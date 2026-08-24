@@ -285,7 +285,11 @@ jobs:
               if [ -n "$next_issue" ]; then
                 gh workflow run work-router.yml --repo "$REPO" --ref "$REF" \
                   -f operation=batch \
-                  -f issue-number="$MASTER_ISSUE" --jq '.id'
+                  -f issue-number="$MASTER_ISSUE" \
+                  -f start-from="$next_issue"
+                exit 0
+              fi
+            fi
 
           done < /tmp/batch-issues.txt
 
