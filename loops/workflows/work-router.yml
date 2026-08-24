@@ -372,7 +372,7 @@ jobs:
             -f issue-number="$ISSUE_NUMBER" \
             -f mode="$MODE"
 
-    call-triage:
+  call-triage:
     needs: [classify, authorize]
     # Triage on issue open is for outside collaborators only (handled by dispatch-triage).
     # A trusted actor who opens an issue should not start triage — they can add refine/implement/direct
