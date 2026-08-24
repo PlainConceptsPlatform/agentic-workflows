@@ -36,6 +36,9 @@ outputs:
   trigger-kind:
     description: scheduled or manual.
     value: ${{ steps.classify.outputs.trigger-kind }}
+  batch-branch:
+    description: Batch branch to push to (batch mode only). Empty in normal mode.
+    value: ${{ steps.classify.outputs.batch-branch }}
 runs:
   using: composite
   steps:
@@ -63,6 +66,7 @@ runs:
         INPUT_CI_CONCLUSION: ${{ github.event.inputs.ci-conclusion }}
         INPUT_CI_RUN_ID: ${{ github.event.inputs.ci-run-id }}
         INPUT_TRIGGER_KIND: ${{ github.event.inputs.trigger-kind }}
+        INPUT_BATCH_BRANCH: ${{ github.event.inputs.batch-branch }}
       run: |
         set -euo pipefail
 

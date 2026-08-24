@@ -1,0 +1,288 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-batch.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: "Agent: Batch Implement"
+
+run-name: "Batch: #${{ inputs.issue-number }}"
+
+on:
+  workflow_call:
+    inputs:
+      issue-number:
+        description: "Master issue number (has feature + implement labels)"
+        required: true
+        type: string
+      start-from:
+        description: "Skip issues before this number (for resuming after timeout)"
+        required: false
+        type: string
+        default: ""
+
+env:
+  WORKING_LABEL: bot-working
+  IMPLEMENT_LABEL: implement
+  FEATURE_LABEL: feature
+
+permissions:
+  contents: read
+
+jobs:
+  orchestrate:
+    runs-on: RunnerLandingZone
+    timeout-minutes: 300
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Configure GH_HOST for enterprise compatibility
+        shell: bash
+        run: |
+          GH_HOST="${GITHUB_SERVER_URL#https://}"
+          GH_HOST="${GH_HOST#http://}"
+          echo "GH_HOST=${GH_HOST}" >> "$GITHUB_ENV"
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Parse master issue and setup batch
+        id: setup
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          MASTER_ISSUE: ${{ inputs.issue-number }}
+          START_FROM: ${{ inputs.start-from }}
+        run: |
+          set -euo pipefail
+
+          # Read master issue body
+          body=$(gh issue view "$MASTER_ISSUE" --repo "$REPO" --json body --jq '.body')
+
+          # Extract all #NNN references, exclude master issue's own number, sort ascending
+          issues=$(echo "$body" | grep -oE '#[0-9]+' | tr -d '#' | sort -n | uniq | grep -v "^${MASTER_ISSUE}$" || true)
+
+          if [ -z "$issues" ]; then
+            gh issue comment "$MASTER_ISSUE" --repo "$REPO" --body "## Batch error
+
+          No issue references (\`#NNN\`) found in the master issue body. Add the child issues you want to implement, e.g.:
+
+          \`\`\`
+          #300
+          #301
+          #302
+          \`\`\`"
+            exit 1
+          fi
+
+          # Filter by start-from if resuming
+          if [ -n "$START_FROM" ]; then
+            issues=$(echo "$issues" | awk -v start="$START_FROM" '$1 >= start')
+            if [ -z "$issues" ]; then
+              echo "::notice::No issues remaining after start-from filter."
+              exit 0
+            fi
+          fi
+
+          # Write issues to file for the loop
+          echo "$issues" > /tmp/batch-issues.txt
+          count=$(echo "$issues" | wc -l)
+          echo "issue-count=$count" >> "$GITHUB_OUTPUT"
+
+          # Create or reuse batch branch
+          BRANCH="bot/batch-${MASTER_ISSUE}"
+          if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+            git checkout "$BRANCH"
+            git pull origin "$BRANCH" || true
+          else
+            git checkout -b "$BRANCH"
+            git push origin "$BRANCH"
+          fi
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+          # Create or reuse draft PR
+          PR_BODY=""
+          for issue in $issues; do
+            PR_BODY="${PR_BODY}Closes #${issue}
+          "
+          done
+          PR_BODY="${PR_BODY}Closes #${MASTER_ISSUE}"
+
+          PR_EXISTS=$(gh pr list --repo "$REPO" --state open --head "$BRANCH" --json number --jq 'length')
+          if [ "$PR_EXISTS" -gt 0 ]; then
+            PR_NUMBER=$(gh pr list --repo "$REPO" --state open --head "$BRANCH" --json number --jq '.[0].number')
+          else
+            PR_URL=$(gh pr create --repo "$REPO" \
+              --title "[bot] Batch implement #${MASTER_ISSUE}" \
+              --body "$PR_BODY" \
+              --head "$BRANCH" \
+              --base main \
+              --draft)
+            PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+          fi
+          echo "pr-number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+          # Post initial progress comment
+          PROGRESS_BODY="## Batch progress
+
+          Branch: \`$BRANCH\`
+          PR: #$PR_NUMBER (draft — will be marked ready when all issues are done)
+
+          | # | Issue | Status | Duration |
+          |---|-------|--------|----------|"
+
+          idx=0
+          for issue in $issues; do
+            idx=$((idx + 1))
+            PROGRESS_BODY="${PROGRESS_BODY}
+          | ${idx} | #${issue} | 🕐 Queued | — |"
+          done
+
+          COMMENT_ID=$(gh api "repos/$REPO/issues/$MASTER_ISSUE/comments" \
+            --method POST \
+            -f body="$PROGRESS_BODY" --jq '.id')
+          echo "comment-id=$COMMENT_ID" >> "$GITHUB_OUTPUT"
+
+          echo "Master issue #$MASTER_ISSUE parsed: $count child issues found."
+          echo "Batch branch: $BRANCH"
+          echo "Draft PR: #$PR_NUMBER"
+
+      - name: Implement each issue sequentially
+        if: steps.setup.outputs.issue-count != '0'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch }}
+          MASTER_ISSUE: ${{ inputs.issue-number }}
+          BRANCH: ${{ steps.setup.outputs.branch }}
+          PR_NUMBER: ${{ steps.setup.outputs.pr-number }}
+          COMMENT_ID: ${{ steps.setup.outputs.comment-id }}
+          RUN_STARTED_AT: ${{ github.run_started_at }}
+        run: |
+          set -euo pipefail
+
+          update_progress() {
+            local idx="$1" issue="$2" status="$3" duration="$4"
+            local body
+            body=$(gh api "repos/$REPO/issues/comments/$COMMENT_ID" --jq '.body')
+            # Replace the row for this issue
+            body=$(echo "$body" | sed "s/| ${idx} | #${issue} | 🕐 Queued | — |/| ${idx} | #${issue} | ${status} | ${duration} |/")
+            body=$(echo "$body" | sed "s/| ${idx} | #${issue} | ⏳ In progress | — |/| ${idx} | #${issue} | ${status} | ${duration} |/")
+            # Mark next row as in-progress if it's still queued
+            local next_idx=$((idx + 1))
+            body=$(echo "$body" | sed "s/| ${next_idx} | \(#[0-9]*\) | 🕐 Queued | — |/| ${next_idx} | \1 | ⏳ In progress | — |/")
+            gh api "repos/$REPO/issues/comments/$COMMENT_ID" --method PATCH -f body="$body" 2>/dev/null || true
+          }
+
+          idx=0
+          while IFS= read -r issue; do
+            idx=$((idx + 1))
+            start_ts=$(date +%s)
+
+            # Mark as in-progress
+            update_progress "$idx" "$issue" "⏳ In progress" "—"
+
+            # Check if already closed
+            state=$(gh issue view "$issue" --repo "$REPO" --json state --jq '.state')
+            if [ "$state" = "CLOSED" ]; then
+              update_progress "$idx" "$issue" "⏭️ Already closed" "—"
+              continue
+            fi
+
+            # Check if issue already has bot-working (another workflow is processing it)
+            has_working=$(gh issue view "$issue" --repo "$REPO" --json labels --jq '[.labels[].name] | index("bot-working") != null')
+            if [ "$has_working" = "true" ]; then
+              update_progress "$idx" "$issue" "⚠️ Already in progress" "—"
+              continue
+            fi
+
+            # Add bot-working to child
+            gh issue edit "$issue" --repo "$REPO" --add-label "${{ env.WORKING_LABEL }}" 2>/dev/null || true
+
+            # Dispatch implement with batch-branch
+            gh workflow run work-router.yml --repo "$REPO" --ref "$REF" \
+              -f operation=implement \
+              -f issue-number="$issue" \
+              -f batch-branch="$BRANCH"
+
+            # Wait for the run to appear (match by display title pattern)
+            sleep 10
+            run_id=""
+            for i in $(seq 1 30); do
+              run_id=$(gh run list --repo "$REPO" --limit 10 \
+                --json databaseId,displayTitle,createdAt \
+                --jq "[.[] | select(.displayTitle | test(\"#${issue}\"))] | sort_by(.createdAt) | reverse | .[0].databaseId // empty" 2>/dev/null || true)
+              if [ -n "$run_id" ]; then break; fi
+              sleep 10
+            done
+
+            if [ -z "$run_id" ]; then
+              update_progress "$idx" "$issue" "❌ Dispatch failed" "—"
+              gh issue edit "$issue" --repo "$REPO" --remove-label "${{ env.WORKING_LABEL }}" 2>/dev/null || true
+              continue
+            fi
+
+            echo "Watching implement run $run_id for issue #$issue..."
+            gh run watch "$run_id" --repo "$REPO" --exit-status 2>/dev/null || true
+            conclusion=$(gh run view "$run_id" --repo "$REPO" --json conclusion --jq '.conclusion' 2>/dev/null || echo "unknown")
+
+            end_ts=$(date +%s)
+            duration=$(( (end_ts - start_ts) / 60 ))
+
+            if [ "$conclusion" = "success" ]; then
+              # Remove bot-working from child
+              gh issue edit "$issue" --repo "$REPO" --remove-label "${{ env.WORKING_LABEL }}" 2>/dev/null || true
+              # Close child issue
+              gh issue close "$issue" --repo "$REPO" \
+                --comment "Implemented in batch PR #${PR_NUMBER}" 2>/dev/null || true
+              update_progress "$idx" "$issue" "✅ Implemented" "${duration}m"
+            else
+              gh issue edit "$issue" --repo "$REPO" --remove-label "${{ env.WORKING_LABEL }}" 2>/dev/null || true
+              update_progress "$idx" "$issue" "⚠️ Failed (${conclusion})" "${duration}m"
+            fi
+
+            # Check elapsed time — re-dispatch if approaching 4.5h
+            run_start_epoch=$(date -d "$RUN_STARTED_AT" +%s 2>/dev/null || echo 0)
+            if [ "$run_start_epoch" -gt 0 ]; then
+              elapsed_min=$(( ($(date +%s) - run_start_epoch) / 60 ))
+              if [ "$elapsed_min" -gt 270 ]; then
+                echo "::notice::Approaching timeout (elapsed ${elapsed_min}m). Re-dispatching batch from next issue."
+                # Read next issue number
+                next_issue=$(sed -n "$((idx + 1))p" /tmp/batch-issues.txt)
+                if [ -n "$next_issue" ]; then
+                  gh workflow run work-router.yml --repo "$REPO" --ref "$REF" \
+                    -f operation=batch \
+                    -f issue-number="$MASTER_ISSUE" \
+                    -f start-from="$next_issue"
+                  exit 0
+                fi
+              fi
+            fi
+
+          done < /tmp/batch-issues.txt
+
+          # All done — mark PR ready for review
+          gh pr ready "$PR_NUMBER" --repo "$REPO" 2>/dev/null || true
+
+          # Remove bot-working from master
+          gh issue edit "$MASTER_ISSUE" --repo "$REPO" --remove-label "${{ env.WORKING_LABEL }}" 2>/dev/null || true
+
+          # Update final progress comment
+          body=$(gh api "repos/$REPO/issues/comments/$COMMENT_ID" --jq '.body')
+          body=$(echo "$body" | sed 's/| ⏳ In progress | — |/| ✅ Complete | — |/')
+          body="${body}
+
+          ---
+          **Batch complete.** PR #${PR_NUMBER} marked ready for review. CI will run, then merge-gate will evaluate."
+
+          gh api "repos/$REPO/issues/comments/$COMMENT_ID" --method PATCH -f body="$body" 2>/dev/null || true
+
+          echo "Batch complete. PR #$PR_NUMBER is ready for review."

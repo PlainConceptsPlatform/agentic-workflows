@@ -55,6 +55,9 @@ run-name: >-
   && inputs.operation == 'merge-gate'
   && format('Working (Merge Gate): PR #{0}', inputs.pr-number)
   || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'batch'
+  && format('Working (Batch): #{0}', inputs.issue-number)
+  || github.event_name == 'workflow_dispatch'
   && format('dispatch: {0}', inputs.operation)
   || github.event_name == 'schedule'
   && format('schedule {0}', github.event.schedule)
@@ -110,6 +113,7 @@ on:
           - cleanup-artifacts
           - reconcile-bot-pr-runs
           - validate
+          - batch
       issue-number:
         description: "Issue number (required for refine / implement / direct)"
         required: false
@@ -144,6 +148,10 @@ on:
         options:
           - manual
           - scheduled
+      batch-branch:
+        description: "Batch branch to push to (batch mode only)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -241,6 +249,7 @@ jobs:
       direct-mode: ${{ steps.route.outputs.direct-mode }}
       triage-mode: ${{ steps.route.outputs.triage-mode }}
       trigger-kind: ${{ steps.route.outputs.trigger-kind }}
+      batch-branch: ${{ steps.route.outputs.batch-branch }}
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -293,8 +302,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
+          BATCH_BRANCH: ${{ needs.classify.outputs.batch-branch }}
         run: |
           set -euo pipefail
+          # In batch mode, the batch PR already exists — skip the check
+          if [ -n "$BATCH_BRANCH" ]; then
+            echo "has-open-pr=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Batch mode active, skipping duplicate PR check."
+            exit 0
+          fi
           existing=$(gh pr list --repo "$REPO" --state open --json number,author,body \
             --jq "[.[]
               | select(.author.login | startswith(\"app/\") or endswith(\"[bot]\"))
@@ -313,14 +329,29 @@ jobs:
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true' && needs.check-implement-pr.outputs.has-open-pr != 'true'
     uses: ./.github/workflows/agent-implement.lock.yml
     concurrency:
-      group: write-pipeline-${{ needs.classify.outputs.issue-number }}
+      group: implement-global
+      cancel-in-progress: false
+    permissions: write-all
+    with:
+      issue-number: ${{ needs.classify.outputs.issue-number }}
+      batch-branch: ${{ needs.classify.outputs.batch-branch }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+
+  call-batch:
+    needs: [classify, authorize]
+    if: needs.classify.outputs.route == 'batch' && needs.authorize.outputs.trusted == 'true'
+    uses: ./.github/workflows/agent-batch.yml
+    concurrency:
+      group: batch-${{ needs.classify.outputs.issue-number }}
       cancel-in-progress: false
     permissions: write-all
     with:
       issue-number: ${{ needs.classify.outputs.issue-number }}
     secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
 

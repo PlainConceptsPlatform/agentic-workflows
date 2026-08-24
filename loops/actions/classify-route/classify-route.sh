@@ -29,6 +29,7 @@ classify_route() {
   local route="none" error=""
   local issue_number="" pr_number="" ci_conclusion="" ci_run_id=""
   local refine_mode="" direct_mode="" triage_mode="" trigger_kind=""
+  local batch_branch=""
 
   case "${EVENT:-}" in
     issues)
@@ -53,6 +54,9 @@ classify_route() {
             # BUT: if review label is present, do NOT route (human review required)
             if has_label review; then
               error="issue has review label; bot-working does not re-trigger while human review is required"
+            elif has_label implement && has_label feature; then
+              route="batch"
+              issue_number="${EVENT_ISSUE_NUMBER:-}"
             elif has_label implement; then
               route="implement"
               issue_number="${EVENT_ISSUE_NUMBER:-}"
@@ -178,6 +182,7 @@ classify_route() {
           if is_issue_number "${INPUT_ISSUE_NUMBER:-}"; then
             route="${OPERATION}"
             issue_number="${INPUT_ISSUE_NUMBER}"
+            batch_branch="${INPUT_BATCH_BRANCH:-}"
             if [ "$OPERATION" = "refine" ]; then
               refine_mode="${INPUT_MODE:-first}"
             elif [ "$OPERATION" = "direct" ]; then
@@ -194,6 +199,14 @@ classify_route() {
             triage_mode="${INPUT_MODE:-first}"
           else
             error="operation 'triage' needs a positive issue-number, got '${INPUT_ISSUE_NUMBER:-}'"
+          fi
+          ;;
+        batch)
+          if is_issue_number "${INPUT_ISSUE_NUMBER:-}"; then
+            route="batch"
+            issue_number="${INPUT_ISSUE_NUMBER}"
+          else
+            error="operation 'batch' needs a positive issue-number, got '${INPUT_ISSUE_NUMBER:-}'"
           fi
           ;;
         apply-review)
@@ -242,6 +255,7 @@ refine-mode=${refine_mode}
 direct-mode=${direct_mode}
 triage-mode=${triage_mode}
 trigger-kind=${trigger_kind}
+batch-branch=${batch_branch}
 error=${error}
 EOF
 }

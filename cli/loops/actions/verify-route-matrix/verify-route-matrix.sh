@@ -77,6 +77,10 @@ assert_route "a human triage label routes to triage" triage \
   EVENT=issues ACTION=labeled LABEL=triage ACTOR=maintainer EVENT_ISSUE_NUMBER=42
 assert_route "a bot triage label routes nowhere" none \
   EVENT=issues ACTION=labeled LABEL=triage ACTOR=platform-devbox[bot] EVENT_ISSUE_NUMBER=42
+assert_route "feature + implement + bot-working routes to batch" batch \
+  EVENT=issues ACTION=labeled LABEL=bot-working 'ISSUE_LABELS=["feature","implement","bot-working"]' EVENT_ISSUE_NUMBER=350
+assert_route "implement + bot-working without feature routes to implement" implement \
+  EVENT=issues ACTION=labeled LABEL=bot-working 'ISSUE_LABELS=["implement","bot-working"]' EVENT_ISSUE_NUMBER=300
 assert "refine label starts a first pass" first \
   "$(route_field refine-mode EVENT=issues ACTION=labeled LABEL=refine EVENT_ISSUE_NUMBER=42)"
 assert_route "direct label routes to direct" direct \
@@ -167,6 +171,14 @@ assert_route "triage dispatch needs an issue number" none \
   EVENT=workflow_dispatch OPERATION=triage INPUT_ISSUE_NUMBER=
 assert "triage dispatch defaults to first pass" first \
   "$(route_field triage-mode EVENT=workflow_dispatch OPERATION=triage INPUT_ISSUE_NUMBER=42)"
+assert_route "batch dispatch accepts a positive issue" batch \
+  EVENT=workflow_dispatch OPERATION=batch INPUT_ISSUE_NUMBER=350
+assert_route "batch dispatch needs an issue number" none \
+  EVENT=workflow_dispatch OPERATION=batch INPUT_ISSUE_NUMBER=
+assert "implement dispatch passes batch-branch through" "bot/batch-350" \
+  "$(route_field batch-branch EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=300 INPUT_BATCH_BRANCH=bot/batch-350)"
+assert "implement dispatch has empty batch-branch when not provided" "" \
+  "$(route_field batch-branch EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=300)"
 assert_route "merge-gate dispatch needs a pull request number" none \
   EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=0
 assert_route "merge-gate dispatch accepts a positive pull request" merge-gate \
@@ -222,7 +234,7 @@ else
 fi
 
 for route in refine implement direct triage apply-review merge-gate audit propose bot-approve \
-  audit-close cleanup-artifacts reconcile-bot-pr-runs stale-recovery validate; do
+  audit-close cleanup-artifacts reconcile-bot-pr-runs stale-recovery validate batch; do
   if grep -q "route == '${route}'" "$ROUTER_YML"; then
     PASS=$((PASS + 1))
   else
