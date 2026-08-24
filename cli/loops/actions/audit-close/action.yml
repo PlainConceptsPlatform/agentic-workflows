@@ -81,6 +81,30 @@ runs:
               ? 'This report references no issues.'
               : `All ${closedRefs} referenced issue(s) are closed.`;
 
+            // Do not close if there are open PRs that close this issue.
+            // The audit report may have spawned implement workers whose PRs
+            // are still under review — closing the report prematurely is misleading.
+            const openPRs = await github.paginate(github.rest.pulls.list, {
+              ...context.repo,
+              state: 'open',
+              per_page: 100,
+            });
+
+            const closesThisReport = openPRs.some((pr) => {
+              const body = pr.body ?? '';
+              const patterns = [
+                new RegExp(`(?:^|[^A-Za-z0-9_/])#(?:closes?|fixes?|resolves?|closed?)\\s+#${report.number}\\b`, 'i'),
+                new RegExp(`(?:^|[^A-Za-z0-9_/])#${report.number}\\b`),
+              ];
+              return patterns.some((p) => p.test(body));
+            });
+
+            if (closesThisReport) {
+              core.info(`#${report.number}: kept open, has open PR(s) that close it.`);
+              keptOpen += 1;
+              continue;
+            }
+
             await github.rest.issues.createComment({
               ...context.repo,
               issue_number: report.number,

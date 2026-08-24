@@ -226,7 +226,7 @@ jobs:
             Problems found in PR #${{ needs.subject.outputs.pr }}. ${{ steps.conflicts.outputs.has_conflicts == 'true' && 'Merge conflicts detected.' || 'CI failed.' }}
             Bot is working on fixing it.
   validate_output:
-    needs: [activation, agent, safe_outputs]
+    needs: [activation, subject, agent, safe_outputs]
     if: >
       always() &&
       needs.agent.result == 'success' &&

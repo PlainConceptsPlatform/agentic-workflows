@@ -33,12 +33,19 @@ classify_route() {
   case "${EVENT:-}" in
     issues)
       if [ "${ACTION:-}" = "opened" ]; then
-        # Issue opened by an outside collaborator → triage. The authorize job
-        # gates the caller on is_outside_collaborator; this routes unconditionally
-        # so write+ openers classify to triage but the caller job skips them.
-        route="triage"
-        triage_mode="first"
-        issue_number="${EVENT_ISSUE_NUMBER:-}"
+        # Issue opened with a work label (refine/implement/direct) → skip triage.
+        # The label event will trigger authorize-bot-work → bot-working → the
+        # correct worker. Triage would only interfere.
+        if has_label refine || has_label implement || has_label direct; then
+          error="issue opened with a work label (refine/implement/direct); triage skipped"
+        else
+          # Issue opened by an outside collaborator → triage. The authorize job
+          # gates the caller on is_outside_collaborator; this routes unconditionally
+          # so write+ openers classify to triage but the caller job skips them.
+          route="triage"
+          triage_mode="first"
+          issue_number="${EVENT_ISSUE_NUMBER:-}"
+        fi
       elif [ "${ACTION:-}" = "labeled" ]; then
         case "${LABEL:-}" in
           bot-working)

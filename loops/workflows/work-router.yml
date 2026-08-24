@@ -359,7 +359,10 @@ jobs:
 
   call-triage:
     needs: [classify, authorize]
-    if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.trusted == 'true'
+    # Triage on issue open is for outside collaborators only (handled by dispatch-triage).
+    # A trusted actor who opens an issue should not start triage — they can add refine/implement/direct
+    # labels or manually dispatch triage. All other triage routes (labeled, comment, dispatch) are trusted.
+    if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.trusted == 'true' && !(github.event_name == 'issues' && github.event.action == 'opened')
     uses: ./.github/workflows/agent-triage.lock.yml
     concurrency:
       group: triage-${{ needs.classify.outputs.issue-number }}

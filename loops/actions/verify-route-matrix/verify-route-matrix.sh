@@ -65,8 +65,14 @@ assert_route "implement label routes to implement" implement \
   EVENT=issues ACTION=labeled LABEL=implement EVENT_ISSUE_NUMBER=42
 assert_route "unrelated label routes nowhere" none \
   EVENT=issues ACTION=labeled LABEL=documentation EVENT_ISSUE_NUMBER=42
-assert_route "a non-label issue action routes to triage" triage \
+assert_route "issue opened without labels routes to triage" triage \
   EVENT=issues ACTION=opened EVENT_ISSUE_NUMBER=42
+assert_route "issue opened with refine label skips triage" none \
+  EVENT=issues ACTION=opened 'ISSUE_LABELS=["refine"]' EVENT_ISSUE_NUMBER=42
+assert_route "issue opened with implement label skips triage" none \
+  EVENT=issues ACTION=opened 'ISSUE_LABELS=["implement"]' EVENT_ISSUE_NUMBER=42
+assert_route "issue opened with direct label skips triage" none \
+  EVENT=issues ACTION=opened 'ISSUE_LABELS=["direct"]' EVENT_ISSUE_NUMBER=42
 assert_route "a human triage label routes to triage" triage \
   EVENT=issues ACTION=labeled LABEL=triage ACTOR=maintainer EVENT_ISSUE_NUMBER=42
 assert_route "a bot triage label routes nowhere" none \
