@@ -109,6 +109,8 @@ jobs:
             git pull origin "$BRANCH" || true
           else
             git checkout -b "$BRANCH"
+            # Create an initial commit so the draft PR can be created (GitHub requires at least one commit)
+            git commit --allow-empty -m "chore: initialize batch branch for #${MASTER_ISSUE}"
             git push origin "$BRANCH"
           fi
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
