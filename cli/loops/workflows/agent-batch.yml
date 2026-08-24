@@ -1,8 +1,6 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-batch.yml. Update with `workflows update --force`; consumer edits may be overwritten.
 name: "Agent: Batch Implement"
 
-run-name: "Batch: #${{ inputs.issue-number }}"
-
 on:
   workflow_call:
     inputs:
