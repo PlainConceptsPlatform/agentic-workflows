@@ -13,6 +13,13 @@ on:
         required: false
         type: string
         default: ""
+    secrets:
+      BOT_APP_ID:
+        description: "GitHub App client ID for bot operations"
+        required: true
+      BOT_PRIVATE_KEY:
+        description: "GitHub App private key for bot operations"
+        required: true
 
 env:
   WORKING_LABEL: bot-working
