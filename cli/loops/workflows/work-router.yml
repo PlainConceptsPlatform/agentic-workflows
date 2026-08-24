@@ -191,11 +191,26 @@ jobs:
           permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" \
             --jq '.permission' 2>/dev/null || echo "none")
 
+          # Check if the actor is an organization member. Outside collaborators can have
+          # write/maintain permission on a repo without being org members. Triage is for
+          # outside collaborators only — a non-member with write access is still outside.
+          org=$(echo "$GITHUB_REPOSITORY" | cut -d/ -f1)
+          is_member=false
+          if gh api "orgs/$org/members/$ACTOR" >/dev/null 2>&1; then
+            is_member=true
+          fi
+
           case "$permission" in
             admin | maintain | write)
-              echo "trusted=true" >> "$GITHUB_OUTPUT"
-              echo "is_outside_collaborator=false" >> "$GITHUB_OUTPUT"
-              echo "::notice::$ACTOR has $permission permission."
+              if [ "$is_member" = "true" ]; then
+                echo "trusted=true" >> "$GITHUB_OUTPUT"
+                echo "is_outside_collaborator=false" >> "$GITHUB_OUTPUT"
+                echo "::notice::$ACTOR has $permission permission and is an org member."
+              else
+                echo "trusted=true" >> "$GITHUB_OUTPUT"
+                echo "is_outside_collaborator=true" >> "$GITHUB_OUTPUT"
+                echo "::notice::$ACTOR has $permission permission but is NOT an org member (outside collaborator). Triage route eligible."
+              fi
               ;;
             read)
               echo "trusted=false" >> "$GITHUB_OUTPUT"
@@ -357,7 +372,7 @@ jobs:
             -f issue-number="$ISSUE_NUMBER" \
             -f mode="$MODE"
 
-  call-triage:
+    call-triage:
     needs: [classify, authorize]
     # Triage on issue open is for outside collaborators only (handled by dispatch-triage).
     # A trusted actor who opens an issue should not start triage — they can add refine/implement/direct
