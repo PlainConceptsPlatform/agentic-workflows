@@ -189,9 +189,10 @@ jobs:
           BRANCH: ${{ steps.setup.outputs.branch }}
           PR_NUMBER: ${{ steps.setup.outputs.pr-number }}
           COMMENT_ID: ${{ steps.setup.outputs.comment-id }}
-          RUN_STARTED_AT: ${{ github.run_started_at }}
         run: |
           set -euo pipefail
+
+          BATCH_START=$(date +%s)
 
           update_progress() {
             local idx="$1" issue="$2" status="$3" duration="$4"
@@ -274,22 +275,15 @@ jobs:
             fi
 
             # Check elapsed time — re-dispatch if approaching 4.5h
-            run_start_epoch=$(date -d "$RUN_STARTED_AT" +%s 2>/dev/null || echo 0)
-            if [ "$run_start_epoch" -gt 0 ]; then
-              elapsed_min=$(( ($(date +%s) - run_start_epoch) / 60 ))
-              if [ "$elapsed_min" -gt 270 ]; then
-                echo "::notice::Approaching timeout (elapsed ${elapsed_min}m). Re-dispatching batch from next issue."
-                # Read next issue number
-                next_issue=$(sed -n "$((idx + 1))p" /tmp/batch-issues.txt)
-                if [ -n "$next_issue" ]; then
-                  gh workflow run work-router.yml --repo "$REPO" --ref "$REF" \
-                    -f operation=batch \
-                    -f issue-number="$MASTER_ISSUE" \
-                    -f start-from="$next_issue"
-                  exit 0
-                fi
-              fi
-            fi
+            elapsed_min=$(( ($(date +%s) - BATCH_START) / 60 ))
+            if [ "$elapsed_min" -gt 270 ]; then
+              echo "::notice::Approaching timeout (elapsed ${elapsed_min}m). Re-dispatching batch from next issue."
+              # Read next issue number
+              next_issue=$(sed -n "$((idx + 1))p" /tmp/batch-issues.txt)
+              if [ -n "$next_issue" ]; then
+                gh workflow run work-router.yml --repo "$REPO" --ref "$REF" \
+                  -f operation=batch \
+                  -f issue-number="$MASTER_ISSUE" --jq '.id'
 
           done < /tmp/batch-issues.txt
 
