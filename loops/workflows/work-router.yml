@@ -148,10 +148,6 @@ on:
         options:
           - manual
           - scheduled
-      batch-branch:
-        description: "Batch branch to push to (batch mode only)"
-        required: false
-        type: string
       start-from:
         description: "Skip issues before this number (batch resume only)"
         required: false
@@ -253,7 +249,6 @@ jobs:
       direct-mode: ${{ steps.route.outputs.direct-mode }}
       triage-mode: ${{ steps.route.outputs.triage-mode }}
       trigger-kind: ${{ steps.route.outputs.trigger-kind }}
-      batch-branch: ${{ steps.route.outputs.batch-branch }}
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -306,15 +301,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
-          BATCH_BRANCH: ${{ needs.classify.outputs.batch-branch }}
         run: |
           set -euo pipefail
-          # In batch mode, the batch PR already exists — skip the check
-          if [ -n "$BATCH_BRANCH" ]; then
-            echo "has-open-pr=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Batch mode active, skipping duplicate PR check."
-            exit 0
-          fi
           existing=$(gh pr list --repo "$REPO" --state open --json number,author,body \
             --jq "[.[]
               | select(.author.login | startswith(\"app/\") or endswith(\"[bot]\"))
@@ -338,7 +326,6 @@ jobs:
     permissions: write-all
     with:
       issue-number: ${{ needs.classify.outputs.issue-number }}
-      batch-branch: ${{ needs.classify.outputs.batch-branch }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}

@@ -234,11 +234,10 @@ jobs:
             # Add bot-working to child
             gh issue edit "$issue" --repo "$REPO" --add-label "${{ env.WORKING_LABEL }}" 2>/dev/null || true
 
-            # Dispatch implement with batch-branch
+            # Dispatch implement (agent works normally, creates its own PR)
             gh workflow run work-router.yml --repo "$REPO" --ref "$REF" \
               -f operation=implement \
-              -f issue-number="$issue" \
-              -f batch-branch="$BRANCH"
+              -f issue-number="$issue"
 
             # Wait for the run to appear (match by display title pattern)
             sleep 10
@@ -267,6 +266,29 @@ jobs:
             if [ "$conclusion" = "success" ]; then
               # Remove bot-working from child
               gh issue edit "$issue" --repo "$REPO" --remove-label "${{ env.WORKING_LABEL }}" 2>/dev/null || true
+
+              # Cherry-pick the implement agent's commits into the batch branch
+              # The agent creates its own branch; we find it and merge into our batch branch
+              sleep 5  # Give GitHub a moment to index the new PR
+              agent_pr=$(gh pr list --repo "$REPO" --state all --json number,headRefName,body,createdAt \
+                --jq "[.[] | select(.createdAt > \"$(date -u -d '@${start_ts}' -u +%Y-%m-%dT%H:%M:%SZ)\") | (.body | ascii_downcase) as \$body | select(\$body | contains(\"close #${issue}\") or contains(\"closes #${issue}\") or contains(\"fix #${issue}\") or contains(\"fixes #${issue}\") or contains(\"resolve #${issue}\") or contains(\"resolves #${issue}\"))] | sort_by(.createdAt) | reverse | .[0] // empty" 2>/dev/null || true)
+
+              if [ -n "$agent_pr" ]; then
+                agent_branch=$(echo "$agent_pr" | jq -r '.headRefName' 2>/dev/null || true)
+                if [ -n "$agent_branch" ]; then
+                  echo "Merging agent branch $agent_branch into batch branch $BRANCH..."
+                  git fetch origin "$agent_branch"
+                  git checkout "$BRANCH"
+                  git merge --no-edit "origin/$agent_branch" || git merge --abort
+                  git push origin "$BRANCH"
+                  # Close the agent's individual PR — its commits are now in the batch PR
+                  agent_pr_num=$(echo "$agent_pr" | jq -r '.number' 2>/dev/null || true)
+                  if [ -n "$agent_pr_num" ]; then
+                    gh pr close "$agent_pr_num" --repo "$REPO" --comment "Commits merged into batch PR #${PR_NUMBER}" --delete-branch 2>/dev/null || true
+                  fi
+                fi
+              fi
+
               # Close child issue
               gh issue close "$issue" --repo "$REPO" \
                 --comment "Implemented in batch PR #${PR_NUMBER}" 2>/dev/null || true

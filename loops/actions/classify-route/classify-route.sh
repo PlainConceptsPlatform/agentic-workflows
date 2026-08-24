@@ -29,7 +29,6 @@ classify_route() {
   local route="none" error=""
   local issue_number="" pr_number="" ci_conclusion="" ci_run_id=""
   local refine_mode="" direct_mode="" triage_mode="" trigger_kind=""
-  local batch_branch=""
 
   case "${EVENT:-}" in
     issues)
@@ -182,7 +181,6 @@ classify_route() {
           if is_issue_number "${INPUT_ISSUE_NUMBER:-}"; then
             route="${OPERATION}"
             issue_number="${INPUT_ISSUE_NUMBER}"
-            batch_branch="${INPUT_BATCH_BRANCH:-}"
             if [ "$OPERATION" = "refine" ]; then
               refine_mode="${INPUT_MODE:-first}"
             elif [ "$OPERATION" = "direct" ]; then
@@ -255,7 +253,6 @@ refine-mode=${refine_mode}
 direct-mode=${direct_mode}
 triage-mode=${triage_mode}
 trigger-kind=${trigger_kind}
-batch-branch=${batch_branch}
 error=${error}
 EOF
 }

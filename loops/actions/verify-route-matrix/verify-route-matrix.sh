@@ -175,10 +175,6 @@ assert_route "batch dispatch accepts a positive issue" batch \
   EVENT=workflow_dispatch OPERATION=batch INPUT_ISSUE_NUMBER=350
 assert_route "batch dispatch needs an issue number" none \
   EVENT=workflow_dispatch OPERATION=batch INPUT_ISSUE_NUMBER=
-assert "implement dispatch passes batch-branch through" "bot/batch-350" \
-  "$(route_field batch-branch EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=300 INPUT_BATCH_BRANCH=bot/batch-350)"
-assert "implement dispatch has empty batch-branch when not provided" "" \
-  "$(route_field batch-branch EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=300)"
 assert_route "merge-gate dispatch needs a pull request number" none \
   EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=0
 assert_route "merge-gate dispatch accepts a positive pull request" merge-gate \
