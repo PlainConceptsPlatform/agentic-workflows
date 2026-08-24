@@ -71,25 +71,29 @@ jobs:
 
           # Read master issue body
           body=$(gh issue view "$MASTER_ISSUE" --repo "$REPO" --json body --jq '.body')
+          echo "Issue body length: ${#body}"
+
+          # Write body to temp file to avoid shell interpreting special chars
+          printf '%s' "$body" > /tmp/batch-body.txt
 
           # Extract all #NNN references, exclude master issue's own number, sort ascending
-          # Use printf to avoid shell interpreting backticks and special chars in the body
-          issues=$(printf '%s' "$body" | grep -oE '#[0-9]+' | tr -d '#' | sort -n | uniq | grep -v "^${MASTER_ISSUE}$" || true)
+          grep -oE '#[0-9]+' /tmp/batch-body.txt | tr -d '#' | sort -n | uniq | grep -v "^${MASTER_ISSUE}$" > /tmp/batch-issues.txt || true
+
+          issues=""
+          if [ -s /tmp/batch-issues.txt ]; then
+            issues=$(cat /tmp/batch-issues.txt)
+          fi
 
           if [ -z "$issues" ]; then
-            raw_count=$(printf '%s' "$body" | grep -coE '#[0-9]+' || echo 0)
+            raw_count=$(grep -coE '#[0-9]+' /tmp/batch-body.txt || echo 0)
             echo "::warning::No issues found. Body has $raw_count #NNN patterns."
+            echo "::group::Issue body first 500 chars"
+            head -c 500 /tmp/batch-body.txt
+            echo
+            echo "::endgroup::"
             gh issue comment "$MASTER_ISSUE" --repo "$REPO" --body "## Batch error
 
-          No issue references (\`#NNN\`) found in the master issue body. The body contained $raw_count patterns.
-
-          Add the child issues you want to implement, e.g.:
-
-          \`\`\`
-          #300
-          #301
-          #302
-          \`\`\`"
+          No issue references found in the master issue body. The body contained $raw_count patterns." || true
             exit 1
           fi
 
