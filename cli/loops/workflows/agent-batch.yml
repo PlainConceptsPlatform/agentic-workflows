@@ -73,12 +73,17 @@ jobs:
           body=$(gh issue view "$MASTER_ISSUE" --repo "$REPO" --json body --jq '.body')
 
           # Extract all #NNN references, exclude master issue's own number, sort ascending
-          issues=$(echo "$body" | grep -oE '#[0-9]+' | tr -d '#' | sort -n | uniq | grep -v "^${MASTER_ISSUE}$" || true)
+          # Use printf to avoid shell interpreting backticks and special chars in the body
+          issues=$(printf '%s' "$body" | grep -oE '#[0-9]+' | tr -d '#' | sort -n | uniq | grep -v "^${MASTER_ISSUE}$" || true)
 
           if [ -z "$issues" ]; then
+            raw_count=$(printf '%s' "$body" | grep -coE '#[0-9]+' || echo 0)
+            echo "::warning::No issues found. Body has $raw_count #NNN patterns."
             gh issue comment "$MASTER_ISSUE" --repo "$REPO" --body "## Batch error
 
-          No issue references (\`#NNN\`) found in the master issue body. Add the child issues you want to implement, e.g.:
+          No issue references (\`#NNN\`) found in the master issue body. The body contained $raw_count patterns.
+
+          Add the child issues you want to implement, e.g.:
 
           \`\`\`
           #300
