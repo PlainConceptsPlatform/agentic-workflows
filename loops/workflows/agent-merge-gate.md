@@ -1,8 +1,8 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-merge-gate.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
-  VERIFY_COMMANDS: "dotnet restore apps/api/Numa.slnx && dotnet build apps/api/Numa.slnx -c Release --no-restore && dotnet test apps/api/tests/Numa.UnitTests/Numa.UnitTests.csproj -c Release --no-build && dotnet test apps/api/tests/Numa.ParityTests/Numa.ParityTests.csproj -c Release --no-build"
-  REPO_RULES: "Make a risk-based merge decision for the selected bot pull request. Merge only when CI is green and no risk indicators are present. Risk indicators for Numa: changes to QuoteCalculator or calculation waterfall, audit appender or hash chain, JWT issuance or permission checks, EF migrations or entity configurations, decimal precision or money handling, quote lifecycle transitions. Any of these require human review. Do not merge protected file changes."
+  VERIFY_COMMANDS: ""
+  REPO_RULES: "Make a risk-based merge decision for the selected bot pull request. Merge only when CI is green and no risk indicators are present. Review risk indicators defined in the repository's guardrails or project documentation. Any of these require human review. Do not merge protected file changes."
   WORKING_LABEL: bot-working
   IMPLEMENT_LABEL: implement
   REVIEW_LABEL: review
@@ -527,9 +527,9 @@ timeout-minutes: 60
    Flag if the diff is materially larger or smaller than expected.
 
    **Check 8 — Repository risk indicators.** Does the diff touch any risk indicator defined in
-   ${{ env.REPO_RULES }}? For Numa these include: QuoteCalculator or calculation waterfall,
-   audit appender or hash chain, JWT issuance or permission checks, EF migrations or entity
-   configurations, decimal precision or money handling, quote lifecycle transitions. Flag any
+   ${{ env.REPO_RULES }}? Review the repository guardrails for domain-specific risk areas such
+   as calculation engines, audit chains, authentication, database migrations, or money handling.
+   Flag any
    match and name the specific indicator.
 
    **Check 9 — Mergeability.** Can the PR be merged cleanly? The value is
