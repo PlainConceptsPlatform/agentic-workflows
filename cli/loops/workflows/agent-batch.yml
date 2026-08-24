@@ -121,9 +121,11 @@ jobs:
 
           # Create or reuse batch branch
           BRANCH="bot/batch-${MASTER_ISSUE}"
-          if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-            git checkout "$BRANCH"
-            git pull origin "$BRANCH" || true
+
+          # Fetch existing remote branch if it exists
+          if git ls-remote --heads origin "$BRANCH" | grep -q "$BRANCH"; then
+            git fetch origin "$BRANCH"
+            git checkout -B "$BRANCH" "origin/$BRANCH"
           else
             git checkout -b "$BRANCH"
             # Create an initial commit so the draft PR can be created (GitHub requires at least one commit)
