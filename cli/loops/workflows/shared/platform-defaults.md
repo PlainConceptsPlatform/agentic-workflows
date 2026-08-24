@@ -10,6 +10,7 @@ network:
     - github
     - dotnet
     - fonts
+    - login.microsoftonline.com
 
 safe-outputs:
   threat-detection: false
