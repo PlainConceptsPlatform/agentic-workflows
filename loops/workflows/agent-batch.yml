@@ -173,8 +173,7 @@ jobs:
           if [ -z "$pr_number" ]; then
             closed_pr=$(gh pr list --repo "$REPO" --state closed --head "$branch" --limit 1 \
               --json number,mergedAt --jq 'map(select(.mergedAt == null))[0].number // empty')
-            if [ -n "$closed_pr" ]; then
-              gh pr reopen "$closed_pr" --repo "$REPO"
+            if [ -n "$closed_pr" ] && gh pr reopen "$closed_pr" --repo "$REPO" 2>/dev/null; then
               pr_number=$closed_pr
             else
               pr_url=$(gh pr create --repo "$REPO" --title "[bot] Batch implement #${MASTER_ISSUE}" \
