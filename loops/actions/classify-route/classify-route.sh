@@ -33,11 +33,11 @@ classify_route() {
   case "${EVENT:-}" in
     issues)
       if [ "${ACTION:-}" = "opened" ]; then
-        # Issue opened with a work label (refine/implement/direct) → skip triage.
+        # Issue opened with a work label → skip triage.
         # The label event will trigger authorize-bot-work → bot-working → the
         # correct worker. Triage would only interfere.
-        if has_label refine || has_label implement || has_label direct; then
-          error="issue opened with a work label (refine/implement/direct); triage skipped"
+        if has_label refine || has_label implement || has_label direct || has_label feature; then
+          error="issue opened with a work label; triage skipped"
         else
           # Issue opened by an outside collaborator → triage. The authorize job
           # gates the caller on is_outside_collaborator; this routes unconditionally
@@ -53,7 +53,7 @@ classify_route() {
             # BUT: if review label is present, do NOT route (human review required)
             if has_label review; then
               error="issue has review label; bot-working does not re-trigger while human review is required"
-            elif has_label implement && has_label feature; then
+            elif has_label feature; then
               route="batch"
               issue_number="${EVENT_ISSUE_NUMBER:-}"
             elif has_label implement; then
@@ -68,7 +68,7 @@ classify_route() {
               direct_mode="first"
               issue_number="${EVENT_ISSUE_NUMBER:-}"
             else
-              error="bot-working added but no work label (implement/refine/direct) found"
+              error="bot-working added but no work label found"
             fi
             ;;
           triage)
@@ -170,6 +170,7 @@ classify_route() {
         "$AUDIT_CLOSE_CRON") route="audit-close" ;;
         "$CLEANUP_ARTIFACTS_CRON") route="cleanup-artifacts" ;;
         "$RECONCILE_BOT_PR_RUNS_CRON") route="reconcile-bot-pr-runs" ;;
+        "$PROPOSE_CRON") route="propose" ;;
         *) error="no route for cron '${SCHEDULE:-}'" ;;
       esac
       ;;

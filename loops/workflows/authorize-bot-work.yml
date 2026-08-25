@@ -1,4 +1,5 @@
-# Human adds implement/refine/direct label → validates permission → bot adds bot-working
+# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/authorize-bot-work.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+# Human adds implement/refine/direct/feature label → validates permission → bot adds bot-working
 # This ensures the bot is the actor for all agentic workflows.
 #
 # IMPORTANT: Only triggers for HUMAN actors. When the bot transitions refine→implement,
@@ -16,12 +17,13 @@ permissions:
 
 jobs:
   authorize:
-    # Only trigger for implement/refine/direct labels from HUMANS (not bots),
+    # Only trigger for work labels from HUMANS (not bots),
     # and only if neither another bot run nor human review currently owns the issue.
     if: >
       (github.event.label.name == 'implement' ||
        github.event.label.name == 'refine' ||
-       github.event.label.name == 'direct') &&
+       github.event.label.name == 'direct' ||
+       github.event.label.name == 'feature') &&
       !contains(github.event.issue.labels.*.name, 'bot-working') &&
       !contains(github.event.issue.labels.*.name, 'review') &&
       !endsWith(github.actor, '[bot]')
@@ -58,14 +60,14 @@ jobs:
 
       - name: Checkout for App token action
         if: steps.check.outputs.authorized == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Generate App token
         if: steps.check.outputs.authorized == 'true'
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
