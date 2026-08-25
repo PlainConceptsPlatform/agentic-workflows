@@ -323,6 +323,9 @@ jobs:
     concurrency:
       group: implement-global
       cancel-in-progress: false
+      # FIFO, up to 100 waiting. Without this the default `queue: single` cancels whatever
+      # was pending, so labelling six issues at once implements one and drops the rest.
+      queue: max
     permissions: write-all
     with:
       issue-number: ${{ needs.classify.outputs.issue-number }}
