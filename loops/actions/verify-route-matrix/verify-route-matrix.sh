@@ -243,6 +243,17 @@ else
   echo "FAIL: batch pull request marker is not agreed between agent-batch.yml and the implement worker" >&2
 fi
 
+# The batch pull request number reaches the model as a named value, not as a field it has to
+# pick out of the packed batch context. It once chose the master issue number instead, because
+# that number also appears in the branch name, and the push landed nowhere.
+if grep -Fq 'pr-number: ${{ steps.check.outputs.pr-number }}' "$IMPLEMENT_WORKER_MD" &&
+  grep -Fq 'needs.batch_target.outputs.pr-number' "$IMPLEMENT_WORKER_MD"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: implement worker does not name the batch pull request number explicitly" >&2
+fi
+
 if grep -Fq 'protected-files: allowed' "$IMPLEMENT_WORKER_MD" &&
   grep -Fq 'protected_changes:' "$MERGE_GATE_WORKER_MD"; then
   PASS=$((PASS + 1))
