@@ -254,6 +254,17 @@ else
   echo "FAIL: implement worker does not name the batch pull request number explicitly" >&2
 fi
 
+# A worker that prints ${VERIFY_COMMANDS} without setting it renders an empty command block,
+# and the model invents its own build line. That is how a child shipped `dotnet build
+# --no-restore` against an unrestored workspace.
+if ! grep -q 'env.VERIFY_COMMANDS' "$IMPLEMENT_WORKER_MD" ||
+  grep -q '^  VERIFY_COMMANDS:' "$IMPLEMENT_WORKER_MD"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: implement worker prints VERIFY_COMMANDS without defining it" >&2
+fi
+
 if grep -Fq 'protected-files: allowed' "$IMPLEMENT_WORKER_MD" &&
   grep -Fq 'protected_changes:' "$MERGE_GATE_WORKER_MD"; then
   PASS=$((PASS + 1))
