@@ -160,7 +160,8 @@ jobs:
             git push origin "$branch"
           fi
 
-          pr_body="Batch implementation of #${MASTER_ISSUE}.
+          pr_body="<!-- agent-batch-pr master=${MASTER_ISSUE} -->
+          Batch implementation of #${MASTER_ISSUE}.
 
           Child issues implemented sequentially by this batch:"
           while IFS= read -r issue; do
@@ -384,7 +385,8 @@ jobs:
             exit 1
           fi
 
-          pr_body="Closes #${MASTER_ISSUE}
+          pr_body="<!-- agent-batch-pr master=${MASTER_ISSUE} -->
+          Closes #${MASTER_ISSUE}
 
           Child issues implemented by this batch:"
           while IFS= read -r issue; do

@@ -7,6 +7,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROUTER_YML="${HERE}/../../workflows/work-router.yml"
+AUTHORIZE_YML="${HERE}/../../workflows/authorize-bot-work.yml"
+BATCH_WORKFLOW_YML="${HERE}/../../workflows/agent-batch.yml"
 IMPLEMENT_WORKER_MD="${HERE}/../../workflows/agent-implement.md"
 MERGE_GATE_WORKER_MD="${HERE}/../../workflows/agent-merge-gate.md"
 
@@ -59,10 +61,16 @@ assert_route() {
 }
 
 echo "── Label events ──────────────────────────────────────────────────────────"
-assert_route "refine label routes to refine" refine \
-  EVENT=issues ACTION=labeled LABEL=refine EVENT_ISSUE_NUMBER=42
-assert_route "implement label routes to implement" implement \
-  EVENT=issues ACTION=labeled LABEL=implement EVENT_ISSUE_NUMBER=42
+assert_route "human refine label waits for authorization" none \
+  EVENT=issues ACTION=labeled LABEL=refine ACTOR=maintainer EVENT_ISSUE_NUMBER=42
+assert_route "bot refine label routes to refine" refine \
+  EVENT=issues ACTION=labeled LABEL=refine ACTOR=platform-devbox[bot] EVENT_ISSUE_NUMBER=42
+assert_route "human implement label waits for authorization" none \
+  EVENT=issues ACTION=labeled LABEL=implement ACTOR=maintainer EVENT_ISSUE_NUMBER=42
+assert_route "bot implement label routes to implement" implement \
+  EVENT=issues ACTION=labeled LABEL=implement ACTOR=platform-devbox[bot] EVENT_ISSUE_NUMBER=42
+assert_route "human feature label waits for authorization" none \
+  EVENT=issues ACTION=labeled LABEL=feature ACTOR=maintainer EVENT_ISSUE_NUMBER=350
 assert_route "unrelated label routes nowhere" none \
   EVENT=issues ACTION=labeled LABEL=documentation EVENT_ISSUE_NUMBER=42
 assert_route "issue opened without labels routes to triage" triage \
@@ -73,20 +81,22 @@ assert_route "issue opened with implement label skips triage" none \
   EVENT=issues ACTION=opened 'ISSUE_LABELS=["implement"]' EVENT_ISSUE_NUMBER=42
 assert_route "issue opened with direct label skips triage" none \
   EVENT=issues ACTION=opened 'ISSUE_LABELS=["direct"]' EVENT_ISSUE_NUMBER=42
+assert_route "issue opened with feature label skips triage" none \
+  EVENT=issues ACTION=opened 'ISSUE_LABELS=["feature"]' EVENT_ISSUE_NUMBER=42
 assert_route "a human triage label routes to triage" triage \
   EVENT=issues ACTION=labeled LABEL=triage ACTOR=maintainer EVENT_ISSUE_NUMBER=42
 assert_route "a bot triage label routes nowhere" none \
   EVENT=issues ACTION=labeled LABEL=triage ACTOR=platform-devbox[bot] EVENT_ISSUE_NUMBER=42
-assert_route "feature + implement + bot-working routes to batch" batch \
-  EVENT=issues ACTION=labeled LABEL=bot-working 'ISSUE_LABELS=["feature","implement","bot-working"]' EVENT_ISSUE_NUMBER=350
+assert_route "feature + bot-working routes to batch" batch \
+  EVENT=issues ACTION=labeled LABEL=bot-working 'ISSUE_LABELS=["feature","bot-working"]' EVENT_ISSUE_NUMBER=350
 assert_route "implement + bot-working without feature routes to implement" implement \
   EVENT=issues ACTION=labeled LABEL=bot-working 'ISSUE_LABELS=["implement","bot-working"]' EVENT_ISSUE_NUMBER=300
 assert "refine label starts a first pass" first \
-  "$(route_field refine-mode EVENT=issues ACTION=labeled LABEL=refine EVENT_ISSUE_NUMBER=42)"
-assert_route "direct label routes to direct" direct \
-  EVENT=issues ACTION=labeled LABEL=direct EVENT_ISSUE_NUMBER=42
+  "$(route_field refine-mode EVENT=issues ACTION=labeled LABEL=refine ACTOR=platform-devbox[bot] EVENT_ISSUE_NUMBER=42)"
+assert_route "bot direct label routes to direct" direct \
+  EVENT=issues ACTION=labeled LABEL=direct ACTOR=platform-devbox[bot] EVENT_ISSUE_NUMBER=42
 assert "direct label starts a first pass" first \
-  "$(route_field direct-mode EVENT=issues ACTION=labeled LABEL=direct EVENT_ISSUE_NUMBER=42)"
+  "$(route_field direct-mode EVENT=issues ACTION=labeled LABEL=direct ACTOR=platform-devbox[bot] EVENT_ISSUE_NUMBER=42)"
 
 echo "── Comment events ────────────────────────────────────────────────────────"
 assert_route "a comment on a pull request routes to apply-review" apply-review \
@@ -179,8 +189,6 @@ assert_route "merge-gate dispatch needs a pull request number" none \
   EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=0
 assert_route "merge-gate dispatch accepts a positive pull request" merge-gate \
   EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7
-assert_route "stale-recovery dispatch needs no numbers" stale-recovery \
-  EVENT=workflow_dispatch OPERATION=stale-recovery
 assert_route "reconcile-bot-pr-runs dispatch needs no numbers" reconcile-bot-pr-runs \
   EVENT=workflow_dispatch OPERATION=reconcile-bot-pr-runs
 assert_route "an unknown operation routes nowhere" none \
@@ -197,6 +205,44 @@ assert "a dispatched propose reports its trigger kind" manual \
   "$(route_field trigger-kind EVENT=workflow_dispatch OPERATION=propose INPUT_TRIGGER_KIND=manual)"
 
 echo "── Router wiring ─────────────────────────────────────────────────────────"
+if grep -Fq "github.event.label.name == 'feature'" "$AUTHORIZE_YML" &&
+  grep -Fq "elif has_label feature; then" "${HERE}/../classify-route/classify-route.sh"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: feature labels are not authorized and routed through bot-working" >&2
+fi
+
+if grep -Fq 'batch-context' "$BATCH_WORKFLOW_YML" &&
+  grep -Fq 'displayTitle == \"Working (Implement): #' "$BATCH_WORKFLOW_YML" &&
+  grep -Fq 'sha=$(completion_sha' "$BATCH_WORKFLOW_YML" &&
+  grep -Fq 'gh issue close "$issue"' "$BATCH_WORKFLOW_YML"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: batch workflow lacks correlated dispatch or verified-close wiring" >&2
+fi
+
+if grep -Fq 'Closes #${MASTER_ISSUE}' "$BATCH_WORKFLOW_YML" &&
+  ! grep -Fq 'Closes #${issue}' "$BATCH_WORKFLOW_YML" &&
+  ! grep -Fq 'pr_body="Closes #${MASTER_ISSUE}' "$BATCH_WORKFLOW_YML"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: batch pull request must close only the master issue, and only once every child is verified" >&2
+fi
+
+# Both ends of the batch handshake must name the same marker. The implement worker used to
+# accept the pull request on a `Closes #<master>` reference, which forced the draft to claim
+# the umbrella from the moment it was opened.
+if grep -Fq 'agent-batch-pr master=${MASTER_ISSUE}' "$BATCH_WORKFLOW_YML" &&
+  grep -Fq 'agent-batch-pr master=${MASTER_ISSUE}' "$IMPLEMENT_WORKER_MD"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: batch pull request marker is not agreed between agent-batch.yml and the implement worker" >&2
+fi
+
 if grep -Fq 'protected-files: allowed' "$IMPLEMENT_WORKER_MD" &&
   grep -Fq 'protected_changes:' "$MERGE_GATE_WORKER_MD"; then
   PASS=$((PASS + 1))
@@ -209,7 +255,7 @@ fi
 # label must pass the authorize gate, or anyone able to comment can start a model run that
 # writes code. Asserted here because removing the gate would otherwise be a silent, one-line
 # change that nothing fails on.
-for route in refine implement direct apply-review; do
+for route in refine implement direct apply-review batch; do
   if grep -qE "route == '${route}'.*needs\.authorize\.outputs\.trusted == 'true'" "$ROUTER_YML"; then
     PASS=$((PASS + 1))
   else
@@ -230,7 +276,7 @@ else
 fi
 
 for route in refine implement direct triage apply-review merge-gate audit propose bot-approve \
-  audit-close cleanup-artifacts reconcile-bot-pr-runs stale-recovery validate batch; do
+  audit-close cleanup-artifacts reconcile-bot-pr-runs validate batch; do
   if grep -q "route == '${route}'" "$ROUTER_YML"; then
     PASS=$((PASS + 1))
   else
