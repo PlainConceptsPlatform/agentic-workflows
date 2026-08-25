@@ -159,7 +159,7 @@ permissions:
 jobs:
   # Public repositories must check repository permission before an event can start a model.
   authorize:
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
@@ -233,7 +233,7 @@ jobs:
           esac
 
   classify:
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
@@ -287,7 +287,7 @@ jobs:
   check-implement-pr:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     timeout-minutes: 3
     permissions:
       contents: read
@@ -369,7 +369,7 @@ jobs:
   dispatch-triage:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.is_outside_collaborator == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       actions: write
@@ -490,7 +490,7 @@ jobs:
     if: >
       needs.classify.outputs.route == 'bot-approve' &&
         (github.actor == 'app/github-actions' || github.actor == 'platform-devbox[bot]')
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       actions: write
@@ -521,7 +521,7 @@ jobs:
   reconcile-bot-pr-runs:
     needs: classify
     if: needs.classify.outputs.route == 'reconcile-bot-pr-runs'
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
@@ -619,7 +619,7 @@ jobs:
   audit-close:
     needs: classify
     if: needs.classify.outputs.route == 'audit-close'
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
       group: audit-close
@@ -639,7 +639,7 @@ jobs:
   cleanup-artifacts:
     needs: classify
     if: needs.classify.outputs.route == 'cleanup-artifacts' && !github.event.repository.fork
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
       group: cleanup-artifacts
@@ -660,7 +660,7 @@ jobs:
   validate:
     needs: classify
     if: needs.classify.outputs.route == 'validate'
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read

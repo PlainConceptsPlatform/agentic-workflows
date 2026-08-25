@@ -48,7 +48,7 @@ permissions: {}
 jobs:
   close-expired-discussions:
     if: ${{ !(github.event.repository.fork) && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call' || inputs.operation == '') }}
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     permissions:
       discussions: write
     steps:
@@ -66,7 +66,7 @@ jobs:
             await main();
   close-expired-issues:
     if: ${{ !(github.event.repository.fork) && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call' || inputs.operation == '') }}
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     permissions:
       issues: write
     steps:
@@ -84,7 +84,7 @@ jobs:
             await main();
   close-expired-pull-requests:
     if: ${{ !(github.event.repository.fork) && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call' || inputs.operation == '') }}
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     permissions:
       pull-requests: write
     steps:
@@ -102,7 +102,7 @@ jobs:
             await main();
   cleanup-cache-memory:
     if: ${{ !(github.event.repository.fork) && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call' || inputs.operation == '' || inputs.operation == 'clean_cache_memories') }}
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:

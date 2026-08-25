@@ -3,3 +3,7 @@ dist/
 coverage/
 *.lock.yml
 .github/aw/actions-lock.json
+
+# Generated from /loops by cli/scripts/copy-loops.mjs on prepare and prepack.
+# Committing it duplicates every change and the two trees drift.
+cli/loops/

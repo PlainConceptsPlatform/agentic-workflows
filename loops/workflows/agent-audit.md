@@ -42,8 +42,8 @@ on:
     query: "is:issue is:open label:audit"
     max: 3
 
-runs-on: RunnerLandingZone
-runs-on-slim: RunnerLandingZone
+runs-on: [self-hosted, linux, agents]
+runs-on-slim: [self-hosted, linux, agents]
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -76,7 +76,7 @@ jobs:
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.safe_outputs.outputs.process_safe_outputs_processed_count != '0'
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     permissions:
       contents: read
       issues: write

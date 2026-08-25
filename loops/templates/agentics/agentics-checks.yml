@@ -26,7 +26,7 @@ concurrency:
 jobs:
   verify-lockfiles:
     name: Verify generated agent lockfiles
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout repository
@@ -56,7 +56,7 @@ jobs:
 
   lint-workflows:
     name: Lint authored workflows and shell
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout repository

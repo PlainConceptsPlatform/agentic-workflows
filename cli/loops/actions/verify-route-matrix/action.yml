@@ -1,9 +1,0 @@
-# Managed by @plainconceptsplatform/workflows. Source: loops/actions/verify-route-matrix/action.yml. Update with workflows update --force; consumer edits may be overwritten.
-name: Verify route matrix
-description: Exercise the router's classifier against every supported event, and check that each route and dispatch operation has a job in work-router.yml.
-runs:
-  using: composite
-  steps:
-    - name: Run route matrix verification
-      shell: bash
-      run: bash "${GITHUB_ACTION_PATH}/verify-route-matrix.sh"

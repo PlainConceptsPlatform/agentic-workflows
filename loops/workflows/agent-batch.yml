@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   orchestrate:
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     timeout-minutes: 300
     permissions:
       contents: write

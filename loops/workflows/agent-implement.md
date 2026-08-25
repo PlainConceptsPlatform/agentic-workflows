@@ -43,7 +43,7 @@ on:
 
 jobs:
   eligibility:
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     permissions:
       issues: read
     outputs:
@@ -70,7 +70,7 @@ jobs:
   reserve:
     needs: eligibility
     if: needs.eligibility.outputs.eligible == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     permissions:
       contents: read
       issues: write
@@ -102,7 +102,7 @@ jobs:
     if: >
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success'
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     permissions:
       contents: read
       issues: write
@@ -150,7 +150,7 @@ jobs:
       always() &&
       needs.eligibility.outputs.eligible == 'true' &&
       needs.agent.result != 'success'
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     permissions:
       contents: read
       issues: write
@@ -189,8 +189,8 @@ jobs:
 
 if: inputs.issue-number != '' && needs.eligibility.outputs.eligible == 'true'
 
-runs-on: RunnerLandingZone
-runs-on-slim: RunnerLandingZone
+runs-on: [self-hosted, linux, agents]
+runs-on-slim: [self-hosted, linux, agents]
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

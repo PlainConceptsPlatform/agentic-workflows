@@ -44,7 +44,7 @@ on:
 # substantive feedback. A custom job, not `on.steps`, because the prompt needs these values.
 jobs:
   subject:
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     permissions:
       contents: read
       issues: read
@@ -113,7 +113,7 @@ jobs:
   reserve:
     needs: subject
     if: needs.subject.outputs.found == 'true' && needs.subject.outputs.issue != ''
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     permissions:
       contents: read
       issues: write
@@ -143,7 +143,7 @@ jobs:
   validate_output:
     needs: [activation, subject, agent, safe_outputs]
     if: always() && needs.agent.result == 'success' && needs.safe_outputs.result == 'success'
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     permissions:
       contents: read
       pull-requests: read
@@ -186,7 +186,7 @@ jobs:
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.validate_output.outputs.valid == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     permissions:
       contents: write
       issues: write
@@ -237,7 +237,7 @@ jobs:
       always() &&
       needs.subject.outputs.found == 'true' &&
       (needs.agent.result != 'success' || needs.safe_outputs.result != 'success' || needs.validate_output.outputs.valid != 'true')
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     permissions:
       contents: read
       issues: write
@@ -276,8 +276,8 @@ jobs:
 
 if: needs.subject.outputs.found == 'true'
 
-runs-on: RunnerLandingZone
-runs-on-slim: RunnerLandingZone
+runs-on: [self-hosted, linux, agents]
+runs-on-slim: [self-hosted, linux, agents]
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

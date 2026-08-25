@@ -25,7 +25,7 @@ jobs:
       !contains(github.event.issue.labels.*.name, 'bot-working') &&
       !contains(github.event.issue.labels.*.name, 'review') &&
       !endsWith(github.actor, '[bot]')
-    runs-on: RunnerLandingZone
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
       group: authorize-${{ github.event.issue.number }}
