@@ -45,15 +45,18 @@ for (const file of readdirSync(workflowDirectory)) {
     // The MCP gateway is the only thing the agent publishes on the host loopback, so it is the
     // one thing two runners on the same machine cannot share. Honour an inherited port so each
     // runner service can pick its own; everything else is namespaced by its Docker daemon.
-    // Rootless Docker maps the runner user to container root, so the mounted socket appears as
-    // uid 0 and the host uid gh-aw passes through cannot open it. The host GID it adds with
-    // --group-add is not mapped in the user namespace either, and runc then fails with
-    // 'setgroups: invalid argument' before the gateway prints anything, which reads as the
-    // gateway exiting during initialisation with empty output. Runner 1 is rootful and keeps both.
-    .replace(/^([ \t]*)(.*resolve_docker_socket_gid.*)$/m,
-      (m, indent) => m + '\n' + indent + 'GH_AW_GROUP_ADD=\"--group-add ${DOCKER_SOCK_GID}\"' +
-        '\n' + indent + 'case ${DOCKER_HOST:-none} in */run/user/*) MCP_GATEWAY_UID=0; MCP_GATEWAY_GID=0; GH_AW_GROUP_ADD=\"\";; esac')
-    .replaceAll("--group-add '\"${DOCKER_SOCK_GID}\"'", "'\"${GH_AW_GROUP_ADD}\"'")
+    // awf names its containers awf-agent, awf-squid and awf-api-proxy with no way to change
+    // them, so two agent jobs on one host recreate each other's containers and the first dies
+    // with exit 137. Giving each runner its own user and daemon isolated the containers but
+    // broke everything the runners share through the filesystem: awf and gh-aw both write
+    // fixed-name files into /tmp, and a file one user creates cannot be overwritten by the
+    // next. Six separate failures came from that. One host lock is the smaller trade: agent
+    // jobs run one at a time, every other job still uses all the runners, and every user is
+    // the same again. The chain is serial anyway, so in practice this only queues Numa behind
+    // Odyssey. Held for the whole agent run, which is deliberate. The lock lives outside the
+    // /tmp/gh-aw namespace on purpose: the keying rewrite below would otherwise make the lock
+    // file per job, which is silently no lock at all.
+    .replaceAll('          awf --config', '          flock /tmp/agentic-awf.lock awf --config')
     .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"')
     // /tmp/gh-aw is a fixed host path used to stage prompt.txt, agent_output.json and
     // safeoutputs.jsonl. Two runners on one machine share it, so one agent overwrote another's
