@@ -110,6 +110,9 @@ jobs:
             implement
 
 safe-outputs:
+  # A failed run is already a red run. An issue per failure buries the real backlog
+  # under noise nobody closes.
+  report-failure-as-issue: false
   staged: true
   threat-detection: false
   create-issue:

@@ -339,6 +339,9 @@ steps:
         > /tmp/gh-aw/agent/review-threads.json
 
 safe-outputs:
+  # A failed run is already a red run. An issue per failure buries the real backlog
+  # under noise nobody closes.
+  report-failure-as-issue: false
   staged: true
   threat-detection: false
   push-to-pull-request-branch:

@@ -226,6 +226,9 @@ steps:
       output-path: ${{ env.ISSUE_CONTEXT_PATH }}
 
 safe-outputs:
+  # A failed run is already visible as a red run. An issue per failure buries the
+  # real backlog under noise that nobody closes.
+  report-failure-as-issue: false
   threat-detection: false
   create-pull-request:
     draft: false
