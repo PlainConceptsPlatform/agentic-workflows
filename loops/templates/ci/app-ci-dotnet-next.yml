@@ -28,7 +28,6 @@ env:
   PRIMARY_DATABASE: numa
   DATA_LAYER_DATABASE: numa_dl
   SQL_SA_PASSWORD: "YourStrong!Passw0rd"
-  SQL_PORT: "1433"
   WEB_PACKAGE: "@numa/web"
   NPM_REGISTRY_URL: "//npm.pkg.github.com/"
   TRUFFLEHOG_IMAGE: "trufflesecurity/trufflehog:latest"
@@ -56,7 +55,10 @@ jobs:
           ACCEPT_EULA: "Y"
           MSSQL_SA_PASSWORD: ${{ env.SQL_SA_PASSWORD }}
         ports:
-          - ${{ env.SQL_PORT }}:1433
+        # Ephemeral host port. Four runners share this machine, so a fixed 1433 means the
+        # second concurrent job fails at Initialize containers with "Docker start fail with
+        # exit code 1". Steps read the assigned port from the job.services context.
+          - 1433
         options: >-
           --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P '${{ env.SQL_SA_PASSWORD }}' -Q 'SELECT 1' -C || exit 1"
           --health-interval 10s --health-timeout 5s --health-retries 12 --health-start-period 30s
@@ -84,16 +86,16 @@ jobs:
           done
       - name: Apply migrations and seed test data
         env:
-          ConnectionStrings__Numa: Server=localhost,${{ env.SQL_PORT }};Database=${{ env.PRIMARY_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
-          DataLayer__ConnectionString: Server=localhost,${{ env.SQL_PORT }};Database=${{ env.DATA_LAYER_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
+          ConnectionStrings__Numa: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.PRIMARY_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
+          DataLayer__ConnectionString: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.DATA_LAYER_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
           DATALAYER_SEED: "true"
         run: |
           dotnet ef database update -p "$MIGRATION_PROJECT" -s "$MIGRATION_STARTUP_PROJECT" --context "$MIGRATION_CONTEXT"
           dotnet run --project "$SEED_PROJECT" --no-build -c Release
       - name: Integration tests with coverage
         env:
-          ConnectionStrings__Numa: Server=localhost,${{ env.SQL_PORT }};Database=${{ env.PRIMARY_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
-          DataLayer__ConnectionString: Server=localhost,${{ env.SQL_PORT }};Database=${{ env.DATA_LAYER_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
+          ConnectionStrings__Numa: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.PRIMARY_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
+          DataLayer__ConnectionString: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.DATA_LAYER_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
         run: dotnet test "$INTEGRATION_TEST_PROJECT" --no-build -c Release --collect:"XPlat Code Coverage" --settings "$COVERAGE_SETTINGS" --results-directory TestResults
       - name: Enforce merged coverage floor
         run: |
