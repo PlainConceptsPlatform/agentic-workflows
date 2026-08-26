@@ -74,7 +74,8 @@ EACCES: permission denied, scandir '/tmp/gh-aw-<run_id>/aw-prompts'
 
 Paths that gh-aw hardcodes inside its own bundled action scripts, `/tmp/gh-aw` above all,
 cannot be keyed this way at all: the wrapper only rewrites the compiled lock. Those are handled
-on the host instead, by a shared `ghaw` group with default ACLs. See
+on the host, by a default ACL on `/tmp` for a group every runner user belongs to. It has to be
+on `/tmp` rather than on `/tmp/gh-aw`, because jobs delete and recreate that directory. See
 [`../vm/README.md`](../vm/README.md).
 
 Loosening the permissions would not have been enough, because the individual files are owned by
