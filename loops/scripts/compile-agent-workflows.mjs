@@ -57,16 +57,22 @@ for (const file of readdirSync(workflowDirectory)) {
     // /tmp/gh-aw namespace on purpose: the keying rewrite below would otherwise make the lock
     // file per job, which is silently no lock at all.
     .replaceAll('          awf --config', '          flock /tmp/agentic-awf.lock awf --config')
+    // gh-aw's bundled action scripts default models.json to a hardcoded /tmp/gh-aw, which the
+    // lock rewrites cannot reach, so the activation job wrote it outside the directory it
+    // uploads from and the agent reported unknown_model_ai_credits.
+    .replace(/^env:\n/m, 'env:\n  GH_AW_MODELS_JSON_PATH: /tmp/gh-aw-${{ github.run_id }}/models.json\n')
     .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"')
     // /tmp/gh-aw is a fixed host path used to stage prompt.txt, agent_output.json and
     // safeoutputs.jsonl. Two runners on one machine share it, so one agent overwrote another's
     // prompt and opencode started with no prompt at all. Give each runner its own directory.
     // ${{ github.run_id }} is substituted by Actions, so it works in run: blocks and with:/env:
-    // runner context is not. The job id is appended because jobs of one run land on different
-    // runners, and those run as different users: a directory created by one cannot be written
-    // by the next. Jobs pass data through artifacts, so nothing needs a shared path. It stays under
+    // runner context is not. It stays under
     // /tmp where the -v /tmp:/tmp mount already reaches it.
-    .replace(/\/tmp\/gh-aw(?!-\$\{\{)/g, () => '/tmp/gh-aw-${{ github.run_id }}-${{ github.job }}')
+    // Keyed on the run only. A job suffix was added while each runner had its own Linux user,
+    // and it broke the activation-to-agent handoff: awf mounts only the current job's
+    // directory into the container, so the agent could not read a path built in activation.
+    // One user again means the run key is enough, and it still separates concurrent runs.
+    .replace(/\/tmp\/gh-aw(?!-\$\{\{)/g, () => '/tmp/gh-aw-${{ github.run_id }}')
     // Three host-global resources were left, and concurrent agent jobs fought over all of them.
     // The global npm install rewrote the opencode binary another job was executing and killed it
     // with SIGKILL mid-run; the warm server and its data directory were shared by every runner.
