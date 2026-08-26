@@ -333,12 +333,16 @@ steps:
     if: inputs.batch-context != ''
     env:
       BRANCH: ${{ needs.batch_target.outputs.branch }}
+      BATCH_FETCH_TOKEN: ${{ secrets.GH_AW_GITHUB_MCP_SERVER_TOKEN || secrets.GH_AW_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
     run: |
       set -euo pipefail
       # The sandbox checks out the default branch and runs without git credentials, so the
-      # agent cannot relocate itself. Land it on the batch branch here, using refs that
-      # checkout already fetched.
-      git checkout -B "$BRANCH" "origin/$BRANCH"
+      # agent cannot relocate itself. This checkout is a partial clone, so it lazily fetches
+      # blobs the earlier children added, and that fetch needs the token the same way gh-aw's
+      # own "Fetch additional refs" step does. Credentials stay on this command only.
+      header=$(printf 'x-access-token:%s' "$BATCH_FETCH_TOKEN" | base64 -w 0)
+      git -c "http.extraheader=Authorization: Basic ${header}" fetch --no-tags origin         "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+      git -c "http.extraheader=Authorization: Basic ${header}" checkout -B "$BRANCH" "origin/$BRANCH"
       git status --short
 
   - name: Load implementation context
