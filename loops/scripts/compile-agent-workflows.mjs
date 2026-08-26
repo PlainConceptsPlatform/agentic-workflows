@@ -45,7 +45,13 @@ for (const file of readdirSync(workflowDirectory)) {
     // The MCP gateway is the only thing the agent publishes on the host loopback, so it is the
     // one thing two runners on the same machine cannot share. Honour an inherited port so each
     // runner service can pick its own; everything else is namespaced by its Docker daemon.
-    .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"');
+    .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"')
+    // /tmp/gh-aw is a fixed host path used to stage prompt.txt, agent_output.json and
+    // safeoutputs.jsonl. Two runners on one machine share it, so one agent overwrote another's
+    // prompt and opencode started with no prompt at all. Give each runner its own directory.
+    // ${{ runner.name }} is substituted by Actions, so it works in run: blocks and with:/env:
+    // values alike, and it stays under /tmp where the -v /tmp:/tmp mount already reaches it.
+    .replace(/\/tmp\/gh-aw(?!-\$\{\{)/g, () => '/tmp/gh-aw-${{ runner.name }}');
 
   if (patched !== content) writeFileSync(path, patched);
 }
