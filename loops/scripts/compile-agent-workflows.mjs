@@ -45,6 +45,12 @@ for (const file of readdirSync(workflowDirectory)) {
     // The MCP gateway is the only thing the agent publishes on the host loopback, so it is the
     // one thing two runners on the same machine cannot share. Honour an inherited port so each
     // runner service can pick its own; everything else is namespaced by its Docker daemon.
+    // In rootless Docker the daemon maps the runner user to container root, so the socket
+    // mounted into the gateway appears owned by uid 0 and mode rw-rw----. gh-aw passes the
+    // host uid straight through, and that namespaced non-root user cannot open it, so the
+    // gateway exits during initialisation. Runner 1 is rootful and is left alone.
+    .replace(/^([ \t]*)MCP_GATEWAY_GID=\$\(id -g 2>\/dev\/null \|\| echo '0'\)$/m,
+      (m, indent) => m + '\n' + indent + 'case ${DOCKER_HOST:-none} in */run/user/*) MCP_GATEWAY_UID=0; MCP_GATEWAY_GID=0;; esac')
     .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"')
     // /tmp/gh-aw is a fixed host path used to stage prompt.txt, agent_output.json and
     // safeoutputs.jsonl. Two runners on one machine share it, so one agent overwrote another's
