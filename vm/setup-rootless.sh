@@ -26,6 +26,21 @@ done
 
 [ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
 
+echo "== shared gh-aw staging =="
+# gh-aw ships action scripts that hardcode /tmp/gh-aw, so no amount of rewriting the compiled
+# lock reaches them. With a runner per user the first user to run creates the directory and the
+# rest get EACCES, which surfaces as an unhandled error in "Generate agentic run info". A shared
+# group plus default ACLs lets any runner user overwrite a file another one created.
+apt-get install -y -qq acl >/dev/null 2>&1 || true
+getent group ghaw >/dev/null || groupadd ghaw
+cat > /etc/tmpfiles.d/gh-aw.conf <<'CONF'
+d /tmp/gh-aw 2775 root ghaw - -
+a+ /tmp/gh-aw - - - - d:g:ghaw:rwx,g:ghaw:rwx,d:o::rwx,o::rwx
+CONF
+systemd-tmpfiles --create /etc/tmpfiles.d/gh-aw.conf
+touch /tmp/opencode-install.lock && chgrp ghaw /tmp/opencode-install.lock && chmod 664 /tmp/opencode-install.lock
+echo "  /tmp/gh-aw shared via group ghaw"
+
 echo "== prerequisites =="
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -43,6 +58,7 @@ for i in $(seq 2 "$COUNT"); do
   echo "== $u =="
   if ! id -u "$u" >/dev/null 2>&1; then
     useradd -m -s /bin/bash "$u"
+    usermod -aG ghaw "$u"
     printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$u" > "/etc/sudoers.d/$u"
     chmod 0440 "/etc/sudoers.d/$u"
     echo "  created"

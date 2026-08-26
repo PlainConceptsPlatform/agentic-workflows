@@ -72,6 +72,11 @@ run alone, the first job creates the tree and the next job cannot write into it:
 EACCES: permission denied, scandir '/tmp/gh-aw-<run_id>/aw-prompts'
 ```
 
+Paths that gh-aw hardcodes inside its own bundled action scripts, `/tmp/gh-aw` above all,
+cannot be keyed this way at all: the wrapper only rewrites the compiled lock. Those are handled
+on the host instead, by a shared `ghaw` group with default ACLs. See
+[`../vm/README.md`](../vm/README.md).
+
 Loosening the permissions would not have been enough, because the individual files are owned by
 the job that wrote them too. Jobs hand data to each other through artifacts, so no job needs to
 read another's staging path, and giving each its own removes the sharing rather than trying to

@@ -166,6 +166,13 @@ job and not per run: the jobs land on different runners, so they write as differ
 the second gets `Permission denied` on a path the first created. `/tmp/gh-aw-<run_id>-<job>` is
 keyed that way for exactly this reason.
 
+Two shared paths need care for the same reason. `/tmp/gh-aw` is hardcoded inside gh-aw's own
+bundled action scripts, so it cannot be keyed per runner from the compiled lock, and the
+OpenCode install lock is shared by design. Both are owned by the `ghaw` group with default
+ACLs, recreated at boot by `/etc/tmpfiles.d/gh-aw.conf`, so any runner user can overwrite what
+another wrote. Without it the second user to run fails in "Generate agentic run info" with
+`EACCES: permission denied, open '/tmp/gh-aw/models.json'`.
+
 `setup-rootless.sh` builds these. To confirm the isolation is real rather than assumed, create a
 container with the same name in two daemons at the same moment: on one daemon the second create
 fails, which is the collision itself; across two daemons both succeed.
