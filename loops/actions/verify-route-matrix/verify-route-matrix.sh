@@ -8,7 +8,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROUTER_YML="${HERE}/../../workflows/work-router.yml"
 AUTHORIZE_YML="${HERE}/../../workflows/authorize-bot-work.yml"
-BATCH_WORKFLOW_YML="${HERE}/../../workflows/agent-batch.yml"
+FEATURE_WORKER_MD="${HERE}/../../workflows/agent-feature.md"
 IMPLEMENT_WORKER_MD="${HERE}/../../workflows/agent-implement.md"
 MERGE_GATE_WORKER_MD="${HERE}/../../workflows/agent-merge-gate.md"
 
@@ -213,34 +213,42 @@ else
   echo "FAIL: feature labels are not authorized and routed through bot-working" >&2
 fi
 
-if grep -Fq 'batch-context' "$BATCH_WORKFLOW_YML" &&
-  grep -Fq 'displayTitle == \"Working (Implement): #' "$BATCH_WORKFLOW_YML" &&
-  grep -Fq 'sha=$(completion_sha' "$BATCH_WORKFLOW_YML" &&
-  grep -Fq 'gh issue close "$issue"' "$BATCH_WORKFLOW_YML"; then
+# A feature is one long run, not a chain of per-story runs. The whole point is that the worker
+# reads every story up front, so assert it loads them rather than a single issue.
+if grep -Fq 'feature-context.json' "$FEATURE_WORKER_MD" &&
+  grep -Fq 'stories:' "$FEATURE_WORKER_MD"; then
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))
-  echo "FAIL: batch workflow lacks correlated dispatch or verified-close wiring" >&2
+  echo "FAIL: feature worker does not load the child stories into one context" >&2
 fi
 
-if grep -Fq 'Closes #${MASTER_ISSUE}' "$BATCH_WORKFLOW_YML" &&
-  ! grep -Fq 'Closes #${issue}' "$BATCH_WORKFLOW_YML" &&
-  ! grep -Fq 'pr_body="Closes #${MASTER_ISSUE}' "$BATCH_WORKFLOW_YML"; then
+# The run has to outlive a normal implement by hours, or it will be cut off mid-feature.
+feature_timeout=$(sed -n 's/^timeout-minutes: \([0-9]*\)$/\1/p' "$FEATURE_WORKER_MD" | tail -n 1)
+if [ -n "$feature_timeout" ] && [ "$feature_timeout" -ge 240 ]; then
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))
-  echo "FAIL: batch pull request must close only the master issue, and only once every child is verified" >&2
+  echo "FAIL: feature worker timeout is '${feature_timeout:-unset}', expected at least 240 minutes" >&2
 fi
 
-# Both ends of the batch handshake must name the same marker. The implement worker used to
-# accept the pull request on a `Closes #<master>` reference, which forced the draft to claim
-# the umbrella from the moment it was opened.
-if grep -Fq 'agent-batch-pr master=${MASTER_ISSUE}' "$BATCH_WORKFLOW_YML" &&
-  grep -Fq 'agent-batch-pr master=${MASTER_ISSUE}' "$IMPLEMENT_WORKER_MD"; then
+# A partial feature must not claim the umbrella issue, and the checklist a human reads to decide
+# on the merge must not report stories that were never implemented.
+if grep -Fq 'only if every story is complete' "$FEATURE_WORKER_MD" &&
+  grep -Fq 'Never claim a story you did not implement' "$FEATURE_WORKER_MD"; then
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))
-  echo "FAIL: batch pull request marker is not agreed between agent-batch.yml and the implement worker" >&2
+  echo "FAIL: feature worker may claim stories it did not implement" >&2
+fi
+
+# The feature route must reach the long-run worker, not the retired per-story orchestrator.
+if grep -Fq 'uses: ./.github/workflows/agent-feature.lock.yml' "$ROUTER_YML" &&
+  ! grep -Fq 'agent-batch.yml' "$ROUTER_YML"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the feature route does not reach agent-feature" >&2
 fi
 
 # The batch pull request number reaches the model as a named value, not as a field it has to
