@@ -179,6 +179,13 @@ for i in 1 2 3 4; do echo "$i: $(tr '\n' ' ' < /opt/actions-runner/$i/.env)"; do
 
 # services
 systemctl list-units --type=service --plain --no-legend | grep actions.runner
+
+# the agent lock actually serialises: B must not start before A ends
+sudo -u runner bash -c '
+  ( flock /tmp/agentic-awf.lock -c "echo A start \$(date +%S); sleep 4; echo A end \$(date +%S)" ) &
+  sleep 1
+  ( flock /tmp/agentic-awf.lock -c "echo B start \$(date +%S)" ) &
+  wait'
 ```
 
 A runner that shows `offline` while its service is `running` is usually mid-shutdown; GitHub's
@@ -186,8 +193,17 @@ registry lags the host by a minute or so.
 
 ## Operational notes
 
-- **Stopping a runner is graceful.** `systemctl stop` lets the current job finish rather than
-  killing it, so draining a runner is safe mid-feature.
+- **Stopping a runner kills its running job.** It does not drain. The job dies and the run
+  fails, reported as `The runner has received a shutdown signal` or, if a build was underway,
+  as something that looks like a workflow bug: `MSB4166: Child node "2" exited prematurely`.
+  Check for a busy runner before touching the services:
+
+  ```bash
+  gh api orgs/<org>/actions/runners --jq '.runners[]|select(.busy)|.name'
+  ```
+
+  An hour of agent work has been lost to this more than once, and both times the failure was
+  first read as a defect in the workflow.
 - **A cancelled run leaves labels behind.** The `incomplete` job releases `bot-working`, but a
   cancelled workflow never runs it. The issue then looks reserved forever and no retrigger
   fires. Clear it by hand before retriggering.
