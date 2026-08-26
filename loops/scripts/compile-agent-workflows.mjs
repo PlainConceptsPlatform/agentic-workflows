@@ -50,9 +50,11 @@ for (const file of readdirSync(workflowDirectory)) {
     // safeoutputs.jsonl. Two runners on one machine share it, so one agent overwrote another's
     // prompt and opencode started with no prompt at all. Give each runner its own directory.
     // ${{ github.run_id }} is substituted by Actions, so it works in run: blocks and with:/env:
-    // runner context is not, and it is constant across the jobs of one run. It stays under
+    // runner context is not. The job id is appended because jobs of one run land on different
+    // runners, and those run as different users: a directory created by one cannot be written
+    // by the next. Jobs pass data through artifacts, so nothing needs a shared path. It stays under
     // /tmp where the -v /tmp:/tmp mount already reaches it.
-    .replace(/\/tmp\/gh-aw(?!-\$\{\{)/g, () => '/tmp/gh-aw-${{ github.run_id }}')
+    .replace(/\/tmp\/gh-aw(?!-\$\{\{)/g, () => '/tmp/gh-aw-${{ github.run_id }}-${{ github.job }}')
     // Three host-global resources were left, and concurrent agent jobs fought over all of them.
     // The global npm install rewrote the opencode binary another job was executing and killed it
     // with SIGKILL mid-run; the warm server and its data directory were shared by every runner.

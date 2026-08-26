@@ -161,6 +161,12 @@ namespaces.
 | 3 | `runner3` | `/run/user/1003/docker.sock` |
 | 4 | `runner4` | `/run/user/1004/docker.sock` |
 
+A runner per user has one consequence worth stating, because it is not obvious and it broke the
+workers once. Anything the jobs of a single run share through the filesystem must be keyed per
+job and not per run: the jobs land on different runners, so they write as different users, and
+the second gets `Permission denied` on a path the first created. `/tmp/gh-aw-<run_id>-<job>` is
+keyed that way for exactly this reason.
+
 `setup-rootless.sh` builds these. To confirm the isolation is real rather than assumed, create a
 container with the same name in two daemons at the same moment: on one daemon the second create
 fails, which is the collision itself; across two daemons both succeed.
