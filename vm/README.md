@@ -111,7 +111,8 @@ job's awf containers and kills it.
 
 Four runners on one machine are not four independent machines. They share a filesystem, a
 network namespace and a Docker daemon, and the agent workflow was written for a host running
-one job at a time. Three things collide, and each one was found by a failed run.
+one job at a time. Five things collide, and every one of them was found by a failed run
+rather than by reading anything.
 
 | Resource | Collision | Isolation |
 |---|---|---|
@@ -121,8 +122,8 @@ one job at a time. Three things collide, and each one was found by a failed run.
 | gh-aw staging tree | `/tmp/gh-aw` holds `prompt.txt`, `agent_output.json`, `safeoutputs.jsonl` | keyed on `github.run_id` |
 | OpenCode install | a global `npm install -g` rewrites the binary a running job is executing | installed only when the pinned version is missing, behind `flock` |
 
-Only the first two are set on the host, in each instance's `.env`. See
-[`runner.env.template`](runner.env.template). The other two are handled when the workflows are
+Only the two ports are set on the host, in each instance's `.env`. See
+[`runner.env.template`](runner.env.template). The rest are handled when the workflows are
 compiled, described in [`../docs/self-hosted-runners.md`](../docs/self-hosted-runners.md).
 
 The failure modes are worth recognising, because none of them names its cause:

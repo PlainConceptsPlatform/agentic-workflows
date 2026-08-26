@@ -54,8 +54,7 @@ no configuration. Symptom when shared: `Port 8080 does not appear to be listenin
 
 **The gh-aw staging tree.** `/tmp/gh-aw` holds `prompt.txt`, `agent_output.json` and
 `safeoutputs.jsonl`. The real work already happens in `${RUNNER_TEMP}/gh-aw`, which is
-per-instance, but the staging copies were not. Now keyed on `github.run_id` and
-`github.job`. Symptom when
+per-instance, but the staging copies were not. Now keyed on `github.run_id`. Symptom when
 shared:
 
 ```
@@ -67,47 +66,20 @@ One job cleared the tree while another was reading its prompt, so OpenCode start
 prompt at all. The silent version is worse: safe outputs create pull requests and close issues,
 so a crossed `agent_output.json` attributes one run's work to another and nothing looks wrong.
 
-The job id is in the key for a second reason, and it only appeared once the runners moved to a
-user each. A run's jobs land on different runners, so they run as different users. Keyed on the
-run alone, the first job creates the tree and the next job cannot write into it:
+A job suffix was added to this key for a while, when each runner ran as its own Linux user and
+one user's staging directory could not be written by the next. It was reverted with the users:
+awf mounts only the current job's directory into the container, so a path built in the
+activation job could not be read by the agent. One user again means the run key is enough.
 
-```
-/tmp/gh-aw-<run_id>/agent_output.json: Permission denied
-EACCES: permission denied, scandir '/tmp/gh-aw-<run_id>/aw-prompts'
-```
-
-Paths that gh-aw hardcodes inside its own bundled action scripts, `/tmp/gh-aw` above all,
-cannot be keyed this way at all: the wrapper only rewrites the compiled lock. Those are handled
-on the host, by a default ACL on `/tmp` for a group every runner user belongs to. It has to be
-on `/tmp` rather than on `/tmp/gh-aw`, because jobs delete and recreate that directory. See
-[`../vm/README.md`](../vm/README.md).
-
-Loosening the permissions would not have been enough, because the individual files are owned by
-the job that wrote them too. Jobs hand data to each other through artifacts, so no job needs to
-read another's staging path, and giving each its own removes the sharing rather than trying to
-make it safe.
-
-**The OpenCode install.** `npm install -g opencode-ai@<version>` ran unconditionally on every
-job, rewriting a binary another job was executing. Now it installs only when the pinned version
-is missing, behind `flock`, so two jobs starting together cannot both write the global prefix.
-Symptom when shared: `exit code 137` partway through the agent's work, with no OOM anywhere in
-`dmesg`. It reads like a memory problem and is not one.
-
-**The OpenCode warm server.** One server on port 4096 with one `XDG_DATA_HOME`. The port now
-reads `${OPENCODE_PORT:-4096}` and the data directory is keyed on `runner.name`, so each runner
-keeps its own server warm between its own jobs.
-
-**models.json.** gh-aw's bundled action scripts default this to a hardcoded `/tmp/gh-aw`,
-which the wrapper cannot reach because it only rewrites the compiled lock. The activation job
-therefore wrote it outside the keyed directory it uploads from, so `models.json` never reached
-the activation artifact and the agent reported `unknown_model_ai_credits`. The wrapper now sets
-`GH_AW_MODELS_JSON_PATH` at workflow level, which points the writer at the same directory as
-the readers. Every job gets its own, because `github.job` resolves per job there.
+**models.json.** gh-aw's bundled action scripts default this to a hardcoded `/tmp/gh-aw`, which
+the wrapper cannot reach because it only rewrites the compiled lock. The activation job
+therefore wrote it outside the directory it uploads from, so `models.json` never reached the
+activation artifact and the agent reported `unknown_model_ai_credits`. The wrapper now sets
+`GH_AW_MODELS_JSON_PATH` at workflow level.
 
 ### Why the keys differ
 
-The staging tree uses `github.run_id` and `github.job`; the OpenCode data directory uses
-`runner.name`. That is
+The staging tree uses `github.run_id`; the OpenCode data directory uses `runner.name`. That is
 deliberate.
 
 A warm server should survive between jobs on the same runner, which is what makes it warm, so
@@ -117,8 +89,8 @@ run.
 There is also a hard constraint. **The `runner` context does not exist at workflow level.** A
 path rewritten to `${{ runner.name }}` in a workflow-level `env:` makes the workflow fail to
 start at all, with no jobs and no log, which is very hard to read. `github.run_id` is valid
-everywhere, and `github.job` resolves per job there too, which is why the staging key can use
-it and cannot use the runner name. Use `runner.*` only in step-level `run:` and `env:`, and
+everywhere. `github.job` also resolves per job there, which is worth knowing but is not used
+for the staging key any more. Use `runner.*` only in step-level `run:` and `env:`, and
 check where a value actually lands before keying it on the runner. Make that check a probe
 rather than a reading of the documentation: a two-job workflow echoing the value costs a minute,
 and it has already caught one wrong assumption here.

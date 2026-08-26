@@ -26,8 +26,8 @@ tar xzf "$tmp/trivy.tgz" -C "$tmp" trivy
 install -m 0755 "$tmp/trivy" /usr/local/bin/trivy
 rm -rf "$tmp"
 
-echo "== verify for every runner user =="
-for u in runner runner2 runner3 runner4; do
+echo "== verify =="
+for u in runner; do
   id -u "$u" >/dev/null 2>&1 || continue
   printf '  %s: ' "$u"
   sudo -u "$u" bash -lc 'command -v reportgenerator >/dev/null && command -v trivy >/dev/null && echo ok || echo MISSING'
