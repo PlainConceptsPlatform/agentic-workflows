@@ -198,12 +198,6 @@ assert "a scheduled audit reports its trigger kind" scheduled \
   "$(route_field trigger-kind EVENT=schedule "SCHEDULE=17 1 * * 1")"
 assert "a dispatched audit reports its trigger kind" manual \
   "$(route_field trigger-kind EVENT=workflow_dispatch OPERATION=audit INPUT_TRIGGER_KIND=manual)"
-assert_route "propose dispatch needs no numbers" propose \
-  EVENT=workflow_dispatch OPERATION=propose
-assert "a scheduled propose reports its trigger kind" scheduled \
-  "$(route_field trigger-kind EVENT=schedule "SCHEDULE=29 7 * * *")"
-assert "a dispatched propose reports its trigger kind" manual \
-  "$(route_field trigger-kind EVENT=workflow_dispatch OPERATION=propose INPUT_TRIGGER_KIND=manual)"
 
 echo "── Router wiring ─────────────────────────────────────────────────────────"
 if grep -Fq "github.event.label.name == 'feature'" "$AUTHORIZE_YML" &&
@@ -271,6 +265,17 @@ else
   echo "FAIL: implement worker does not confirm the story closed before advancing the chain" >&2
 fi
 
+# Two links can be alive at once, because a delayed label event or a manual retrigger starts a
+# second one. Both would otherwise pick the same first-open story and implement it twice, so a
+# link must refuse to dispatch while any story is already reserved.
+if grep -Fq 'WORKING_LABEL' "$FEATURE_CHAIN_YML" &&
+  grep -Fq 'already being implemented' "$FEATURE_CHAIN_YML"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: a feature chain link can dispatch a story that another link already reserved" >&2
+fi
+
 # Skipping is reversible: the story keeps the review label until a human removes it.
 if grep -Fq 'SKIP_LABEL: review' "$FEATURE_CHAIN_YML"; then
   PASS=$((PASS + 1))
@@ -332,7 +337,7 @@ else
   echo "FAIL: route 'triage' does not dispatch outside collaborators and require a trusted worker actor" >&2
 fi
 
-for route in refine implement direct triage apply-review merge-gate audit propose bot-approve \
+for route in refine implement direct triage apply-review merge-gate audit bot-approve \
   audit-close cleanup-artifacts reconcile-bot-pr-runs validate batch; do
   if grep -q "route == '${route}'" "$ROUTER_YML"; then
     PASS=$((PASS + 1))

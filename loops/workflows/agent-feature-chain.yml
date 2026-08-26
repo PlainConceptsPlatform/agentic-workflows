@@ -29,6 +29,7 @@ on:
 env:
   FEATURE_LABEL: feature
   SKIP_LABEL: review
+  WORKING_LABEL: bot-working
   STATE_MARKER: "<!-- agent-feature-chain:v1 -->"
 
 permissions:
@@ -96,6 +97,14 @@ jobs:
             if jq -e --arg l "$SKIP_LABEL" 'index($l)' >/dev/null <<<"$story_labels"; then
               skipped="${skipped}#${n} "
               continue
+            fi
+
+            # An implement already owns this story. That run dispatches the next link when it
+            # finishes, so this one must not dispatch anything: two links racing would both pick
+            # the same first-open story and implement it twice.
+            if jq -e --arg l "$WORKING_LABEL" 'index($l)' >/dev/null <<<"$story_labels"; then
+              echo "::notice::#$n is already being implemented. This link exits without dispatching."
+              exit 0
             fi
 
             if [ -z "$next" ]; then
