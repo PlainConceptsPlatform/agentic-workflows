@@ -18,6 +18,10 @@ The router, the authorizer, the feature chain and the agentics checks stay on Gi
 runners on purpose. They finish in seconds, and keeping them off the host stops them queueing
 behind a forty-minute agent job.
 
+There is deliberately no visual evidence workflow. It was removed: the agent cannot capture
+from inside the sandbox, and screenshots were never compared against a baseline, so they gated
+nothing. `pc-ops-evidence` remains installed for running `/ops-evidence` locally.
+
 `runs-on: RunnerLandingZone` is a decommissioned label. No runner carries it, so anything still
 targeting it queues forever without an error. The CI templates under `loops/templates/ci/` and
 `loops/templates/release/` were moved off it.
@@ -93,6 +97,13 @@ Symptom when shared: `exit code 137` partway through the agent's work, with no O
 reads `${OPENCODE_PORT:-4096}` and the data directory is keyed on `runner.name`, so each runner
 keeps its own server warm between its own jobs.
 
+**models.json.** gh-aw's bundled action scripts default this to a hardcoded `/tmp/gh-aw`,
+which the wrapper cannot reach because it only rewrites the compiled lock. The activation job
+therefore wrote it outside the keyed directory it uploads from, so `models.json` never reached
+the activation artifact and the agent reported `unknown_model_ai_credits`. The wrapper now sets
+`GH_AW_MODELS_JSON_PATH` at workflow level, which points the writer at the same directory as
+the readers. Every job gets its own, because `github.job` resolves per job there.
+
 ### Why the keys differ
 
 The staging tree uses `github.run_id` and `github.job`; the OpenCode data directory uses
@@ -140,3 +151,26 @@ The schema has no option for container names, a prefix, or a project name. The s
 is `container.dockerHost`, auto-detected from `DOCKER_HOST`, so each runner beyond the first
 runs as its own user with a rootless daemon. No workflow changes are needed: awf reads the
 variable itself. See [`../vm/setup-rootless.sh`](../vm/setup-rootless.sh).
+
+### What rootless changes for the MCP gateway
+
+gh-aw builds the gateway's `docker run` from host values, and two of them are wrong inside a
+user namespace. Both are rewritten by the wrapper, and only when `DOCKER_HOST` points at a
+rootless socket, so a single-runner rootful host is untouched.
+
+| Host value | Why it breaks | Rewrite |
+|---|---|---|
+| `--user $(id -u):$(id -g)` | the daemon maps the runner user to container root, so the mounted socket appears as uid 0 mode `rw-rw----` and the passed-through uid is neither owner nor group | force `0:0` |
+| `--group-add $DOCKER_SOCK_GID` | the host GID is not mapped in the namespace, so runc fails at `setgroups` | drop the flag |
+
+The second is worth knowing by sight. It fails before the gateway writes anything, and gh-aw
+reports it only as:
+
+```
+[error] ERROR: Gateway process (PID: N) exited during initialization
+[error] Gateway stdout (errors are written here per MCP Gateway Specification):
+```
+
+with nothing after it. An empty stdout there means `docker run` itself failed, not the gateway.
+Reproduce it directly on the host, where the real error is plain: the same `docker run`
+succeeds without `--group-add` and fails with it.
