@@ -58,6 +58,17 @@ because it hands the sandboxed agent control of the host daemon.
 Watch disk when container work lands here. Images, build caches and four runners' worth of tool
 caches accumulate on the OS disk, and nothing prunes them automatically.
 
+## Host tools
+
+`app-ci.yml` and `app-infra.yml` run here now, and they expect tools that GitHub-hosted
+runners ship and this host does not. `install-host-tools.sh` installs them, currently
+`reportgenerator` and `trivy`.
+
+Install into `/usr/local/bin`, never into a user's home. With a runner per user anything under
+`/home/<user>` is invisible to the other three, and the failure is an exit 127 in a step that
+names no cause: `reportgenerator: command not found`. Both tools were found this way, one after
+the other.
+
 ## Non-negotiables
 
 **The runner group must never allow public repositories.** A self-hosted runner executes
