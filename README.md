@@ -8,8 +8,16 @@ Source repository for Platform GitHub agentic workflows and the `@plainconceptsp
 - `cli/`: TypeScript installer and updater.
 - `docs/`: ownership and consumer guidance.
 - `skills/`: workflow-author and workflow-consumer skills.
+- `vm/`: how to build the self-hosted runner host the agent workers run on.
 
 Consumer repositories generate and commit their own `*.lock.yml` files. This repository does not store generated workflow locks.
+
+## Runner host
+
+The agent workers target `runs-on: [self-hosted, linux, agents]`. [`vm/`](vm/) builds that host,
+and [`docs/self-hosted-runners.md`](docs/self-hosted-runners.md) explains what the compiled lock
+files do differently from what gh-aw generates, and why. Read the second one before changing
+`loops/scripts/compile-agent-workflows.mjs`.
 
 ## Consumer prerequisite
 
