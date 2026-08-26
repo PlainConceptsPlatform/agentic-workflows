@@ -150,7 +150,7 @@ naming, because it is the reason this took an afternoon to find.
 The schema has no option for container names, a prefix, or a project name. The supported lever
 is `container.dockerHost`, auto-detected from `DOCKER_HOST`, so each runner beyond the first
 runs as its own user with a rootless daemon. No workflow changes are needed: awf reads the
-variable itself. See [`../vm/setup-rootless.sh`](../vm/setup-rootless.sh).
+variable itself. See [`../vm/serialise-agents.md`](../vm/serialise-agents.md).
 
 ### What rootless changes for the MCP gateway
 

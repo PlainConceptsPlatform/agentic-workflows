@@ -99,7 +99,7 @@ TOKEN=$(gh api -X POST orgs/<org>/actions/runners/registration-token --jq .token
 sudo bash install-runners.sh --org <org> --token "$TOKEN" --count 4 --group agentic --labels agents
 
 # 3. give every runner after the first its own Docker daemon
-sudo bash setup-rootless.sh --count 4
+sudo bash serialise-agents.md --count 4
 ```
 
 All three are idempotent: they skip what is already done, so re-run them to add runners.
@@ -186,7 +186,7 @@ under `/tmp` is writable by all of them. Without it the second user to run fails
 `EACCES: permission denied, open '/tmp/gh-aw/agent_output.json'`, and the run dies at
 "Create gh-aw temp directory".
 
-`setup-rootless.sh` builds these. To confirm the isolation is real rather than assumed, create a
+See [`serialise-agents.md`](serialise-agents.md). To confirm the isolation is real rather than assumed, create a
 container with the same name in two daemons at the same moment: on one daemon the second create
 fails, which is the collision itself; across two daemons both succeed.
 
