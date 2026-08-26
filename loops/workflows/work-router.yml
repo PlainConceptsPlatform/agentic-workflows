@@ -597,7 +597,7 @@ jobs:
                 --jq '.workflow_runs[]
                   | select(
                       .event == "pull_request"
-                      and (.name == "App: CI" or .name == "Visual evidence")
+                      and .name == "App: CI"
                     )
                   | .id' |
                 while IFS= read -r run_id; do

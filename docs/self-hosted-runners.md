@@ -9,8 +9,8 @@ For building the host itself, see [`../vm/README.md`](../vm/README.md).
 
 ## What targets the host
 
-The eight `agent-*` workers, plus the three workflows that need a container runtime:
-`app-ci.yml`, `app-infra.yml` and `visual-evidence.yml`. The runner user is in the `docker`
+The eight `agent-*` workers, plus the two workflows that need a container runtime:
+`app-ci.yml` and `app-infra.yml`. The runner user is in the `docker`
 group, so those call `docker` and `docker compose` directly. No Docker-in-Docker is involved:
 the job runs on the host, not inside a container, so it simply uses the daemon.
 

@@ -30,7 +30,6 @@ Everything that needs either an agent or a container:
 | the eight `agent-*` workers | warm OpenCode server, large tool cache, long runs |
 | `app-ci.yml` | needs Docker for service containers |
 | `app-infra.yml` | needs the Azure tooling and Docker |
-| `visual-evidence.yml` | starts SQL Server with `docker compose` |
 
 Deliberately **not** here: `work-router.yml`, `authorize-bot-work.yml`,
 `agent-feature-chain.yml` and `agentics-checks.yml`. Those are seconds-long coordination jobs,

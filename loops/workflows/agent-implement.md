@@ -344,7 +344,7 @@ timeout-minutes: 90
       options for more than one turn.
 
    After all todos are complete, skip directly to step 4 (verify). Do not run
-   `pc-plan-goal`, `pc-plan-archive`, or `pc-ops-evidence`.
+   `pc-plan-goal` or `pc-plan-archive`.
 
    **If the trivial marker is absent (standard path):**
 
@@ -352,7 +352,7 @@ timeout-minutes: 90
    manually orchestrate implementation steps. Instead:
 
    a. Load the `pc-plan-goal` skill. It defines a mandatory, gate-sequenced pipeline:
-      `explore · propose · apply · verify · archive · evidence · output · report`
+      `explore · propose · apply · verify · archive · output · report`
 
    b. **Refined-issue fast path:** If the issue context at `${{ env.ISSUE_CONTEXT_PATH }}`
       already contains structured acceptance criteria (e.g. "## Acceptance criteria",
@@ -361,20 +361,15 @@ timeout-minutes: 90
       apply. Do not override this: re-exploring a pre-refined issue wastes tokens.
 
    c. Execute every phase in order. Each phase loads its own sub-skill (`pc-plan-explore`,
-      `pc-plan-propose`, `pc-plan-apply`, `pc-repo-verify`, `pc-plan-archive`,
-      `pc-ops-evidence`) and owns its procedure. You must not skip a phase unless the
+      `pc-plan-propose`, `pc-plan-apply`, `pc-repo-verify`, `pc-plan-archive`)
+      and owns its procedure. You must not skip a phase unless the
       pipeline's refined-issue detection says to.
 
     d. The `apply` phase uses `pc-plan-apply` which delegates implementation to specialist
        subagent waves. Let it own worker resolution, concurrency, and retry , do not
        implement the tasks yourself unless `pc-plan-apply` instructs you to.
 
-    e. **Evidence phase:** The agent sandbox cannot run Docker or headless Chromium.
-       `pc-ops-evidence` writes a `capturePlan` in `evidence.json` instead of capturing
-       screenshots. A separate "Visual evidence" CI workflow runs the capturePlan on a
-       runner with full access. Do not attempt workarounds — write the capturePlan and move on.
-
-    f. Implement only what the issue asks for: a vague sentence is not licence to redesign
+    e. Implement only what the issue asks for: a vague sentence is not licence to redesign
        a module. Never read outside this repository root. The issue context at
        `${{ env.ISSUE_CONTEXT_PATH }}` defines acceptance criteria that the pipeline must
        satisfy.

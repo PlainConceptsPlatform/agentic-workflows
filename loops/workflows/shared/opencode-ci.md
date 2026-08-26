@@ -139,14 +139,12 @@ pre-agent-steps:
       npm install -g "@fission-ai/openspec@1.8.0"
       openspec --version
 
-  # NOTE: playwright-cli and SQL Server startup steps have been removed from the
-  # shared CI baseline. Visual evidence capture now runs in a separate "Visual
-  # evidence" workflow that executes on the raw runner (not inside the awf
-  # sandbox), where Docker and headless Chromium are available. The agent's
-  # /ops-evidence skill writes a capturePlan in evidence.json when blocked;
-  # the Visual Evidence workflow reads and executes it. If you need playwright-cli
-  # or SQL Server inside the agent sandbox for other reasons, add them as
-  # consumer-specific steps after the shared baseline.
+  # NOTE: playwright-cli and SQL Server startup steps are not part of the shared CI
+  # baseline. The agent path captures no visual evidence: it cannot reach a browser
+  # from inside the awf sandbox, and a screenshot with no baseline to compare against
+  # gated nothing. Run /ops-evidence locally when a change warrants screenshots. If
+  # you need playwright-cli or SQL Server inside the agent sandbox for other reasons,
+  # add them as consumer-specific steps after the shared baseline.
 
   - name: Cache NuGet packages
     uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
