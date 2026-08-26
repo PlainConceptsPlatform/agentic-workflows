@@ -49,6 +49,11 @@ for (const file of readdirSync(workflowDirectory)) {
     // mounted into the gateway appears owned by uid 0 and mode rw-rw----. gh-aw passes the
     // host uid straight through, and that namespaced non-root user cannot open it, so the
     // gateway exits during initialisation. Runner 1 is rootful and is left alone.
+    // gh-aw's bundled action scripts default models.json to a hardcoded /tmp/gh-aw, which the
+    // lock rewrites cannot reach. The activation job then wrote it outside the keyed directory
+    // it uploads from, so models.json never reached the artifact and the agent reported
+    // unknown_model_ai_credits. Point the writer at the same keyed directory as the readers.
+    .replace(/^env:\n/m, 'env:\n  GH_AW_MODELS_JSON_PATH: /tmp/gh-aw-${{ github.run_id }}-${{ github.job }}/models.json\n')
     .replace(/^([ \t]*)MCP_GATEWAY_GID=\$\(id -g 2>\/dev\/null \|\| echo '0'\)$/m,
       (m, indent) => m + '\n' + indent + 'case ${DOCKER_HOST:-none} in */run/user/*) MCP_GATEWAY_UID=0; MCP_GATEWAY_GID=0;; esac')
     .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"')
