@@ -12,7 +12,7 @@ permissions:
 jobs:
   publish:
     name: Publish release
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     timeout-minutes: 10
     steps:
       - name: Create or update GitHub release

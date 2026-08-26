@@ -21,6 +21,44 @@ reasoning is recorded, because most of it was learned by watching a run fail.
 | Runner group | `agentic`, visible to all org repositories |
 | Labels | `agents` (plus the automatic `self-hosted,Linux,X64`) |
 
+## What runs here
+
+Everything that needs either an agent or a container:
+
+| Workflow | Why here |
+|---|---|
+| the eight `agent-*` workers | warm OpenCode server, large tool cache, long runs |
+| `app-ci.yml` | needs Docker for service containers |
+| `app-infra.yml` | needs the Azure tooling and Docker |
+| `visual-evidence.yml` | starts SQL Server with `docker compose` |
+
+Deliberately **not** here: `work-router.yml`, `authorize-bot-work.yml`,
+`agent-feature-chain.yml` and `agentics-checks.yml`. Those are seconds-long coordination jobs,
+and running them on GitHub-hosted runners keeps them from queueing behind a forty-minute agent
+job. That queueing was the original bottleneck, so moving them here would undo the benefit.
+
+If you are wiring a repository up, look for `runs-on: RunnerLandingZone`. That label belongs to
+a decommissioned host and no runner carries it, so any workflow still targeting it never starts
+at all: it queues forever with no error to read.
+
+## Docker
+
+The runner user is in the `docker` group and talks to the host daemon directly, so workflows
+can call `docker` and `docker compose` with no extra setup. `setup-vm.sh` installs the engine
+and the compose plugin.
+
+This is not Docker-in-Docker and does not need to be. DinD matters when a *container* has to
+start containers; here the job runs on the host, so it just uses the daemon. It is simpler and
+faster than nesting.
+
+The agent sandbox is the one place where nesting would apply: awf can expose the Docker socket
+inside the agent container through `container.enableDind`, which would let the model itself run
+`docker`. That is off, and turning it on is a real security decision rather than a convenience,
+because it hands the sandboxed agent control of the host daemon.
+
+Watch disk when container work lands here. Images, build caches and four runners' worth of tool
+caches accumulate on the OS disk, and nothing prunes them automatically.
+
 ## Non-negotiables
 
 **The runner group must never allow public repositories.** A self-hosted runner executes
@@ -84,7 +122,7 @@ The last one is the dangerous shape. A crossed `agent_output.json` would not cra
 outputs create pull requests and close issues, so one run's work can be attributed to another
 and nothing looks wrong.
 
-## Docker
+## One Docker daemon, four runners
 
 A single rootful daemon is shared by all runners. That is safe because awf names its network
 per run (`awf-<timestamp>_awf-ext`), so networks and containers do not collide.

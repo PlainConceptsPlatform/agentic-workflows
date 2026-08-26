@@ -47,7 +47,7 @@ jobs:
   api:
     name: API (.NET)
     if: github.event_name != 'schedule'
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     timeout-minutes: 30
     services:
       sqlserver:
@@ -104,7 +104,7 @@ jobs:
   web:
     name: Web (Next.js)
     if: github.event_name != 'schedule'
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -134,14 +134,14 @@ jobs:
 
   secret-scan:
     name: Secret scan (TruffleHog)
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: docker run --rm -v "${{ github.workspace }}:/repo" "$TRUFFLEHOG_IMAGE" filesystem /repo --only-verified --fail --no-update
 
   deps-and-iac-scan:
     name: Dependencies and IaC (Trivy)
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -155,14 +155,14 @@ jobs:
 
   sast-scan:
     name: SAST (Semgrep)
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: docker run --rm -v "${{ github.workspace }}:/src" -w /src "$SEMGREP_IMAGE" semgrep scan --error --metrics=off --oss-only --disable-version-check --config p/default --config p/security-audit --config p/secrets --config p/csharp --config p/typescript --config p/react --exclude-rule yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
 
   sbom:
     name: SBOM (CycloneDX)
-    runs-on: RunnerLandingZone
+    runs-on: [self-hosted, linux, agents]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0

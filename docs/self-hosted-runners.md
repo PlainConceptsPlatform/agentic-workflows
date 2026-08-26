@@ -7,6 +7,21 @@ what actually ships, and why each one exists.
 
 For building the host itself, see [`../vm/README.md`](../vm/README.md).
 
+## What targets the host
+
+The eight `agent-*` workers, plus the three workflows that need a container runtime:
+`app-ci.yml`, `app-infra.yml` and `visual-evidence.yml`. The runner user is in the `docker`
+group, so those call `docker` and `docker compose` directly. No Docker-in-Docker is involved:
+the job runs on the host, not inside a container, so it simply uses the daemon.
+
+The router, the authorizer, the feature chain and the agentics checks stay on GitHub-hosted
+runners on purpose. They finish in seconds, and keeping them off the host stops them queueing
+behind a forty-minute agent job.
+
+`runs-on: RunnerLandingZone` is a decommissioned label. No runner carries it, so anything still
+targeting it queues forever without an error. The CI templates under `loops/templates/ci/` and
+`loops/templates/release/` were moved off it.
+
 ## The lock files are post-processed
 
 `gh aw compile` is never called directly. `loops/scripts/compile-agent-workflows.mjs` runs it
