@@ -52,7 +52,27 @@ for (const file of readdirSync(workflowDirectory)) {
     // ${{ github.run_id }} is substituted by Actions, so it works in run: blocks and with:/env:
     // runner context is not, and it is constant across the jobs of one run. It stays under
     // /tmp where the -v /tmp:/tmp mount already reaches it.
-    .replace(/\/tmp\/gh-aw(?!-\$\{\{)/g, () => '/tmp/gh-aw-${{ github.run_id }}');
+    .replace(/\/tmp\/gh-aw(?!-\$\{\{)/g, () => '/tmp/gh-aw-${{ github.run_id }}')
+    // Three host-global resources were left, and concurrent agent jobs fought over all of them.
+    // The global npm install rewrote the opencode binary another job was executing and killed it
+    // with SIGKILL mid-run; the warm server and its data directory were shared by every runner.
+    //
+    // All of these sites are step-level run: or env:, where the runner context is available. It
+    // is not available at workflow level, which is what broke the staging path earlier.
+    //
+    // Install only when the pinned version is missing, and take a lock so two jobs starting at
+    // once cannot both write the global prefix.
+    .replace(
+      /npm install --ignore-scripts -g opencode-ai@([0-9][0-9.]*)/g,
+      (_m, v) =>
+        "opencode --version 2>/dev/null | grep -qF '" + v + "' || " +
+        "flock /tmp/opencode-install.lock npm install --ignore-scripts -g opencode-ai@" + v)
+    // One warm server per runner, on its own port, with its own data directory. Keyed on the
+    // runner rather than the run so a runner keeps its server warm between its own jobs.
+    // No double quotes here: the enclosing run: is a double-quoted YAML scalar, so a quote
+    // would have to be escaped. The default has no spaces, so bare is safe shell.
+    .replaceAll('OPENCODE_PORT=4096', 'OPENCODE_PORT=${OPENCODE_PORT:-4096}')
+    .replace(/\/tmp\/opencode-data(?!-\$\{\{)/g, () => '/tmp/opencode-data-${{ runner.name }}');
 
   if (patched !== content) writeFileSync(path, patched);
 }
