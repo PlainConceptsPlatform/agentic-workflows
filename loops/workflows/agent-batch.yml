@@ -230,6 +230,18 @@ jobs:
           failed=""
           . /tmp/mint-token.sh
 
+          token_minted_at=0
+          # Installation tokens last an hour. Refresh at forty minutes so no API call in the
+          # watch loop is ever made with a token close to expiry.
+          ensure_token() {
+            local now
+            now=$(date +%s)
+            if [ "$(( now - token_minted_at ))" -ge 2400 ]; then
+              mint_token || return 1
+              token_minted_at=$now
+            fi
+          }
+
           set_status() {
             local issue="$1" status="$2" body
             body=$(gh api "repos/$REPO/issues/comments/$COMMENT_ID" --jq '.body')
@@ -259,6 +271,7 @@ jobs:
               echo "::error::Could not mint an installation token; stopping the batch"
               exit 1
             }
+            token_minted_at=$(date +%s)
             existing_sha=$(completion_sha "$issue")
             if [ -n "$existing_sha" ] && verify_ancestor "$existing_sha"; then
               state=$(gh issue view "$issue" --repo "$REPO" --json state --jq '.state')
@@ -318,7 +331,18 @@ jobs:
               continue
             }
 
-            if ! gh run watch "$run_id" --repo "$REPO" --exit-status; then
+            # `gh run watch` blocks for the child's whole lifetime, which outlives the token
+            # minted for it. Poll instead, refreshing the token well inside its hour.
+            child_state=""
+            while :; do
+              ensure_token || break
+              child_state=$(gh api "repos/$REPO/actions/runs/$run_id"                 --jq '"\(.status)/\(.conclusion // "-")"' 2>/dev/null || echo "")
+              case "$child_state" in
+                completed/*) break ;;
+              esac
+              sleep 30
+            done
+            if [ "$child_state" != "completed/success" ]; then
               set_status "$issue" "Failed: run $run_id"
               failed="${failed}${issue} "
               continue
