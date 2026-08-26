@@ -131,6 +131,7 @@ jobs:
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
       - name: Land the story and advance the feature chain
+        id: land
         if: inputs.feature-chain != '' && needs.safe_outputs.outputs.created_pr_number != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -143,6 +144,11 @@ jobs:
           set -euo pipefail
 
           gh pr merge "$PR_NUMBER" --repo "$REPO" --squash --delete-branch
+
+          # Underscore, not a hyphen: a hyphen inside a ${{ }} property path parses as
+          # subtraction and the reference silently resolves to nothing.
+          merge_sha=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json mergeCommit --jq '.mergeCommit.oid // ""')
+          echo "merge_sha=${merge_sha}" >> "$GITHUB_OUTPUT"
 
           # Closing the story is the chain's state, so it is checked rather than assumed. A
           # story left open would be picked again on the next link, forever.
@@ -160,6 +166,14 @@ jobs:
             -f ref="$DEFAULT_BRANCH" \
             -f "inputs[operation]=feature-chain" \
             -f "inputs[issue-number]=$FEATURE"
+      - name: Record the change in the changelog
+        if: inputs.feature-chain != '' && steps.land.outputs.merge_sha != ''
+        uses: ./.github/actions/update-changelog
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          commit-sha: ${{ steps.land.outputs.merge_sha }}
+
       - name: Verify PR closes the source issue
         if: inputs.feature-chain == '' && needs.safe_outputs.outputs.created_pr_number != ''
         continue-on-error: true
@@ -395,24 +409,10 @@ timeout-minutes: 90
 
       If no existing PR is found, proceed to create a new one as described below.
 
-      Before creating the pull request, update `changelog.json` in the project's
-      `src/shared/data/` folder (create `src/shared/data/changelog.json` if it does not
-      exist; in a monorepo use `apps/web/src/shared/data/changelog.json`). The file
-      has shape `{"version":1,"changes":[...]}`. Use `jq` to prepend a new entry
-      with `"timestamp"` (ISO 8601), `"issue"` (number), `"title"` (issue title),
-      `"summary"` (1-2 sentences of what you changed), and `"commit"` (short SHA).
-      After prepending, trim the array to the 10 newest entries by dropping entries
-      from the end. This means: if the array has N entries after prepend and N > 10,
-      drop the last N - 10 entries. Never drop more than necessary and never drop the
-      new entry you just added. Commit this file as part of the same branch before
-      creating the PR.
-
-      The changelog is user-facing. Write the summary for a non-technical reader. Never
-      expose security, auth, or admin internals: no token/session/JWT details, no
-      permission or authorization logic, no audit trail mechanics, no internal method
-      names, no database or migration details. If the work touches these areas, describe
-      the user-visible outcome only (e.g. "Improved session reliability" or "Fixed a data
-      display issue"), not how it was implemented.
+      Do not touch `changelog.json`. The workflow records the change itself once the work is
+      on the default branch. Every implement used to edit that one file, so two runs whose
+      branches were cut before the other merged conflicted on it and failed to open a pull
+      request with the code already written.
 
   6. You **must** call exactly one safe-output tool before finishing, or the workflow
     reports a failure. All safe-output tools are on the `safeoutputs` MCP server. Call
