@@ -49,9 +49,10 @@ for (const file of readdirSync(workflowDirectory)) {
     // /tmp/gh-aw is a fixed host path used to stage prompt.txt, agent_output.json and
     // safeoutputs.jsonl. Two runners on one machine share it, so one agent overwrote another's
     // prompt and opencode started with no prompt at all. Give each runner its own directory.
-    // ${{ runner.name }} is substituted by Actions, so it works in run: blocks and with:/env:
-    // values alike, and it stays under /tmp where the -v /tmp:/tmp mount already reaches it.
-    .replace(/\/tmp\/gh-aw(?!-\$\{\{)/g, () => '/tmp/gh-aw-${{ runner.name }}');
+    // ${{ github.run_id }} is substituted by Actions, so it works in run: blocks and with:/env:
+    // runner context is not, and it is constant across the jobs of one run. It stays under
+    // /tmp where the -v /tmp:/tmp mount already reaches it.
+    .replace(/\/tmp\/gh-aw(?!-\$\{\{)/g, () => '/tmp/gh-aw-${{ github.run_id }}');
 
   if (patched !== content) writeFileSync(path, patched);
 }
