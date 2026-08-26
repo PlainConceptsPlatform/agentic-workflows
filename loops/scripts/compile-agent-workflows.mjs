@@ -45,17 +45,15 @@ for (const file of readdirSync(workflowDirectory)) {
     // The MCP gateway is the only thing the agent publishes on the host loopback, so it is the
     // one thing two runners on the same machine cannot share. Honour an inherited port so each
     // runner service can pick its own; everything else is namespaced by its Docker daemon.
-    // In rootless Docker the daemon maps the runner user to container root, so the socket
-    // mounted into the gateway appears owned by uid 0 and mode rw-rw----. gh-aw passes the
-    // host uid straight through, and that namespaced non-root user cannot open it, so the
-    // gateway exits during initialisation. Runner 1 is rootful and is left alone.
-    // gh-aw's bundled action scripts default models.json to a hardcoded /tmp/gh-aw, which the
-    // lock rewrites cannot reach. The activation job then wrote it outside the keyed directory
-    // it uploads from, so models.json never reached the artifact and the agent reported
-    // unknown_model_ai_credits. Point the writer at the same keyed directory as the readers.
-    .replace(/^env:\n/m, 'env:\n  GH_AW_MODELS_JSON_PATH: /tmp/gh-aw-${{ github.run_id }}-${{ github.job }}/models.json\n')
-    .replace(/^([ \t]*)MCP_GATEWAY_GID=\$\(id -g 2>\/dev\/null \|\| echo '0'\)$/m,
-      (m, indent) => m + '\n' + indent + 'case ${DOCKER_HOST:-none} in */run/user/*) MCP_GATEWAY_UID=0; MCP_GATEWAY_GID=0;; esac')
+    // Rootless Docker maps the runner user to container root, so the mounted socket appears as
+    // uid 0 and the host uid gh-aw passes through cannot open it. The host GID it adds with
+    // --group-add is not mapped in the user namespace either, and runc then fails with
+    // 'setgroups: invalid argument' before the gateway prints anything, which reads as the
+    // gateway exiting during initialisation with empty output. Runner 1 is rootful and keeps both.
+    .replace(/^([ \t]*)(.*resolve_docker_socket_gid.*)$/m,
+      (m, indent) => m + '\n' + indent + 'GH_AW_GROUP_ADD=\"--group-add ${DOCKER_SOCK_GID}\"' +
+        '\n' + indent + 'case ${DOCKER_HOST:-none} in */run/user/*) MCP_GATEWAY_UID=0; MCP_GATEWAY_GID=0; GH_AW_GROUP_ADD=\"\";; esac')
+    .replaceAll("--group-add '\"${DOCKER_SOCK_GID}\"'", "'\"${GH_AW_GROUP_ADD}\"'")
     .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"')
     // /tmp/gh-aw is a fixed host path used to stage prompt.txt, agent_output.json and
     // safeoutputs.jsonl. Two runners on one machine share it, so one agent overwrote another's
