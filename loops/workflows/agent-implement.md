@@ -56,7 +56,7 @@ jobs:
     outputs:
       valid: ${{ steps.check.outputs.valid }}
       branch: ${{ steps.check.outputs.branch }}
-      pr-number: ${{ steps.check.outputs.pr-number }}
+      pr_number: ${{ steps.check.outputs.pr_number }}
     steps:
       - name: Validate the batch pull request target
         id: check
@@ -69,7 +69,7 @@ jobs:
           if [ -z "$BATCH_CONTEXT" ]; then
             echo "valid=true" >> "$GITHUB_OUTPUT"
             echo "branch=" >> "$GITHUB_OUTPUT"
-            echo "pr-number=" >> "$GITHUB_OUTPUT"
+            echo "pr_number=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -93,7 +93,7 @@ jobs:
 
           echo "valid=$valid" >> "$GITHUB_OUTPUT"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          echo "pr-number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           [ "$valid" = "true" ] || {
             echo "::error::PR #$PR_NUMBER is not the expected draft batch target at $EXPECTED_HEAD"
             exit 1
@@ -369,7 +369,7 @@ timeout-minutes: 90
    selected for you; do not choose a different one, and do not look for other candidates.
 
    If batch context **${{ inputs.batch-context }}** is non-empty, this is batch mode. Push only to
-   pull request **#${{ needs.batch_target.outputs.pr-number }}** on branch
+   pull request **#${{ needs.batch_target.outputs.pr_number }}** on branch
    **${{ needs.batch_target.outputs.branch }}**. Use that number exactly; never derive a pull
    request number from the batch context or the branch name. Do not create another branch or
    pull request.

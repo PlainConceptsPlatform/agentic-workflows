@@ -246,12 +246,22 @@ fi
 # The batch pull request number reaches the model as a named value, not as a field it has to
 # pick out of the packed batch context. It once chose the master issue number instead, because
 # that number also appears in the branch name, and the push landed nowhere.
-if grep -Fq 'pr-number: ${{ steps.check.outputs.pr-number }}' "$IMPLEMENT_WORKER_MD" &&
-  grep -Fq 'needs.batch_target.outputs.pr-number' "$IMPLEMENT_WORKER_MD"; then
+if grep -Fq 'pr_number: ${{ steps.check.outputs.pr_number }}' "$IMPLEMENT_WORKER_MD" &&
+  grep -Fq 'needs.batch_target.outputs.pr_number' "$IMPLEMENT_WORKER_MD"; then
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))
   echo "FAIL: implement worker does not name the batch pull request number explicitly" >&2
+fi
+
+# A hyphen inside a ${{ }} property path is parsed as subtraction, so the reference silently
+# resolves to nothing and the rendered prompt keeps the raw expression. Underscores only.
+if ! grep -qE 'needs\.[a-z_]+\.outputs\.[a-zA-Z0-9_]*-' "$IMPLEMENT_WORKER_MD"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: implement worker reads a hyphenated job output inside an expression" >&2
+  grep -nE 'needs\.[a-z_]+\.outputs\.[a-zA-Z0-9_]*-' "$IMPLEMENT_WORKER_MD" >&2
 fi
 
 # A worker that prints ${VERIFY_COMMANDS} without setting it renders an empty command block,
