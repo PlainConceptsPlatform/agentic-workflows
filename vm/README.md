@@ -98,14 +98,17 @@ sudo bash setup-vm.sh
 TOKEN=$(gh api -X POST orgs/<org>/actions/runners/registration-token --jq .token)
 sudo bash install-runners.sh --org <org> --token "$TOKEN" --count 4 --group agentic --labels agents
 
-# 3. give every runner after the first its own Docker daemon
-sudo bash serialise-agents.md --count 4
+# 3. tools that app-ci.yml and app-infra.yml expect on PATH
+sudo bash install-host-tools.sh
 ```
 
 All three are idempotent: they skip what is already done, so re-run them to add runners.
 
-Step 3 is not optional above one runner. Without it a second agent job recreates the first
-job's awf containers and kills it.
+Nothing on the host stops two agent jobs colliding, and nothing needs to. awf's container names
+are fixed, so the compiled lock serialises agent jobs behind `flock /tmp/agentic-awf.lock`.
+Every runner is the same `runner` user on the one Docker daemon. Giving each its own user and
+daemon was tried and reverted, and [`serialise-agents.md`](serialise-agents.md) explains why
+before anyone tries it again.
 
 ## Why each runner needs its own environment
 
