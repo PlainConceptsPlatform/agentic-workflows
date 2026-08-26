@@ -145,7 +145,7 @@ jobs:
 
           gh pr merge "$PR_NUMBER" --repo "$REPO" --squash --delete-branch
 
-          # Underscore, not a hyphen: a hyphen inside a ${{ }} property path parses as
+          # Underscore, not a hyphen: a hyphen inside an Actions expression parses as
           # subtraction and the reference silently resolves to nothing.
           merge_sha=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json mergeCommit --jq '.mergeCommit.oid // ""')
           echo "merge_sha=${merge_sha}" >> "$GITHUB_OUTPUT"

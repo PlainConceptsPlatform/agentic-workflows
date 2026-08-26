@@ -276,6 +276,20 @@ else
   echo "FAIL: a feature chain link can dispatch a story that another link already reserved" >&2
 fi
 
+# GitHub evaluates every Actions expression in a workflow file, including ones written inside
+# shell comments. An empty pair is not a valid expression and fails the whole file to parse,
+# with an error that points at a line number rather than saying what is wrong. Prose about
+# expressions must not contain one.
+empty_expr=$(grep -rl -e '${{[[:space:]]*}}' "${HERE}/../../workflows"/*.yml "${HERE}/../../workflows"/*.md 2>/dev/null || true)
+if [ -z "$empty_expr" ]; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: workflow files contain an empty Actions expression:" >&2
+  printf '  %s
+' $empty_expr >&2
+fi
+
 # Skipping is reversible: the story keeps the review label until a human removes it.
 if grep -Fq 'SKIP_LABEL: review' "$FEATURE_CHAIN_YML"; then
   PASS=$((PASS + 1))
