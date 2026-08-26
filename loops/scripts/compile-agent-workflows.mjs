@@ -41,7 +41,11 @@ for (const file of readdirSync(workflowDirectory)) {
     .replaceAll("--log-level DEBUG", "--log-level ERROR")
     .replace(/GH_AW_INFO_MODEL: "[^"]*"/g, 'GH_AW_INFO_MODEL: "per-agent"')
     .replace(/OPENCODE_MODEL: [^\n]+/g, "OPENCODE_MODEL: ''")
-    .replace(/GH_AW_INFO_MODEL_COSTS: '[^']*'/g, 'GH_AW_INFO_MODEL_COSTS: \'{"providers":{}}\'');
+    .replace(/GH_AW_INFO_MODEL_COSTS: '[^']*'/g, 'GH_AW_INFO_MODEL_COSTS: \'{"providers":{}}\'')
+    // The MCP gateway is the only thing the agent publishes on the host loopback, so it is the
+    // one thing two runners on the same machine cannot share. Honour an inherited port so each
+    // runner service can pick its own; everything else is namespaced by its Docker daemon.
+    .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"');
 
   if (patched !== content) writeFileSync(path, patched);
 }
