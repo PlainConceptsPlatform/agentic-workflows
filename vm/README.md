@@ -115,7 +115,7 @@ one job at a time. Three things collide, and each one was found by a failed run.
 
 | Resource | Collision | Isolation |
 |---|---|---|
-| **awf containers** | **fixed names `awf-agent`, `awf-squid`, `awf-api-proxy`; a second job recreates the first job's containers and kills it** | **one Docker daemon per runner** |
+| **awf containers** | **fixed names `awf-agent`, `awf-squid`, `awf-api-proxy`; a second job recreates the first job's containers and kills it** | **agent jobs serialised by `flock /tmp/agentic-awf.lock`** |
 | MCP gateway port | published on `127.0.0.1:8080`, so the second job cannot bind | `MCP_GATEWAY_PORT` per runner |
 | OpenCode server | one server on `4096` with one data directory | `OPENCODE_PORT` per runner, data directory keyed on runner name |
 | gh-aw staging tree | `/tmp/gh-aw` holds `prompt.txt`, `agent_output.json`, `safeoutputs.jsonl` | keyed on `github.run_id` |
@@ -145,50 +145,24 @@ The last one is the dangerous shape. A crossed `agent_output.json` would not cra
 outputs create pull requests and close issues, so one run's work can be attributed to another
 and nothing looks wrong.
 
-## One Docker daemon per runner
+## Agent jobs run one at a time
 
-This is the piece that makes concurrency possible at all, and it is the easiest thing to get
-wrong.
+awf gives its containers fixed names, `awf-agent`, `awf-squid` and `awf-api-proxy`, with only
+the compose project label varying per run. On a shared daemon a second agent job recreates the
+first job's containers and kills it, and the first dies with exit 137 partway through its work.
+The schema has no option for container names, a prefix, or a project name.
 
-awf gives its containers fixed names: `awf-agent`, `awf-squid`, `awf-api-proxy`. Only the
-compose project label varies per run. On a shared daemon a second agent job therefore recreates
-the first job's containers and kills it, and the first job dies with exit 137 partway through
-its work.
+The timestamped network `awf-<timestamp>_awf-ext` makes runs look isolated. They are not:
+`awf-net` is shared and the names are what collide.
 
-The network name looks per-run (`awf-<timestamp>_awf-ext`) and that is misleading. `awf-net`
-itself is shared, and the container names are what collide. Do not conclude from the timestamped
-network that runs are isolated, because they are not. That mistake cost an afternoon here.
+The compiled lock therefore wraps the awf call in `flock /tmp/agentic-awf.lock`, so one agent
+job runs at a time. Every other job, CI and deploy included, still uses all four runners, and
+the chain implements one story at a time anyway.
 
-The schema offers no option for container names, a name prefix, or a project name, so the names
-cannot be changed. The supported lever is `container.dockerHost`, auto-detected from
-`DOCKER_HOST`. Give each runner its own daemon and the identical names live in separate
-namespaces.
-
-| runner | user | daemon |
-|---|---|---|
-| 1 | `runner` | rootful, `/var/run/docker.sock` |
-| 2 | `runner2` | `/run/user/1002/docker.sock` |
-| 3 | `runner3` | `/run/user/1003/docker.sock` |
-| 4 | `runner4` | `/run/user/1004/docker.sock` |
-
-A runner per user has one consequence worth stating, because it is not obvious and it broke the
-workers once. Anything the jobs of a single run share through the filesystem must be keyed per
-job and not per run: the jobs land on different runners, so they write as different users, and
-the second gets `Permission denied` on a path the first created. `/tmp/gh-aw-<run_id>-<job>` is
-keyed that way for exactly this reason.
-
-Anything the runners share through the filesystem needs care, and one case is not obvious.
-gh-aw hardcodes `/tmp/gh-aw` inside its own bundled action scripts, so it cannot be keyed per
-job from the compiled lock. Putting an ACL on that directory does not work either: jobs delete
-and recreate it, and the new directory belongs to whichever user recreated it. The fix is a
-default ACL on `/tmp` for group `ghaw`, which every runner user belongs to, so anything created
-under `/tmp` is writable by all of them. Without it the second user to run fails with
-`EACCES: permission denied, open '/tmp/gh-aw/agent_output.json'`, and the run dies at
-"Create gh-aw temp directory".
-
-See [`serialise-agents.md`](serialise-agents.md). To confirm the isolation is real rather than assumed, create a
-container with the same name in two daemons at the same moment: on one daemon the second create
-fails, which is the collision itself; across two daemons both succeed.
+A user and a rootless daemon per runner was tried first and reverted. It isolated the containers
+and broke everything the runners share through `/tmp`. All four instances run as `runner`.
+[`serialise-agents.md`](serialise-agents.md) records the six failures it caused, which is worth
+reading before anyone tries it again.
 
 ## Checks
 

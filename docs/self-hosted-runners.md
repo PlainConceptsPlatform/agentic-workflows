@@ -147,30 +147,14 @@ The timestamped network name `awf-<timestamp>_awf-ext` suggests runs are isolate
 not: `awf-net` is shared and the container names are what collide. That misreading is worth
 naming, because it is the reason this took an afternoon to find.
 
-The schema has no option for container names, a prefix, or a project name. The supported lever
-is `container.dockerHost`, auto-detected from `DOCKER_HOST`, so each runner beyond the first
-runs as its own user with a rootless daemon. No workflow changes are needed: awf reads the
-variable itself. See [`../vm/serialise-agents.md`](../vm/serialise-agents.md).
+The schema has no option for container names, a prefix, or a project name, so the compiled
+lock wraps the awf call in `flock /tmp/agentic-awf.lock` and one agent job runs at a time.
+Every other job still uses all four runners.
 
-### What rootless changes for the MCP gateway
+Giving each runner its own user and rootless daemon was tried first and reverted: it isolated
+the containers and broke every fixed-name path the runners share in `/tmp`. See
+[`../vm/serialise-agents.md`](../vm/serialise-agents.md).
 
-gh-aw builds the gateway's `docker run` from host values, and two of them are wrong inside a
-user namespace. Both are rewritten by the wrapper, and only when `DOCKER_HOST` points at a
-rootless socket, so a single-runner rootful host is untouched.
-
-| Host value | Why it breaks | Rewrite |
-|---|---|---|
-| `--user $(id -u):$(id -g)` | the daemon maps the runner user to container root, so the mounted socket appears as uid 0 mode `rw-rw----` and the passed-through uid is neither owner nor group | force `0:0` |
-| `--group-add $DOCKER_SOCK_GID` | the host GID is not mapped in the namespace, so runc fails at `setgroups` | drop the flag |
-
-The second is worth knowing by sight. It fails before the gateway writes anything, and gh-aw
-reports it only as:
-
-```
-[error] ERROR: Gateway process (PID: N) exited during initialization
-[error] Gateway stdout (errors are written here per MCP Gateway Specification):
-```
-
-with nothing after it. An empty stdout there means `docker run` itself failed, not the gateway.
-Reproduce it directly on the host, where the real error is plain: the same `docker run`
-succeeds without `--group-add` and fails with it.
+The lock name deliberately avoids the `/tmp/gh-aw` prefix. The staging rewrite keys anything
+starting `/tmp/gh-aw` on run and job, which would give each job its own lock file and no mutual
+exclusion at all.
