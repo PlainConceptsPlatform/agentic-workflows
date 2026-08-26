@@ -103,10 +103,15 @@ That pattern is why instance 1 has an almost empty `.env`.
 
 ## Docker
 
-A single rootful daemon is shared by all runners. awf names its network per run
-(`awf-<timestamp>_awf-ext`), so networks and containers never collide, and the daemon needs no
-isolation.
+awf gives its containers fixed names: `awf-agent`, `awf-squid`, `awf-api-proxy`. Only the
+compose project label varies per run, so two agent jobs on one daemon recreate each other's
+containers and the first dies with exit 137 partway through its work.
 
-If separate daemons are ever needed, awf reads `DOCKER_HOST` from the environment
-(`container.dockerHost` in its config schema, auto-detected when unset). A rootless daemon per
-runner user works without touching any workflow.
+The timestamped network name `awf-<timestamp>_awf-ext` suggests runs are isolated. They are
+not: `awf-net` is shared and the container names are what collide. That misreading is worth
+naming, because it is the reason this took an afternoon to find.
+
+The schema has no option for container names, a prefix, or a project name. The supported lever
+is `container.dockerHost`, auto-detected from `DOCKER_HOST`, so each runner beyond the first
+runs as its own user with a rootless daemon. No workflow changes are needed: awf reads the
+variable itself. See [`../vm/setup-rootless.sh`](../vm/setup-rootless.sh).

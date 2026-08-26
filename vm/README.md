@@ -87,10 +87,15 @@ sudo bash setup-vm.sh
 # 2. runners: pass a registration token and how many you want
 TOKEN=$(gh api -X POST orgs/<org>/actions/runners/registration-token --jq .token)
 sudo bash install-runners.sh --org <org> --token "$TOKEN" --count 4 --group agentic --labels agents
+
+# 3. give every runner after the first its own Docker daemon
+sudo bash setup-rootless.sh --count 4
 ```
 
-`install-runners.sh` is idempotent: it skips an instance that is already configured, so it can
-be re-run to add more.
+All three are idempotent: they skip what is already done, so re-run them to add runners.
+
+Step 3 is not optional above one runner. Without it a second agent job recreates the first
+job's awf containers and kills it.
 
 ## Why each runner needs its own environment
 
@@ -100,6 +105,7 @@ one job at a time. Three things collide, and each one was found by a failed run.
 
 | Resource | Collision | Isolation |
 |---|---|---|
+| **awf containers** | **fixed names `awf-agent`, `awf-squid`, `awf-api-proxy`; a second job recreates the first job's containers and kills it** | **one Docker daemon per runner** |
 | MCP gateway port | published on `127.0.0.1:8080`, so the second job cannot bind | `MCP_GATEWAY_PORT` per runner |
 | OpenCode server | one server on `4096` with one data directory | `OPENCODE_PORT` per runner, data directory keyed on runner name |
 | gh-aw staging tree | `/tmp/gh-aw` holds `prompt.txt`, `agent_output.json`, `safeoutputs.jsonl` | keyed on `github.run_id` |
@@ -111,25 +117,53 @@ compiled, described in [`../docs/self-hosted-runners.md`](../docs/self-hosted-ru
 
 The failure modes are worth recognising, because none of them names its cause:
 
-- **`Port 8080 does not appear to be listening`** — two gateways, one port.
+- **`Port 8080 does not appear to be listening`** , two gateways, one port.
 - **`cat: /tmp/gh-aw/aw-prompts/prompt.txt: No such file or directory`** followed by
-  `Error: You must provide a message or a command` — one job cleared the staging tree while
+  `Error: You must provide a message or a command` , one job cleared the staging tree while
   another was reading its prompt. OpenCode then starts with no prompt at all.
-- **`exit code 137`** in the middle of the agent's work, with no OOM in `dmesg` — a global
-  `npm install` replaced the binary the running job was executing.
+- **`exit code 137`** in the middle of the agent's work, with no OOM in `dmesg` , a global
+  `npm install` replaced the binary the running job was executing. The other, and the one
+  that matters, is a second job recreating the shared awf containers. It announces itself
+  only as a compose warning that is easy to read past:
+
+  ```
+  a network with name awf-net exists but was not created for project "awf-1787774939451"
+  Container awf-squid Recreate
+  ```
 
 The last one is the dangerous shape. A crossed `agent_output.json` would not crash: safe
 outputs create pull requests and close issues, so one run's work can be attributed to another
 and nothing looks wrong.
 
-## One Docker daemon, four runners
+## One Docker daemon per runner
 
-A single rootful daemon is shared by all runners. That is safe because awf names its network
-per run (`awf-<timestamp>_awf-ext`), so networks and containers do not collide.
+This is the piece that makes concurrency possible at all, and it is the easiest thing to get
+wrong.
 
-If you ever need genuinely separate daemons, awf reads `DOCKER_HOST` from the environment
-(`container.dockerHost` in its config schema, auto-detected when unset), so a rootless daemon
-per runner user works without touching any workflow. It was not needed here.
+awf gives its containers fixed names: `awf-agent`, `awf-squid`, `awf-api-proxy`. Only the
+compose project label varies per run. On a shared daemon a second agent job therefore recreates
+the first job's containers and kills it, and the first job dies with exit 137 partway through
+its work.
+
+The network name looks per-run (`awf-<timestamp>_awf-ext`) and that is misleading. `awf-net`
+itself is shared, and the container names are what collide. Do not conclude from the timestamped
+network that runs are isolated, because they are not. That mistake cost an afternoon here.
+
+The schema offers no option for container names, a name prefix, or a project name, so the names
+cannot be changed. The supported lever is `container.dockerHost`, auto-detected from
+`DOCKER_HOST`. Give each runner its own daemon and the identical names live in separate
+namespaces.
+
+| runner | user | daemon |
+|---|---|---|
+| 1 | `runner` | rootful, `/var/run/docker.sock` |
+| 2 | `runner2` | `/run/user/1002/docker.sock` |
+| 3 | `runner3` | `/run/user/1003/docker.sock` |
+| 4 | `runner4` | `/run/user/1004/docker.sock` |
+
+`setup-rootless.sh` builds these. To confirm the isolation is real rather than assumed, create a
+container with the same name in two daemons at the same moment: on one daemon the second create
+fails, which is the collision itself; across two daemons both succeed.
 
 ## Checks
 
