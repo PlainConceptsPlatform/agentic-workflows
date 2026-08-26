@@ -50,6 +50,10 @@ run-name: >-
   && format('Working (Refine): #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'implement'
+  && inputs.feature-chain != ''
+  && format('Working (Implement): #{0} [feature #{1}]', inputs.issue-number, inputs.feature-chain)
+  || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'implement'
   && format('Working (Implement): #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'merge-gate'
@@ -114,6 +118,8 @@ on:
           - reconcile-bot-pr-runs
           - validate
           - batch
+          - feature-chain
+          - feature-finish
       issue-number:
         description: "Issue number (required for refine / implement / direct)"
         required: false
@@ -148,8 +154,8 @@ on:
         options:
           - manual
           - scheduled
-      start-from:
-        description: "Skip issues before this number (batch resume only)"
+      feature-chain:
+        description: "Feature issue number when an implement dispatch is one link of a feature chain"
         required: false
         type: string
 
@@ -301,8 +307,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
+          FEATURE_CHAIN: ${{ github.event.inputs.feature-chain }}
         run: |
           set -euo pipefail
+          if [ -n "$FEATURE_CHAIN" ]; then
+            echo "has-open-pr=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Story of feature #$FEATURE_CHAIN; the standalone duplicate check does not apply."
+            exit 0
+          fi
           existing=$(gh pr list --repo "$REPO" --state open --json number,author,body \
             --jq "[.[]
               | select(.author.login | startswith(\"app/\") or endswith(\"[bot]\"))
@@ -329,6 +341,7 @@ jobs:
     permissions: write-all
     with:
       issue-number: ${{ needs.classify.outputs.issue-number }}
+      feature-chain: ${{ github.event.inputs.feature-chain }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
@@ -337,10 +350,24 @@ jobs:
 
   call-batch:
     needs: [classify, authorize]
-    if: needs.classify.outputs.route == 'batch' && needs.authorize.outputs.trusted == 'true'
+    if: (needs.classify.outputs.route == 'batch' || needs.classify.outputs.route == 'feature-chain') && needs.authorize.outputs.trusted == 'true'
+    uses: ./.github/workflows/agent-feature-chain.yml
+    concurrency:
+      group: feature-${{ needs.classify.outputs.issue-number }}
+      cancel-in-progress: false
+    permissions: write-all
+    with:
+      issue-number: ${{ needs.classify.outputs.issue-number }}
+    secrets:
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+
+  call-feature-finish:
+    needs: [classify, authorize]
+    if: needs.classify.outputs.route == 'feature-finish' && needs.authorize.outputs.trusted == 'true'
     uses: ./.github/workflows/agent-feature.lock.yml
     concurrency:
-      group: batch-${{ needs.classify.outputs.issue-number }}
+      group: feature-${{ needs.classify.outputs.issue-number }}
       cancel-in-progress: false
     permissions: write-all
     with:
@@ -559,12 +586,13 @@ jobs:
             jq -r --arg repo "$REPO" '
               .[]
               | select(
-                   (.user.login == "github-actions[bot]" or .user.login == "app/github-actions" or .user.login == "platform-devbox[bot]")
-                   and .head.repo.full_name == $repo
-                )
-              | [.number, .head.ref] | @tsv
+                    (.user.login == "github-actions[bot]" or .user.login == "app/github-actions" or .user.login == "platform-devbox[bot]")
+                    and .draft == false
+                    and .head.repo.full_name == $repo
+                 )
+              | [.number, .head.ref, .head.sha] | @tsv
             ' |
-            while IFS=$'\t' read -r pr_number branch; do
+            while IFS=$'\t' read -r pr_number branch head_sha; do
               gh api "repos/$REPO/actions/runs?status=action_required&branch=$branch" \
                 --jq '.workflow_runs[]
                   | select(
@@ -596,7 +624,7 @@ jobs:
                 fi
               fi
 
-              ci=$(gh api "repos/$REPO/actions/runs?branch=$branch&per_page=100" \
+              ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
                 --jq '[.workflow_runs[]
                   | select(
                       .name == "App: CI"

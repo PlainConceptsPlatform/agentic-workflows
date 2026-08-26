@@ -1,0 +1,129 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-feature-chain.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: "Agent: Feature Chain"
+
+# One link of a feature chain. It picks the next unfinished story, dispatches an implement for
+# it, and exits within seconds. Nothing here waits: the implement worker itself merges its
+# pull request and dispatches the next link, so no process ever outlives its own token.
+#
+# State lives in GitHub, not here. A story is done when its issue is closed, and skipped when
+# it carries the review label. Re-running this workflow is always safe: it re-derives the next
+# step from that state rather than from anything it remembers.
+#
+# The feature label is the kill switch. Remove it and the chain stops at the next link.
+
+on:
+  workflow_call:
+    inputs:
+      issue-number:
+        description: "Feature issue whose stories are implemented one at a time"
+        required: true
+        type: string
+    secrets:
+      BOT_APP_ID:
+        description: "GitHub App client ID for bot operations"
+        required: true
+      BOT_PRIVATE_KEY:
+        description: "GitHub App private key for bot operations"
+        required: true
+
+env:
+  FEATURE_LABEL: feature
+  SKIP_LABEL: review
+  STATE_MARKER: "<!-- agent-feature-chain:v1 -->"
+
+permissions:
+  contents: read
+
+jobs:
+  advance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Pick the next story and hand it off
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          FEATURE: ${{ inputs.issue-number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          labels=$(gh issue view "$FEATURE" --repo "$REPO" --json labels --jq '[.labels[].name]')
+          if ! jq -e --arg l "$FEATURE_LABEL" 'index($l)' >/dev/null <<<"$labels"; then
+            echo "::notice::#$FEATURE no longer carries $FEATURE_LABEL. Chain stopped."
+            exit 0
+          fi
+
+          body=$(gh issue view "$FEATURE" --repo "$REPO" --json body --jq '.body // ""')
+          printf '%s' "$body" | grep -oE '#[0-9]+' | tr -d '#' | grep -v "^${FEATURE}$" > /tmp/mentions.txt || true
+          if [ ! -s /tmp/mentions.txt ]; then
+            echo "::error::#$FEATURE mentions no story issues"
+            exit 1
+          fi
+
+          # Mentions keep their written order: the author's ordering is the execution order.
+          next=""
+          total=0
+          done_count=0
+          skipped=""
+          seen=""
+          while IFS= read -r n; do
+            case " $seen " in *" $n "*) continue ;; esac
+            seen="$seen $n"
+            total=$((total + 1))
+
+            state=$(gh issue view "$n" --repo "$REPO" --json state --jq '.state' 2>/dev/null || echo "MISSING")
+            if [ "$state" = "MISSING" ]; then
+              continue
+            fi
+            if [ "$state" = "CLOSED" ]; then
+              done_count=$((done_count + 1))
+              continue
+            fi
+
+            story_labels=$(gh issue view "$n" --repo "$REPO" --json labels --jq '[.labels[].name]')
+            if jq -e --arg l "$SKIP_LABEL" 'index($l)' >/dev/null <<<"$story_labels"; then
+              skipped="${skipped}#${n} "
+              continue
+            fi
+
+            if [ -z "$next" ]; then
+              next="$n"
+            fi
+          done < /tmp/mentions.txt
+
+          echo "Stories: ${total} total, ${done_count} closed, skipped: ${skipped:-none}"
+
+          if [ -n "$next" ]; then
+            echo "Next story: #$next"
+            gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
+              -f ref="$DEFAULT_BRANCH" \
+              -f "inputs[operation]=implement" \
+              -f "inputs[issue-number]=$next" \
+              -f "inputs[feature-chain]=$FEATURE"
+            exit 0
+          fi
+
+          # Every story is closed or skipped. The stories are already on the default branch, so
+          # the finish worker only has to make the accumulated result build and open the one
+          # pull request that CI and Merge Gate actually see.
+          echo "No stories left. Handing off to the finish worker."
+          gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
+            -f ref="$DEFAULT_BRANCH" \
+            -f "inputs[operation]=feature-finish" \
+            -f "inputs[issue-number]=$FEATURE"
+
+          if [ -n "$skipped" ]; then
+            echo "::warning::Feature #$FEATURE finished with skipped stories: ${skipped}"
+          fi

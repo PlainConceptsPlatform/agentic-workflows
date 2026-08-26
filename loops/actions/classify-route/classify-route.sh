@@ -200,12 +200,12 @@ classify_route() {
             error="operation 'triage' needs a positive issue-number, got '${INPUT_ISSUE_NUMBER:-}'"
           fi
           ;;
-        batch)
+        batch | feature-chain | feature-finish)
           if is_issue_number "${INPUT_ISSUE_NUMBER:-}"; then
-            route="batch"
+            route="${OPERATION}"
             issue_number="${INPUT_ISSUE_NUMBER}"
           else
-            error="operation 'batch' needs a positive issue-number, got '${INPUT_ISSUE_NUMBER:-}'"
+            error="operation '${OPERATION}' needs a positive issue-number, got '${INPUT_ISSUE_NUMBER:-}'"
           fi
           ;;
         apply-review)

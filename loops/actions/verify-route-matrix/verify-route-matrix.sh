@@ -9,6 +9,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROUTER_YML="${HERE}/../../workflows/work-router.yml"
 AUTHORIZE_YML="${HERE}/../../workflows/authorize-bot-work.yml"
 FEATURE_WORKER_MD="${HERE}/../../workflows/agent-feature.md"
+FEATURE_CHAIN_YML="${HERE}/../../workflows/agent-feature-chain.yml"
 IMPLEMENT_WORKER_MD="${HERE}/../../workflows/agent-implement.md"
 MERGE_GATE_WORKER_MD="${HERE}/../../workflows/agent-merge-gate.md"
 
@@ -251,15 +252,31 @@ else
   echo "FAIL: the feature route does not reach agent-feature" >&2
 fi
 
-# The batch pull request number reaches the model as a named value, not as a field it has to
-# pick out of the packed batch context. It once chose the master issue number instead, because
-# that number also appears in the branch name, and the push landed nowhere.
-if grep -Fq 'pr_number: ${{ steps.check.outputs.pr_number }}' "$IMPLEMENT_WORKER_MD" &&
-  grep -Fq 'needs.batch_target.outputs.pr_number' "$IMPLEMENT_WORKER_MD"; then
+# The chain advances by dispatching, never by waiting. A link that blocks on its story would
+# put the orchestrator back inside the token lifetime problem the chain exists to avoid.
+if ! grep -q 'gh run watch' "$FEATURE_CHAIN_YML"; then
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))
-  echo "FAIL: implement worker does not name the batch pull request number explicitly" >&2
+  echo "FAIL: the feature chain waits on a run instead of dispatching and exiting" >&2
+fi
+
+# A story is done when its issue is closed. That is the chain's entire state, so the worker
+# confirms the close rather than assuming it; an issue left open is picked again, forever.
+if grep -Fq 'gh issue close "$STORY"' "$IMPLEMENT_WORKER_MD" &&
+  grep -Fq 'inputs[operation]=feature-chain' "$IMPLEMENT_WORKER_MD"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: implement worker does not confirm the story closed before advancing the chain" >&2
+fi
+
+# Skipping is reversible: the story keeps the review label until a human removes it.
+if grep -Fq 'SKIP_LABEL: review' "$FEATURE_CHAIN_YML"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the feature chain has no reversible skip marker" >&2
 fi
 
 # A hyphen inside a ${{ }} property path is parsed as subtraction, so the reference silently
