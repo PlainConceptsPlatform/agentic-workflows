@@ -85,6 +85,21 @@ steps. It breaks every CI job that reaches a service container on `localhost`, b
 ports would then be published inside the daemon. `app-ci.yml` talks to SQL Server that way. Set
 it only in "Start MCP Gateway" and "Execute OpenCode CLI", derived from `$RUNNER_NAME`.
 
+## Every daemon needs its own copy of the images
+
+A dind daemon has its own image store, and awf starts its containers with
+`docker compose up --pull never`. An image the daemon has never pulled is a hard failure, and
+the host daemon having it makes no difference:
+
+```
+[ERROR] Fatal error: Command failed with exit code 1:
+docker compose up -d --no-deps --pull never squid-proxy
+```
+
+Run [`prepull-images.sh`](prepull-images.sh) after creating or recreating any daemon, and after
+bumping an image version in the workflows. It also lists what each daemon holds, which should be
+identical across all four.
+
 ## Verifying
 
 ```bash
