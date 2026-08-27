@@ -44,8 +44,6 @@ imports:
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
-runner:
-  topology: arc-dind
 on:
   workflow_call:
     inputs:
