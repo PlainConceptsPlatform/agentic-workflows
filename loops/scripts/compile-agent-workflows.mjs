@@ -66,12 +66,6 @@ for (const file of readdirSync(workflowDirectory)) {
     // gh-aw's bundled action scripts default models.json to a hardcoded /tmp/gh-aw, which the
     // lock rewrites cannot reach, so the activation job wrote it outside the directory it
     // uploads from and the agent reported unknown_model_ai_credits.
-    // Centralised AgentMemory: the @agentmemory/mcp shim proxies every tool call to the
-    // server named by AGENTMEMORY_URL and only falls back to a per-process local store when
-    // the variable is absent. Ephemeral ARC runners have no durable local store, so point
-    // them at the in-cluster service. Local development leaves the variable unset and keeps
-    // the existing local behaviour.
-    .replace(/^env:\n/m, 'env:\n  AGENTMEMORY_URL: http://agentmemory.mcp.svc.cluster.local:3111\n')
     .replace(/^env:\n/m, 'env:\n  GH_AW_MODELS_JSON_PATH: /tmp/gh-aw-${{ github.run_id }}/models.json\n')
     // /tmp/gh-aw is a fixed host path used to stage prompt.txt, agent_output.json and
     // safeoutputs.jsonl. Two runners on one machine share it, so one agent overwrote another's
