@@ -127,9 +127,9 @@ for (const file of readdirSync(workflowDirectory)) {
     // Copilot engine: command -v copilot is empty under engine: opencode and cp "" fails the
     // job before the agent starts. OpenCode needs no staging, because npm -g installs it under
     // the tool-cache prefix inside _work, which the dind daemon shares.
-    .replaceAll('COPILOT_SRC="$(command -v copilot)"',
-      'command -v copilot >/dev/null 2>&1 || { echo "no copilot binary (engine is opencode); skipping"; exit 0; }' + '\n' +
-      'COPILOT_SRC="$(command -v copilot)"')
+    .replaceAll('          COPILOT_SRC="$(command -v copilot)"',
+      '          command -v copilot >/dev/null 2>&1 || { echo "no copilot binary (engine is opencode); skipping"; exit 0; }' + '\n' +
+      '          COPILOT_SRC="$(command -v copilot)"')
     .replace(/opencode-ai@[0-9][0-9.]*/g, 'opencode-ai@' + OPENCODE_VERSION)
     // gh-aw installs with --ignore-scripts, which blocks opencode's own postinstall. That
     // script downloads the platform binary, so 1.18 fails at first use with "opencode-ai's
