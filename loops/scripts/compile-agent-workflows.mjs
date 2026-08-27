@@ -110,6 +110,13 @@ for (const file of readdirSync(workflowDirectory)) {
     // daemon, awf's container names are fixed, and the jobs must be serialised.
     .replaceAll('          awf --config', '          flock /tmp/agentic-awf.lock awf --config')
     .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"')
+    // The agent's safe outputs land in safeoutputs.jsonl, but the collector reads
+    // agent_output.json, and nothing in the generated workflow converts one to the other.
+    // With the OpenCode engine the tool calls go through the MCP server rather than stdout,
+    // so the log parser never produces agent_output.json and the placeholder step writes
+    // {"items":[]} over a run that did real work: the job goes green and the pull request
+    // is silently dropped. Build the collector's input from what the agent actually emitted.
+    .replaceAll("echo '{\"items\":[]}' > /tmp/gh-aw-${{ github.run_id }}/agent_output.json", "if [ -s /tmp/gh-aw-${{ github.run_id }}/safeoutputs.jsonl ]; then jq -s '{items: .}' /tmp/gh-aw-${{ github.run_id }}/safeoutputs.jsonl > /tmp/gh-aw-${{ github.run_id }}/agent_output.json; else echo '{\"items\":[]}' > /tmp/gh-aw-${{ github.run_id }}/agent_output.json; fi")
     .replace(/opencode-ai@[0-9][0-9.]*/g, 'opencode-ai@' + OPENCODE_VERSION)
     // gh-aw installs with --ignore-scripts, which blocks opencode's own postinstall. That
     // script downloads the platform binary, so 1.18 fails at first use with "opencode-ai's
