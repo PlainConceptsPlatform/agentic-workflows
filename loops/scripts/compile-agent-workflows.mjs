@@ -104,6 +104,11 @@ for (const file of readdirSync(workflowDirectory)) {
     // gh-aw pins opencode-ai 1.2.14 at every release checked, up to v0.87.5. That version is
     // from 2026-02-25. The harness expects 1.18.9 and this is the current release, so a gh-aw
     // upgrade does not move it and the pin is ours to choose.
+    // gh-aw defaults NPM_CONFIG_MIN_RELEASE_AGE to 3 days, which blocks any package
+    // published in the last three days with ETARGET "No matching version found ... with a
+    // date before". Lowered to 1 so a fix released yesterday is usable. This is a
+    // supply-chain cooldown: shortening it accepts a newer package sooner.
+    .replace(/NPM_CONFIG_MIN_RELEASE_AGE: ['\"]?3['\"]?/g, "NPM_CONFIG_MIN_RELEASE_AGE: '1'")
     .replace(/opencode-ai@[0-9][0-9.]*/g, 'opencode-ai@' + OPENCODE_VERSION)
     .replace(
       /npm install --ignore-scripts -g opencode-ai@([0-9][0-9.]*)/g,
