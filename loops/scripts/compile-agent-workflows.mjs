@@ -95,14 +95,6 @@ for (const file of readdirSync(workflowDirectory)) {
     // The gateway defaults its log directory to the unkeyed /tmp/gh-aw/mcp-logs, shared by every
     // run and every runner, so a failing run's log is overwritten by the next one and the only
     // diagnostic left is an empty stdout. Point it at this run's own directory.
-    // gh-aw spawns the gateway with stdio [pipe, outputFd, 'ignore'], so docker's stderr is
-    // discarded. Every gateway failure then reports an empty "Gateway stdout" and no cause,
-    // which is unreadable. Wrapping the command in sh -c with 2>&1 routes stderr into the
-    // stdout they already capture. spawn() takes cmd + args with no shell, so the wrapper has
-    // to be an explicit sh -c rather than a bare redirect.
-    .replace(/^([ \t]*)(export MCP_GATEWAY_DOCKER_COMMAND=.*)$/m,
-      (m, indent) => m + '\n' + indent +
-        'MCP_GATEWAY_DOCKER_COMMAND="sh -c '+String.fromCharCode(39)+'exec ${MCP_GATEWAY_DOCKER_COMMAND} 2>&1'+String.fromCharCode(39)+'"')
     .replace(/^([ \t]*)export MCP_GATEWAY_DOCKER_COMMAND=/m,
       (m, indent) => indent + 'export MCP_GATEWAY_LOG_DIR="/tmp/gh-aw-${{ github.run_id }}/mcp-logs"' + '\n' + m)
     .replace(/^([ \t]*)export MCP_GATEWAY_DOCKER_COMMAND=/m,
