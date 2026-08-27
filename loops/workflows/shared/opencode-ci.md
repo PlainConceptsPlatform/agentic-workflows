@@ -21,6 +21,19 @@ pre-agent-steps:
   - name: Create agent scratch directory
     run: mkdir -p .opencode/.tmp
 
+  - name: Install the Docker Compose plugin
+    # The ARC runner image ships the docker CLI without the compose plugin, and awf drives its
+    # sandbox with `docker compose up`. User-space install; no root required.
+    run: |
+      set -euo pipefail
+      if docker compose version >/dev/null 2>&1; then
+        echo "compose already present"; exit 0
+      fi
+      mkdir -p "$HOME/.docker/cli-plugins"
+      curl -sSfL "https://github.com/docker/compose/releases/download/v2.39.2/docker-compose-linux-x86_64"         -o "$HOME/.docker/cli-plugins/docker-compose"
+      chmod +x "$HOME/.docker/cli-plugins/docker-compose"
+      docker compose version
+
   - name: Install ripgrep
     run: |
       set -euo pipefail
