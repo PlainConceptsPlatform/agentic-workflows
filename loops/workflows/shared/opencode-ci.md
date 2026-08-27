@@ -146,6 +146,13 @@ pre-agent-steps:
   # you need playwright-cli or SQL Server inside the agent sandbox for other reasons,
   # add them as consumer-specific steps after the shared baseline.
 
+  - name: Setup .NET
+    # Ephemeral VMs carry no SDK; the old host had it baked in, and GitHub-hosted images made
+    # the dependency invisible. setup-dotnet caches per run from the MS CDN.
+    uses: actions/setup-dotnet@v5
+    with:
+      dotnet-version: 10.0.x
+
   - name: Cache NuGet packages
     uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
     with:
