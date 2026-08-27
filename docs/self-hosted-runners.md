@@ -95,6 +95,46 @@ check where a value actually lands before keying it on the runner. Make that che
 rather than a reading of the documentation: a two-job workflow echoing the value costs a minute,
 and it has already caught one wrong assumption here.
 
+## The npm cooldown blocks fresh releases
+
+gh-aw sets `NPM_CONFIG_MIN_RELEASE_AGE` to **3** days, so npm cannot see any package published
+in the last three. Pinning a newer version fails in a way that does not look like a cooldown:
+
+```
+npm error code ETARGET
+npm error notarget No matching version found for opencode-ai@1.18.23 with a date before 8/24/2026
+```
+
+That reads as "the version does not exist". It does; it is just too new. The wrapper lowers the
+value to **1** so a fix released yesterday is usable.
+
+This is a supply-chain control, not a nuisance. At three days a compromised release has time to
+be pulled before a runner fetches it, and at one day that window is shorter. Raising it back is
+a one-line change in the wrapper, and anything pinned must then be at least that many days old.
+
+## Toolchain versions the wrapper controls
+
+| Tool | Pinned | Why it is not gh-aw's default |
+|---|---|---|
+| `opencode-ai` | 1.18.23 | gh-aw pins 1.2.14 at every release through v0.87.5, a build from 2026-02-25 |
+| `@colbymchenry/codegraph` | 1.6.0 | 1.5.0 shipped the `codegraph_explore` behaviour that cost 15.6 min of one run |
+
+After a codegraph upgrade the index must be rebuilt, which the "Install codegraph and index the
+repository" step does. A stale index is the first thing to suspect if `explore` misbehaves right
+after a bump.
+
+## Verification is scoped to what changed
+
+`VERIFY_COMMANDS` was one unconditional block, so a change to a single `.tsx` file still ran
+`dotnet restore`, a Release build of the API and two test suites. On a shared 2-vCPU runner that
+is minutes spent on code the change never touched.
+
+It is now `VERIFY_COMMANDS_API` and `VERIFY_COMMANDS_WEB`, and the worker runs whichever match
+the paths it edited, both when a change spans both, and neither for documentation. The route
+matrix asserts each variable is defined wherever it is printed, and that the old unscoped name is
+gone: an undefined variable renders an empty command block and the model invents its own build
+line, which is how one run shipped `dotnet build --no-restore` against an unrestored workspace.
+
 ## The OpenCode version is ours to choose
 
 gh-aw pins `opencode-ai@1.2.14` and has done at every release checked, up to and including
