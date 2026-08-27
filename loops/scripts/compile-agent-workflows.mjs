@@ -87,20 +87,6 @@ for (const file of readdirSync(workflowDirectory)) {
     //
     // Install only when the pinned version is missing, and take a lock so two jobs starting at
     // once cannot both write the global prefix.
-    // Each runner has its own Docker-in-Docker daemon, so awf's fixed container names cannot
-    // collide between parallel jobs. This is set here and NOT in the runner's .env: ports
-    // published inside a DinD daemon are unreachable from the host, so a runner-wide value
-    // breaks any CI job that reaches a service container on localhost, as app-ci.yml does for
-    // SQL Server. Only the gateway and the agent sandbox need the DinD daemon.
-    // The gateway defaults its log directory to the unkeyed /tmp/gh-aw/mcp-logs, shared by every
-    // run and every runner, so a failing run's log is overwritten by the next one and the only
-    // diagnostic left is an empty stdout. Point it at this run's own directory.
-    .replace(/^([ \t]*)export MCP_GATEWAY_DOCKER_COMMAND=/m,
-      (m, indent) => indent + 'export MCP_GATEWAY_LOG_DIR="/tmp/gh-aw-${{ github.run_id }}/mcp-logs"' + '\n' + m)
-    .replace(/^([ \t]*)export MCP_GATEWAY_DOCKER_COMMAND=/m,
-      (m, indent) => indent + 'case "${RUNNER_NAME:-}" in *-[1-9]) export DOCKER_HOST="tcp://127.0.0.1:$((2380 + ${RUNNER_NAME##*-}))" ;; esac' + '\n' + m)
-    .replace(/^([ \t]*)GH_AW_DOCKER_HOST=""/m,
-      (m, indent) => indent + 'case "${RUNNER_NAME:-}" in *-[1-9]) export DOCKER_HOST="tcp://127.0.0.1:$((2380 + ${RUNNER_NAME##*-}))" ;; esac' + '\n' + m)
     // gh-aw pins opencode-ai 1.2.14 at every release checked, up to v0.87.5. That version is
     // from 2026-02-25. The harness expects 1.18.9 and this is the current release, so a gh-aw
     // upgrade does not move it and the pin is ours to choose.
@@ -117,6 +103,12 @@ for (const file of readdirSync(workflowDirectory)) {
     .replaceAll("-p 127.0.0.1:'\"${MCP_GATEWAY_PORT}\"':", "-p '\"${MCP_GATEWAY_PORT}\"':")
     // Each runner needs its own gateway port: four DinD daemons publish through to one host
     // loopback, so two jobs on 8080 would collide. The runner sets it in .env.
+    // awf chroots into the Docker daemon's filesystem and requires it to be the runner's own
+    // glibc host. A Docker-in-Docker daemon fails with "Detected Alpine/musl host filesystem
+    // under /host", and no dind image fixes it: the agent needs the runner's toolchain and
+    // workspace, which a separate daemon container never has. So every agent job shares one
+    // daemon, awf's container names are fixed, and the jobs must be serialised.
+    .replaceAll('          awf --config', '          flock /tmp/agentic-awf.lock awf --config')
     .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"')
     .replace(/opencode-ai@[0-9][0-9.]*/g, 'opencode-ai@' + OPENCODE_VERSION)
     // gh-aw installs with --ignore-scripts, which blocks opencode's own postinstall. That
