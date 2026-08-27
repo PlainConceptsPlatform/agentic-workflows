@@ -100,6 +100,7 @@ jobs:
       - name: Enforce merged coverage floor
         run: |
           dotnet tool install --global dotnet-reportgenerator-globaltool
+          export PATH="$PATH:$HOME/.dotnet/tools"   # ephemeral ARC runners do not have dotnet tools on PATH
           reportgenerator -reports:"TestResults/**/coverage.cobertura.xml" -targetdir:TestResults/merged -reporttypes:Cobertura
           bash -c "$COVERAGE_CHECK_COMMAND"
 
