@@ -26,9 +26,23 @@ tar xzf "$tmp/trivy.tgz" -C "$tmp" trivy
 install -m 0755 "$tmp/trivy" /usr/local/bin/trivy
 rm -rf "$tmp"
 
+# The agent workflows check for these and skip installing when the version matches. They cannot
+# install them themselves: `npm install -g` as the runner user fails with EACCES because
+# /usr/lib/node_modules is root-owned, and the job only ever succeeded because the pinned version
+# was already present. Bumping a pin without running this script makes the job fail at install.
+echo "== opencode and codegraph (pins must match the workflows) =="
+export NPM_CONFIG_MIN_RELEASE_AGE=1
+OPENCODE_VERSION=1.18.23
+CODEGRAPH_VERSION=1.6.0
+npm install --ignore-scripts -g "opencode-ai@${OPENCODE_VERSION}"
+# opencode's postinstall downloads its platform binary. --ignore-scripts blocks it, so run only
+# this one explicitly and leave every other package's scripts blocked.
+( cd "$(npm root -g)/opencode-ai" && node postinstall.mjs )
+npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}"
+
 echo "== verify =="
 for u in runner; do
   id -u "$u" >/dev/null 2>&1 || continue
   printf '  %s: ' "$u"
-  sudo -u "$u" bash -lc 'command -v reportgenerator >/dev/null && command -v trivy >/dev/null && echo ok || echo MISSING'
+  sudo -u "$u" bash -lc 'for t in reportgenerator trivy opencode codegraph; do command -v $t >/dev/null || { echo "MISSING: $t"; exit 1; }; done; echo ok'
 done

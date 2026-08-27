@@ -110,11 +110,16 @@ for (const file of readdirSync(workflowDirectory)) {
     // supply-chain cooldown: shortening it accepts a newer package sooner.
     .replace(/NPM_CONFIG_MIN_RELEASE_AGE: ['\"]?3['\"]?/g, "NPM_CONFIG_MIN_RELEASE_AGE: '1'")
     .replace(/opencode-ai@[0-9][0-9.]*/g, 'opencode-ai@' + OPENCODE_VERSION)
+    // gh-aw installs with --ignore-scripts, which blocks opencode's own postinstall. That
+    // script downloads the platform binary, so 1.18 fails at first use with "opencode-ai's
+    // postinstall script was not run". 1.2.14 did not need it. Run only opencode's postinstall
+    // explicitly, so every other package's scripts stay blocked.
     .replace(
       /npm install --ignore-scripts -g opencode-ai@([0-9][0-9.]*)/g,
       (_m, v) =>
         "opencode --version 2>/dev/null | grep -qF '" + v + "' || " +
-        "flock /tmp/opencode-install.lock npm install --ignore-scripts -g opencode-ai@" + v)
+        "flock /tmp/opencode-install.lock sh -c 'npm install --ignore-scripts -g opencode-ai@" + v +
+        " && cd \"$(npm root -g)/opencode-ai\" && node postinstall.mjs' # opencode-ai@" + v)
     // One warm server per runner, on its own port, with its own data directory. Keyed on the
     // runner rather than the run so a runner keeps its server warm between its own jobs.
     // No double quotes here: the enclosing run: is a double-quoted YAML scalar, so a quote
