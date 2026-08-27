@@ -6,16 +6,17 @@
 #            repository with a JIT config (single job, ephemeral by construction), start it.
 # completed: delete instances whose runner has finished or that were never claimed.
 #
-# The JIT config comes from the job's own GITHUB_TOKEN (administration: write), so no PAT is
-# stored anywhere. Azure access uses the Platform Agents Pro service principal from org secrets.
+# The JIT config needs a real token: GITHUB_TOKEN cannot manage runners, so
+# RUNNER_SCALER_GH_TOKEN is a fine-grained PAT with the org permission
+# "Self-hosted runners: read and write". Azure access uses the Platform Agents Pro
+# service principal from org secrets.
 name: "Runners: scale"
 
 on:
   workflow_job:
     types: [queued, completed]
 
-permissions:
-  administration: write
+permissions: {}
 
 concurrency:
   group: runner-scaler
@@ -41,7 +42,7 @@ jobs:
       - name: Scale up and start a JIT runner
         if: github.event.action == 'queued'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RUNNER_SCALER_GH_TOKEN }}
         run: |
           set -euo pipefail
           cap=$(az vmss show -g "$RG" -n "$VMSS" --query sku.capacity -o tsv)
@@ -62,8 +63,8 @@ jobs:
           done
           [ -n "$claimed" ] || { echo "::error::no instance became ready"; exit 1; }
           echo "claimed instance $claimed"
-          jit=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runners/generate-jitconfig" \
-            -f name="vmss-${claimed}-${GITHUB_RUN_ID}" -F runner_group_id=1 \
+          jit=$(gh api -X POST "orgs/${GITHUB_REPOSITORY_OWNER}/actions/runners/generate-jitconfig" \
+            -f name="vmss-${claimed}-${GITHUB_RUN_ID}" -F runner_group_id=6 \
             -f "labels[]=${RUNNER_LABEL}" -f work_folder=_work --jq .encoded_jit_config)
           az vmss run-command invoke -g "$RG" -n "$VMSS" --instance-id "$claimed" \
             --command-id RunShellScript \
