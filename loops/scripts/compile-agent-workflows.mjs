@@ -61,7 +61,11 @@ for (const file of readdirSync(workflowDirectory)) {
     // lock rewrites cannot reach, so the activation job wrote it outside the directory it
     // uploads from and the agent reported unknown_model_ai_credits.
     .replace(/^env:\n/m, 'env:\n  GH_AW_MODELS_JSON_PATH: /tmp/gh-aw-${{ github.run_id }}/models.json\n')
-    .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"')
+    // MCP_GATEWAY_PORT is deliberately NOT made configurable. It was, to stop two runners
+    // binding 8080, and that broke safe outputs: awf only routes the agent to the gateway on
+    // the default port, so on a runner using 8082 the agent finished the work and then hit
+    // EHOSTUNREACH 172.30.0.2:8082 and delivered nothing, while the run stayed green.
+    // Agent jobs are serialised, so only one gateway exists at a time and 8080 never clashes.
     // /tmp/gh-aw is a fixed host path used to stage prompt.txt, agent_output.json and
     // safeoutputs.jsonl. Two runners on one machine share it, so one agent overwrote another's
     // prompt and opencode started with no prompt at all. Give each runner its own directory.
