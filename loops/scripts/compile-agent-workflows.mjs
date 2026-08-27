@@ -63,21 +63,6 @@ for (const file of readdirSync(workflowDirectory)) {
     // separate namespaces and cannot recreate each other. gh-aw detects the tcp DOCKER_HOST
     // and switches to its ARC/DinD path by itself, so no flag is needed here. The host-wide
     // flock this replaces made every agent job wait for the previous one.
-    // gh-aw's bundled action scripts default models.json to a hardcoded /tmp/gh-aw, which the
-    // lock rewrites cannot reach, so the activation job wrote it outside the directory it
-    // uploads from and the agent reported unknown_model_ai_credits.
-    .replace(/^env:\n/m, 'env:\n  GH_AW_MODELS_JSON_PATH: /tmp/gh-aw-${{ github.run_id }}/models.json\n')
-    // /tmp/gh-aw is a fixed host path used to stage prompt.txt, agent_output.json and
-    // safeoutputs.jsonl. Two runners on one machine share it, so one agent overwrote another's
-    // prompt and opencode started with no prompt at all. Give each runner its own directory.
-    // ${{ github.run_id }} is substituted by Actions, so it works in run: blocks and with:/env:
-    // runner context is not. It stays under
-    // /tmp where the -v /tmp:/tmp mount already reaches it.
-    // Keyed on the run only. A job suffix was added while each runner had its own Linux user,
-    // and it broke the activation-to-agent handoff: awf mounts only the current job's
-    // directory into the container, so the agent could not read a path built in activation.
-    // One user again means the run key is enough, and it still separates concurrent runs.
-    .replace(/\/tmp\/gh-aw(?!-\$\{\{)/g, () => '/tmp/gh-aw-${{ github.run_id }}')
     // Three host-global resources were left, and concurrent agent jobs fought over all of them.
     // The global npm install rewrote the opencode binary another job was executing and killed it
     // with SIGKILL mid-run; the warm server and its data directory were shared by every runner.
