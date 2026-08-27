@@ -105,7 +105,7 @@ sudo bash install-host-tools.sh
 All three are idempotent: they skip what is already done, so re-run them to add runners.
 
 Nothing on the host stops two agent jobs colliding, and nothing needs to. awf's container names
-are fixed, so the compiled lock serialises agent jobs behind `flock /tmp/agentic-awf.lock`.
+are fixed, so each runner gets its own Docker-in-Docker daemon, see [`dind.md`](dind.md).
 Every runner is the same `runner` user on the one Docker daemon. Giving each its own user and
 daemon was tried and reverted, and [`serialise-agents.md`](serialise-agents.md) explains why
 before anyone tries it again.
@@ -119,7 +119,7 @@ rather than by reading anything.
 
 | Resource | Collision | Isolation |
 |---|---|---|
-| **awf containers** | **fixed names `awf-agent`, `awf-squid`, `awf-api-proxy`; a second job recreates the first job's containers and kills it** | **agent jobs serialised by `flock /tmp/agentic-awf.lock`** |
+| **awf containers** | **fixed names `awf-agent`, `awf-squid`, `awf-api-proxy`; a second job recreates the first job's containers and kills it** | **one Docker-in-Docker daemon per runner, see [`dind.md`](dind.md)** |
 | MCP gateway port | published on `127.0.0.1:8080`, so the second job cannot bind | `MCP_GATEWAY_PORT` per runner |
 | OpenCode server | one server on `4096` with one data directory | `OPENCODE_PORT` per runner, data directory keyed on runner name |
 | gh-aw staging tree | `/tmp/gh-aw` holds `prompt.txt`, `agent_output.json`, `safeoutputs.jsonl` | keyed on `github.run_id` |
@@ -149,25 +149,16 @@ The last one is the dangerous shape. A crossed `agent_output.json` would not cra
 outputs create pull requests and close issues, so one run's work can be attributed to another
 and nothing looks wrong.
 
-## Agent jobs run one at a time
+## Agent jobs run in parallel
 
-awf gives its containers fixed names, `awf-agent`, `awf-squid` and `awf-api-proxy`, with only
-the compose project label varying per run. On a shared daemon a second agent job recreates the
-first job's containers and kills it, and the first dies with exit 137 partway through its work.
-The schema has no option for container names, a prefix, or a project name.
+Each runner has its own Docker-in-Docker daemon, so awf's fixed container names live in separate
+namespaces and four agent jobs can run at once. This replaced a host-wide `flock` that made every
+agent job wait for the previous one. See [`dind.md`](dind.md), which also records the one thing
+that is not yet verified under parallel load.
 
-The timestamped network `awf-<timestamp>_awf-ext` makes runs look isolated. They are not:
-`awf-net` is shared and the names are what collide.
-
-The compiled lock therefore wraps the awf call in `flock /tmp/agentic-awf.lock`, so one agent
-job runs at a time. Every other job, CI and deploy included, still uses all four runners, and
-the chain implements one story at a time anyway.
-
-A user and a rootless daemon per runner was tried first and reverted. It isolated the containers
-and broke everything the runners share through `/tmp`. All four instances run as `runner`.
-[`serialise-agents.md`](serialise-agents.md) records the six failures it caused, which is worth
-reading before anyone tries it again.
-
+`DOCKER_HOST` belongs in the agent lock, not in a runner's `.env`. Ports published inside a DinD
+daemon are unreachable from the host, so a runner-wide value breaks CI jobs that reach service
+containers on `localhost`.
 ## Checks
 
 ```bash
@@ -180,12 +171,18 @@ for i in 1 2 3 4; do echo "$i: $(tr '\n' ' ' < /opt/actions-runner/$i/.env)"; do
 # services
 systemctl list-units --type=service --plain --no-legend | grep actions.runner
 
-# the agent lock actually serialises: B must not start before A ends
-sudo -u runner bash -c '
-  ( flock /tmp/agentic-awf.lock -c "echo A start \$(date +%S); sleep 4; echo A end \$(date +%S)" ) &
-  sleep 1
-  ( flock /tmp/agentic-awf.lock -c "echo B start \$(date +%S)" ) &
-  wait'
+# container isolation is real: the same name in all four daemons at once
+for i in 1 2 3 4; do
+  DOCKER_HOST=tcp://127.0.0.1:238$i docker run -d --name awf-agent --rm alpine sleep 25
+done
+# all four must succeed; on a shared daemon the second would fail
+for i in 1 2 3 4; do DOCKER_HOST=tcp://127.0.0.1:238$i docker rm -f awf-agent; done
+
+# published ports inside a dind daemon are NOT reachable from the host, by design
+DOCKER_HOST=tcp://127.0.0.1:2382 docker run -d --rm --name pt -p 15533:80 nginx:alpine
+curl -s -o /dev/null -w "%{http_code}
+" --max-time 4 http://127.0.0.1:15533/   # expect 000
+DOCKER_HOST=tcp://127.0.0.1:2382 docker rm -f pt
 ```
 
 A runner that shows `offline` while its service is `running` is usually mid-shutdown; GitHub's

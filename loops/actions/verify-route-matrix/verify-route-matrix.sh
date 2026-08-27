@@ -308,16 +308,22 @@ else
   grep -nE 'needs\.[a-z_]+\.outputs\.[a-zA-Z0-9_]*-' "$IMPLEMENT_WORKER_MD" >&2
 fi
 
-# A worker that prints ${VERIFY_COMMANDS} without setting it renders an empty command block,
-# and the model invents its own build line. That is how a child shipped `dotnet build
-# --no-restore` against an unrestored workspace.
-if ! grep -q 'env.VERIFY_COMMANDS' "$IMPLEMENT_WORKER_MD" ||
-  grep -q '^  VERIFY_COMMANDS:' "$IMPLEMENT_WORKER_MD"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: implement worker prints VERIFY_COMMANDS without defining it" >&2
+# A worker that prints a ${VERIFY_COMMANDS_*} block without setting it renders an empty command
+# block, and the model invents its own build line. That is how a child shipped `dotnet build
+# --no-restore` against an unrestored workspace. The commands are split per area so a change
+# that only touches apps/web does not pay for a cold Release build of the API.
+VERIFY_OK=1
+for VAR in VERIFY_COMMANDS_API VERIFY_COMMANDS_WEB; do
+  if grep -q "env\.$VAR" "$IMPLEMENT_WORKER_MD" && ! grep -q "^  $VAR:" "$IMPLEMENT_WORKER_MD"; then
+    VERIFY_OK=0
+    echo "FAIL: implement worker prints $VAR without defining it" >&2
+  fi
+done
+if grep -qE 'env\.VERIFY_COMMANDS[^_]' "$IMPLEMENT_WORKER_MD"; then
+  VERIFY_OK=0
+  echo "FAIL: implement worker still references the unscoped VERIFY_COMMANDS" >&2
 fi
+if [ "$VERIFY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 if grep -Fq 'protected-files: allowed' "$IMPLEMENT_WORKER_MD" &&
   grep -Fq 'protected_changes:' "$MERGE_GATE_WORKER_MD"; then

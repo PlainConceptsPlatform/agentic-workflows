@@ -95,6 +95,17 @@ check where a value actually lands before keying it on the runner. Make that che
 rather than a reading of the documentation: a two-job workflow echoing the value costs a minute,
 and it has already caught one wrong assumption here.
 
+## The OpenCode version is ours to choose
+
+gh-aw pins `opencode-ai@1.2.14` and has done at every release checked, up to and including
+v0.87.5. That version was published 2026-02-25. The harness expects 1.18.9 and the current
+release is 1.18.23, so upgrading gh-aw does **not** move it.
+
+The wrapper already rewrites the install line, so the pin is ours to override. Do not assume a
+gh-aw upgrade brings a newer agent runtime with it; check what
+`.github/workflows/shared/opencode.md` pins at the tag you are moving to, and compare it against
+`opencodeVersion` in `.opencode/harness.json`.
+
 ## Rules for changing the wrapper
 
 **Validate the compiled output, not the patch.** A rewrite that looks right can still produce

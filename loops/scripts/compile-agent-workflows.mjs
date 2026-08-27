@@ -1,4 +1,6 @@
 // Managed by @plainconceptsplatform/workflows. Source: loops/scripts/compile-agent-workflows.mjs. Update with `workflows update --force`; consumer edits may be overwritten.
+
+const OPENCODE_VERSION = '1.18.23'
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -90,6 +92,19 @@ for (const file of readdirSync(workflowDirectory)) {
     //
     // Install only when the pinned version is missing, and take a lock so two jobs starting at
     // once cannot both write the global prefix.
+    // Each runner has its own Docker-in-Docker daemon, so awf's fixed container names cannot
+    // collide between parallel jobs. This is set here and NOT in the runner's .env: ports
+    // published inside a DinD daemon are unreachable from the host, so a runner-wide value
+    // breaks any CI job that reaches a service container on localhost, as app-ci.yml does for
+    // SQL Server. Only the gateway and the agent sandbox need the DinD daemon.
+    .replace(/^([ \t]*)export MCP_GATEWAY_DOCKER_COMMAND=/m,
+      (m, indent) => indent + 'case "${RUNNER_NAME:-}" in *-[1-9]) export DOCKER_HOST="tcp://127.0.0.1:$((2380 + ${RUNNER_NAME##*-}))" ;; esac' + '\n' + m)
+    .replace(/^([ \t]*)GH_AW_DOCKER_HOST=""/m,
+      (m, indent) => indent + 'case "${RUNNER_NAME:-}" in *-[1-9]) export DOCKER_HOST="tcp://127.0.0.1:$((2380 + ${RUNNER_NAME##*-}))" ;; esac' + '\n' + m)
+    // gh-aw pins opencode-ai 1.2.14 at every release checked, up to v0.87.5. That version is
+    // from 2026-02-25. The harness expects 1.18.9 and this is the current release, so a gh-aw
+    // upgrade does not move it and the pin is ours to choose.
+    .replace(/opencode-ai@[0-9][0-9.]*/g, 'opencode-ai@' + OPENCODE_VERSION)
     .replace(
       /npm install --ignore-scripts -g opencode-ai@([0-9][0-9.]*)/g,
       (_m, v) =>

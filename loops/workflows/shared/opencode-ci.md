@@ -2,7 +2,7 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/shared/opencode-ci.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
   AGENTMEMORY_VERSION: "0.9.28"
-  CODEGRAPH_VERSION: "1.5.0"
+  CODEGRAPH_VERSION: "1.6.0"
   RTK_VERSION: "0.44.1"
   RTK_SHA256: "986f29704469b3d1051e2474105c6c75ab8b73651068dcd61612c1fb3938ad95"
 description: |
