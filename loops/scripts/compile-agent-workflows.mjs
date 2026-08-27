@@ -123,6 +123,13 @@ for (const file of readdirSync(workflowDirectory)) {
     // {"items":[]} over a run that did real work: the job goes green and the pull request
     // is silently dropped. Build the collector's input from what the agent actually emitted.
     .replaceAll("echo '{\"items\":[]}' > /tmp/gh-aw-${{ github.run_id }}/agent_output.json", "if [ -s /tmp/gh-aw-${{ github.run_id }}/safeoutputs.jsonl ]; then jq -s '{items: .}' /tmp/gh-aw-${{ github.run_id }}/safeoutputs.jsonl > /tmp/gh-aw-${{ github.run_id }}/agent_output.json; else echo '{\"items\":[]}' > /tmp/gh-aw-${{ github.run_id }}/agent_output.json; fi")
+    // v0.87.5's arc-dind mode stages the engine CLI to a daemon-visible path but assumes the
+    // Copilot engine: command -v copilot is empty under engine: opencode and cp "" fails the
+    // job before the agent starts. OpenCode needs no staging, because npm -g installs it under
+    // the tool-cache prefix inside _work, which the dind daemon shares.
+    .replaceAll('COPILOT_SRC="$(command -v copilot)"',
+      'command -v copilot >/dev/null 2>&1 || { echo "no copilot binary (engine is opencode); skipping"; exit 0; }' + '\n' +
+      'COPILOT_SRC="$(command -v copilot)"')
     .replace(/opencode-ai@[0-9][0-9.]*/g, 'opencode-ai@' + OPENCODE_VERSION)
     // gh-aw installs with --ignore-scripts, which blocks opencode's own postinstall. That
     // script downloads the platform binary, so 1.18 fails at first use with "opencode-ai's
