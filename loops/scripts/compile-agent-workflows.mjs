@@ -67,11 +67,6 @@ for (const file of readdirSync(workflowDirectory)) {
     // lock rewrites cannot reach, so the activation job wrote it outside the directory it
     // uploads from and the agent reported unknown_model_ai_credits.
     .replace(/^env:\n/m, 'env:\n  GH_AW_MODELS_JSON_PATH: /tmp/gh-aw-${{ github.run_id }}/models.json\n')
-    // MCP_GATEWAY_PORT is deliberately NOT made configurable. It was, to stop two runners
-    // binding 8080, and that broke safe outputs: awf only routes the agent to the gateway on
-    // the default port, so on a runner using 8082 the agent finished the work and then hit
-    // EHOSTUNREACH 172.30.0.2:8082 and delivered nothing, while the run stayed green.
-    // Agent jobs are serialised, so only one gateway exists at a time and 8080 never clashes.
     // /tmp/gh-aw is a fixed host path used to stage prompt.txt, agent_output.json and
     // safeoutputs.jsonl. Two runners on one machine share it, so one agent overwrote another's
     // prompt and opencode started with no prompt at all. Give each runner its own directory.
@@ -109,6 +104,15 @@ for (const file of readdirSync(workflowDirectory)) {
     // date before". Lowered to 1 so a fix released yesterday is usable. This is a
     // supply-chain cooldown: shortening it accepts a newer package sooner.
     .replace(/NPM_CONFIG_MIN_RELEASE_AGE: ['\"]?3['\"]?/g, "NPM_CONFIG_MIN_RELEASE_AGE: '1'")
+    // The MCP gateway runs inside a per-runner Docker-in-Docker daemon. gh-aw publishes it on
+    // 127.0.0.1, which is the DinD container's own loopback, while the outer publish forwards to
+    // that container's eth0, so the two never meet and gh-aw's health check fails 120 times with
+    // ECONNREFUSED. Binding 0.0.0.0 inside the daemon connects them. The host still exposes the
+    // port on loopback only, because the DinD container is published as 127.0.0.1:<port>.
+    .replace(/-p 127\.0\.0\.1:'"\$\{MCP_GATEWAY_PORT\}"':/g, `-p '"\${MCP_GATEWAY_PORT}"':`)
+    // Each runner needs its own gateway port: four DinD daemons publish through to one host
+    // loopback, so two jobs on 8080 would collide. The runner sets it in .env.
+    .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"')
     .replace(/opencode-ai@[0-9][0-9.]*/g, 'opencode-ai@' + OPENCODE_VERSION)
     // gh-aw installs with --ignore-scripts, which blocks opencode's own postinstall. That
     // script downloads the platform binary, so 1.18 fails at first use with "opencode-ai's
