@@ -152,6 +152,9 @@ pre-agent-steps:
     uses: actions/setup-dotnet@v5
     with:
       dotnet-version: 10.0.x
+    env:
+      # the default /usr/share/dotnet needs root; the tool cache belongs to the runner user
+      DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
 
   - name: Cache NuGet packages
     uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
