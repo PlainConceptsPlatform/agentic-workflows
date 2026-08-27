@@ -56,7 +56,11 @@ for (const file of readdirSync(workflowDirectory)) {
     // Odyssey. Held for the whole agent run, which is deliberate. The lock lives outside the
     // /tmp/gh-aw namespace on purpose: the keying rewrite below would otherwise make the lock
     // file per job, which is silently no lock at all.
-    .replaceAll('          awf --config', '          flock /tmp/agentic-awf.lock awf --config')
+    // Agent jobs run in parallel again. Each runner has its own Docker-in-Docker daemon, so
+    // awf's fixed container names (awf-agent, awf-squid, awf-api-proxy, awmg-mcpg) live in
+    // separate namespaces and cannot recreate each other. gh-aw detects the tcp DOCKER_HOST
+    // and switches to its ARC/DinD path by itself, so no flag is needed here. The host-wide
+    // flock this replaces made every agent job wait for the previous one.
     // gh-aw's bundled action scripts default models.json to a hardcoded /tmp/gh-aw, which the
     // lock rewrites cannot reach, so the activation job wrote it outside the directory it
     // uploads from and the agent reported unknown_model_ai_credits.
