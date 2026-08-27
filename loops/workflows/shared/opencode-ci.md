@@ -21,43 +21,6 @@ pre-agent-steps:
   - name: Create agent scratch directory
     run: mkdir -p .opencode/.tmp
 
-  - name: Start OpenCode server (persistent warm server for faster agent runs)
-    run: |
-      set -euo pipefail
-
-      OPENCODE_PORT=4096
-      mkdir -p /tmp/opencode-data /tmp/gh-aw
-
-      # Check if server is already running
-      if curl -sf --max-time 3 "http://127.0.0.1:${OPENCODE_PORT}/health" >/dev/null 2>&1; then
-        echo "OpenCode server already running on port ${OPENCODE_PORT}"
-        exit 0
-      fi
-
-      echo "Starting OpenCode server on port ${OPENCODE_PORT}..."
-      export XDG_DATA_HOME=/tmp/opencode-data
-      nohup opencode serve --port "${OPENCODE_PORT}" --hostname 127.0.0.1 \
-        > /tmp/gh-aw/opencode-server.log 2>&1 &
-
-      SERVER_PID=$!
-      echo "Server PID: ${SERVER_PID}"
-
-      # Wait for server to be ready. Every curl is bounded: without --max-time a saturated
-      # box makes each probe stall for seconds, so a "30 second" loop ran for 2m34s against a
-      # server that was already listening. Four agent jobs share two vCPUs, so the window is
-      # generous on purpose.
-      for i in $(seq 1 60); do
-        if curl -sf --max-time 3 "http://127.0.0.1:${OPENCODE_PORT}/health" >/dev/null 2>&1; then
-          echo "OpenCode server is ready on port ${OPENCODE_PORT}"
-          exit 0
-        fi
-        sleep 1
-      done
-
-      # Server didn't start in time - continue without it (agent will cold-start)
-      echo "::warning::OpenCode server did not start in 30s, agent will run without warm server"
-      kill "${SERVER_PID}" 2>/dev/null || true
-
   - name: Install ripgrep
     run: |
       set -euo pipefail

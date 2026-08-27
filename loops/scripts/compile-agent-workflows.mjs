@@ -37,9 +37,9 @@ for (const file of readdirSync(workflowDirectory)) {
   const path = join(workflowDirectory, file);
   const content = readFileSync(path, "utf8");
   const patched = content
-    .replaceAll("opencode run --print-logs --log-level DEBUG", "opencode run --port 4096 --log-level ERROR")
-    .replaceAll("opencode run --print-logs --log-level ERROR", "opencode run --port 4096 --log-level ERROR")
-    .replaceAll("opencode run --log-level ERROR", "opencode run --port 4096 --log-level ERROR")
+    .replaceAll("opencode run --print-logs --log-level DEBUG", "opencode run --log-level ERROR")
+    .replaceAll("opencode run --print-logs --log-level ERROR", "opencode run --log-level ERROR")
+    .replaceAll("opencode run --log-level ERROR", "opencode run --log-level ERROR")
     .replaceAll("--log-level DEBUG", "--log-level ERROR")
     .replace(/GH_AW_INFO_MODEL: "[^"]*"/g, 'GH_AW_INFO_MODEL: "per-agent"')
     .replace(/OPENCODE_MODEL: [^\n]+/g, "OPENCODE_MODEL: ''")
@@ -92,6 +92,11 @@ for (const file of readdirSync(workflowDirectory)) {
     // published inside a DinD daemon are unreachable from the host, so a runner-wide value
     // breaks any CI job that reaches a service container on localhost, as app-ci.yml does for
     // SQL Server. Only the gateway and the agent sandbox need the DinD daemon.
+    // The gateway defaults its log directory to the unkeyed /tmp/gh-aw/mcp-logs, shared by every
+    // run and every runner, so a failing run's log is overwritten by the next one and the only
+    // diagnostic left is an empty stdout. Point it at this run's own directory.
+    .replace(/^([ \t]*)export MCP_GATEWAY_DOCKER_COMMAND=/m,
+      (m, indent) => indent + 'export MCP_GATEWAY_LOG_DIR="/tmp/gh-aw-${{ github.run_id }}/mcp-logs"' + '\n' + m)
     .replace(/^([ \t]*)export MCP_GATEWAY_DOCKER_COMMAND=/m,
       (m, indent) => indent + 'case "${RUNNER_NAME:-}" in *-[1-9]) export DOCKER_HOST="tcp://127.0.0.1:$((2380 + ${RUNNER_NAME##*-}))" ;; esac' + '\n' + m)
     .replace(/^([ \t]*)GH_AW_DOCKER_HOST=""/m,
@@ -128,7 +133,6 @@ for (const file of readdirSync(workflowDirectory)) {
     // runner rather than the run so a runner keeps its server warm between its own jobs.
     // No double quotes here: the enclosing run: is a double-quoted YAML scalar, so a quote
     // would have to be escaped. The default has no spaces, so bare is safe shell.
-    .replaceAll('OPENCODE_PORT=4096', 'OPENCODE_PORT=${OPENCODE_PORT:-4096}')
     .replace(/\/tmp\/opencode-data(?!-\$\{\{)/g, () => '/tmp/opencode-data-${{ runner.name }}');
 
   if (patched !== content) writeFileSync(path, patched);
