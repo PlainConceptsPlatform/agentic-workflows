@@ -29,7 +29,7 @@ pre-agent-steps:
       mkdir -p /tmp/opencode-data /tmp/gh-aw
 
       # Check if server is already running
-      if curl -sf "http://127.0.0.1:${OPENCODE_PORT}/health" >/dev/null 2>&1; then
+      if curl -sf --max-time 3 "http://127.0.0.1:${OPENCODE_PORT}/health" >/dev/null 2>&1; then
         echo "OpenCode server already running on port ${OPENCODE_PORT}"
         exit 0
       fi
@@ -42,9 +42,12 @@ pre-agent-steps:
       SERVER_PID=$!
       echo "Server PID: ${SERVER_PID}"
 
-      # Wait for server to be ready (max 30 seconds)
-      for i in $(seq 1 30); do
-        if curl -sf "http://127.0.0.1:${OPENCODE_PORT}/health" >/dev/null 2>&1; then
+      # Wait for server to be ready. Every curl is bounded: without --max-time a saturated
+      # box makes each probe stall for seconds, so a "30 second" loop ran for 2m34s against a
+      # server that was already listening. Four agent jobs share two vCPUs, so the window is
+      # generous on purpose.
+      for i in $(seq 1 60); do
+        if curl -sf --max-time 3 "http://127.0.0.1:${OPENCODE_PORT}/health" >/dev/null 2>&1; then
           echo "OpenCode server is ready on port ${OPENCODE_PORT}"
           exit 0
         fi
