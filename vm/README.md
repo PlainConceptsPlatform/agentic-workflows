@@ -120,7 +120,7 @@ rather than by reading anything.
 | Resource | Collision | Isolation |
 |---|---|---|
 | **awf containers** | **fixed names `awf-agent`, `awf-squid`, `awf-api-proxy`; a second job recreates the first job's containers and kills it** | **one Docker-in-Docker daemon per runner, see [`dind.md`](dind.md)** |
-| MCP gateway port | published on `127.0.0.1:8080`, so the second job cannot bind | `MCP_GATEWAY_PORT` per runner |
+| MCP gateway port | four DinD daemons publish through to one host loopback, so the second job cannot bind | `MCP_GATEWAY_PORT` per runner in `.env`, and the dind container publishes it, see [`dind.md`](dind.md) |
 | OpenCode server | one server on `4096` with one data directory | `OPENCODE_PORT` per runner, data directory keyed on runner name |
 | gh-aw staging tree | `/tmp/gh-aw` holds `prompt.txt`, `agent_output.json`, `safeoutputs.jsonl` | keyed on `github.run_id` |
 | OpenCode install | a global `npm install -g` rewrites the binary a running job is executing | installed only when the pinned version is missing, behind `flock` |
@@ -178,10 +178,10 @@ done
 # all four must succeed; on a shared daemon the second would fail
 for i in 1 2 3 4; do DOCKER_HOST=tcp://127.0.0.1:238$i docker rm -f awf-agent; done
 
-# published ports inside a dind daemon are NOT reachable from the host, by design
-DOCKER_HOST=tcp://127.0.0.1:2382 docker run -d --rm --name pt -p 15533:80 nginx:alpine
+# the gateway port must reach the runner: expect 200, not 000
+DOCKER_HOST=tcp://127.0.0.1:2382 docker run -d --rm --name pt -p 8082:80 nginx:alpine
 curl -s -o /dev/null -w "%{http_code}
-" --max-time 4 http://127.0.0.1:15533/   # expect 000
+" --max-time 4 http://127.0.0.1:8082/
 DOCKER_HOST=tcp://127.0.0.1:2382 docker rm -f pt
 ```
 

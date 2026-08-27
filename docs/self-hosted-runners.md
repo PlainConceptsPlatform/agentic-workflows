@@ -52,6 +52,12 @@ run, and none of them names its cause in the error.
 `${MCP_GATEWAY_PORT:-8080}`, so a runner sets its own in `.env` and a single-runner host needs
 no configuration. Symptom when shared: `Port 8080 does not appear to be listening`.
 
+The port alone is not enough once the gateway runs inside a per-runner Docker-in-Docker daemon.
+gh-aw health-checks it from the runner, so the daemon has to publish the port through and the
+wrapper has to strip the inner `127.0.0.1:` from gh-aw's `docker run`, or the check fails 120
+times with `ECONNREFUSED`. All three requirements are in
+[`../vm/dind.md`](../vm/dind.md).
+
 **The gh-aw staging tree.** `/tmp/gh-aw` holds `prompt.txt`, `agent_output.json` and
 `safeoutputs.jsonl`. The real work already happens in `${RUNNER_TEMP}/gh-aw`, which is
 per-instance, but the staging copies were not. Now keyed on `github.run_id`. Symptom when
