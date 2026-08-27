@@ -11,6 +11,9 @@ network:
     - dotnet
     - fonts
     - login.microsoftonline.com
+    # In-cluster AgentMemory service: the agentmemory MCP shim proxies to it when
+    # AGENTMEMORY_URL is set, which the compile wrapper injects on ARC runners.
+    - agentmemory.mcp.svc.cluster.local
 
 safe-outputs:
   threat-detection: false
