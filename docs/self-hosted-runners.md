@@ -1,189 +1,50 @@
-# Self-hosted runners and the compiled lock files
+# Runners and the compiled lock files
 
-The agent workflows target `runs-on: [self-hosted, linux, agents]`. gh-aw generates their
-`.lock.yml` files assuming a host that runs one job at a time, which is not true once a runner
-host has more than one runner. This describes the differences between what gh-aw generates and
-what actually ships, and why each one exists.
-
-For building the host itself, see [`../vm/README.md`](../vm/README.md).
-
-## What targets the host
-
-The eight `agent-*` workers, plus the two workflows that need a container runtime:
-`app-ci.yml` and `app-infra.yml`. The runner user is in the `docker`
-group, so those call `docker` and `docker compose` directly. No Docker-in-Docker is involved:
-the job runs on the host, not inside a container, so it simply uses the daemon.
-
-The router, the authorizer, the feature chain and the agentics checks stay on GitHub-hosted
-runners on purpose. They finish in seconds, and keeping them off the host stops them queueing
-behind a forty-minute agent job.
-
-There is deliberately no visual evidence workflow. It was removed: the agent cannot capture
-from inside the sandbox, and screenshots were never compared against a baseline, so they gated
-nothing. `pc-ops-evidence` remains installed for running `/ops-evidence` locally.
-
-`runs-on: RunnerLandingZone` is a decommissioned label. No runner carries it, so anything still
-targeting it queues forever without an error. The CI templates under `loops/templates/ci/` and
-`loops/templates/release/` were moved off it.
+The agent workflows target `runs-on: agents-arc`: ephemeral VM Scale Set runners, one VM per
+job. For the platform itself (scale set, bootstrap, scaler, credentials, costs, the policy
+findings that rule out AKS) see [`../runners/README.md`](../runners/README.md).
 
 ## The lock files are post-processed
 
 `gh aw compile` is never called directly. `loops/scripts/compile-agent-workflows.mjs` runs it
-and then rewrites the generated `.lock.yml` files. Consumers get the wrapper through
-`workflows update`, so the rewrites survive every recompile.
+and rewrites the generated `.lock.yml` files. Consumers get the wrapper through
+`workflows update`, so the rewrites survive every recompile. Never hand-edit a `.lock.yml`.
 
-Never hand-edit a `.lock.yml`. The next compile discards it. If a lock needs to differ from
-what gh-aw generates, the change belongs in the wrapper.
+Validate the compiled output, not the patch: every lock must parse as YAML, every `run:` block
+must pass `bash -n`, no empty `${{ }}` anywhere, and the route matrix must pass in both
+consumer repos. A wrapper rewrite that misses its anchor is silent, and one broken lock takes
+the router down with zero-job runs that carry no annotation.
 
-### Noise and cost reporting
+## What the wrapper rewrites, and which era each rewrite belongs to
 
-| Rewrite | Reason |
-|---|---|
-| `--log-level DEBUG` becomes `ERROR` | debug logging buries the agent's own output |
-| `GH_AW_INFO_MODEL` becomes `per-agent` | the platform routes per agent, so a single model name is wrong |
-| `OPENCODE_MODEL` emptied, `GH_AW_INFO_MODEL_COSTS` emptied | prices come from the internal proxy, and stale figures are worse than none |
-
-### Concurrency on one host
-
-Four things collide when two agent jobs run on the same machine. Each was found by a failing
-run, and none of them names its cause in the error.
-
-**MCP gateway port.** Published on `127.0.0.1:8080`. The lock now reads
-`${MCP_GATEWAY_PORT:-8080}`, so a runner sets its own in `.env` and a single-runner host needs
-no configuration. Symptom when shared: `Port 8080 does not appear to be listening`.
-
-The port alone is not enough once the gateway runs inside a per-runner Docker-in-Docker daemon.
-gh-aw health-checks it from the runner, so the daemon has to publish the port through and the
-wrapper has to strip the inner `127.0.0.1:` from gh-aw's `docker run`, or the check fails 120
-times with `ECONNREFUSED`. All three requirements are in
-[`../vm/dind.md`](../vm/dind.md).
-
-**The gh-aw staging tree.** `/tmp/gh-aw` holds `prompt.txt`, `agent_output.json` and
-`safeoutputs.jsonl`. The real work already happens in `${RUNNER_TEMP}/gh-aw`, which is
-per-instance, but the staging copies were not. Now keyed on `github.run_id`. Symptom when
-shared:
-
-```
-cat: /tmp/gh-aw/aw-prompts/prompt.txt: No such file or directory
-Error: You must provide a message or a command
-```
-
-One job cleared the tree while another was reading its prompt, so OpenCode started with no
-prompt at all. The silent version is worse: safe outputs create pull requests and close issues,
-so a crossed `agent_output.json` attributes one run's work to another and nothing looks wrong.
-
-A job suffix was added to this key for a while, when each runner ran as its own Linux user and
-one user's staging directory could not be written by the next. It was reverted with the users:
-awf mounts only the current job's directory into the container, so a path built in the
-activation job could not be read by the agent. One user again means the run key is enough.
-
-**models.json.** gh-aw's bundled action scripts default this to a hardcoded `/tmp/gh-aw`, which
-the wrapper cannot reach because it only rewrites the compiled lock. The activation job
-therefore wrote it outside the directory it uploads from, so `models.json` never reached the
-activation artifact and the agent reported `unknown_model_ai_credits`. The wrapper now sets
-`GH_AW_MODELS_JSON_PATH` at workflow level.
-
-### Why the keys differ
-
-The staging tree uses `github.run_id`; the OpenCode data directory uses `runner.name`. That is
-deliberate.
-
-A warm server should survive between jobs on the same runner, which is what makes it warm, so
-it is keyed on the runner. Staging files must never outlive their run, so they are keyed on the
-run.
-
-There is also a hard constraint. **The `runner` context does not exist at workflow level.** A
-path rewritten to `${{ runner.name }}` in a workflow-level `env:` makes the workflow fail to
-start at all, with no jobs and no log, which is very hard to read. `github.run_id` is valid
-everywhere. `github.job` also resolves per job there, which is worth knowing but is not used
-for the staging key any more. Use `runner.*` only in step-level `run:` and `env:`, and
-check where a value actually lands before keying it on the runner. Make that check a probe
-rather than a reading of the documentation: a two-job workflow echoing the value costs a minute,
-and it has already caught one wrong assumption here.
-
-## The npm cooldown blocks fresh releases
-
-gh-aw sets `NPM_CONFIG_MIN_RELEASE_AGE` to **3** days, so npm cannot see any package published
-in the last three. Pinning a newer version fails in a way that does not look like a cooldown:
-
-```
-npm error code ETARGET
-npm error notarget No matching version found for opencode-ai@1.18.23 with a date before 8/24/2026
-```
-
-That reads as "the version does not exist". It does; it is just too new. The wrapper lowers the
-value to **1** so a fix released yesterday is usable.
-
-This is a supply-chain control, not a nuisance. At three days a compromised release has time to
-be pulled before a runner fetches it, and at one day that window is shorter. Raising it back is
-a one-line change in the wrapper, and anything pinned must then be at least that many days old.
-
-## Toolchain versions the wrapper controls
-
-| Tool | Pinned | Why it is not gh-aw's default |
+| Rewrite | Why | On ephemeral VMs |
 |---|---|---|
-| `opencode-ai` | 1.18.23 | gh-aw pins 1.2.14 at every release through v0.87.5, a build from 2026-02-25 |
-| `@colbymchenry/codegraph` | 1.6.0 | 1.5.0 shipped the `codegraph_explore` behaviour that cost 15.6 min of one run |
+| `opencode-ai` pinned to 1.18.23 + explicit postinstall | gh-aw pins a Feb-2026 build at every release; `--ignore-scripts` blocks the postinstall that downloads the binary | required |
+| `NPM_CONFIG_MIN_RELEASE_AGE` 3 to 1 | the 3-day cooldown rejects fresh releases with a misleading ETARGET | required |
+| copilot-staging guard | gh-aw's arc-dind step assumes the Copilot engine and fails under `engine: opencode` | inert without the topology, kept for safety |
+| `GH_AW_MODELS_JSON_PATH` at workflow level | the writer defaulted to a path outside the uploaded directory, so the artifact lost models.json | required |
+| staging keyed on `github.run_id` | two jobs on one host crossed prompts and outputs | harmless with one job per VM |
+| `flock /tmp/agentic-awf.lock` around awf | awf's fixed container names killed concurrent jobs on a shared daemon | uncontended no-op, kept |
+| log level, model name, cost table | noise and wrong constants for per-agent routing | cosmetic |
 
-After a codegraph upgrade the index must be rebuilt, which the "Install codegraph and index the
-repository" step does. A stale index is the first thing to suspect if `explore` misbehaves right
-after a bump.
+`VERIFY_COMMANDS` is split per area (`_API` / `_WEB`) so a web-only change does not pay for a
+cold .NET Release build; the route matrix asserts each variable is defined wherever printed.
 
-## Verification is scoped to what changed
+## Tools on the runner
 
-`VERIFY_COMMANDS` was one unconditional block, so a change to a single `.tsx` file still ran
-`dotnet restore`, a Release build of the API and two test suites. On a shared 2-vCPU runner that
-is minutes spent on code the change never touched.
+The VM image is built by [`cloud-init`](../runners/cloud-init.yaml): docker-ce with the
+compose plugin, gh, git, jq, and the actions runner. Everything else the workflows need
+arrives per run and user-space: setup-node and setup-dotnet into the tool cache, ripgrep and
+rtk from release artifacts into `$HOME/.local/bin`, `dotnet tool` output onto PATH explicitly
+(fresh VMs do not have `~/.dotnet/tools` on PATH), and OpenCode via npm into the tool-cache
+prefix. Nothing requires root at job time, which also keeps the workflows valid for ARC
+should the AKS path open up.
 
-It is now `VERIFY_COMMANDS_API` and `VERIFY_COMMANDS_WEB`, and the worker runs whichever match
-the paths it edited, both when a change spans both, and neither for documentation. The route
-matrix asserts each variable is defined wherever it is printed, and that the old unscoped name is
-gone: an undefined variable renders an empty command block and the model invents its own build
-line, which is how one run shipped `dotnet build --no-restore` against an unrestored workspace.
+## CodeGraph
 
-## The OpenCode version is ours to choose
-
-gh-aw pins `opencode-ai@1.2.14` and has done at every release checked, up to and including
-v0.87.5. That version was published 2026-02-25. The harness expects 1.18.9 and the current
-release is 1.18.23, so upgrading gh-aw does **not** move it.
-
-The wrapper already rewrites the install line, so the pin is ours to override. Do not assume a
-gh-aw upgrade brings a newer agent runtime with it; check what
-`.github/workflows/shared/opencode.md` pins at the tag you are moving to, and compare it against
-`opencodeVersion` in `.opencode/harness.json`.
-
-## Rules for changing the wrapper
-
-**Validate the compiled output, not the patch.** A rewrite that looks right can still produce
-an invalid lock. After changing the wrapper, confirm the lock parses as YAML, every `run:`
-block passes `bash -n`, and no `runner.*` reference landed at workflow or job level.
-
-**Mind the enclosing scalar.** gh-aw emits most `run:` blocks as double-quoted YAML scalars. A
-rewrite that inserts an unescaped `"` produces a lock that no longer parses. Prefer values that
-need no quoting.
-
-**Prefer an environment default to a hard-coded value.** `${VAR:-default}` keeps a
-single-runner host working with no configuration while letting a multi-runner host override it.
-That pattern is why instance 1 has an almost empty `.env`.
-
-## Docker
-
-awf gives its containers fixed names: `awf-agent`, `awf-squid`, `awf-api-proxy`. Only the
-compose project label varies per run, so two agent jobs on one daemon recreate each other's
-containers and the first dies with exit 137 partway through its work.
-
-The timestamped network name `awf-<timestamp>_awf-ext` suggests runs are isolated. They are
-not: `awf-net` is shared and the container names are what collide. That misreading is worth
-naming, because it is the reason this took an afternoon to find.
-
-The schema has no option for container names, a prefix, or a project name, so the compiled
-lock wraps the awf call in `flock /tmp/agentic-awf.lock` and one agent job runs at a time.
-Every other job still uses all four runners.
-
-Giving each runner its own user and rootless daemon was tried first and reverted: it isolated
-the containers and broke every fixed-name path the runners share in `/tmp`. See
-[`../vm/serialise-agents.md`](../vm/serialise-agents.md).
-
-The lock name deliberately avoids the `/tmp/gh-aw` prefix. The staging rewrite keys anything
-starting `/tmp/gh-aw` on run and job, which would give each job its own lock file and no mutual
-exclusion at all.
+The index (`.codegraph/` in the checkout plus the `~/.codegraph` registry) rides
+`actions/cache`, which is repository-scoped: Numa and Odyssey cannot see each other's graphs.
+Every run restores the newest snapshot via `restore-keys` and saves its own immutable key at
+job end, so concurrent runs never write one database. Centralised AgentMemory is deferred:
+ACI is policy-denied, and the URL of a dead server is worse than no URL, because the MCP shim
+retries it on every call.
