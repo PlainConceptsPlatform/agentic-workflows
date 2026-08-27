@@ -1,0 +1,86 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/runner-scaler.yml.
+#
+# Ephemeral VM Scale Set autoscaler for the agents-arc runners.
+#
+# queued:    grow agentrunner-vmss-01 (cap 4), claim a booted instance, register it to THIS
+#            repository with a JIT config (single job, ephemeral by construction), start it.
+# completed: delete instances whose runner has finished or that were never claimed.
+#
+# The JIT config comes from the job's own GITHUB_TOKEN (administration: write), so no PAT is
+# stored anywhere. Azure access uses the Platform Agents Pro service principal from org secrets.
+name: "Runners: scale"
+
+on:
+  workflow_job:
+    types: [queued, completed]
+
+permissions:
+  administration: write
+
+concurrency:
+  group: runner-scaler
+  cancel-in-progress: false
+
+env:
+  RG: agentrunner-pro-rg-01
+  VMSS: agentrunner-vmss-01
+  MAX_RUNNERS: "4"
+  RUNNER_LABEL: agents-arc
+
+jobs:
+  scale:
+    if: contains(github.event.workflow_job.labels, 'agents-arc')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: '{"clientId":"${{ secrets.AZURE_SCALER_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_SCALER_CLIENT_SECRET }}","tenantId":"${{ secrets.AZURE_SCALER_TENANT_ID }}","subscriptionId":"${{ secrets.AZURE_SCALER_SUBSCRIPTION_ID }}"}'
+
+      - name: Scale up and start a JIT runner
+        if: github.event.action == 'queued'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cap=$(az vmss show -g "$RG" -n "$VMSS" --query sku.capacity -o tsv)
+          if [ "$cap" -lt "$MAX_RUNNERS" ]; then
+            az vmss scale -g "$RG" -n "$VMSS" --new-capacity $((cap + 1)) -o none
+          fi
+          # wait for a bootstrapped, unclaimed instance and claim it atomically
+          claimed=""
+          for attempt in $(seq 1 40); do
+            for id in $(az vmss list-instances -g "$RG" -n "$VMSS" --query "[].instanceId" -o tsv); do
+              out=$(az vmss run-command invoke -g "$RG" -n "$VMSS" --instance-id "$id" \
+                --command-id RunShellScript \
+                --scripts 'if [ -f /opt/runner/.ready ] && [ ! -f /opt/runner/.claimed ]; then touch /opt/runner/.claimed && echo CLAIMED; else echo NO; fi' \
+                --query "value[0].message" -o tsv 2>/dev/null || true)
+              if echo "$out" | grep -q CLAIMED; then claimed="$id"; break 2; fi
+            done
+            sleep 15
+          done
+          [ -n "$claimed" ] || { echo "::error::no instance became ready"; exit 1; }
+          echo "claimed instance $claimed"
+          jit=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runners/generate-jitconfig" \
+            -f name="vmss-${claimed}-${GITHUB_RUN_ID}" -F runner_group_id=1 \
+            -f "labels[]=${RUNNER_LABEL}" -f work_folder=_work --jq .encoded_jit_config)
+          az vmss run-command invoke -g "$RG" -n "$VMSS" --instance-id "$claimed" \
+            --command-id RunShellScript \
+            --scripts "systemd-run --unit=gha-runner --uid=runner --gid=runner --working-directory=/opt/actions-runner /opt/actions-runner/run.sh --jitconfig '$jit'" \
+            --query "value[0].message" -o tsv | tail -2
+
+      - name: Reap finished instances
+        if: github.event.action == 'completed'
+        run: |
+          set -euo pipefail
+          for id in $(az vmss list-instances -g "$RG" -n "$VMSS" --query "[].instanceId" -o tsv); do
+            out=$(az vmss run-command invoke -g "$RG" -n "$VMSS" --instance-id "$id" \
+              --command-id RunShellScript \
+              --scripts 'if [ -f /opt/runner/.claimed ] && ! systemctl is-active --quiet gha-runner; then echo DEAD; elif [ ! -f /opt/runner/.ready ]; then echo BOOTING; else echo ALIVE; fi' \
+              --query "value[0].message" -o tsv 2>/dev/null || true)
+            if echo "$out" | grep -q DEAD; then
+              echo "deleting finished instance $id"
+              az vmss delete-instances -g "$RG" -n "$VMSS" --instance-ids "$id" --no-wait -o none
+            fi
+          done
