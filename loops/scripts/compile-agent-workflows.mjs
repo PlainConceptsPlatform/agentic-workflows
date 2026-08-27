@@ -109,7 +109,7 @@ for (const file of readdirSync(workflowDirectory)) {
     // that container's eth0, so the two never meet and gh-aw's health check fails 120 times with
     // ECONNREFUSED. Binding 0.0.0.0 inside the daemon connects them. The host still exposes the
     // port on loopback only, because the DinD container is published as 127.0.0.1:<port>.
-    .replace(/-p 127\.0\.0\.1:'"\$\{MCP_GATEWAY_PORT\}"':/g, `-p '"\${MCP_GATEWAY_PORT}"':`)
+    .replaceAll("-p 127.0.0.1:'\"${MCP_GATEWAY_PORT}\"':", "-p '\"${MCP_GATEWAY_PORT}\"':")
     // Each runner needs its own gateway port: four DinD daemons publish through to one host
     // loopback, so two jobs on 8080 would collide. The runner sets it in .env.
     .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"')
