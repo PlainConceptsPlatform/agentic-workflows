@@ -24,10 +24,12 @@ name: "Agent: Apply Review"
 # Router-only worker. The Work Router owns triggers, classification, and rung 1-2 checks.
 # This workflow receives the classified inputs and runs rung 3+.
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.86.2
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
+runner:
+  topology: arc-dind
 on:
   workflow_call:
     inputs:
@@ -44,7 +46,7 @@ on:
 # substantive feedback. A custom job, not `on.steps`, because the prompt needs these values.
 jobs:
   subject:
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: read
@@ -113,7 +115,7 @@ jobs:
   reserve:
     needs: subject
     if: needs.subject.outputs.found == 'true' && needs.subject.outputs.issue != ''
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
@@ -143,7 +145,7 @@ jobs:
   validate_output:
     needs: [activation, subject, agent, safe_outputs]
     if: always() && needs.agent.result == 'success' && needs.safe_outputs.result == 'success'
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
     permissions:
       contents: read
       pull-requests: read
@@ -186,7 +188,7 @@ jobs:
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.validate_output.outputs.valid == 'true'
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
     permissions:
       contents: write
       issues: write
@@ -237,7 +239,7 @@ jobs:
       always() &&
       needs.subject.outputs.found == 'true' &&
       (needs.agent.result != 'success' || needs.safe_outputs.result != 'success' || needs.validate_output.outputs.valid != 'true')
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
@@ -276,8 +278,8 @@ jobs:
 
 if: needs.subject.outputs.found == 'true'
 
-runs-on: [self-hosted, linux, agents]
-runs-on-slim: [self-hosted, linux, agents]
+runs-on: agents-arc
+runs-on-slim: agents-arc
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

@@ -24,10 +24,12 @@ name: "Agent: Audit"
 # Shared: network policy only. This workflow owns its Safe Outputs and OpenCode configuration.
 # permissions, engine, model and runs-on cannot be shared , see shared/platform-defaults.md.
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.86.2
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
+runner:
+  topology: arc-dind
 on:
   workflow_call:
     inputs:
@@ -42,8 +44,8 @@ on:
     query: "is:issue is:open label:audit"
     max: 3
 
-runs-on: [self-hosted, linux, agents]
-runs-on-slim: [self-hosted, linux, agents]
+runs-on: agents-arc
+runs-on-slim: agents-arc
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -76,7 +78,7 @@ jobs:
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.safe_outputs.outputs.process_safe_outputs_processed_count != '0'
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write

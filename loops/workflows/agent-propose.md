@@ -37,10 +37,12 @@ name: "Agent: Propose Feature"
 # Shared: network policy only. This workflow owns its Safe Outputs and OpenCode configuration.
 # permissions, engine, model and runs-on cannot be shared, see shared/platform-defaults.md.
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.86.2
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
+runner:
+  topology: arc-dind
 on:
   workflow_call:
     inputs:
@@ -56,8 +58,8 @@ on:
     query: "is:issue is:open label:proposed -label:refine -label:implement"
     max: 1
 
-runs-on: [self-hosted, linux, agents]
-runs-on-slim: [self-hosted, linux, agents]
+runs-on: agents-arc
+runs-on-slim: agents-arc
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -156,7 +158,7 @@ jobs:
   # Circuit breaker. A guard job that only reports; the agent's own `if:` is what stops the
   # run, because a `needs` job succeeding with a false output does not gate its dependents.
   capacity:
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
     permissions:
       issues: read
     outputs:
@@ -185,7 +187,7 @@ jobs:
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.safe_outputs.outputs.process_safe_outputs_processed_count != '0'
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
@@ -228,7 +230,7 @@ safe-outputs:
   # (release notes) and then files an issue, so it is the only one where a prompt-injection
   # attempt has somewhere to go.
   threat-detection:
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
   create-issue:
     max: 1
 

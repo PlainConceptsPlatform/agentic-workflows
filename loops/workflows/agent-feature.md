@@ -31,10 +31,12 @@ name: "Agent: Finish Feature"
 
 # Shared: network policy only. This workflow owns its Safe Outputs and OpenCode configuration.
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.86.2
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
+runner:
+  topology: arc-dind
 on:
   workflow_call:
     inputs:
@@ -45,7 +47,7 @@ on:
 
 jobs:
   eligibility:
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
     permissions:
       issues: read
     outputs:
@@ -72,7 +74,7 @@ jobs:
   reserve:
     needs: [eligibility]
     if: needs.eligibility.outputs.eligible == 'true'
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
@@ -106,7 +108,7 @@ jobs:
       always() &&
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success'
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
@@ -157,7 +159,7 @@ jobs:
         needs.agent.result != 'success' ||
         needs.safe_outputs.result != 'success'
       )
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
@@ -200,8 +202,8 @@ jobs:
 
 if: inputs.issue-number != ''
 
-runs-on: [self-hosted, linux, agents]
-runs-on-slim: [self-hosted, linux, agents]
+runs-on: agents-arc
+runs-on-slim: agents-arc
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

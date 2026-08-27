@@ -30,8 +30,11 @@ pre-agent-steps:
         exit 0
       fi
 
-      sudo apt-get update
-      sudo apt-get install --yes ripgrep
+      # ARC runner pods have no root, so ripgrep comes from its release tarball into a
+      # user-writable prefix instead of apt.
+      mkdir -p "$HOME/.local/bin"
+      curl -sSfL https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz         | tar -xz --strip-components=1 -C "$HOME/.local/bin" --wildcards "*/rg"
+      echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       rg --version
 
   - name: Activate the pnpm version package.json pins
@@ -63,7 +66,9 @@ pre-agent-steps:
       echo "${RTK_SHA256}  $tarball" | sha256sum --check --strict
 
       tar -xzf "$tarball" -C "$RUNNER_TEMP"
-      sudo install -m 0755 "$RUNNER_TEMP/rtk" /usr/local/bin/rtk
+      mkdir -p "$HOME/.local/bin"
+      install -m 0755 "$RUNNER_TEMP/rtk" "$HOME/.local/bin/rtk"
+      echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       rtk --version
       rtk init -g --opencode --auto-patch
