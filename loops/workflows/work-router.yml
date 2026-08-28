@@ -347,6 +347,21 @@ jobs:
             fi
           done
 
+          # Marker-first: implement stamps <!-- implement-pr: N --> on the issue when its
+          # pull request is created, so the duplicate check is an exact lookup. Only an
+          # OPEN marker PR blocks; a merged or closed one means a re-implement is legitimate.
+          marker_pr=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq '.body // ""' \
+            | grep -oE '<!-- implement-pr: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
+          if [ -n "$marker_pr" ]; then
+            state=$(gh pr view "$marker_pr" --repo "$REPO" --json state --jq '.state' 2>/dev/null || echo GONE)
+            if [ "$state" = "OPEN" ]; then
+              echo "has-open-pr=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::Issue #$ISSUE_NUMBER is marked as implemented by open PR #$marker_pr. Skipping duplicate implement."
+              exit 0
+            fi
+            echo "Marker PR #$marker_pr is $state; a fresh implement is allowed."
+          fi
+
           existing=$(gh pr list --repo "$REPO" --state open --json number,author,body \
             --jq "[.[]
               | select(.author.login | startswith(\"app/\") or endswith(\"[bot]\"))

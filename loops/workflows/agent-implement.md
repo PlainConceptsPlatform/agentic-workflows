@@ -210,6 +210,27 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           pr-number: ${{ needs.safe_outputs.outputs.created_pr_number }}
           issue-number: ${{ inputs.issue-number }}
+      # GitHub only stores the PR-to-issue direction (Closes #N); the reverse lookup is a
+      # body-text search. Stamping hidden markers on the issue makes issue-to-branch exact:
+      # the duplicate check reads them first, and anything editing the change later knows
+      # the branch without guessing. Old markers are replaced, so a re-implement after a
+      # closed pull request re-stamps cleanly.
+      - name: Record the pull request and branch on the issue
+        if: inputs.feature-chain == '' && needs.safe_outputs.outputs.created_pr_number != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue-number }}
+          PR_NUMBER: ${{ needs.safe_outputs.outputs.created_pr_number }}
+        run: |
+          set -euo pipefail
+          branch=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefName --jq '.headRefName')
+          body=$(gh issue view "$ISSUE" --repo "$REPO" --json body --jq '.body // ""')
+          cleaned=$(printf '%s' "$body" | sed -E 's/<!-- implement-(pr|branch): [^ ]+ -->//g' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
+          printf '%s\n\n<!-- implement-pr: %s -->\n<!-- implement-branch: %s -->' "$cleaned" "$PR_NUMBER" "$branch" > /tmp/issue-body.md
+          gh issue edit "$ISSUE" --repo "$REPO" --body-file /tmp/issue-body.md
+          echo "Stamped PR #$PR_NUMBER and branch $branch on issue #$ISSUE"
       - name: Reconcile the new bot pull request
         if: inputs.feature-chain == '' && needs.safe_outputs.outputs.created_pr_number != ''
         env:
