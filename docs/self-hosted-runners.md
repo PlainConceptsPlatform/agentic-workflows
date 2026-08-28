@@ -1,7 +1,7 @@
 # Runners and the compiled lock files
 
-The agent workflows target `runs-on: agents-arc`: ephemeral VM Scale Set runners, one VM per
-job. For the platform itself (scale set, bootstrap, scaler, credentials, costs, the policy
+The agent workflows target `runs-on: agents-arc`: ephemeral VM Scale Set runners. A VM serves
+one job at a time and takes consecutive jobs until the queue is empty, then deletes itself. For the platform itself (scale set, bootstrap, scaler, credentials, costs, the policy
 findings that rule out AKS) see [`../runners/README.md`](../runners/README.md).
 
 ## The lock files are post-processed
