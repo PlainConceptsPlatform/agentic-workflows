@@ -91,16 +91,12 @@ on:
 
   pull_request_target:
     types: [opened, synchronize, reopened, labeled]
-  workflow_run:
-    workflows: ["App: CI", "CI"]
-    types: [completed]
-    branches:
-      - "fix/*"
-      - "bugfix/*"
-      - "feature/*"
-      - "bot/*"
-      - "patch/*"
-      - "hotfix/*"
+  # No workflow_run trigger, on purpose. Bot PRs are created with GITHUB_TOKEN, and
+  # GitHub does not deliver workflow_run for runs whose originating event came from
+  # that token, so CI completions on bot branches never arrived here (verified
+  # 2026-08-28: every firing had a human actor). The reliable paths are app-ci's
+  # dispatch-merge-gate job (bot App token, immediate) and the reconcile cron as the
+  # belt. Keeping the trigger double-fired the gate whenever a human touched a PR.
 
   # Cron to route mapping lives in .github/actions/classify-route/classify-route.sh.
   schedule:
@@ -657,25 +653,6 @@ jobs:
                   gh api "repos/$REPO/actions/runs/$run_id/approve" --method POST
                 done
 
-              # Check if merge-gate already ran for this PR (comment on PR or linked issue)
-              gate_recorded=$(gh api "repos/$REPO/issues/$pr_number/comments?per_page=100" \
-                --jq 'any(.[]; .body | contains("<!-- agent-merge-gate -->"))')
-              if [ "$gate_recorded" = "true" ]; then
-                echo "Merge gate already recorded for PR #$pr_number, skipping"
-                continue
-              fi
-
-              # Also check the linked issue comments if the PR closes an issue
-              linked_issue=$(gh pr view "$pr_number" --repo "$REPO" --json closingIssuesReferences --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)
-              if [ -n "$linked_issue" ]; then
-                gate_recorded=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
-                  --jq 'any(.[]; .body | contains("<!-- agent-merge-gate -->"))')
-                if [ "$gate_recorded" = "true" ]; then
-                  echo "Merge gate already recorded on issue #$linked_issue for PR #$pr_number, skipping"
-                  continue
-                fi
-              fi
-
               ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
                 --jq '[.workflow_runs[]
                   | select(
@@ -684,12 +661,31 @@ jobs:
                       and .status == "completed"
                       and (.conclusion == "success" or .conclusion == "failure")
                     )
-                  ] | sort_by(.created_at) | last // empty | [.id, .conclusion] | @tsv')
+                  ] | sort_by(.created_at) | last // empty | [.id, .conclusion, .updated_at] | @tsv')
               if [ -z "$ci" ]; then
                 continue
               fi
 
-              IFS=$'\t' read -r ci_run_id ci_conclusion <<<"$ci"
+              IFS=$'\t' read -r ci_run_id ci_conclusion ci_finished <<<"$ci"
+
+              # A recorded verdict only counts when it is NEWER than the latest CI run.
+              # The old existence check made the gate one-shot per PR: after any verdict
+              # (say remediated), a later CI completion could never reopen the gate, so
+              # the fix-CI loop starved. ISO-8601 timestamps compare lexicographically.
+              latest_marker=$(gh api "repos/$REPO/issues/$pr_number/comments?per_page=100" \
+                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate -->")) | .created_at] | max // empty')
+              linked_issue=$(gh pr view "$pr_number" --repo "$REPO" --json closingIssuesReferences --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)
+              if [ -n "$linked_issue" ]; then
+                issue_marker=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
+                  --jq '[.[] | select(.body | contains("<!-- agent-merge-gate -->")) | .created_at] | max // empty')
+                if [ -n "$issue_marker" ] && { [ -z "$latest_marker" ] || [ "$issue_marker" \> "$latest_marker" ]; }; then
+                  latest_marker="$issue_marker"
+                fi
+              fi
+              if [ -n "$latest_marker" ] && [ "$latest_marker" \> "$ci_finished" ]; then
+                echo "Merge gate verdict ($latest_marker) is newer than CI ($ci_finished) for PR #$pr_number, skipping"
+                continue
+              fi
               echo "Dispatching Merge Gate for PR #$pr_number ($ci_conclusion, run $ci_run_id)"
               gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" \
                 --method POST \
