@@ -154,7 +154,7 @@ jobs:
           set -euo pipefail
 
           body=$(gh issue view "$FEATURE" --repo "$REPO" --json body --jq '.body // ""')
-          branch=$(printf '%s' "$body" | grep -oE '<!-- feature-branch: [^ ]+ -->' | head -1 | sed 's/<!-- feature-branch: //; s/ -->//')
+          branch=$(printf '%s' "$body" | grep -oE '<!-- feature-branch: [^ ]+ -->' | head -1 | sed 's/<!-- feature-branch: //; s/ -->//' || true)
           if [ -z "$branch" ]; then
             echo "::error::Feature #$FEATURE lost its <!-- feature-branch --> marker; cannot land."
             exit 1
@@ -352,7 +352,7 @@ steps:
     run: |
       set -euo pipefail
       body=$(gh issue view "$FEATURE" --repo "$REPO" --json body --jq '.body // ""')
-      branch=$(printf '%s' "$body" | grep -oE '<!-- feature-branch: [^ ]+ -->' | head -1 | sed 's/<!-- feature-branch: //; s/ -->//')
+      branch=$(printf '%s' "$body" | grep -oE '<!-- feature-branch: [^ ]+ -->' | head -1 | sed 's/<!-- feature-branch: //; s/ -->//' || true)
       if [ -z "$branch" ]; then
         echo "::error::Feature #$FEATURE carries no <!-- feature-branch --> marker; the chain link should have created it."
         exit 1

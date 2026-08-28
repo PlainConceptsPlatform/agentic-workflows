@@ -145,7 +145,7 @@ jobs:
           set -euo pipefail
 
           body=$(gh issue view "$FEATURE" --repo "$REPO" --json body --jq '.body // ""')
-          branch=$(printf '%s' "$body" | grep -oE '<!-- feature-branch: [^ ]+ -->' | head -1 | sed 's/<!-- feature-branch: //; s/ -->//')
+          branch=$(printf '%s' "$body" | grep -oE '<!-- feature-branch: [^ ]+ -->' | head -1 | sed 's/<!-- feature-branch: //; s/ -->//' || true)
           title=$(gh issue view "$FEATURE" --repo "$REPO" --json title --jq '.title')
           if [ -z "$branch" ]; then
             echo "::error::Feature #$FEATURE lost its <!-- feature-branch --> marker; cannot open the pull request."
@@ -368,7 +368,7 @@ steps:
     run: |
       set -euo pipefail
       body=$(gh issue view "$FEATURE" --repo "$REPO" --json body --jq '.body // ""')
-      branch=$(printf '%s' "$body" | grep -oE '<!-- feature-branch: [^ ]+ -->' | head -1 | sed 's/<!-- feature-branch: //; s/ -->//')
+      branch=$(printf '%s' "$body" | grep -oE '<!-- feature-branch: [^ ]+ -->' | head -1 | sed 's/<!-- feature-branch: //; s/ -->//' || true)
       if [ -z "$branch" ]; then
         echo "::error::Feature #$FEATURE carries no <!-- feature-branch --> marker; nothing to finish."
         exit 1

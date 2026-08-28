@@ -71,7 +71,7 @@ jobs:
           # The chain branch is state, and state lives in GitHub: a hidden marker in the
           # feature body names the integration branch every story lands on. First link
           # creates both; every later link (and a resume after any crash) re-derives them.
-          CHAIN_BRANCH=$(printf '%s' "$body" | grep -oE '<!-- feature-branch: [^ ]+ -->' | head -1 | sed 's/<!-- feature-branch: //; s/ -->//')
+          CHAIN_BRANCH=$(printf '%s' "$body" | grep -oE '<!-- feature-branch: [^ ]+ -->' | head -1 | sed 's/<!-- feature-branch: //; s/ -->//' || true)
           if [ -z "$CHAIN_BRANCH" ]; then
             title=$(gh issue view "$FEATURE" --repo "$REPO" --json title --jq '.title')
             slug=$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//' | cut -c1-32)
