@@ -10,8 +10,7 @@
 //  - the Entra app (Platform Agents Pro): directory-level, made in the portal
 //  - role assignment: the scaler app's managed identity (agentrunner-scaler-01) needs
 //    "Virtual Machine Contributor" on this RG
-//  - the scaler web app itself (agentrunner-scaler-01 on the shared B1 plan), its app
-//    settings, and the org webhook: see README.md
+//  - the org webhook and the scaler app's code deploy (zip): see README.md
 //  - GitHub org secrets (AGENTMEMORY_SECRET, BOT_*)
 
 @description('SSH public key for the VMSS admin user (never used interactively)')
@@ -21,8 +20,20 @@ param adminPublicKey string
 @secure()
 param agentMemorySecret string
 
-@description('base64 of cloud-init.yaml')
+@description('base64 of cloud-init.yaml (with __VM_TOKEN__ already substituted)')
 param customData string
+
+@description('Fine-grained PAT, sole grant org "Self-hosted runners: rw"')
+@secure()
+param ghPat string
+
+@description('HMAC secret shared with the org workflow_job webhook')
+@secure()
+param webhookSecret string
+
+@description('Bearer VMs use against /vm/jit and /vm/done; same value substituted into customData')
+@secure()
+param vmToken string
 
 param location string = resourceGroup().location
 param vmSku string = 'Standard_D2ads_v5'
@@ -145,5 +156,46 @@ resource agentMemory 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
+resource scaler 'Microsoft.Web/sites@2023-12-01' = {
+  name: 'agentrunner-scaler-01'
+  location: location
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    serverFarmId: plan.id
+    httpsOnly: true
+    siteConfig: {
+      linuxFxVersion: 'DOTNETCORE|10.0'
+      ftpsState: 'Disabled'
+      alwaysOn: true
+      appSettings: [
+        { name: 'GH_PAT', value: ghPat }
+        { name: 'GH_ORG', value: 'PlainConceptsPlatform' }
+        { name: 'WEBHOOK_SECRET', value: webhookSecret }
+        { name: 'VM_TOKEN', value: vmToken }
+        { name: 'AZ_SUBSCRIPTION', value: subscription().subscriptionId }
+        { name: 'AZ_RG', value: resourceGroup().name }
+        { name: 'AZ_VMSS', value: vmss.name }
+        { name: 'RUNNER_LABEL', value: 'agents-arc' }
+        { name: 'RUNNER_GROUP_ID', value: '6' }
+      ]
+    }
+  }
+}
+
+// Virtual Machine Contributor for the scaler's identity: scale the VMSS, delete
+// instances. Deploying this resource needs Owner or User Access Administrator on
+// the RG; anyone else must ask IT for this one assignment (see README).
+resource scalerVmContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, 'agentrunner-scaler-01', 'vm-contributor')
+  scope: resourceGroup()
+  properties: {
+    principalId: scaler.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '9980e02c-c2be-4d73-94e8-173b1dc7cf3c')
+  }
+}
+
 output vmssIdentityPrincipalId string = vmss.identity.principalId
 output agentMemoryUrl string = 'https://${agentMemory.properties.defaultHostName}'
+output scalerUrl string = 'https://${scaler.properties.defaultHostName}'
+output scalerPrincipalId string = scaler.identity.principalId
