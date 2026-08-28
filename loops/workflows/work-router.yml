@@ -317,6 +317,28 @@ jobs:
             echo "::notice::Story of feature #$FEATURE_CHAIN; the standalone duplicate check does not apply."
             exit 0
           fi
+          # A refine-to-implement transition emits two label events (the implement label,
+          # then the worker re-adding bot-working) and each one classifies to implement.
+          # The older router run wins: a younger run that finds an older live implement
+          # route for the same issue skips instead of queueing a duplicate worker. Only
+          # bot-actor titles are counted, so a human's "waiting for bot-working" run can
+          # never block the real one.
+          for st in in_progress queued; do
+            dupes=$(gh api "repos/$REPO/actions/workflows/work-router.yml/runs?status=$st&per_page=100"               --jq "[.workflow_runs[]
+                | select(.id < $GITHUB_RUN_ID)
+                | select(
+                    ((.display_title | startswith(\"Working (Implement)\")) and (.display_title | contains(\"(#${ISSUE_NUMBER})\")))
+                    or
+                    ((.display_title | contains(\"implement label on #${ISSUE_NUMBER} by\")) and (.display_title | endswith(\"[bot]\")))
+                  )
+              ] | length" 2>/dev/null || echo 0)
+            if [ "${dupes:-0}" -gt 0 ]; then
+              echo "has-open-pr=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::An older router run is already implementing #$ISSUE_NUMBER; skipping the duplicate."
+              exit 0
+            fi
+          done
+
           existing=$(gh pr list --repo "$REPO" --state open --json number,author,body \
             --jq "[.[]
               | select(.author.login | startswith(\"app/\") or endswith(\"[bot]\"))
