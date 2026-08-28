@@ -24,9 +24,27 @@ happen: no port claims, no fixed container names colliding, no shared `/tmp`, no
 
 The full audited list, including per-repo secrets and what is safe to delete, lives in [`secrets.md`](secrets.md).
 
-The service principal and the scale set's managed identity both need **Virtual Machine
-Contributor** on `agentrunner-pro-rg-01`. The identity's grant is what lets a finished
-instance delete itself.
+### Role assignments (IAM)
+
+Two members need **Virtual Machine Contributor** on `agentrunner-pro-rg-01`, and without
+them the platform degrades to manual scaling:
+
+| Member | Why | IAM picker detail |
+|---|---|---|
+| `Platform Agents Pro` (service principal) | the scaler workflow logs in as it to grow and reap the fleet | Members type **User, group, or service principal**, search by name |
+| `agentrunner-vmss-01` (managed identity) | a finished VM deletes itself through it | Members type **Managed identity** → category *Virtual machine scale set* — it does not appear in the normal people search |
+
+Portal path: Resource groups → `agentrunner-pro-rg-01` → Access control (IAM) → Add →
+Add role assignment → role **Virtual Machine Contributor** → add each member → Review + assign.
+
+Verify:
+
+```bash
+az role assignment list   --scope /subscriptions/c63519b4-84a6-448c-b0e6-4ebef696b8ff/resourceGroups/agentrunner-pro-rg-01   --query "[?roleDefinitionName=='Virtual Machine Contributor'].principalName" -o tsv
+```
+
+Symptoms when missing: the runner-scaler run fails at `azure/login`'s first az call with
+`AuthorizationFailed`, and finished VMSS instances linger instead of deleting themselves.
 
 ## The proven pipeline
 
