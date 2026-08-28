@@ -124,8 +124,17 @@ jobs:
             [ "${q:-0}" -gt 0 ] && [ "${idle:-0}" -eq 0 ]
           }
 
+          top_up() {
+            # one requested event means one run, but a run holds many jobs: keep adding
+            # runners while work is queued and nothing idle can take it, up to capacity
+            for i in 1 2 3 4; do
+              queued_needs || break
+              scale_up_one || break
+            done
+          }
+
           case "$EVENT" in
-            requested) scale_up_one ;;
-            completed) reap_and_arm ;;
-            *) reap_and_arm; if queued_needs; then scale_up_one; fi ;;
+            requested) scale_up_one || true ;;
+            completed) reap_and_arm; top_up ;;
+            *) reap_and_arm; top_up ;;
           esac
