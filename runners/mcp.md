@@ -6,7 +6,7 @@ get their state elsewhere. Everything here degrades gracefully: with the org sec
 
 ## AgentMemory — one shared server
 
-`https://agentmemory-pro-01.azurewebsites.net` — an App Service (plan `probe-plan`, B1,
+`https://agentmemory-pro-01.azurewebsites.net` — an App Service (plan `agentmemory-plan-01`, B1,
 always-on, ~$13/month, the platform's only fixed cost). The public `node:22-bookworm` image
 boots a startup command that installs the `iii` engine and `@agentmemory/agentmemory@0.9.28`
 into the persistent `/home` on first boot; later boots reuse them, and the memory store lives

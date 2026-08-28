@@ -115,7 +115,7 @@ resource vmss 'Microsoft.Compute/virtualMachineScaleSets@2024-03-01' = {
 
 // ---------- AgentMemory ----------
 resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
-  name: 'probe-plan'
+  name: 'agentmemory-plan-01'
   location: location
   kind: 'linux'
   sku: { name: 'B1' }
