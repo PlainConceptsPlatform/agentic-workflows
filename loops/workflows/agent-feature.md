@@ -373,7 +373,11 @@ steps:
         echo "::error::Feature #$FEATURE carries no <!-- feature-branch --> marker; nothing to finish."
         exit 1
       fi
-      git fetch origin "$branch"
+      # The workspace checkout keeps no credentials on purpose (the sandbox must stay
+      # credential-less), so the fetch authenticates once through the URL and leaves
+      # nothing behind. The remote-tracking ref matters: patch generation diffs against
+      # origin/<branch> to isolate what this run added.
+      git fetch "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/heads/$branch:refs/remotes/origin/$branch"
       git checkout -B "$branch" "origin/$branch"
       echo "Workspace now on $branch at $(git rev-parse --short HEAD)"
 
