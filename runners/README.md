@@ -11,9 +11,10 @@ GitHub org webhook (workflow_job) ──► agentrunner-scaler-01 (App Service, 
                                             ▼
                               agentrunner-vmss-01 (VMSS, Uniform, D2ads_v5,
                               ephemeral OS disk, public IP per VM, capacity 0 at rest)
-                                            │  cloud-init: one JIT runner, one job
+                                            │  cloud-init: one job at a time, reused
                                             ▼
-                              VM asks /vm/jit ► runs the job ► /vm/done ► deleted
+                              VM asks /vm/jit ► runs a job ► resets state ► asks again
+                              ► idle 5 min ► /vm/done ► deleted
 ```
 
 Everything lives in `agentrunner-pro-rg-01`, which also hosts AgentMemory
@@ -32,9 +33,15 @@ app rides on for free.
   write and re-verified after each one; a watchdog forces capacity back down if it
   ever reads more than 2. A third VM is never created automatically.
 - Jobs beyond capacity wait in the GitHub queue on purpose.
-- One VM hosts exactly one ephemeral JIT runner and executes exactly one job, with
-  its own local Docker Engine, then is deleted. Two agentic workflows never share a
-  VM.
+- One VM runs **one job at a time** on its own local Docker Engine; two agentic
+  workflows never share a VM. A VM serves **consecutive** jobs rather than one, and
+  resets Docker state between them, then retires after 5 minutes idle (2 minutes if
+  it never got work), 20 jobs, or 85% disk.
+- Why reuse: gh-aw locks split a run into many stages of a few seconds each, while a
+  VM needs about three minutes to boot. Measured on 2026-08-28, one VM per stage put
+  roughly 78% of billed time into booting (14 VMs, ~12 min of real work across ~45 min
+  of VM life) and added that wait to every stage. Each JIT registration is still
+  single-use and ephemeral; only the host is reused.
 - Demand comes from the org webhook (`workflow_job` events, label-filtered,
   private repos only), persisted as a job ledger in the app's `/home`. Missed
   webhooks self-heal: entries expire (queued 24h, in_progress 8h) and three
@@ -78,10 +85,24 @@ az webapp deploy -g agentrunner-pro-rg-01 -n agentrunner-scaler-01 --src-path ..
 ## VM lifecycle (`runners/cloud-init.yaml`)
 
 cloud-init installs docker-ce + compose, gh, az, trivy, jq and the actions runner,
-then `runner-job.service` runs `job.sh`: request a JIT config from the scaler, run
-`run.sh --jitconfig` for at most one job, and call `/vm/done`. If GitHub hands the
-runner nothing within 10 minutes the VM gives up and reports done anyway, so stale
-demand cannot keep instances billing.
+then `runner-job.service` runs `job.sh`, which loops: request a JIT config from the
+scaler, run `run.sh --jitconfig` for exactly one job, reset Docker state (awf uses
+fixed container names, so a leftover would collide by name), ask again. It reports
+`/vm/done` and is deleted when the queue stays empty past the idle limit, at
+`MAX_JOBS`, or when the disk crosses `DISK_LIMIT`. A VM that boots into no work at
+all retires after 2 minutes, so stale demand cannot keep instances billing.
+
+**`customData` is write-only.** `az vmss show` returns an empty string for it, so a
+grep against that output proves nothing about what was deployed. Verify on an
+instance instead:
+
+```bash
+az vmss run-command invoke -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --instance-id <id> --command-id RunShellScript --scripts 'grep -c MAX_JOBS /opt/runner/job.sh' --query "value[0].message" -o tsv
+```
+
+Model updates also block while instances churn: pass `--no-wait`. And a single stuck
+instance can hold the whole set in `Failed` and reject model edits; delete that
+instance first (`az vmss delete-instances --instance-ids <id>`).
 
 The repo copy has `__VM_TOKEN__` as a placeholder; the real value is only in the
 VMSS model's custom data and the app settings. To rotate it: set a new value in
