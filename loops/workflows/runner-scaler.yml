@@ -57,7 +57,7 @@ env:
 jobs:
   scale:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     continue-on-error: true
     steps:
       - name: Azure login
@@ -73,25 +73,21 @@ jobs:
         run: |
           set -euo pipefail
 
+          # One run-command, not forty. Each `az vmss run-command invoke` round-trip costs
+          # roughly 30s, so polling readiness from here blew the job timeout and left
+          # instances unarmed. The VM does its own waiting instead, and mkdir gives an atomic
+          # claim so two concurrent sweeps cannot arm the same instance twice.
           arm_runner() {
-            local id="$1"
-            for t in $(seq 1 40); do
-              out=$(az vmss run-command invoke -g "$RG" -n "$VMSS" --instance-id "$id" \
-                --command-id RunShellScript \
-                --scripts 'if [ -f /opt/runner/.ready ] && [ ! -f /opt/runner/.claimed ]; then touch /opt/runner/.claimed && echo CLAIMED; elif [ -f /opt/runner/.claimed ]; then echo TAKEN; else echo WAIT; fi' \
-                --query "value[0].message" -o tsv 2>/dev/null | tr -d '\r' || true)
-              echo "$out" | grep -q CLAIMED && break
-              echo "$out" | grep -q TAKEN && { echo "instance $id already claimed"; return 1; }
-              sleep 12
-            done
-            jit=$(gh api -X POST "orgs/${GITHUB_REPOSITORY_OWNER}/actions/runners/generate-jitconfig" \
-              -f name="vmss-${id}-${GITHUB_RUN_ID}" -F runner_group_id=6 \
-              -f "labels[]=${RUNNER_LABEL}" -f work_folder=_work --jq .encoded_jit_config)
-            az vmss run-command invoke -g "$RG" -n "$VMSS" --instance-id "$id" \
-              --command-id RunShellScript \
-              --scripts "systemd-run --unit=gha-runner --uid=runner --gid=runner --working-directory=/opt/actions-runner /opt/actions-runner/run.sh --jitconfig '$jit'" \
-              --query "value[0].message" -o tsv >/dev/null
-            echo "armed runner on instance $id"
+            local id="$1" jit out
+            jit=$(gh api -X POST "orgs/${GITHUB_REPOSITORY_OWNER}/actions/runners/generate-jitconfig" -f name="vmss-${id}-${GITHUB_RUN_ID}" -F runner_group_id=6 -f "labels[]=${RUNNER_LABEL}" -f work_folder=_work --jq .encoded_jit_config 2>/dev/null || true)
+            if [ -z "$jit" ]; then echo "instance $id: could not mint a JIT config"; return 1; fi
+            out=$(az vmss run-command invoke -g "$RG" -n "$VMSS" --instance-id "$id" --command-id RunShellScript --scripts "for i in \$(seq 1 90); do [ -f /opt/runner/.ready ] && break; sleep 4; done; if [ ! -f /opt/runner/.ready ]; then echo NOTREADY; exit 0; fi; if ! mkdir /opt/runner/.claimed 2>/dev/null; then echo TAKEN; exit 0; fi; systemd-run --unit=gha-runner --uid=runner --gid=runner --working-directory=/opt/actions-runner /opt/actions-runner/run.sh --jitconfig '$jit' >/dev/null 2>&1 && echo ARMED || echo ARMFAIL" --query "value[0].message" -o tsv 2>/dev/null | strip_cr || true)
+            case "$out" in
+              *ARMED*)    echo "instance $id: armed"; return 0 ;;
+              *TAKEN*)    echo "instance $id: already claimed"; return 1 ;;
+              *NOTREADY*) echo "instance $id: still booting after 6m"; return 1 ;;
+              *)          echo "instance $id: arm failed ($out)"; return 1 ;;
+            esac
           }
 
           # az on this runner emits CRLF; every numeric read below goes through this.
