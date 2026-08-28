@@ -11,7 +11,7 @@ its secrets again.
 | Secret | Used by | Purpose |
 |---|---|---|
 | `AZURE_SCALER_CLIENT_ID` / `TENANT_ID` / `SUBSCRIPTION_ID` / `CLIENT_SECRET` | runner-scaler.yml | `Platform Agents Pro` SP login to scale `agentrunner-vmss-01` |
-| `RUNNER_SCALER_GH_TOKEN` | runner-scaler.yml | mints org JIT runner configs. **Currently a personal session token — replace with a fine-grained PAT (org, "Self-hosted runners: read/write") and rotate** |
+| `RUNNER_SCALER_GH_TOKEN` | runner-scaler.yml | mints org JIT runner configs. Fine-grained PAT owned by PlainConceptsPlatform, sole permission org "Self-hosted runners: read/write", expires 2027-08-29 |
 | `AGENTMEMORY_SECRET` | every agent run | HMAC auth to the shared AgentMemory App Service; mirrored in the app's settings |
 | `BOT_APP_ID` / `BOT_PRIVATE_KEY` | bot-approve, merge-gate | the platform-devbox GitHub App that approves and merges bot PRs |
 
@@ -39,3 +39,7 @@ none is configured and none is required in this setup.
   `Platform Agents Pro` app registration, then update the org secret.
 - `AGENTMEMORY_SECRET` rotation: generate a new value, set it in the App Service settings
   **and** the org secret, restart the app.
+- `RUNNER_SCALER_GH_TOKEN` expires 2027-08-29. Renew at Settings, Developer Settings,
+  Fine-grained tokens, with resource owner PlainConceptsPlatform. The org permission
+  "Self-hosted runners" only appears in the picker once that resource owner is selected,
+  and the enterprise SSO gate must be authorized before the form will submit.
