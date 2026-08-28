@@ -2,21 +2,44 @@
 #
 # Ephemeral VM Scale Set autoscaler for the agents-arc runners.
 #
-# queued:    grow agentrunner-vmss-01 (cap 4), claim a booted instance, register it to THIS
-#            repository with a JIT config (single job, ephemeral by construction), start it.
-# completed: delete instances whose runner has finished or that were never claimed.
+# workflow_job is a webhook event, not a workflow trigger, so this fires on workflow_run
+# (top-level runs only; reusable calls ride inside their caller) for every workflow whose
+# call graph reaches agents-arc, plus a 15-minute reconciliation sweep that fixes drift in
+# either direction: dead instances reaped, idle ones armed, queued work given a runner.
 #
-# The JIT config needs a real token: GITHUB_TOKEN cannot manage runners, so
-# RUNNER_SCALER_GH_TOKEN is a fine-grained PAT with the org permission
-# "Self-hosted runners: read and write". Azure access uses the Platform Agents Pro
-# service principal from org secrets.
+# requested  -> +1 instance (cap 4), boot, arm a single-job org JIT runner (group agentic)
+# completed  -> reconcile
+# schedule   -> reconcile
+#
+# JIT configs need RUNNER_SCALER_GH_TOKEN (fine-grained PAT, org "Self-hosted runners: rw").
+# Azure uses the Platform Agents Pro service principal. Failures here must never block or
+# redden product repos: continue-on-error at the job level.
 name: "Runners: scale"
 
 on:
-  workflow_job:
-    types: [queued, completed]
+  workflow_run:
+    workflows:
+      - "All Work Router"
+      - "Authorize Bot Work"
+      - "App: CI"
+      - "App: Deploy"
+      - "App: Infra (Bicep)"
+      - "Agentics checks"
+      - "Agent: Implement Issue"
+      - "Agent: Refine Issue"
+      - "Agent: Triage Issue"
+      - "Agent: Audit"
+      - "Agent: Direct"
+      - "Agent: Apply Review"
+      - "Agent: Merge Gate"
+      - "Agent: Finish Feature"
+    types: [requested, completed]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
 
-permissions: {}
+permissions:
+  actions: read
 
 concurrency:
   group: runner-scaler
@@ -30,61 +53,79 @@ env:
 
 jobs:
   scale:
-    if: contains(github.event.workflow_job.labels, 'agents-arc')
-    # advisory automation: a scaler failure must never redden a repo or block a job.
-    # Until the role assignments exist it fails at the first az call by design.
-    continue-on-error: true
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
+    continue-on-error: true
     steps:
       - name: Azure login
         uses: azure/login@v2
         with:
           creds: '{"clientId":"${{ secrets.AZURE_SCALER_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_SCALER_CLIENT_SECRET }}","tenantId":"${{ secrets.AZURE_SCALER_TENANT_ID }}","subscriptionId":"${{ secrets.AZURE_SCALER_SUBSCRIPTION_ID }}"}'
 
-      - name: Scale up and start a JIT runner
-        if: github.event.action == 'queued'
+      - name: Reconcile the fleet
         env:
           GH_TOKEN: ${{ secrets.RUNNER_SCALER_GH_TOKEN }}
+          EVENT: ${{ github.event_name == 'workflow_run' && github.event.action || 'sweep' }}
         run: |
           set -euo pipefail
-          cap=$(az vmss show -g "$RG" -n "$VMSS" --query sku.capacity -o tsv)
-          if [ "$cap" -lt "$MAX_RUNNERS" ]; then
-            az vmss scale -g "$RG" -n "$VMSS" --new-capacity $((cap + 1)) -o none
-          fi
-          # wait for a bootstrapped, unclaimed instance and claim it atomically
-          claimed=""
-          for attempt in $(seq 1 40); do
-            for id in $(az vmss list-instances -g "$RG" -n "$VMSS" --query "[].instanceId" -o tsv); do
+
+          arm_runner() {
+            local id="$1"
+            for t in $(seq 1 40); do
               out=$(az vmss run-command invoke -g "$RG" -n "$VMSS" --instance-id "$id" \
                 --command-id RunShellScript \
-                --scripts 'if [ -f /opt/runner/.ready ] && [ ! -f /opt/runner/.claimed ]; then touch /opt/runner/.claimed && echo CLAIMED; else echo NO; fi' \
-                --query "value[0].message" -o tsv 2>/dev/null || true)
-              if echo "$out" | grep -q CLAIMED; then claimed="$id"; break 2; fi
+                --scripts 'if [ -f /opt/runner/.ready ] && [ ! -f /opt/runner/.claimed ]; then touch /opt/runner/.claimed && echo CLAIMED; elif [ -f /opt/runner/.claimed ]; then echo TAKEN; else echo WAIT; fi' \
+                --query "value[0].message" -o tsv 2>/dev/null | tr -d '\r' || true)
+              echo "$out" | grep -q CLAIMED && break
+              echo "$out" | grep -q TAKEN && { echo "instance $id already claimed"; return 1; }
+              sleep 12
             done
-            sleep 15
-          done
-          [ -n "$claimed" ] || { echo "::error::no instance became ready"; exit 1; }
-          echo "claimed instance $claimed"
-          jit=$(gh api -X POST "orgs/${GITHUB_REPOSITORY_OWNER}/actions/runners/generate-jitconfig" \
-            -f name="vmss-${claimed}-${GITHUB_RUN_ID}" -F runner_group_id=6 \
-            -f "labels[]=${RUNNER_LABEL}" -f work_folder=_work --jq .encoded_jit_config)
-          az vmss run-command invoke -g "$RG" -n "$VMSS" --instance-id "$claimed" \
-            --command-id RunShellScript \
-            --scripts "systemd-run --unit=gha-runner --uid=runner --gid=runner --working-directory=/opt/actions-runner /opt/actions-runner/run.sh --jitconfig '$jit'" \
-            --query "value[0].message" -o tsv | tail -2
-
-      - name: Reap finished instances
-        if: github.event.action == 'completed'
-        run: |
-          set -euo pipefail
-          for id in $(az vmss list-instances -g "$RG" -n "$VMSS" --query "[].instanceId" -o tsv); do
-            out=$(az vmss run-command invoke -g "$RG" -n "$VMSS" --instance-id "$id" \
+            jit=$(gh api -X POST "orgs/${GITHUB_REPOSITORY_OWNER}/actions/runners/generate-jitconfig" \
+              -f name="vmss-${id}-${GITHUB_RUN_ID}" -F runner_group_id=6 \
+              -f "labels[]=${RUNNER_LABEL}" -f work_folder=_work --jq .encoded_jit_config)
+            az vmss run-command invoke -g "$RG" -n "$VMSS" --instance-id "$id" \
               --command-id RunShellScript \
-              --scripts 'if [ -f /opt/runner/.claimed ] && ! systemctl is-active --quiet gha-runner; then echo DEAD; elif [ ! -f /opt/runner/.ready ]; then echo BOOTING; else echo ALIVE; fi' \
-              --query "value[0].message" -o tsv 2>/dev/null || true)
-            if echo "$out" | grep -q DEAD; then
-              echo "deleting finished instance $id"
-              az vmss delete-instances -g "$RG" -n "$VMSS" --instance-ids "$id" --no-wait -o none
-            fi
-          done
+              --scripts "systemd-run --unit=gha-runner --uid=runner --gid=runner --working-directory=/opt/actions-runner /opt/actions-runner/run.sh --jitconfig '$jit'" \
+              --query "value[0].message" -o tsv >/dev/null
+            echo "armed runner on instance $id"
+          }
+
+          scale_up_one() {
+            local cap before after new
+            cap=$(az vmss show -g "$RG" -n "$VMSS" --query sku.capacity -o tsv | tr -d '\r')
+            if [ "$cap" -ge "$MAX_RUNNERS" ]; then echo "at capacity ($cap)"; return 0; fi
+            before=$(az vmss list-instances -g "$RG" -n "$VMSS" --query "[].instanceId" -o tsv | tr -d '\r')
+            az vmss scale -g "$RG" -n "$VMSS" --new-capacity $((cap + 1)) -o none
+            after=$(az vmss list-instances -g "$RG" -n "$VMSS" --query "[].instanceId" -o tsv | tr -d '\r')
+            new=$(comm -13 <(echo "$before" | sort) <(echo "$after" | sort) | head -1)
+            if [ -n "$new" ]; then arm_runner "$new"; else echo "no new instance appeared"; fi
+          }
+
+          reap_and_arm() {
+            for id in $(az vmss list-instances -g "$RG" -n "$VMSS" --query "[].instanceId" -o tsv | tr -d '\r'); do
+              state=$(az vmss run-command invoke -g "$RG" -n "$VMSS" --instance-id "$id" \
+                --command-id RunShellScript \
+                --scripts 'if [ ! -f /opt/runner/.ready ]; then echo BOOTING; elif [ ! -f /opt/runner/.claimed ]; then echo IDLE; elif systemctl is-active --quiet gha-runner; then echo BUSY; else echo DEAD; fi' \
+                --query "value[0].message" -o tsv 2>/dev/null | tr -d '\r' | grep -oE "BOOTING|IDLE|BUSY|DEAD" | head -1 || echo UNKNOWN)
+              echo "instance $id: $state"
+              if [ "$state" = "DEAD" ]; then
+                az vmss delete-instances -g "$RG" -n "$VMSS" --instance-ids "$id" --no-wait -o none
+                echo "deleted $id"
+              elif [ "$state" = "IDLE" ]; then
+                arm_runner "$id" || true
+              fi
+            done
+          }
+
+          queued_needs() {
+            local q idle
+            q=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=10" --jq ".total_count" 2>/dev/null || echo 0)
+            idle=$(gh api "orgs/${GITHUB_REPOSITORY_OWNER}/actions/runners" --jq '[.runners[]|select(.busy==false and .status=="online")]|length' 2>/dev/null || echo 0)
+            [ "${q:-0}" -gt 0 ] && [ "${idle:-0}" -eq 0 ]
+          }
+
+          case "$EVENT" in
+            requested) scale_up_one ;;
+            completed) reap_and_arm ;;
+            *) reap_and_arm; if queued_needs; then scale_up_one; fi ;;
+          esac
