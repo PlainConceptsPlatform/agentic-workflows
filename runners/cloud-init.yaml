@@ -16,6 +16,8 @@ write_files:
       echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
       apt-get update -qq
       apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin gh >/dev/null
+      # trivy-action expects the binary on PATH and its own installer is unreliable here
+      curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz"         | tar -xz -C /usr/local/bin trivy
       useradd -m -s /bin/bash runner || true
       usermod -aG docker runner
       mkdir -p /opt/actions-runner && cd /opt/actions-runner
