@@ -57,7 +57,7 @@ on:
     max: 1
 
 runs-on: agents-arc
-runs-on-slim: agents-arc
+runs-on-slim: ubuntu-latest
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -156,7 +156,7 @@ jobs:
   # Circuit breaker. A guard job that only reports; the agent's own `if:` is what stops the
   # run, because a `needs` job succeeding with a false output does not gate its dependents.
   capacity:
-    runs-on: agents-arc
+    runs-on: ubuntu-latest
     permissions:
       issues: read
     outputs:
@@ -185,7 +185,7 @@ jobs:
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.safe_outputs.outputs.process_safe_outputs_processed_count != '0'
-    runs-on: agents-arc
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
@@ -228,7 +228,7 @@ safe-outputs:
   # (release notes) and then files an issue, so it is the only one where a prompt-injection
   # attempt has somewhere to go.
   threat-detection:
-    runs-on: agents-arc
+    runs-on: ubuntu-latest
   create-issue:
     max: 1
 

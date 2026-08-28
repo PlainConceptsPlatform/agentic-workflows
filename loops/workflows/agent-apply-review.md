@@ -44,7 +44,7 @@ on:
 # substantive feedback. A custom job, not `on.steps`, because the prompt needs these values.
 jobs:
   subject:
-    runs-on: agents-arc
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: read
@@ -113,7 +113,7 @@ jobs:
   reserve:
     needs: subject
     if: needs.subject.outputs.found == 'true' && needs.subject.outputs.issue != ''
-    runs-on: agents-arc
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
@@ -143,7 +143,7 @@ jobs:
   validate_output:
     needs: [activation, subject, agent, safe_outputs]
     if: always() && needs.agent.result == 'success' && needs.safe_outputs.result == 'success'
-    runs-on: agents-arc
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
@@ -186,7 +186,7 @@ jobs:
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.validate_output.outputs.valid == 'true'
-    runs-on: agents-arc
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       issues: write
@@ -237,7 +237,7 @@ jobs:
       always() &&
       needs.subject.outputs.found == 'true' &&
       (needs.agent.result != 'success' || needs.safe_outputs.result != 'success' || needs.validate_output.outputs.valid != 'true')
-    runs-on: agents-arc
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
@@ -277,7 +277,7 @@ jobs:
 if: needs.subject.outputs.found == 'true'
 
 runs-on: agents-arc
-runs-on-slim: agents-arc
+runs-on-slim: ubuntu-latest
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
