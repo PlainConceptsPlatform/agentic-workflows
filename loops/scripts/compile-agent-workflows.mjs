@@ -109,7 +109,12 @@ for (const file of readdirSync(workflowDirectory)) {
     // Centralised AgentMemory: an always-on App Service; the shim proxies to it when the
     // URL is set and authenticates with the HMAC secret. Local development leaves both
     // unset and keeps the local per-run store.
-    .replace(/^env:\n/m, 'env:\n  AGENTMEMORY_URL: https://agentmemory-pro-01.azurewebsites.net\n  AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}\n')
+    .replace(/^env:\n/m, 'env:\n  AGENTMEMORY_URL: https://agentmemory-pro-01.azurewebsites.net\n')
+    // the secret is scoped to the one step that runs the agent (semgrep: a secret in
+    // workflow-level env is visible to every job and step)
+    .replaceAll('          OPENAI_BASE_URL: https://forge.plainconcepts.com/v1',
+      '          OPENAI_BASE_URL: https://forge.plainconcepts.com/v1' + '\n' +
+      '          AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}')
     .replaceAll('          COPILOT_SRC="$(command -v copilot)"',
       '          command -v copilot >/dev/null 2>&1 || { echo "no copilot binary (engine is opencode); skipping"; exit 0; }' + '\n' +
       '          COPILOT_SRC="$(command -v copilot)"')
