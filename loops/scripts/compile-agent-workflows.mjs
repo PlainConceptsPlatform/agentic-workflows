@@ -122,6 +122,10 @@ for (const file of readdirSync(workflowDirectory)) {
     .replaceAll('          COPILOT_SRC="$(command -v copilot)"',
       '          command -v copilot >/dev/null 2>&1 || { echo "no copilot binary (engine is opencode); skipping"; exit 0; }' + '\n' +
       '          COPILOT_SRC="$(command -v copilot)"')
+    // "A failed run is already a red run": report-failure-as-issue: false silences one
+    // reporter, but gh-aw hardcodes a second one (report_failed_jobs) that files an
+    // "[aw] Failed jobs" issue per red run. Same philosophy, same off switch.
+    .replaceAll('GH_AW_REPORT_FAILED_JOBS: "true"', 'GH_AW_REPORT_FAILED_JOBS: "false"')
     .replace(/opencode-ai@[0-9][0-9.]*/g, 'opencode-ai@' + OPENCODE_VERSION)
     // gh-aw installs with --ignore-scripts, which blocks opencode's own postinstall. That
     // script downloads the platform binary, so 1.18 fails at first use with "opencode-ai's
