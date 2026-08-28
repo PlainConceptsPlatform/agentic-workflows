@@ -17,9 +17,25 @@ declares.
 
 | Secret | Used by | Purpose |
 |---|---|---|
-| `OPENAI_API_KEY` | agent runs | the **Forge key**: gh-aw's OpenAI-shaped slot, pointed at forge.plainconcepts.com; per-repo value |
-| `CODEX_API_KEY` | agent runs | gh-aw's alternate engine slot; same Forge routing, kept because the locks reference it |
-| `COPILOT_GITHUB_TOKEN` | refine paths | Copilot-engine calls where used |
+| `FORGE_API_KEY` | every agent run | the **Forge key** (forge.plainconcepts.com), the only stored LLM credential; per-repo value (Numa and Odyssey differ) |
+
+**One stored secret, three names.** gh-aw's generated locks read `OPENAI_API_KEY`,
+`CODEX_API_KEY` and `COPILOT_GITHUB_TOKEN`, but all three always held the same Forge
+key. Every agent lock is `workflow_call`-only, so the secrets it sees are exactly what
+the router passes, and the router aliases all three names to the one real secret at
+each call site:
+
+```yaml
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
+```
+
+No lock rewriting is involved; gh-aw upgrades cannot break the mapping. The old
+`OPENAI_API_KEY` / `CODEX_API_KEY` / `COPILOT_GITHUB_TOKEN` repo secrets were deleted
+on 2026-08-28. If a workflow ever moves to the real Copilot engine (an actual GitHub
+token, not a Forge key), give that call site its own secret instead of the alias.
 
 ## Scaler app settings (agentrunner-scaler-01, not GitHub secrets)
 
@@ -41,10 +57,6 @@ RG): no Azure credential is stored anywhere.
 the app's `GH_PAT` setting, and the SP is no longer in the scaling path at all.
 
 ## Present but unused
-
-`FORGE_API_KEY` is referenced by **nothing** — the Forge value flows through `OPENAI_API_KEY`
-because that is the env name gh-aw's engine wiring reads. Safe to delete, or keep as the
-human-readable source of truth you copy into `OPENAI_API_KEY`.
 
 `GH_AW_GITHUB_TOKEN`, `GH_AW_GITHUB_MCP_SERVER_TOKEN`, `GH_AW_CI_TRIGGER_TOKEN`,
 `NPM_REGISTRY_TOKEN` appear in generated lock references with fallbacks to `GITHUB_TOKEN`;
@@ -113,27 +125,17 @@ az vmss update -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 \
 Only instances created after the update use the new token; the fleet is ephemeral so
 that is every future VM.
 
-### `OPENAI_API_KEY` / `CODEX_API_KEY` (repo secrets, per-repo values)
+### `FORGE_API_KEY` (repo secret, per-repo values)
 
 Issued by **Plain Concepts Forge** (forge.plainconcepts.com): create or rotate a key
-per consuming repo there, then set the same Forge key into both names (gh-aw reads
-whichever its engine wiring expects):
+per consuming repo there, then:
 
 ```bash
-gh secret set OPENAI_API_KEY --repo PlainConceptsPlatform/Numa --body "<forge key>"
-gh secret set CODEX_API_KEY  --repo PlainConceptsPlatform/Numa --body "<forge key>"
+gh secret set FORGE_API_KEY --repo PlainConceptsPlatform/Numa --body "<forge key>"
 ```
 
-Numa and Odyssey deliberately hold **different** key values.
-
-### `COPILOT_GITHUB_TOKEN` (repo secret, per-repo values)
-
-A GitHub token from an account with Copilot access; gh-aw's copilot engine paths use
-it. Generate from that account's token settings and set per repo:
-
-```bash
-gh secret set COPILOT_GITHUB_TOKEN --repo PlainConceptsPlatform/Numa --body "<token>"
-```
+Numa and Odyssey deliberately hold **different** key values. The router aliases this
+one secret into every name the locks expect (see above); no other LLM secret exists.
 
 ### Deleting the retired ones
 

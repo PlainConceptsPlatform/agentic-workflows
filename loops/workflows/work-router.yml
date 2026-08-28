@@ -282,12 +282,12 @@ jobs:
       issue-number: ${{ needs.classify.outputs.issue-number }}
       mode: ${{ needs.classify.outputs.refine-mode }}
     secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
 
   # Checks whether an open bot PR already exists for the issue. If it does, implement is
   # skipped — the merge-gate will handle fixing the existing PR. This prevents duplicate
@@ -345,12 +345,12 @@ jobs:
       issue-number: ${{ needs.classify.outputs.issue-number }}
       feature-chain: ${{ github.event.inputs.feature-chain }}
     secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
 
   call-batch:
     needs: [classify, authorize]
@@ -377,12 +377,12 @@ jobs:
     with:
       issue-number: ${{ needs.classify.outputs.issue-number }}
     secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
 
   call-direct:
     needs: [classify, authorize]
@@ -396,12 +396,12 @@ jobs:
       issue-number: ${{ needs.classify.outputs.issue-number }}
       mode: ${{ needs.classify.outputs.direct-mode }}
     secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
 
   # An outside collaborator cannot pass gh-aw's worker membership check. The router has
   # already verified their read permission, so re-dispatch under the trusted App identity.
@@ -449,12 +449,12 @@ jobs:
       issue-number: ${{ needs.classify.outputs.issue-number }}
       mode: ${{ needs.classify.outputs.triage-mode }}
     secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
 
   call-apply-review:
     needs: [classify, authorize]
@@ -468,12 +468,12 @@ jobs:
       pr-number: ${{ needs.classify.outputs.pr-number }}
       linked-issue: ${{ needs.classify.outputs.linked-issue }}
     secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
 
   # Shares the write-pipeline group with implement so the two never race on one issue.
   # Falls back to the pull request number only when the closing issue cannot be resolved.
@@ -491,12 +491,12 @@ jobs:
       ci-conclusion: ${{ needs.classify.outputs.ci-conclusion }}
       ci-run-id: ${{ needs.classify.outputs.ci-run-id }}
     secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
 
   call-audit:
     needs: classify
@@ -509,12 +509,12 @@ jobs:
     with:
       trigger-kind: ${{ needs.classify.outputs.trigger-kind }}
     secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
 
   call-propose:
     needs: classify
@@ -527,12 +527,12 @@ jobs:
     with:
       trigger-kind: ${{ needs.classify.outputs.trigger-kind }}
     secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
 
   bot-approve:
     needs: classify
