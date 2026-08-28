@@ -8,9 +8,10 @@
 // Demand is queued+in_progress workflow jobs labeled agents-arc on private repos,
 // learned from an org webhook. Jobs beyond capacity wait in GitHub on purpose.
 //
-// Each VM hosts exactly one ephemeral JIT runner, runs exactly one job, then asks
-// to be deleted (/vm/done). The app then re-evaluates and boots the next VM if
-// work remains. Nothing here ever places two jobs on one VM.
+// A VM runs one job at a time and asks for the next one itself (/vm/jit), resetting
+// Docker state between jobs; it reports /vm/done and is deleted once the queue stays
+// empty, so a boot is paid per burst rather than per job. Two jobs never run
+// concurrently on one VM, and every JIT registration is single-use.
 
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
@@ -73,6 +74,9 @@ void SaveLedger()
 // with no job activity clears them, instead of paying for boot loops forever.
 var fruitlessCycles = 0;
 var lastJobActivity = DateTimeOffset.UtcNow;
+// Reuse telemetry, in-memory: jobs per retired VM. 1.0 means no reuse is happening.
+var totalVmsRetired = 0;
+var totalJobsServed = 0;
 
 // ---- Azure (managed identity, no SDK) ----
 string? armToken = null;
@@ -247,6 +251,12 @@ app.MapGet("/status", async (HttpRequest r) =>
         azure,
         jobs = ledger.Select(kv => new { id = kv.Key, kv.Value.Status, kv.Value.UpdatedUtc }),
         fruitlessCycles,
+        reuse = new
+        {
+            vmsRetired = totalVmsRetired,
+            jobsServed = totalJobsServed,
+            jobsPerVm = totalVmsRetired == 0 ? 0 : Math.Round((double)totalJobsServed / totalVmsRetired, 2),
+        },
     });
 });
 
@@ -307,7 +317,14 @@ app.MapPost("/vm/done", async (HttpRequest r) =>
     var node = JsonNode.Parse(await new StreamReader(r.Body).ReadToEndAsync())!;
     var instanceId = node["instanceId"]!.GetValue<string>();
     var gotJob = node["ranJob"]?.GetValue<bool>() ?? false;
-    log.LogInformation("instance {id} done (ranJob={j}); deleting", instanceId, gotJob);
+    // jobsRun is how we measure reuse: 1 means the VM paid a full boot for a single job,
+    // which is the waste the reuse loop exists to remove.
+    var jobsRun = node["jobsRun"]?.GetValue<int>() ?? (gotJob ? 1 : 0);
+    totalVmsRetired++;
+    totalJobsServed += jobsRun;
+    log.LogInformation(
+        "instance {id} done: jobsRun={n} (lifetime avg {avg:F1} jobs/VM over {vms} VMs); deleting",
+        instanceId, jobsRun, totalVmsRetired == 0 ? 0 : (double)totalJobsServed / totalVmsRetired, totalVmsRetired);
     if (!gotJob)
     {
         fruitlessCycles++;
