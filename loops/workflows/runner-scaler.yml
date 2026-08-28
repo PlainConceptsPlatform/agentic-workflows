@@ -31,6 +31,9 @@ env:
 jobs:
   scale:
     if: contains(github.event.workflow_job.labels, 'agents-arc')
+    # advisory automation: a scaler failure must never redden a repo or block a job.
+    # Until the role assignments exist it fails at the first az call by design.
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
