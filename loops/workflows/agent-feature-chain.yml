@@ -67,6 +67,33 @@ jobs:
           fi
 
           body=$(gh issue view "$FEATURE" --repo "$REPO" --json body --jq '.body // ""')
+
+          # The chain branch is state, and state lives in GitHub: a hidden marker in the
+          # feature body names the integration branch every story lands on. First link
+          # creates both; every later link (and a resume after any crash) re-derives them.
+          CHAIN_BRANCH=$(printf '%s' "$body" | grep -oE '<!-- feature-branch: [^ ]+ -->' | head -1 | sed 's/<!-- feature-branch: //; s/ -->//')
+          if [ -z "$CHAIN_BRANCH" ]; then
+            title=$(gh issue view "$FEATURE" --repo "$REPO" --json title --jq '.title')
+            slug=$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//' | cut -c1-32)
+            CHAIN_BRANCH="feature/${FEATURE}-${slug}-$(openssl rand -hex 3)"
+            base_sha=$(gh api "repos/$REPO/git/refs/heads/$DEFAULT_BRANCH" --jq '.object.sha')
+            gh api "repos/$REPO/git/refs" --method POST \
+              -f ref="refs/heads/$CHAIN_BRANCH" -f sha="$base_sha" >/dev/null
+            new_body=$(printf '%s\n\n<!-- feature-branch: %s -->' "$body" "$CHAIN_BRANCH")
+            gh issue edit "$FEATURE" --repo "$REPO" --body "$new_body"
+            echo "::notice::Created chain branch $CHAIN_BRANCH and recorded it in #$FEATURE"
+          else
+            # A resumed chain may predate the branch (or someone deleted it): recreate from
+            # the default branch rather than dying, so re-adding the label always works.
+            if ! gh api "repos/$REPO/git/refs/heads/$CHAIN_BRANCH" >/dev/null 2>&1; then
+              base_sha=$(gh api "repos/$REPO/git/refs/heads/$DEFAULT_BRANCH" --jq '.object.sha')
+              gh api "repos/$REPO/git/refs" --method POST \
+                -f ref="refs/heads/$CHAIN_BRANCH" -f sha="$base_sha" >/dev/null
+              echo "::warning::Chain branch $CHAIN_BRANCH was missing; recreated from $DEFAULT_BRANCH"
+            fi
+            echo "Chain branch: $CHAIN_BRANCH"
+          fi
+
           printf '%s' "$body" | grep -oE '#[0-9]+' | tr -d '#' | grep -v "^${FEATURE}$" > /tmp/mentions.txt || true
           if [ ! -s /tmp/mentions.txt ]; then
             echo "::error::#$FEATURE mentions no story issues"
