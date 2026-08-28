@@ -106,6 +106,27 @@ az vmss scale -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --new-capacity 0
 az webapp stop -g agentrunner-pro-rg-01 -n agentrunner-scaler-01
 ```
 
+## Break glass: manual runners
+
+If the scaler app is down (or not yet authorized) and work must flow, register
+persistent runners on manually-scaled instances. They serve jobs back to back, one
+at a time, until removed — so tear them down as soon as the app is back.
+
+```bash
+az vmss scale -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --new-capacity 2
+TOK=$(gh api -X POST orgs/PlainConceptsPlatform/actions/runners/registration-token --jq .token)
+for id in $(az vmss list-instances -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --query "[].instanceId" -o tsv); do
+  az vmss run-command invoke -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --instance-id "$id" \
+    --command-id RunShellScript \
+    --scripts "for i in \$(seq 1 120); do [ -f /opt/runner/.ready ] && break; sleep 5; done; cd /opt/actions-runner && sudo -u runner ./config.sh --unattended --url https://github.com/PlainConceptsPlatform --token $TOK --name interim-$id --labels agents-arc --runnergroup agentic --work _work --replace && ./svc.sh install runner && ./svc.sh start"
+done
+```
+
+Tear-down: for each instance `./svc.sh stop && ./svc.sh uninstall && sudo -u runner
+./config.sh remove --token $(gh api -X POST orgs/PlainConceptsPlatform/actions/runners/remove-token --jq .token)`,
+then `az vmss scale --new-capacity 0` and delete any leftover offline registrations
+with `gh api -X DELETE orgs/PlainConceptsPlatform/actions/runners/<id>`.
+
 ## Why not X
 
 - **ARC / runner scale sets**: Kubernetes only; AKS is blocked by the management

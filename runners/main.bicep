@@ -7,10 +7,12 @@
 //     -p customData="$(base64 -w0 cloud-init.yaml)"
 //
 // Not covered here, by design:
-//  - the Entra app (Platform Agents Pro) and its role assignments: directory-level, made in
-//    the portal; grant the app SP and the VMSS identity "Virtual Machine Contributor" on this RG
-//  - GitHub org secrets (AZURE_SCALER_*, RUNNER_SCALER_GH_TOKEN, AGENTMEMORY_SECRET)
-//  - runner JIT registration: the runner-scaler workflow does that per job
+//  - the Entra app (Platform Agents Pro): directory-level, made in the portal
+//  - role assignment: the scaler app's managed identity (agentrunner-scaler-01) needs
+//    "Virtual Machine Contributor" on this RG
+//  - the scaler web app itself (agentrunner-scaler-01 on the shared B1 plan), its app
+//    settings, and the org webhook: see README.md
+//  - GitHub org secrets (AGENTMEMORY_SECRET, BOT_*)
 
 @description('SSH public key for the VMSS admin user (never used interactively)')
 param adminPublicKey string

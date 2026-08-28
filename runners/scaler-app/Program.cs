@@ -230,14 +230,21 @@ app.MapGet("/healthz", () => "ok");
 app.MapGet("/status", async (HttpRequest r) =>
 {
     if (!VmAuthorized(r)) return Results.Unauthorized();
-    var instances = await Instances();
+    // Azure state degrades to an error string so the GitHub side (ledger, demand)
+    // stays visible while IAM is missing or ARM is down.
+    object azure;
+    try
+    {
+        var instances = await Instances();
+        azure = new { capacity = await Capacity(), instances = instances.Select(i => new { i.Id, i.State }) };
+    }
+    catch (Exception e) { azure = new { error = e.Message }; }
     return Results.Json(new
     {
         demand = Demand(),
         desired = DesiredVms(Demand()),
         maxVms = MaxVms,
-        capacity = await Capacity(),
-        instances = instances.Select(i => new { i.Id, i.State }),
+        azure,
         jobs = ledger.Select(kv => new { id = kv.Key, kv.Value.Status, kv.Value.UpdatedUtc }),
         fruitlessCycles,
     });
