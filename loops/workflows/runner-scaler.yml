@@ -11,7 +11,10 @@
 # completed  -> reconcile
 # schedule   -> reconcile
 #
-# JIT configs need RUNNER_SCALER_GH_TOKEN (fine-grained PAT, org "Self-hosted runners: rw").
+# Two tokens, on purpose. RUNNER_SCALER_GH_TOKEN is a fine-grained PAT whose only grant is
+# org "Self-hosted runners: rw", used to mint JIT configs and list org runners; it cannot read
+# repositories. The job's own GITHUB_TOKEN (permissions.actions: read) answers the "is work
+# queued" question. Giving the PAT repo scope instead would work but widens it needlessly.
 # Azure uses the Platform Agents Pro service principal. Failures here must never block or
 # redden product repos: continue-on-error at the job level.
 name: "Runners: scale"
@@ -65,6 +68,7 @@ jobs:
       - name: Reconcile the fleet
         env:
           GH_TOKEN: ${{ secrets.RUNNER_SCALER_GH_TOKEN }}
+          REPO_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name == 'workflow_run' && github.event.action || 'sweep' }}
         run: |
           set -euo pipefail
@@ -117,11 +121,19 @@ jobs:
             done
           }
 
+          # num <call output> -- gh prints API errors on stdout, so a failed call would
+          # otherwise flow into an arithmetic test as a JSON blob and abort the sweep.
+          num() { case "$1" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
+
           queued_needs() {
             local q idle
-            q=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=10" --jq ".total_count" 2>/dev/null || echo 0)
-            idle=$(gh api "orgs/${GITHUB_REPOSITORY_OWNER}/actions/runners" --jq '[.runners[]|select(.busy==false and .status=="online")]|length' 2>/dev/null || echo 0)
-            [ "${q:-0}" -gt 0 ] && [ "${idle:-0}" -eq 0 ]
+            # the queue lives in the repo, which the scaler PAT deliberately cannot read:
+            # its only grant is org "Self-hosted runners". The job's own GITHUB_TOKEN has
+            # actions: read, so it answers this question and the PAT stays minimal.
+            q=$(num "$(GH_TOKEN="$REPO_TOKEN" gh api               "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=10"               --jq ".total_count" 2>/dev/null)")
+            idle=$(num "$(gh api "orgs/${GITHUB_REPOSITORY_OWNER}/actions/runners"               --jq '[.runners[]|select(.busy==false and .status=="online")]|length' 2>/dev/null)")
+            echo "queued=$q idle=$idle"
+            [ "$q" -gt 0 ] && [ "$idle" -eq 0 ]
           }
 
           top_up() {
