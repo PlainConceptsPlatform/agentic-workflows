@@ -22,6 +22,8 @@ happen: no port claims, no fixed container names colliding, no shared `/tmp`, no
 | `RUNNER_SCALER_GH_TOKEN` | fine-grained PAT, org permission "Self-hosted runners: read and write", used only to mint JIT configs |
 | `AGENTMEMORY_SECRET` | HMAC secret shared with the AgentMemory App Service, see [`mcp.md`](mcp.md) |
 
+The full audited list, including per-repo secrets and what is safe to delete, lives in [`secrets.md`](secrets.md).
+
 The service principal and the scale set's managed identity both need **Virtual Machine
 Contributor** on `agentrunner-pro-rg-01`. The identity's grant is what lets a finished
 instance delete itself.
