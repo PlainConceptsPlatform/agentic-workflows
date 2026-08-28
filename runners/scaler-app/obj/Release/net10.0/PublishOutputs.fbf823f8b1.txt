@@ -1,7 +1,0 @@
-C:\Users\quique.fernandez\AppData\Local\Temp\claude\C--Projects-PlainConcepts-Platform\3fc3fa1e-5102-4eb9-93e2-8455097fede3\scratchpad\publish\RunnerScaler.exe
-C:\Users\quique.fernandez\AppData\Local\Temp\claude\C--Projects-PlainConcepts-Platform\3fc3fa1e-5102-4eb9-93e2-8455097fede3\scratchpad\publish\appsettings.Development.json
-C:\Users\quique.fernandez\AppData\Local\Temp\claude\C--Projects-PlainConcepts-Platform\3fc3fa1e-5102-4eb9-93e2-8455097fede3\scratchpad\publish\appsettings.json
-C:\Users\quique.fernandez\AppData\Local\Temp\claude\C--Projects-PlainConcepts-Platform\3fc3fa1e-5102-4eb9-93e2-8455097fede3\scratchpad\publish\RunnerScaler.dll
-C:\Users\quique.fernandez\AppData\Local\Temp\claude\C--Projects-PlainConcepts-Platform\3fc3fa1e-5102-4eb9-93e2-8455097fede3\scratchpad\publish\RunnerScaler.deps.json
-C:\Users\quique.fernandez\AppData\Local\Temp\claude\C--Projects-PlainConcepts-Platform\3fc3fa1e-5102-4eb9-93e2-8455097fede3\scratchpad\publish\RunnerScaler.runtimeconfig.json
-C:\Users\quique.fernandez\AppData\Local\Temp\claude\C--Projects-PlainConcepts-Platform\3fc3fa1e-5102-4eb9-93e2-8455097fede3\scratchpad\publish\RunnerScaler.pdb
