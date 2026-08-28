@@ -57,18 +57,13 @@ exactly as shipped.
 
 Centralised AgentMemory and the per-repo CodeGraph index are covered in [`mcp.md`](mcp.md).
 
-## Why not AKS (yet)
+## Org policy constraints, for any future infra work
 
-The management-group policy assignment `Resources` ("Not allowed resource types",
-definition `0a15ec92-a229-4763-bb14-0ea34a568f8d`, MG `3f0bfe2a-8abd-464d-aa27-57fc11146eb4`)
-denies every resource AKS can use for node egress. Verified by real attempts, not docs:
-Standard LB and NAT Gateway are policy-denied; `outbound none` demands an ACR bootstrap
-cache; AKS rejects UDR combined with node public IPs. A VMSS with per-instance public IPs
-and no load balancer is the allowed shape.
-
-If a policy exemption for the AKS node RG ever lands, the `aks-nodes` subnet and the
-`agentrunner-arc-rt-01` route table are already in place in `agentrunner-pro-rg-01`, and the
-workflows need nothing: they only see the `agents-arc` label.
+The management-group policy "Not allowed resource types" (assignment `Resources`) denies load
+balancers and NAT gateways in this subscription, among others. Anything needing managed
+egress infrastructure is off the table; VMs and scale sets with per-instance public IPs, App
+Service, storage accounts and Container Apps are allowed (all verified by real creation
+attempts). Probe with a throwaway resource before designing around anything else.
 
 ## Rebuilding from scratch
 

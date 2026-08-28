@@ -33,20 +33,6 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
   location: location
 }
 
-resource routeTable 'Microsoft.Network/routeTables@2023-11-01' = {
-  // kept for a future AKS attempt; free
-  name: 'agentrunner-arc-rt-01'
-  location: location
-  properties: {
-    routes: [
-      {
-        name: 'default-internet'
-        properties: { addressPrefix: '0.0.0.0/0', nextHopType: 'Internet' }
-      }
-    ]
-  }
-}
-
 resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
   name: 'agentrunner-pro-vnet-01'
   location: location
@@ -58,13 +44,6 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
         properties: {
           addressPrefix: '10.60.1.0/24'
           networkSecurityGroup: { id: nsg.id }
-        }
-      }
-      {
-        name: 'aks-nodes'
-        properties: {
-          addressPrefix: '10.60.8.0/22'
-          routeTable: { id: routeTable.id }
         }
       }
     ]
