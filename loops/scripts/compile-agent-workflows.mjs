@@ -106,6 +106,10 @@ for (const file of readdirSync(workflowDirectory)) {
     // Copilot engine: command -v copilot is empty under engine: opencode and cp "" fails the
     // job before the agent starts. OpenCode needs no staging, because npm -g installs it under
     // the tool-cache prefix inside _work, which the dind daemon shares.
+    // Centralised AgentMemory: an always-on App Service; the shim proxies to it when the
+    // URL is set and authenticates with the HMAC secret. Local development leaves both
+    // unset and keeps the local per-run store.
+    .replace(/^env:\n/m, 'env:\n  AGENTMEMORY_URL: https://agentmemory-pro-01.azurewebsites.net\n  AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}\n')
     .replaceAll('          COPILOT_SRC="$(command -v copilot)"',
       '          command -v copilot >/dev/null 2>&1 || { echo "no copilot binary (engine is opencode); skipping"; exit 0; }' + '\n' +
       '          COPILOT_SRC="$(command -v copilot)"')

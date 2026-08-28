@@ -11,6 +11,8 @@ network:
     - dotnet
     - fonts
     - login.microsoftonline.com
+    # centralised AgentMemory (App Service); the MCP shim needs it through the egress proxy
+    - agentmemory-pro-01.azurewebsites.net
 
 safe-outputs:
   threat-detection: false
