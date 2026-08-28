@@ -59,7 +59,7 @@ on:
 
 jobs:
   reserve:
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
@@ -92,7 +92,7 @@ jobs:
       always() &&
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       contents: read
     outputs:
@@ -122,7 +122,7 @@ jobs:
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.validate_output.outputs.valid == 'true'
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
@@ -187,7 +187,7 @@ jobs:
         needs.safe_outputs.result != 'success' ||
         needs.validate_output.outputs.valid != 'true'
       )
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
@@ -225,7 +225,7 @@ jobs:
 if: inputs.issue-number != ''
 
 runs-on: agents-arc
-runs-on-slim: ubuntu-latest
+runs-on-slim: agents-arc
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

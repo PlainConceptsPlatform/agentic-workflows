@@ -57,7 +57,7 @@ on:
 # values and `on.steps` outputs do not reach the agent job.
 jobs:
   subject:
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: read
@@ -97,7 +97,7 @@ jobs:
   protected_changes:
     needs: subject
     if: needs.subject.outputs.found == 'true'
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       pull-requests: read
     outputs:
@@ -132,7 +132,7 @@ jobs:
     # gh-aw makes the agent depend on custom jobs. Keep this job successful when
     # there are no protected files instead of skipping it and blocking remediation.
     if: always() && needs.subject.outputs.found == 'true'
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
@@ -180,7 +180,7 @@ jobs:
   reserve:
     needs: subject
     if: needs.subject.outputs.found == 'true'
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
@@ -231,7 +231,7 @@ jobs:
       always() &&
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       contents: read
     outputs:
@@ -261,7 +261,7 @@ jobs:
        needs.safe_outputs.result == 'success' &&
        needs.validate_output.outputs.valid == 'true' &&
       needs.protected_changes.outputs.requires_review != 'true'
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       contents: write
       issues: write
@@ -341,7 +341,7 @@ jobs:
          needs.safe_outputs.result != 'success' ||
          needs.validate_output.outputs.valid != 'true'
        )
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
@@ -388,7 +388,7 @@ jobs:
 if: always() && needs.subject.outputs.found == 'true' && needs.protected_changes.outputs.requires_review != 'true' && needs.subject.outputs.review_blocked != 'true'
 
 runs-on: agents-arc
-runs-on-slim: ubuntu-latest
+runs-on-slim: agents-arc
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
