@@ -51,7 +51,7 @@ concurrency:
 env:
   RG: agentrunner-pro-rg-01
   VMSS: agentrunner-vmss-01
-  MAX_RUNNERS: "4"
+  MAX_RUNNERS: "8"
   RUNNER_LABEL: agents-arc
 
 jobs:
@@ -94,15 +94,66 @@ jobs:
             echo "armed runner on instance $id"
           }
 
-          scale_up_one() {
-            local cap before after new
-            cap=$(az vmss show -g "$RG" -n "$VMSS" --query sku.capacity -o tsv | tr -d '\r')
-            if [ "$cap" -ge "$MAX_RUNNERS" ]; then echo "at capacity ($cap)"; return 0; fi
-            before=$(az vmss list-instances -g "$RG" -n "$VMSS" --query "[].instanceId" -o tsv | tr -d '\r')
-            az vmss scale -g "$RG" -n "$VMSS" --new-capacity $((cap + 1)) -o none
-            after=$(az vmss list-instances -g "$RG" -n "$VMSS" --query "[].instanceId" -o tsv | tr -d '\r')
-            new=$(comm -13 <(echo "$before" | sort) <(echo "$after" | sort) | head -1)
-            if [ -n "$new" ]; then arm_runner "$new"; else echo "no new instance appeared"; fi
+          # az on this runner emits CRLF; every numeric read below goes through this.
+          strip_cr() { tr -d '\r'; }
+
+          scale_up_one() { top_up 1; }
+
+          # num <value> -- gh prints API errors on stdout, so a failed call would otherwise
+          # flow into an arithmetic test as a JSON blob and abort the whole sweep.
+          num() { case "$1" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
+
+          # Count queued jobs that want our label, not queued runs. A run holds many jobs and
+          # gh-aw locks split into several tiny ones, so run counts understate demand badly.
+          # The queue lives in the repo, which the scaler PAT deliberately cannot read (its
+          # only grant is org "Self-hosted runners"); the job GITHUB_TOKEN has actions: read,
+          # so it answers this and the PAT stays minimal.
+          queued_jobs() {
+            local ids n total=0 jq_count
+            jq_count="[.jobs[]|select(.status==\"queued\" and (.labels|index(\"${RUNNER_LABEL}\")))]|length"
+            ids=$(GH_TOKEN="$REPO_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=30" --jq '.workflow_runs[]|select(.status=="queued" or .status=="in_progress")|.id' 2>/dev/null || true)
+            for id in $ids; do
+              n=$(num "$(GH_TOKEN="$REPO_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs" --jq "$jq_count" 2>/dev/null)")
+              total=$((total + n))
+            done
+            echo "$total"
+          }
+
+          # Runners that can take work now or shortly: idle online registrations plus
+          # instances still booting, so one burst is not provisioned twice.
+          supply() {
+            local idle booting
+            idle=$(num "$(gh api "orgs/${GITHUB_REPOSITORY_OWNER}/actions/runners" --jq '[.runners[]|select(.busy==false and .status=="online")]|length' 2>/dev/null)")
+            booting=$(num "$(az vmss list-instances -g "$RG" -n "$VMSS" --query "length([?provisioningState!='Succeeded'])" -o tsv 2>/dev/null | strip_cr)")
+            echo $((idle + booting))
+          }
+
+          # top_up [max_add] -- provision the whole deficit in one scale call, then arm every
+          # new instance concurrently. Arming one VM per pass cost about four minutes of dead
+          # time per job, which is what made second-long jobs look stalled.
+          top_up() {
+            local limit="${1:-$MAX_RUNNERS}" q s deficit cap target before after new pids=""
+            q=$(queued_jobs); s=$(supply)
+            deficit=$((q - s))
+            echo "queued_jobs=$q supply=$s deficit=$deficit"
+            if [ "$deficit" -le 0 ]; then echo "supply covers the queue"; return 0; fi
+            if [ "$deficit" -gt "$limit" ]; then deficit=$limit; fi
+            cap=$(num "$(az vmss show -g "$RG" -n "$VMSS" --query sku.capacity -o tsv 2>/dev/null | strip_cr)")
+            target=$((cap + deficit))
+            if [ "$target" -gt "$MAX_RUNNERS" ]; then target=$MAX_RUNNERS; fi
+            if [ "$target" -le "$cap" ]; then echo "at capacity ($cap/$MAX_RUNNERS)"; return 0; fi
+            before=$(az vmss list-instances -g "$RG" -n "$VMSS" --query "[].instanceId" -o tsv 2>/dev/null | strip_cr | sort)
+            echo "scaling $cap -> $target"
+            az vmss scale -g "$RG" -n "$VMSS" --new-capacity "$target" -o none
+            after=$(az vmss list-instances -g "$RG" -n "$VMSS" --query "[].instanceId" -o tsv 2>/dev/null | strip_cr | sort)
+            new=$(comm -13 <(echo "$before") <(echo "$after"))
+            if [ -z "$new" ]; then echo "no new instance appeared"; return 0; fi
+            for id in $new; do
+              arm_runner "$id" || true &
+              pids="$pids $!"
+            done
+            for p in $pids; do wait "$p" || true; done
+            echo "armed wave:" $new
           }
 
           reap_and_arm() {
