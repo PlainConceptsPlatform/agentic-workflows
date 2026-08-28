@@ -8,9 +8,12 @@ get their state elsewhere. Everything here degrades gracefully: with the org sec
 
 `https://agentmemory-pro-01.azurewebsites.net` — an App Service (plan `agentmemory-plan-01`, B1,
 always-on, ~$13/month, the platform's only fixed cost). The public `node:22-bookworm` image
-boots a startup command that installs the `iii` engine and `@agentmemory/agentmemory@0.9.28`
-into the persistent `/home` on first boot; later boots reuse them, and the memory store lives
-in `/home/data`, surviving restarts and plan moves.
+runs `bash /home/start.sh` — [`agentmemory-start.sh`](agentmemory-start.sh), uploaded once to
+the persistent `/home` via Kudu VFS. It installs the `iii` engine and
+`@agentmemory/agentmemory@0.9.28` on first boot, self-repairs interrupted installs, and later
+boots reuse everything; the store lives in `/home/data`. The command must stay quote-free:
+App Service's container CMD parsing shreds nested quotes, silently killing the container in
+under a second with no log line — that cost three attempts to see.
 
 The `@agentmemory/mcp` shim inside every agent proxies to that server when `AGENTMEMORY_URL`
 is set, authenticating with `AGENTMEMORY_SECRET` (org secret, mirrored in the app settings).

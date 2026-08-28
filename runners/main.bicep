@@ -130,7 +130,7 @@ resource agentMemory 'Microsoft.Web/sites@2023-12-01' = {
     siteConfig: {
       linuxFxVersion: 'DOCKER|node:22-bookworm'
       alwaysOn: true
-      appCommandLine: 'bash -c "export HOME=/home; mkdir -p /home/.agentmemory/bin /home/opt && cd /home/opt && if [ ! -x /home/.agentmemory/bin/iii ]; then curl -fsSL https://github.com/iii-hq/iii/releases/download/iii/v${iiiVersion}/iii-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /home/.agentmemory/bin && chmod +x /home/.agentmemory/bin/iii; fi; if [ ! -x node_modules/.bin/agentmemory ]; then rm -rf node_modules package.json package-lock.json; npm install --no-audit --no-fund @agentmemory/agentmemory@${agentMemoryVersion}; fi && export PATH=/home/.agentmemory/bin:$PATH && exec ./node_modules/.bin/agentmemory"' 
+      appCommandLine: 'bash /home/start.sh' 
       appSettings: [
         { name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE', value: 'true' }
         { name: 'WEBSITES_PORT', value: '3111' }
