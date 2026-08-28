@@ -115,6 +115,10 @@ for (const file of readdirSync(workflowDirectory)) {
     .replaceAll('          OPENAI_BASE_URL: https://forge.plainconcepts.com/v1',
       '          OPENAI_BASE_URL: https://forge.plainconcepts.com/v1' + '\n' +
       '          AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}')
+    // the router passes secrets explicitly (semgrep flags secrets: inherit as over-broad),
+    // so the callee must declare everything it accepts
+    .replace(/^      COPILOT_GITHUB_TOKEN:/m,
+      '      AGENTMEMORY_SECRET:' + '\n' + '        required: false' + '\n' + '      COPILOT_GITHUB_TOKEN:')
     .replaceAll('          COPILOT_SRC="$(command -v copilot)"',
       '          command -v copilot >/dev/null 2>&1 || { echo "no copilot binary (engine is opencode); skipping"; exit 0; }' + '\n' +
       '          COPILOT_SRC="$(command -v copilot)"')

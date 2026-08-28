@@ -270,8 +270,14 @@ jobs:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'refine' && needs.authorize.outputs.trusted == 'true'
     uses: ./.github/workflows/agent-refine.lock.yml
-    # reusable workflows do not see org/repo secrets unless the caller forwards them
-    secrets: inherit
+    # explicit, least-privilege forwarding; the callee declares each of these
+    secrets:
+      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     concurrency:
       group: refine-${{ needs.classify.outputs.issue-number }}
       cancel-in-progress: false
@@ -334,8 +340,14 @@ jobs:
     needs: [classify, authorize, check-implement-pr]
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true' && needs.check-implement-pr.outputs.has-open-pr != 'true'
     uses: ./.github/workflows/agent-implement.lock.yml
-    # reusable workflows do not see org/repo secrets unless the caller forwards them
-    secrets: inherit
+    # explicit, least-privilege forwarding; the callee declares each of these
+    secrets:
+      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     concurrency:
       group: implement-global
       cancel-in-progress: false
@@ -370,8 +382,14 @@ jobs:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'feature-finish' && needs.authorize.outputs.trusted == 'true'
     uses: ./.github/workflows/agent-feature.lock.yml
-    # reusable workflows do not see org/repo secrets unless the caller forwards them
-    secrets: inherit
+    # explicit, least-privilege forwarding; the callee declares each of these
+    secrets:
+      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     concurrency:
       group: feature-${{ needs.classify.outputs.issue-number }}
       cancel-in-progress: false
@@ -388,8 +406,14 @@ jobs:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'direct' && needs.authorize.outputs.trusted == 'true'
     uses: ./.github/workflows/agent-direct.lock.yml
-    # reusable workflows do not see org/repo secrets unless the caller forwards them
-    secrets: inherit
+    # explicit, least-privilege forwarding; the callee declares each of these
+    secrets:
+      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     concurrency:
       group: direct-${{ needs.classify.outputs.issue-number }}
       cancel-in-progress: false
@@ -441,8 +465,14 @@ jobs:
     # labels or manually dispatch triage. All other triage routes (labeled, comment, dispatch) are trusted.
     if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.trusted == 'true' && !(github.event_name == 'issues' && github.event.action == 'opened')
     uses: ./.github/workflows/agent-triage.lock.yml
-    # reusable workflows do not see org/repo secrets unless the caller forwards them
-    secrets: inherit
+    # explicit, least-privilege forwarding; the callee declares each of these
+    secrets:
+      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     concurrency:
       group: triage-${{ needs.classify.outputs.issue-number }}
       cancel-in-progress: false
@@ -460,8 +490,14 @@ jobs:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'apply-review' && needs.authorize.outputs.trusted == 'true'
     uses: ./.github/workflows/agent-apply-review.lock.yml
-    # reusable workflows do not see org/repo secrets unless the caller forwards them
-    secrets: inherit
+    # explicit, least-privilege forwarding; the callee declares each of these
+    secrets:
+      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     concurrency:
       group: pr-feedback-${{ needs.classify.outputs.pr-number }}
       cancel-in-progress: false
@@ -481,8 +517,14 @@ jobs:
     needs: classify
     if: needs.classify.outputs.route == 'merge-gate'
     uses: ./.github/workflows/agent-merge-gate.lock.yml
-    # reusable workflows do not see org/repo secrets unless the caller forwards them
-    secrets: inherit
+    # explicit, least-privilege forwarding; the callee declares each of these
+    secrets:
+      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     concurrency:
       group: write-pipeline-${{ needs.classify.outputs.linked-issue || format('pr-{0}', needs.classify.outputs.pr-number) }}
       cancel-in-progress: false
@@ -502,8 +544,14 @@ jobs:
     needs: classify
     if: needs.classify.outputs.route == 'audit'
     uses: ./.github/workflows/agent-audit.lock.yml
-    # reusable workflows do not see org/repo secrets unless the caller forwards them
-    secrets: inherit
+    # explicit, least-privilege forwarding; the callee declares each of these
+    secrets:
+      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     concurrency:
       group: audit
       cancel-in-progress: false
@@ -520,8 +568,14 @@ jobs:
     needs: classify
     if: needs.classify.outputs.route == 'propose'
     uses: ./.github/workflows/agent-propose.lock.yml
-    # reusable workflows do not see org/repo secrets unless the caller forwards them
-    secrets: inherit
+    # explicit, least-privilege forwarding; the callee declares each of these
+    secrets:
+      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     concurrency:
       group: propose
       cancel-in-progress: false
