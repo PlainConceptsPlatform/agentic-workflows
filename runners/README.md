@@ -70,6 +70,18 @@ If a policy exemption for the AKS node RG ever lands, the `aks-nodes` subnet and
 `agentrunner-arc-rt-01` route table are already in place in `agentrunner-pro-rg-01`, and the
 workflows need nothing: they only see the `agents-arc` label.
 
+## Rebuilding from scratch
+
+[`main.bicep`](main.bicep) reproduces the whole platform (network, scale set, AgentMemory):
+
+```bash
+az deployment group create -g agentrunner-pro-rg-01 -f main.bicep   -p adminPublicKey="$(cat ~/.ssh/id_rsa.pub)"   -p agentMemorySecret="$(openssl rand -hex 32)"   -p customData="$(base64 -w0 cloud-init.yaml)"
+```
+
+Afterwards the three manual, directory-level steps: grant Virtual Machine Contributor on the
+RG to the `Platform Agents Pro` SP and to the VMSS identity (the template outputs its
+principal id), and mirror `agentMemorySecret` into the `AGENTMEMORY_SECRET` org secret.
+
 ## Operating it
 
 ```bash
