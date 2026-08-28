@@ -20,10 +20,42 @@ happen: no port claims, no fixed container names colliding, no shared `/tmp`, no
 |---|---|
 | `AZURE_SCALER_CLIENT_ID` / `TENANT_ID` / `SUBSCRIPTION_ID` / `CLIENT_SECRET` | the `Platform Agents Pro` service principal the scaler logs in with |
 | `RUNNER_SCALER_GH_TOKEN` | fine-grained PAT, org permission "Self-hosted runners: read and write", used only to mint JIT configs |
+| `AGENTMEMORY_SECRET` | HMAC secret shared with the AgentMemory App Service, see [`mcp.md`](mcp.md) |
 
 The service principal and the scale set's managed identity both need **Virtual Machine
 Contributor** on `agentrunner-pro-rg-01`. The identity's grant is what lets a finished
 instance delete itself.
+
+## The proven pipeline
+
+The platform's first fully autonomous cycle completed on 2026-08-28: Numa issue #540 was
+labelled `implement`, the router dispatched the agent to a fresh ephemeral VM, the agent
+implemented the change inside the awf sandbox, safe outputs produced PR #579, CI ran on more
+ephemeral VMs, and merge-gate merged it and closed the issue. No human touched anything
+between the label and the merge.
+
+## What fresh VMs taught us
+
+Every one of these failed a real run first, because a long-lived host had hidden the
+dependency. If a job dies with `command not found` or exit 127, start here:
+
+| missing | fix now lives in |
+|---|---|
+| `docker compose` plugin | user-space install step in shared/opencode-ci.md |
+| `gh` | cloud-init |
+| `trivy` | cloud-init (trivy-action assumes the binary exists) |
+| `dotnet` | `setup-dotnet` in shared steps, `DOTNET_INSTALL_DIR` in the tool cache |
+| `node` for CI scripts | `setup-node` in the app-ci API job |
+| `~/.dotnet/tools` on PATH | exported before `reportgenerator` runs |
+
+And the inverse lesson: shared-host armour must not follow us here. Keying `/tmp/gh-aw` per
+run silently broke `create_pull_request` (gh-aw's safeoutputs server writes the patch to its
+hardcoded path), and per-runner ports broke the MCP gateway. One job per VM wants gh-aw
+exactly as shipped.
+
+## MCP state
+
+Centralised AgentMemory and the per-repo CodeGraph index are covered in [`mcp.md`](mcp.md).
 
 ## Why not AKS (yet)
 
