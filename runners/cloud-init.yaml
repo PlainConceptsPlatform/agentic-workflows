@@ -1,4 +1,11 @@
 #cloud-config
+# One ephemeral runner, one job, then gone. Boot sequence: setup.sh installs the
+# toolchain, runner-job.service asks the scaler app for a JIT config, runs at most
+# one job, and reports done so the app deletes this instance. The VM never decides
+# to scale anything; the scaler app (agentrunner-scaler-01) owns all policy.
+#
+# The bearer token below only lets a VM ask the app for work and for deletion; the
+# app verifies the caller is a live instance of this scale set before answering.
 package_update: true
 packages: [git, jq, curl, unzip, apt-transport-https, ca-certificates, gnupg]
 write_files:
@@ -6,16 +13,14 @@ write_files:
     permissions: "0755"
     content: |
       #!/bin/bash
-      # Ephemeral GitHub runner host bootstrap. The scaler delivers a JIT config via
-      # az vmss run-command after boot; this script only prepares the environment.
       set -euo pipefail
       install -m 0755 -d /etc/apt/keyrings
       curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
       echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list
       curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli.gpg
       echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
-      # azure/login and the infra workflows expect az on PATH; the VMs are ephemeral
-      # and the runner user has no sudo, so it has to be baked in here
+      # azure/login and the infra workflows expect az on PATH; the runner user has no
+      # sudo, so it has to be baked in here
       curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg
       echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ noble main" > /etc/apt/sources.list.d/azure-cli.list
       apt-get update -qq
@@ -31,5 +36,53 @@ write_files:
       ./bin/installdependencies.sh >/dev/null 2>&1 || true
       chown -R runner:runner /opt/actions-runner
       touch /opt/runner/.ready
+  - path: /etc/runner-scaler.env
+    permissions: "0600"
+    content: |
+      SCALER_URL=https://agentrunner-scaler-01.azurewebsites.net
+      VM_TOKEN=__VM_TOKEN__
+  - path: /opt/runner/job.sh
+    permissions: "0700"
+    content: |
+      #!/bin/bash
+      # Ask for one JIT config, run one job, report done. If GitHub hands us nothing
+      # within 10 minutes (stale demand), give up so the instance is not billed idle.
+      set -u
+      . /etc/runner-scaler.env
+      for i in $(seq 1 120); do [ -f /opt/runner/.ready ] && break; sleep 5; done
+      NAME=$(curl -s -H Metadata:true "http://169.254.169.254/metadata/instance/compute/name?api-version=2021-02-01&format=text")
+      ID=${NAME##*_}
+      RAN=false
+      JIT=$(curl -fsS -m 60 -X POST "$SCALER_URL/vm/jit"         -H "Authorization: Bearer $VM_TOKEN" -H "Content-Type: application/json"         -d "{\"instanceId\":\"$ID\"}" || true)
+      if [ -n "$JIT" ]; then
+        cd /opt/actions-runner
+        sudo -u runner ./run.sh --jitconfig "$JIT" &
+        PID=$!
+        for i in $(seq 1 120); do
+          sleep 5
+          kill -0 $PID 2>/dev/null || break
+          pgrep -f Runner.Worker >/dev/null && { RAN=true; break; }
+        done
+        if kill -0 $PID 2>/dev/null && [ "$RAN" = "false" ]; then
+          kill $PID 2>/dev/null
+        fi
+        wait $PID 2>/dev/null || true
+        pgrep -f Runner.Worker >/dev/null && RAN=true
+      fi
+      curl -fsS -m 60 -X POST "$SCALER_URL/vm/done"         -H "Authorization: Bearer $VM_TOKEN" -H "Content-Type: application/json"         -d "{\"instanceId\":\"$ID\",\"ranJob\":$RAN}" || true
+  - path: /etc/systemd/system/runner-job.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Run exactly one GitHub Actions job then request deletion
+      After=network-online.target docker.service
+      Wants=network-online.target
+      [Service]
+      Type=oneshot
+      ExecStart=/opt/runner/job.sh
+      TimeoutStartSec=infinity
+      [Install]
+      WantedBy=multi-user.target
 runcmd:
   - [bash, /opt/runner/setup.sh]
+  - [systemctl, enable, --now, --no-block, runner-job.service]
