@@ -1,133 +1,154 @@
-# Runner platform: ephemeral VM Scale Set
+# Runner platform
 
-Every `agents-arc` job runs on its own short-lived Azure VM from the scale set
-`agentrunner-vmss-01` in `agentrunner-pro-rg-01` (North Europe). One VM, one job, then the
-instance is deleted. There is no shared host, so nothing that plagued the single-VM era can
-happen: no port claims, no fixed container names colliding, no shared `/tmp`, no lock.
+Ephemeral GitHub Actions runners for the `agents-arc` label on Azure VM Scale Sets,
+scaled by a small .NET app instead of workflows. Cost beats latency by design.
 
-| | |
+## Topology
+
+```
+GitHub org webhook (workflow_job) ──► agentrunner-scaler-01 (App Service, .NET)
+                                            │  policy + ledger
+                                            ▼
+                              agentrunner-vmss-01 (VMSS, Uniform, D2ads_v5,
+                              ephemeral OS disk, public IP per VM, capacity 0 at rest)
+                                            │  cloud-init: one JIT runner, one job
+                                            ▼
+                              VM asks /vm/jit ► runs the job ► /vm/done ► deleted
+```
+
+Everything lives in `agentrunner-pro-rg-01`, which also hosts AgentMemory
+(`agentmemory-pro-01`) and the shared B1 plan (`agentmemory-plan-01`) the scaler
+app rides on for free.
+
+## Scaling policy (hard rules)
+
+| Demand (queued + running `agents-arc` jobs) | VMs |
 |---|---|
-| Scale set | `agentrunner-vmss-01`, Standard_D2ads_v5, ephemeral OS disk, per-instance public IP, no LB |
-| Bootstrap | [`cloud-init.yaml`](cloud-init.yaml): docker-ce + compose plugin, gh, git, jq, actions runner |
-| Registration | org-level JIT config into runner group `agentic`, label `agents-arc`, single job by construction |
-| Autoscaling | [`runner-scaler.yml`](../loops/workflows/runner-scaler.yml) on `workflow_job` events: queued grows (cap 4), completed reaps |
-| Idle cost | $0 compute: capacity rests at 0, the VMSS object is free, ephemeral disks are free |
-| Running cost | ~$0.115/h per concurrent job (VM) plus ~$0.005/h per instance IP |
+| 0 | 0 |
+| 1–4 | at most 1 |
+| 5+ | at most 2 |
 
-## Credentials
+- `MAX_VMS = 2` is a compile-time constant in the app, clamped at every capacity
+  write and re-verified after each one; a watchdog forces capacity back down if it
+  ever reads more than 2. A third VM is never created automatically.
+- Jobs beyond capacity wait in the GitHub queue on purpose.
+- One VM hosts exactly one ephemeral JIT runner and executes exactly one job, with
+  its own local Docker Engine, then is deleted. Two agentic workflows never share a
+  VM.
+- Demand comes from the org webhook (`workflow_job` events, label-filtered,
+  private repos only), persisted as a job ledger in the app's `/home`. Missed
+  webhooks self-heal: entries expire (queued 24h, in_progress 8h) and three
+  fruitless VM boots with no job activity clear stale queued entries.
 
-| Secret (org, private repos) | What it is |
-|---|---|
-| `AZURE_SCALER_CLIENT_ID` / `TENANT_ID` / `SUBSCRIPTION_ID` / `CLIENT_SECRET` | the `Platform Agents Pro` service principal the scaler logs in with |
-| `RUNNER_SCALER_GH_TOKEN` | fine-grained PAT, org permission "Self-hosted runners: read and write", used only to mint JIT configs |
-| `AGENTMEMORY_SECRET` | HMAC secret shared with the AgentMemory App Service, see [`mcp.md`](mcp.md) |
+## Cost
 
-The full audited list, including per-repo secrets and what is safe to delete, lives in [`secrets.md`](secrets.md).
+- VM compute: $0 at rest; ~$0.115/h per running VM (D2ads_v5, ephemeral OS disk =
+  no disk cost). Worst case 2 VMs 24/7 ≈ **$168/mo**.
+- Scaler app: $0 extra (shares the existing AgentMemory B1 plan, ~$13/mo total).
+- Public IPs: billed only while a VM exists, ≈ $6/mo worst case.
+- **Worst case ≈ $187/mo, under the $200 target. Normal expected: $10–25/mo.**
+- Budget `runner-platform-200` on the resource group emails
+  quique.fernandez@plainconcepts.com at 80% actual, 100% actual, 100% forecast.
 
-### Role assignments (IAM)
+## The scaler app (`runners/scaler-app`)
 
-Two members need **Virtual Machine Contributor** on `agentrunner-pro-rg-01`, and without
-them the platform degrades to manual scaling:
+.NET 10 minimal API, no external packages. Deployed as `agentrunner-scaler-01`.
 
-| Member | Why | IAM picker detail |
+| Endpoint | Auth | Purpose |
 |---|---|---|
-| `Platform Agents Pro` (service principal) | the scaler workflow logs in as it to grow and reap the fleet | Members type **User, group, or service principal**, search by name |
-| `agentrunner-vmss-01` (managed identity) | a finished VM deletes itself through it | Members type **Managed identity** → category *Virtual machine scale set* — it does not appear in the normal people search |
+| `POST /github` | webhook HMAC | workflow_job events update the ledger, trigger evaluate |
+| `POST /vm/jit` | VM bearer token | live instance asks for a JIT config; 204 when no demand |
+| `POST /vm/done` | VM bearer token | instance reports finished; app deletes it, boots next if needed |
+| `GET /status` | VM bearer token | demand, capacity, instances, ledger |
+| `GET /healthz` | none | liveness |
 
-Portal path: Resource groups → `agentrunner-pro-rg-01` → Access control (IAM) → Add →
-Add role assignment → role **Virtual Machine Contributor** → add each member → Review + assign.
+App settings: `GH_PAT` (fine-grained PAT, sole grant org "Self-hosted runners: rw",
+expires 2027-08-29), `GH_ORG`, `WEBHOOK_SECRET`, `VM_TOKEN`, `AZ_SUBSCRIPTION`,
+`AZ_RG`, `AZ_VMSS`, `RUNNER_LABEL`, `RUNNER_GROUP_ID`. Azure access uses the app's
+system-assigned managed identity (Virtual Machine Contributor on the RG).
 
-Verify:
+Deploy an update:
 
 ```bash
-az role assignment list   --scope /subscriptions/c63519b4-84a6-448c-b0e6-4ebef696b8ff/resourceGroups/agentrunner-pro-rg-01   --query "[?roleDefinitionName=='Virtual Machine Contributor'].principalName" -o tsv
+cd runners/scaler-app
+dotnet publish -c Release -o out && cd out && python -c "import shutil; shutil.make_archive('../scaler','zip','.')"
+az webapp deploy -g agentrunner-pro-rg-01 -n agentrunner-scaler-01 --src-path ../scaler.zip --type zip
 ```
 
-Symptoms when missing: the runner-scaler run fails at `azure/login`'s first az call with
-`AuthorizationFailed`, and finished VMSS instances linger instead of deleting themselves.
+## VM lifecycle (`runners/cloud-init.yaml`)
 
-## The proven pipeline
+cloud-init installs docker-ce + compose, gh, az, trivy, jq and the actions runner,
+then `runner-job.service` runs `job.sh`: request a JIT config from the scaler, run
+`run.sh --jitconfig` for at most one job, and call `/vm/done`. If GitHub hands the
+runner nothing within 10 minutes the VM gives up and reports done anyway, so stale
+demand cannot keep instances billing.
 
-The platform's first fully autonomous cycle completed on 2026-08-28: Numa issue #540 was
-labelled `implement`, the router dispatched the agent to a fresh ephemeral VM, the agent
-implemented the change inside the awf sandbox, safe outputs produced PR #579, CI ran on more
-ephemeral VMs, and merge-gate merged it and closed the issue. No human touched anything
-between the label and the merge.
+The repo copy has `__VM_TOKEN__` as a placeholder; the real value is only in the
+VMSS model's custom data and the app settings. To rotate it: set a new value in
+both places (`az webapp config appsettings set` + `az vmss update --set
+virtualMachineProfile.osProfile.customData=...`).
 
-## What fresh VMs taught us
-
-Every one of these failed a real run first, because a long-lived host had hidden the
-dependency. If a job dies with `command not found` or exit 127, start here:
-
-| missing | fix now lives in |
-|---|---|
-| `docker compose` plugin | user-space install step in shared/opencode-ci.md |
-| `gh` | cloud-init |
-| `trivy` | cloud-init (trivy-action assumes the binary exists) |
-| `dotnet` | `setup-dotnet` in shared steps, `DOTNET_INSTALL_DIR` in the tool cache |
-| `node` for CI scripts | `setup-node` in the app-ci API job |
-| `~/.dotnet/tools` on PATH | exported before `reportgenerator` runs |
-
-And the inverse lesson: shared-host armour must not follow us here. Keying `/tmp/gh-aw` per
-run silently broke `create_pull_request` (gh-aw's safeoutputs server writes the patch to its
-hardcoded path), and per-runner ports broke the MCP gateway. One job per VM wants gh-aw
-exactly as shipped.
-
-## MCP state
-
-Centralised AgentMemory and the per-repo CodeGraph index are covered in [`mcp.md`](mcp.md).
-
-## Org policy constraints, for any future infra work
-
-The management-group policy "Not allowed resource types" (assignment `Resources`) denies load
-balancers and NAT gateways in this subscription, among others. Anything needing managed
-egress infrastructure is off the table; VMs and scale sets with per-instance public IPs, App
-Service, storage accounts and Container Apps are allowed (all verified by real creation
-attempts). Probe with a throwaway resource before designing around anything else.
-
-## Rebuilding from scratch
-
-[`main.bicep`](main.bicep) reproduces the whole platform (network, scale set, AgentMemory):
+## Operating
 
 ```bash
-az deployment group create -g agentrunner-pro-rg-01 -f main.bicep   -p adminPublicKey="$(cat ~/.ssh/id_rsa.pub)"   -p agentMemorySecret="$(openssl rand -hex 32)"   -p customData="$(base64 -w0 cloud-init.yaml)"
-```
+# state of everything (needs the VM token)
+curl -s -H "Authorization: Bearer $VM_TOKEN" https://agentrunner-scaler-01.azurewebsites.net/status | jq
 
-Afterwards the three manual, directory-level steps: grant Virtual Machine Contributor on the
-RG to the `Platform Agents Pro` SP and to the VMSS identity (the template outputs its
-principal id), and mirror `agentMemorySecret` into the `AGENTMEMORY_SECRET` org secret.
+# app logs
+az webapp log tail -g agentrunner-pro-rg-01 -n agentrunner-scaler-01
 
-## Operating it
-
-```bash
-# fleet state
-az vmss list-instances -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 -o table
-gh api orgs/PlainConceptsPlatform/actions/runners --jq '.runners[]|"\(.name) \(.status) busy=\(.busy)"'
-
-# manual runner, when the scaler is down (JIT = ephemeral, one job)
-az vmss scale -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --new-capacity 1
-jit=$(gh api -X POST orgs/PlainConceptsPlatform/actions/runners/generate-jitconfig \
-  -f name=vmss-manual -F runner_group_id=6 -f 'labels[]=agents-arc' -f work_folder=_work \
-  --jq .encoded_jit_config)
-az vmss run-command invoke -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --instance-id <id> \
-  --command-id RunShellScript \
-  --scripts "systemd-run --unit=gha-runner --uid=runner --gid=runner --working-directory=/opt/actions-runner /opt/actions-runner/run.sh --jitconfig '$jit'"
-
-# nothing left running? (hidden-cost check)
+# fleet
 az vmss show -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --query sku.capacity
+az vmss list-instances -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 -o table
+
+# emergency stop
+az vmss scale -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --new-capacity 0
+az webapp stop -g agentrunner-pro-rg-01 -n agentrunner-scaler-01
 ```
 
-Instances that fail to self-delete (role missing, crash) are reaped by the scaler's
-`completed` handler; if in doubt, `az vmss scale --new-capacity 0` deletes everything and
-costs stop.
+## Why not X
 
-## History, shortest useful version
+- **ARC / runner scale sets**: Kubernetes only; AKS is blocked by the management
+  group's "Not allowed resource types" policy (load balancers, NAT gateways denied;
+  every AKS outbound mode needs one).
+- **KEDA on Container Apps Jobs**: the native queue-driven option, but Container
+  Apps forbids privileged containers, and gh-aw's awf firewall needs a real Docker
+  daemon. Dead end for this workload.
+- **Azure native VMSS autoscale**: scales on metrics or schedules only. At capacity
+  0 there is no metric to cross, and GitHub's queue is invisible to Azure Monitor.
+- **B-series (burstable) VMs**: no ephemeral OS disk support, and fresh instances
+  have no CPU credits, so CI jobs run at the ~40% baseline: slower jobs bill more
+  minutes than the discount saves.
+- **Workflow-based scaler** (the previous design): polled instead of reacting,
+  lived per-repo while managing a global resource, raced against itself from two
+  repos, and needed org secrets in repos. Replaced by the app on 2026-08-28.
 
-One D2ads_v5 VM ran four runner services sharing everything. gh-aw assumes one job per
-host, so the era produced: port collisions, awf's fixed container names killing concurrent
-jobs (host-wide `flock` as the cure), a shared `/tmp` with cross-user permission wars, and a
-green run whose outputs were silently discarded. A k3s+ARC detour proved ephemeral DinD
-pods work but awf chroots into the daemon host and refuses Alpine, and AKS was policy-blocked.
-Ephemeral VMs give the strong isolation with none of the machinery. The wrapper rewrites in
-`loops/scripts/compile-agent-workflows.mjs` each carry their own rationale; several exist
-purely because of that shared-host era and are now harmless belt-and-braces.
+## IAM
+
+The RG has these role assignments (Portal: resource group → Access control (IAM) →
+Add role assignment):
+
+| Principal | Role | Why |
+|---|---|---|
+| `agentrunner-scaler-01` (managed identity) | Virtual Machine Contributor | scale the VMSS, delete instances |
+| `Platform Agents Pro` (app registration) | Contributor | infra automation from this machine |
+
+When adding the managed identity, pick "Managed identity" in the member picker and
+select App Service → agentrunner-scaler-01; a plain name search will not find it.
+Verify with:
+
+```bash
+az role assignment list --resource-group agentrunner-pro-rg-01 -o table
+```
+
+Failure symptom when the grant is missing: `/status` works but every capacity
+change logs `AuthorizationFailed` and the fleet stays at 0 while demand grows.
+
+## GitHub side
+
+- Org webhook: `https://agentrunner-scaler-01.azurewebsites.net/github`,
+  content type `application/json`, secret = the app's `WEBHOOK_SECRET`, single
+  event **Workflow jobs**. Org → Settings → Webhooks.
+- Runner group `agentic` (id 6), `allows_public_repositories=false`; JIT runners
+  are minted into it with the `agents-arc` label.
+- Secrets inventory: see [secrets.md](secrets.md).
