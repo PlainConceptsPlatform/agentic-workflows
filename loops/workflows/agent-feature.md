@@ -209,19 +209,27 @@ jobs:
             exit 0
           fi
 
-          # Idempotent resume: reuse an open pull request for this branch when one exists.
-          existing=$(gh pr list --repo "$REPO" --state open --head "$branch" --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            echo "Reusing open pull request #$existing"
-            echo "pr_number=$existing" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Closes the feature only when every story is done; skipped stories keep it open.
+          # Closes the feature only when every story is done; skipped stories keep it open,
+          # and a partial feature ships as a DRAFT so the merge gate leaves it to a human.
           open_stories=$(printf '%s' "$body" | grep -oE '#[0-9]+' | tr -d '#' | sort -un | grep -v "^${FEATURE}$" | while IFS= read -r n; do
             state=$(gh issue view "$n" --repo "$REPO" --json state --jq '.state' 2>/dev/null || echo GONE)
             [ "$state" = "OPEN" ] && echo "$n" || true
           done)
+
+          # Idempotent resume: reuse an open pull request for this branch when one exists,
+          # flipping a draft to ready once the chain is complete.
+          existing=$(gh pr list --repo "$REPO" --state open --head "$branch" --json number,isDraft --jq '.[0] | "\(.number // empty) \(.isDraft // false)"' | tr -d '\n')
+          if [ -n "${existing% *}" ] && [ "${existing% *}" != " " ]; then
+            num=${existing% *}; is_draft=${existing#* }
+            if [ -z "$open_stories" ] && [ "$is_draft" = "true" ]; then
+              gh pr ready "$num" --repo "$REPO"
+              echo "Marked draft pull request #$num ready: every story is done."
+            else
+              echo "Reusing open pull request #$num"
+            fi
+            echo "pr_number=$num" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           {
             if [ -z "$open_stories" ]; then
               echo "Closes #${FEATURE}"
@@ -232,8 +240,10 @@ jobs:
             echo ""
             echo "Every story landed on \`$branch\` without per-story CI; this pull request is where CI and the merge gate judge the whole feature. The finish pass notes are on the feature issue."
           } > /tmp/pr-body.md
+          draft_flag=""
+          [ -n "$open_stories" ] && draft_flag="--draft"
           pr_url=$(gh pr create --repo "$REPO" --base "$DEFAULT_BRANCH" --head "$branch" \
-            --title "[bot] ${title}" --body-file /tmp/pr-body.md)
+            $draft_flag --title "[bot] ${title}" --body-file /tmp/pr-body.md)
           echo "pr_number=$(basename "$pr_url")" >> "$GITHUB_OUTPUT"
           echo "Opened $pr_url"
       - name: Reconcile the new bot pull request

@@ -143,6 +143,17 @@ jobs:
 
           if [ -n "$next" ]; then
             echo "Next story: #$next"
+            # A finish pass may have opened the feature pull request while every remaining
+            # story sat skipped (a crash cascade does exactly that). With a story to run the
+            # PR is premature: every branch push would drag CI and the merge gate through
+            # it once per story, which this design exists to avoid. Close it; the finish
+            # pass reopens it when the chain truly ends.
+            stale_pr=$(gh pr list --repo "$REPO" --state open --head "$CHAIN_BRANCH" --json number --jq '.[0].number // empty')
+            if [ -n "$stale_pr" ]; then
+              gh pr close "$stale_pr" --repo "$REPO" \
+                --comment "Closing: the feature chain resumed with open stories, so this pull request was premature. It reopens automatically when every story is done."
+              echo "::notice::Closed premature feature PR #$stale_pr"
+            fi
             gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
               -f ref="$DEFAULT_BRANCH" \
               -f "inputs[operation]=implement" \

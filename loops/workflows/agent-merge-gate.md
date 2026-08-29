@@ -91,7 +91,16 @@ jobs:
           PR: ${{ steps.subject.outputs.pr }}
         run: |
           set -euo pipefail
-          decision=$(gh pr view "$PR" --repo "$REPO" --json reviewDecision --jq '.reviewDecision')
+          # A transient API failure must not kill the gate (the reconcile cron can push the
+          # token into secondary rate limits). Three tries, then default to not blocked; the
+          # agent re-reads the review state itself before any merge.
+          decision=""
+          for _ in 1 2 3; do
+            if decision=$(gh pr view "$PR" --repo "$REPO" --json reviewDecision --jq '.reviewDecision // ""'); then
+              break
+            fi
+            sleep 5
+          done
           echo "review_blocked=$([ "$decision" = 'CHANGES_REQUESTED' ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
   protected_changes:
