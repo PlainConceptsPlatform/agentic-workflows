@@ -62,8 +62,6 @@ run-name: >-
   && format('Working (Refine): #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'implement'
-  && inputs.feature-chain != ''
-  && format('Working (Implement): #{0} [feature #{1}]', inputs.issue-number, inputs.feature-chain)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'implement'
   && format('Working (Implement): #{0}', inputs.issue-number)
@@ -115,19 +113,14 @@ on:
         options:
           - refine
           - implement
-          - direct
           - triage
           - apply-review
           - merge-gate
           - audit
-          - propose
           - audit-close
           - cleanup-artifacts
           - reconcile-bot-pr-runs
           - validate
-          - batch
-          - feature-chain
-          - feature-finish
       issue-number:
         description: "Issue number (required for refine / implement / direct)"
         required: false
@@ -162,7 +155,6 @@ on:
         options:
           - manual
           - scheduled
-      feature-chain:
         description: "Feature issue number when an implement dispatch is one link of a feature chain"
         required: false
         type: string
@@ -317,7 +309,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
-          FEATURE_CHAIN: ${{ github.event.inputs.feature-chain }}
         run: |
           set -euo pipefail
           if [ -n "$FEATURE_CHAIN" ]; then
@@ -388,7 +379,6 @@ jobs:
     permissions: write-all
     with:
       issue-number: ${{ needs.classify.outputs.issue-number }}
-      feature-chain: ${{ github.event.inputs.feature-chain }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
       CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
@@ -397,59 +387,6 @@ jobs:
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
 
-  call-batch:
-    needs: [classify, authorize]
-    if: (needs.classify.outputs.route == 'batch' || needs.classify.outputs.route == 'feature-chain') && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-feature-chain.yml
-    concurrency:
-      group: feature-${{ needs.classify.outputs.issue-number }}
-      cancel-in-progress: false
-    permissions: write-all
-    with:
-      issue-number: ${{ needs.classify.outputs.issue-number }}
-    secrets:
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-
-  call-feature-finish:
-    needs: [classify, authorize]
-    if: needs.classify.outputs.route == 'feature-finish' && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-feature.lock.yml
-    concurrency:
-      group: feature-${{ needs.classify.outputs.issue-number }}
-      cancel-in-progress: false
-    permissions: write-all
-    with:
-      issue-number: ${{ needs.classify.outputs.issue-number }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-
-  call-direct:
-    needs: [classify, authorize]
-    if: needs.classify.outputs.route == 'direct' && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-direct.lock.yml
-    concurrency:
-      group: direct-${{ needs.classify.outputs.issue-number }}
-      cancel-in-progress: false
-    permissions: write-all
-    with:
-      issue-number: ${{ needs.classify.outputs.issue-number }}
-      mode: ${{ needs.classify.outputs.direct-mode }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-
-  # An outside collaborator cannot pass gh-aw's worker membership check. The router has
-  # already verified their read permission, so re-dispatch under the trusted App identity.
   dispatch-triage:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.is_outside_collaborator == 'true'

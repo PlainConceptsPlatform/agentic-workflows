@@ -8,8 +8,6 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROUTER_YML="${HERE}/../../workflows/work-router.yml"
 AUTHORIZE_YML="${HERE}/../../workflows/authorize-bot-work.yml"
-FEATURE_WORKER_MD="${HERE}/../../workflows/agent-feature.md"
-FEATURE_CHAIN_YML="${HERE}/../../workflows/agent-feature-chain.yml"
 IMPLEMENT_WORKER_MD="${HERE}/../../workflows/agent-implement.md"
 MERGE_GATE_WORKER_MD="${HERE}/../../workflows/agent-merge-gate.md"
 
@@ -80,24 +78,14 @@ assert_route "issue opened with refine label skips triage" none \
   EVENT=issues ACTION=opened 'ISSUE_LABELS=["refine"]' EVENT_ISSUE_NUMBER=42
 assert_route "issue opened with implement label skips triage" none \
   EVENT=issues ACTION=opened 'ISSUE_LABELS=["implement"]' EVENT_ISSUE_NUMBER=42
-assert_route "issue opened with direct label skips triage" none \
-  EVENT=issues ACTION=opened 'ISSUE_LABELS=["direct"]' EVENT_ISSUE_NUMBER=42
-assert_route "issue opened with feature label skips triage" none \
-  EVENT=issues ACTION=opened 'ISSUE_LABELS=["feature"]' EVENT_ISSUE_NUMBER=42
 assert_route "a human triage label routes to triage" triage \
   EVENT=issues ACTION=labeled LABEL=triage ACTOR=maintainer EVENT_ISSUE_NUMBER=42
 assert_route "a bot triage label routes nowhere" none \
   EVENT=issues ACTION=labeled LABEL=triage ACTOR=platform-devbox[bot] EVENT_ISSUE_NUMBER=42
-assert_route "feature + bot-working routes to batch" batch \
-  EVENT=issues ACTION=labeled LABEL=bot-working 'ISSUE_LABELS=["feature","bot-working"]' EVENT_ISSUE_NUMBER=350
 assert_route "implement + bot-working without feature routes to implement" implement \
   EVENT=issues ACTION=labeled LABEL=bot-working 'ISSUE_LABELS=["implement","bot-working"]' EVENT_ISSUE_NUMBER=300
 assert "refine label starts a first pass" first \
   "$(route_field refine-mode EVENT=issues ACTION=labeled LABEL=refine ACTOR=platform-devbox[bot] EVENT_ISSUE_NUMBER=42)"
-assert_route "bot direct label routes to direct" direct \
-  EVENT=issues ACTION=labeled LABEL=direct ACTOR=platform-devbox[bot] EVENT_ISSUE_NUMBER=42
-assert "direct label starts a first pass" first \
-  "$(route_field direct-mode EVENT=issues ACTION=labeled LABEL=direct ACTOR=platform-devbox[bot] EVENT_ISSUE_NUMBER=42)"
 
 echo "── Comment events ────────────────────────────────────────────────────────"
 assert_route "a comment on a pull request routes to apply-review" apply-review \
@@ -114,12 +102,6 @@ assert_route "the bot's own comment never re-enters refine" none \
 assert_route "a comment on an issue without refine routes nowhere" none \
   EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User \
   'ISSUE_LABELS=["bug"]' EVENT_ISSUE_NUMBER=42
-assert_route "an author reply on a direct issue continues" direct \
-  EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User \
-  'ISSUE_LABELS=["direct"]' EVENT_ISSUE_NUMBER=42
-assert "a direct reply is a continue pass" continue \
-  "$(route_field direct-mode EVENT=issue_comment COMMENT_ON_PR=false \
-    COMMENT_SENDER_TYPE=User 'ISSUE_LABELS=["direct"]' EVENT_ISSUE_NUMBER=42)"
 assert_route "the bot's own comment never re-enters direct" none \
   EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=Bot \
   'ISSUE_LABELS=["direct"]' EVENT_ISSUE_NUMBER=42
@@ -172,8 +154,6 @@ assert_route "refine dispatch rejects a non-numeric issue" none \
   EVENT=workflow_dispatch OPERATION=refine INPUT_ISSUE_NUMBER=abc
 assert_route "refine dispatch accepts a positive issue" refine \
   EVENT=workflow_dispatch OPERATION=refine INPUT_ISSUE_NUMBER=42
-assert_route "direct dispatch accepts a positive issue" direct \
-  EVENT=workflow_dispatch OPERATION=direct INPUT_ISSUE_NUMBER=42
 assert_route "direct dispatch needs an issue number" none \
   EVENT=workflow_dispatch OPERATION=direct INPUT_ISSUE_NUMBER=
 assert_route "triage dispatch accepts a positive issue" triage \
@@ -182,8 +162,6 @@ assert_route "triage dispatch needs an issue number" none \
   EVENT=workflow_dispatch OPERATION=triage INPUT_ISSUE_NUMBER=
 assert "triage dispatch defaults to first pass" first \
   "$(route_field triage-mode EVENT=workflow_dispatch OPERATION=triage INPUT_ISSUE_NUMBER=42)"
-assert_route "batch dispatch accepts a positive issue" batch \
-  EVENT=workflow_dispatch OPERATION=batch INPUT_ISSUE_NUMBER=350
 assert_route "batch dispatch needs an issue number" none \
   EVENT=workflow_dispatch OPERATION=batch INPUT_ISSUE_NUMBER=
 assert_route "merge-gate dispatch needs a pull request number" none \
@@ -200,81 +178,6 @@ assert "a dispatched audit reports its trigger kind" manual \
   "$(route_field trigger-kind EVENT=workflow_dispatch OPERATION=audit INPUT_TRIGGER_KIND=manual)"
 
 echo "── Router wiring ─────────────────────────────────────────────────────────"
-if grep -Fq "github.event.label.name == 'feature'" "$AUTHORIZE_YML" &&
-  grep -Fq "elif has_label feature; then" "${HERE}/../classify-route/classify-route.sh"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: feature labels are not authorized and routed through bot-working" >&2
-fi
-
-# A feature is one long run, not a chain of per-story runs. The whole point is that the worker
-# reads every story up front, so assert it loads them rather than a single issue.
-if grep -Fq 'feature-context.json' "$FEATURE_WORKER_MD" &&
-  grep -Fq 'stories:' "$FEATURE_WORKER_MD"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: feature worker does not load the child stories into one context" >&2
-fi
-
-# The run has to outlive a normal implement by hours, or it will be cut off mid-feature.
-feature_timeout=$(sed -n 's/^timeout-minutes: \([0-9]*\)$/\1/p' "$FEATURE_WORKER_MD" | tail -n 1)
-if [ -n "$feature_timeout" ] && [ "$feature_timeout" -ge 240 ]; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: feature worker timeout is '${feature_timeout:-unset}', expected at least 240 minutes" >&2
-fi
-
-# A partial feature must not claim the umbrella issue, and the checklist a human reads to decide
-# on the merge must not report stories that were never implemented.
-if grep -Fq 'only if every story is complete' "$FEATURE_WORKER_MD" &&
-  grep -Fq 'Never claim a story you did not implement' "$FEATURE_WORKER_MD"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: feature worker may claim stories it did not implement" >&2
-fi
-
-# The feature route must reach the long-run worker, not the retired per-story orchestrator.
-if grep -Fq 'uses: ./.github/workflows/agent-feature.lock.yml' "$ROUTER_YML" &&
-  ! grep -Fq 'agent-batch.yml' "$ROUTER_YML"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: the feature route does not reach agent-feature" >&2
-fi
-
-# The chain advances by dispatching, never by waiting. A link that blocks on its story would
-# put the orchestrator back inside the token lifetime problem the chain exists to avoid.
-if ! grep -q 'gh run watch' "$FEATURE_CHAIN_YML"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: the feature chain waits on a run instead of dispatching and exiting" >&2
-fi
-
-# A story is done when its issue is closed. That is the chain's entire state, so the worker
-# confirms the close rather than assuming it; an issue left open is picked again, forever.
-if grep -Fq 'gh issue close "$STORY"' "$IMPLEMENT_WORKER_MD" &&
-  grep -Fq 'inputs[operation]=feature-chain' "$IMPLEMENT_WORKER_MD"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: implement worker does not confirm the story closed before advancing the chain" >&2
-fi
-
-# Two links can be alive at once, because a delayed label event or a manual retrigger starts a
-# second one. Both would otherwise pick the same first-open story and implement it twice, so a
-# link must refuse to dispatch while any story is already reserved.
-if grep -Fq 'WORKING_LABEL' "$FEATURE_CHAIN_YML" &&
-  grep -Fq 'already being implemented' "$FEATURE_CHAIN_YML"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: a feature chain link can dispatch a story that another link already reserved" >&2
-fi
 
 # GitHub evaluates every Actions expression in a workflow file, including ones written inside
 # shell comments. An empty pair is not a valid expression and fails the whole file to parse,
@@ -290,13 +193,6 @@ else
 ' $empty_expr >&2
 fi
 
-# Skipping is reversible: the story keeps the review label until a human removes it.
-if grep -Fq 'SKIP_LABEL: review' "$FEATURE_CHAIN_YML"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: the feature chain has no reversible skip marker" >&2
-fi
 
 # A hyphen inside a ${{ }} property path is parsed as subtraction, so the reference silently
 # resolves to nothing and the rendered prompt keeps the raw expression. Underscores only.
@@ -337,7 +233,7 @@ fi
 # label must pass the authorize gate, or anyone able to comment can start a model run that
 # writes code. Asserted here because removing the gate would otherwise be a silent, one-line
 # change that nothing fails on.
-for route in refine implement direct apply-review batch; do
+for route in refine implement apply-review; do
   if grep -qE "route == '${route}'.*needs\.authorize\.outputs\.trusted == 'true'" "$ROUTER_YML"; then
     PASS=$((PASS + 1))
   else
@@ -357,8 +253,8 @@ else
   echo "FAIL: route 'triage' does not dispatch outside collaborators and require a trusted worker actor" >&2
 fi
 
-for route in refine implement direct triage apply-review merge-gate audit bot-approve \
-  audit-close cleanup-artifacts reconcile-bot-pr-runs validate batch; do
+for route in refine implement triage apply-review merge-gate audit bot-approve \
+  audit-close cleanup-artifacts reconcile-bot-pr-runs validate; do
   if grep -q "route == '${route}'" "$ROUTER_YML"; then
     PASS=$((PASS + 1))
   else

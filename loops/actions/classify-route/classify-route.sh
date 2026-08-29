@@ -28,7 +28,7 @@ is_issue_number() {
 classify_route() {
   local route="none" error=""
   local issue_number="" pr_number="" ci_conclusion="" ci_run_id=""
-  local refine_mode="" direct_mode="" triage_mode="" trigger_kind=""
+  local refine_mode="" triage_mode="" trigger_kind=""
 
   case "${EVENT:-}" in
     issues)
@@ -36,7 +36,7 @@ classify_route() {
         # Issue opened with a work label → skip triage.
         # The label event will trigger authorize-bot-work → bot-working → the
         # correct worker. Triage would only interfere.
-        if has_label refine || has_label implement || has_label direct || has_label feature; then
+        if has_label refine || has_label implement; then
           error="issue opened with a work label; triage skipped"
         else
           # Issue opened by an outside collaborator → triage. The authorize job
@@ -53,19 +53,12 @@ classify_route() {
             # BUT: if review label is present, do NOT route (human review required)
             if has_label review; then
               error="issue has review label; bot-working does not re-trigger while human review is required"
-            elif has_label feature; then
-              route="batch"
-              issue_number="${EVENT_ISSUE_NUMBER:-}"
             elif has_label implement; then
               route="implement"
               issue_number="${EVENT_ISSUE_NUMBER:-}"
             elif has_label refine; then
               route="refine"
               refine_mode="first"
-              issue_number="${EVENT_ISSUE_NUMBER:-}"
-            elif has_label direct; then
-              route="direct"
-              direct_mode="first"
               issue_number="${EVENT_ISSUE_NUMBER:-}"
             else
               error="bot-working added but no work label found"
@@ -85,7 +78,7 @@ classify_route() {
               triage_mode="first"
             fi
             ;;
-          refine | implement | direct)
+          refine | implement)
             # If the actor is a bot (e.g. refine→implement transition), route directly.
             # If the actor is a human, authorize-bot-work.yml will add bot-working which triggers the workflow.
             if [ "${ACTOR:-}" != "" ] && echo "${ACTOR:-}" | grep -q '\[bot\]$'; then
@@ -93,13 +86,11 @@ classify_route() {
               issue_number="${EVENT_ISSUE_NUMBER:-}"
               if [ "${LABEL:-}" = "refine" ]; then
                 refine_mode="first"
-              elif [ "${LABEL:-}" = "direct" ]; then
-                direct_mode="first"
               fi
             elif has_label bot-working; then
               # Already has bot-working - the workflow is already running or queued.
               # Don't re-trigger.
-              error="issue already has bot-working label; implement/refine/direct already in progress"
+              error="issue already has bot-working label; implement/refine already in progress"
             else
               error="waiting for bot to add bot-working label"
             fi
@@ -120,12 +111,8 @@ classify_route() {
         issue_number="${EVENT_ISSUE_NUMBER:-}"
       elif has_label implement; then
         error="issue has implement label; comments do not re-trigger implement"
-      elif has_label direct; then
-        route="direct"
-        direct_mode="continue"
-        issue_number="${EVENT_ISSUE_NUMBER:-}"
       elif ! has_label refine; then
-        error="issue does not carry the refine or direct label"
+        error="issue does not carry the refine label"
       else
         route="refine"
         refine_mode="rerefine"
@@ -178,14 +165,12 @@ classify_route() {
     workflow_dispatch)
       trigger_kind="manual"
       case "${OPERATION:-}" in
-        refine | implement | direct)
+        refine | implement)
           if is_issue_number "${INPUT_ISSUE_NUMBER:-}"; then
             route="${OPERATION}"
             issue_number="${INPUT_ISSUE_NUMBER}"
             if [ "$OPERATION" = "refine" ]; then
               refine_mode="${INPUT_MODE:-first}"
-            elif [ "$OPERATION" = "direct" ]; then
-              direct_mode="${INPUT_MODE:-first}"
             fi
           else
             error="operation '${OPERATION}' needs a positive issue-number, got '${INPUT_ISSUE_NUMBER:-}'"
@@ -198,14 +183,6 @@ classify_route() {
             triage_mode="${INPUT_MODE:-first}"
           else
             error="operation 'triage' needs a positive issue-number, got '${INPUT_ISSUE_NUMBER:-}'"
-          fi
-          ;;
-        batch | feature-chain | feature-finish)
-          if is_issue_number "${INPUT_ISSUE_NUMBER:-}"; then
-            route="${OPERATION}"
-            issue_number="${INPUT_ISSUE_NUMBER}"
-          else
-            error="operation '${OPERATION}' needs a positive issue-number, got '${INPUT_ISSUE_NUMBER:-}'"
           fi
           ;;
         apply-review)
@@ -251,7 +228,6 @@ pr-number=${pr_number}
 ci-conclusion=${ci_conclusion}
 ci-run-id=${ci_run_id}
 refine-mode=${refine_mode}
-direct-mode=${direct_mode}
 triage-mode=${triage_mode}
 trigger-kind=${trigger_kind}
 error=${error}

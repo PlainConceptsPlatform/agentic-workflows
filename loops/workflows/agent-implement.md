@@ -41,11 +41,6 @@ on:
         description: Issue number to implement.
         required: true
         type: string
-      feature-chain:
-        description: Feature issue number when this story is one link of a feature chain.
-        required: false
-        type: string
-        default: ""
 jobs:
   eligibility:
     runs-on: agents-arc
@@ -130,80 +125,8 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
-      # Chain landing: no pull request and no CI per story, by design. The agent committed
-      # on the feature branch inside its sandbox; those commits travel here as the aw-*.patch
-      # inside the agent artifact, get replayed onto the real branch, and are pushed with the
-      # bot identity. Cost beats latency at the end: CI and the merge gate see one final PR.
-      - name: Download the story patch
-        if: inputs.feature-chain != ''
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
-        with:
-          pattern: "*agent"
-          path: /tmp/chain-artifacts
-          merge-multiple: true
-      - name: Land the story on the feature branch
-        id: land
-        if: inputs.feature-chain != ''
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPO: ${{ github.repository }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          STORY: ${{ inputs.issue-number }}
-          FEATURE: ${{ inputs.feature-chain }}
-        run: |
-          set -euo pipefail
-
-          body=$(gh issue view "$FEATURE" --repo "$REPO" --json body --jq '.body // ""')
-          branch=$(printf '%s' "$body" | grep -oE '<!-- feature-branch: [^ ]+ -->' | head -1 | sed 's/<!-- feature-branch: //; s/ -->//' || true)
-          if [ -z "$branch" ]; then
-            echo "::error::Feature #$FEATURE lost its <!-- feature-branch --> marker; cannot land."
-            exit 1
-          fi
-
-          patch=$(find /tmp/chain-artifacts -maxdepth 1 -name 'aw-*.patch' | head -1 || true)
-          landed_sha=""
-          if [ -n "$patch" ] && [ -s "$patch" ]; then
-            git clone --depth 50 --branch "$branch" \
-              "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" /tmp/chain-land
-            cd /tmp/chain-land
-            git config user.name "platform-devbox[bot]"
-            git config user.email "platform-devbox[bot]@users.noreply.github.com"
-            # format-patch output replays with authorship and message; fall back to a plain
-            # apply-and-commit when the mailbox form does not take.
-            if ! git am --3way "$patch"; then
-              git am --abort || true
-              git apply --3way "$patch"
-              git add -A
-              git commit -m "feat: story #${STORY} of feature #${FEATURE}"
-            fi
-            git push origin "HEAD:$branch"
-            landed_sha=$(git rev-parse HEAD)
-            cd -
-            echo "Landed $landed_sha on $branch"
-          else
-            echo "::warning::Story #$STORY produced no patch; closing it as requiring no changes."
-          fi
-          echo "landed_sha=${landed_sha}" >> "$GITHUB_OUTPUT"
-
-          # Closing the story is the chain's state, so it is checked rather than assumed. A
-          # story left open would be picked again on the next link, forever.
-          if [ -n "$landed_sha" ]; then
-            gh issue close "$STORY" --repo "$REPO" \
-              --comment "Implemented on the feature branch \`$branch\` (${landed_sha}). CI and the merge gate run once on the feature's final pull request."
-          else
-            gh issue close "$STORY" --repo "$REPO" \
-              --comment "The agent found nothing to change for this story on \`$branch\`; closing it so the chain can continue."
-          fi
-
-          gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
-            -f ref="$DEFAULT_BRANCH" \
-            -f "inputs[operation]=feature-chain" \
-            -f "inputs[issue-number]=$FEATURE"
-      # No per-story changelog: a feature is one user-facing change, so exactly one entry is
-      # written on the chain branch by the finish pass and merges with the feature itself.
-
       - name: Verify PR closes the source issue
-        if: inputs.feature-chain == '' && needs.safe_outputs.outputs.created_pr_number != ''
+        if: needs.safe_outputs.outputs.created_pr_number != ''
         continue-on-error: true
         uses: ./.github/actions/link-pr-to-issue
         with:
@@ -216,7 +139,7 @@ jobs:
       # the branch without guessing. Old markers are replaced, so a re-implement after a
       # closed pull request re-stamps cleanly.
       - name: Record the pull request and branch on the issue
-        if: inputs.feature-chain == '' && needs.safe_outputs.outputs.created_pr_number != ''
+        if: needs.safe_outputs.outputs.created_pr_number != ''
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -232,7 +155,7 @@ jobs:
           gh issue edit "$ISSUE" --repo "$REPO" --body-file /tmp/issue-body.md
           echo "Stamped PR #$PR_NUMBER and branch $branch on issue #$ISSUE"
       - name: Reconcile the new bot pull request
-        if: inputs.feature-chain == '' && needs.safe_outputs.outputs.created_pr_number != ''
+        if: needs.safe_outputs.outputs.created_pr_number != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -288,21 +211,6 @@ jobs:
             ${{ env.IMPLEMENT_MARKER }}
             ${{ env.INCOMPLETE_COMMENT }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-      - name: Skip this story and advance the feature chain
-        if: inputs.feature-chain != ''
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPO: ${{ github.repository }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          FEATURE: ${{ inputs.feature-chain }}
-        run: |
-          set -euo pipefail
-          # The review label added above is what makes the next link skip this story. Removing
-          # it by hand puts the story back in the chain.
-          gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
-            -f ref="$DEFAULT_BRANCH" \
-            -f "inputs[operation]=feature-chain" \
-            -f "inputs[issue-number]=$FEATURE"
   agent:
     needs: [eligibility]
     if: needs.eligibility.outputs.eligible == 'true'
@@ -340,30 +248,6 @@ steps:
       token: ${{ github.token }}
       issue-number: ${{ inputs.issue-number }}
       output-path: ${{ env.ISSUE_CONTEXT_PATH }}
-  # Chain stories stack on one integration branch, so the agent must start from that
-  # branch head, not the default branch: story 3 usually depends on story 1. The branch
-  # name is the hidden marker the chain wrote into the feature issue body.
-  - name: Switch the workspace to the feature chain branch
-    if: inputs.feature-chain != ''
-    env:
-      GH_TOKEN: ${{ github.token }}
-      REPO: ${{ github.repository }}
-      FEATURE: ${{ inputs.feature-chain }}
-    run: |
-      set -euo pipefail
-      body=$(gh issue view "$FEATURE" --repo "$REPO" --json body --jq '.body // ""')
-      branch=$(printf '%s' "$body" | grep -oE '<!-- feature-branch: [^ ]+ -->' | head -1 | sed 's/<!-- feature-branch: //; s/ -->//' || true)
-      if [ -z "$branch" ]; then
-        echo "::error::Feature #$FEATURE carries no <!-- feature-branch --> marker; the chain link should have created it."
-        exit 1
-      fi
-      # The workspace checkout keeps no credentials on purpose (the sandbox must stay
-      # credential-less), so the fetch authenticates once through the URL and leaves
-      # nothing behind. The remote-tracking ref matters: patch generation diffs against
-      # origin/<branch> to isolate what this run added.
-      git fetch "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/heads/$branch:refs/remotes/origin/$branch"
-      git checkout -B "$branch" "origin/$branch"
-      echo "Workspace now on $branch at $(git rev-parse --short HEAD)"
 
 safe-outputs:
   # A failed run is already visible as a red run. An issue per failure buries the
@@ -388,16 +272,6 @@ timeout-minutes: 90
 
 1. You are implementing issue **#${{ inputs.issue-number }}**. It was
    selected for you; do not choose a different one, and do not look for other candidates.
-
-   Feature chain **${{ inputs.feature-chain }}**, when non-empty, means this story is one link
-   of a feature and your workspace is already sitting on the feature's integration branch,
-   on top of every previously landed story. In chain mode, do NOT call
-   `create_pull_request`. Instead: implement the story, then stage and commit your changes
-   yourself (`git add -A && git commit -m "feat: <story summary> (#${{ inputs.issue-number }})"`),
-   and finish by calling the `noop` safe output with one line describing what you committed.
-   The workflow pushes your commits to the feature branch and starts the next story; the
-   feature opens a single pull request only at the very end. When the chain input is empty,
-   everything below about opening a pull request applies unchanged.
 
    Never run `git checkout`, `git fetch`, `git stash`, `git branch` or `git reset`. This sandbox
    has no git credentials, and moving yourself between branches corrupts the working tree.

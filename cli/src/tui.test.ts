@@ -26,7 +26,7 @@ function makeEntry(name: string, kind: "route" | "template", installed = false):
 }
 
 function makeEntries(installed: string[] = []): CatalogEntry[] {
-  const routes = ["refine", "implement", "direct", "triage", "apply-review", "merge-gate", "audit", "propose"];
+  const routes = ["refine", "implement", "triage", "apply-review", "merge-gate", "audit"];
   const templates = ["agentics-checks", "agentics-maintenance", "app-ci-dotnet-next", "app-ci-node-monorepo", "opencode.ci.json"];
   return [
     ...routes.map((name) => makeEntry(name, "route", installed.includes(name))),

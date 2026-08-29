@@ -21,9 +21,7 @@ jobs:
     # and only if neither another bot run nor human review currently owns the issue.
     if: >
       (github.event.label.name == 'implement' ||
-       github.event.label.name == 'refine' ||
-       github.event.label.name == 'direct' ||
-       github.event.label.name == 'feature') &&
+       github.event.label.name == 'refine') &&
       !contains(github.event.issue.labels.*.name, 'bot-working') &&
       !contains(github.event.issue.labels.*.name, 'review') &&
       !endsWith(github.actor, '[bot]')
