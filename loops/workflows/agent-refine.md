@@ -12,6 +12,11 @@ env:
   RESPONSE_MODE: rerefine
   MAX_SELF_QUESTIONS: "5"
   TRIVIAL_MARKER: "<!-- complexity: trivial -->"
+  ESTIMATE_MARKER_PREFIX: "<!-- estimate: "
+  SPLIT_PARENT_PREFIX: "<!-- split-parent: "
+  SPLIT_CHILDREN_PREFIX: "<!-- split-into: "
+  SPLIT_THRESHOLD: "8"
+  MAX_SPLIT_CHILDREN: "6"
   INCOMPLETE_COMMENT: "Automated refinement ended without an outcome. The refine label remains for a retry."
   SAFE_OUTPUT_COMMENT_PREFIX: "Refinement update"
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
@@ -143,6 +148,9 @@ jobs:
           artifact-name: ${{ needs.activation.outputs.artifact_prefix }}agent
           token: ${{ steps.app-token.outputs.token }}
           update-issues: 'true'
+          # Split children are create_issue items; without this they are silently dropped and
+          # the parent becomes a tracker pointing at issues that do not exist.
+          create-issues: 'true'
           apply-labels: 'false'
           fallback-issue-number: ${{ inputs.issue-number }}
       - name: Apply complete refinement labels
@@ -164,6 +172,75 @@ jobs:
             ${{ env.REFINE_LABEL }}
             ${{ env.WORKING_LABEL }}
             ${{ env.REVIEW_LABEL }}
+      # A split parent is refined but never implemented: its children carry the work. It stays
+      # open as their tracker, so a person can see at a glance what is left.
+      - name: Mark the parent of a split
+        if: needs.validate_output.outputs.outcome == 'split'
+        uses: ./.github/actions/add-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: ${{ env.REFINED_LABEL }}
+      - name: Clear split parent labels
+        if: needs.validate_output.outputs.outcome == 'split'
+        uses: ./.github/actions/remove-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: |-
+            ${{ env.REFINE_LABEL }}
+            ${{ env.WORKING_LABEL }}
+            ${{ env.REVIEW_LABEL }}
+      # Estimates become labels here rather than in the agent, because labels are workflow-owned
+      # state. Children were created moments ago by the same run, so they are labelled together
+      # with the parent: each body carries its own marker.
+      - name: Turn estimate markers into labels
+        if: needs.validate_output.outputs.outcome == 'complete' || needs.validate_output.outputs.outcome == 'split'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PARENT: ${{ inputs.issue-number }}
+          OUTCOME: ${{ needs.validate_output.outputs.outcome }}
+        run: |
+          set -euo pipefail
+
+          label_one() {
+            local issue="$1"
+            local body points
+            body=$(gh issue view "$issue" --repo "$REPO" --json body --jq '.body // ""')
+            points=$(printf '%s' "$body" | grep -oE '<!-- estimate: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
+            if [ -z "$points" ]; then
+              echo "::warning::#$issue carries no estimate marker; no points label applied."
+              return 0
+            fi
+            case "$points" in
+              1|2|3|5|8|13|21) ;;
+              *) echo "::warning::#$issue estimate '$points' is not a Fibonacci point value; skipping."; return 0 ;;
+            esac
+            # A re-refine re-estimates, so the previous value must not linger beside the new one.
+            for old in $(gh issue view "$issue" --repo "$REPO" --json labels --jq '.labels[].name | select(startswith("sp-"))'); do
+              [ "$old" = "sp-$points" ] || gh issue edit "$issue" --repo "$REPO" --remove-label "$old" >/dev/null
+            done
+            gh label create "sp-$points" --repo "$REPO" --color BFD4F2 \
+              --description "Story points: $points (about $points human days)" >/dev/null 2>&1 || true
+            gh issue edit "$issue" --repo "$REPO" --add-label "sp-$points" >/dev/null
+            echo "#$issue estimated at $points point(s)"
+          }
+
+          label_one "$PARENT"
+
+          if [ "$OUTCOME" = "split" ]; then
+            parent_body=$(gh issue view "$PARENT" --repo "$REPO" --json body --jq '.body // ""')
+            # The children are the issues that name this parent, which is more reliable than
+            # parsing the parent's own checklist: the marker is written by the agent into each
+            # child, and a child that failed to create simply never appears.
+            for child in $(gh issue list --repo "$REPO" --state open --limit 50 \
+              --search "\"<!-- split-parent: ${PARENT} -->\" in:body" --json number --jq '.[].number'); do
+              [ "$child" = "$PARENT" ] && continue
+              label_one "$child"
+            done
+          fi
       - name: Flag questions for review
         if: needs.validate_output.outputs.outcome == 'questions'
         uses: ./.github/actions/add-issue-labels
@@ -258,11 +335,14 @@ safe-outputs:
   # A failed run is already a red run. An issue per failure buries the real backlog
   # under noise nobody closes.
   report-failure-as-issue: false
-  staged: true
   threat-detection: false
   update-issue:
     target: "*"
   add-comment:
+  # Split children. An oversized story becomes several implementable ones rather than
+  # one issue nobody can land; the cap stops a runaway decomposition.
+  create-issue:
+    max: 6
 
 
 timeout-minutes: 40
@@ -352,7 +432,62 @@ timeout-minutes: 40
 
 5. Load `@humanizer` and prepare the complete replacement issue body as valid Markdown.
 
-6. Decide exactly one outcome:
+6. **Estimate the story in points.** Use the Fibonacci scale, where one point is roughly one
+   human day of work for a developer who knows this codebase. Estimate the whole story: code,
+   tests, and the edge cases the acceptance criteria imply.
+
+   Judge by the shape of the diff the story will produce, not by how long it feels. The bands
+   below are calibrated from this repository's own merged pull requests, so compare the story
+   against them rather than against an abstract scale:
+
+   | Points | Human days | Shape of the change |
+   |---|---|---|
+   | 1 | ~1 | one or two files, under about 50 changed lines, no new concepts: a wording, style or single-value fix |
+   | 2 | ~2 | up to about four files and 150 lines, all inside one layer, no schema or contract change |
+   | 3 | ~3 | a vertical slice through one boundary (API and database, or UI and API), up to about eight files and 400 lines, with new tests |
+   | 5 | ~5 | several layers together, or a schema migration, or a new contract: up to about sixteen files and 1000 lines |
+   | 8 or more | more than a week | beyond those bounds, or it needs a pattern or subsystem that does not exist yet, or it still holds real unknowns |
+
+   Elapsed clock time is not evidence. A large change can land in minutes and a small one can
+   wait days for a human, so never reason from how long anything took.
+
+7. **Split when the estimate is ${{ env.SPLIT_THRESHOLD }} or more.** An oversized story is the
+   single best predictor of a pull request that never lands.
+
+   First test whether it *can* split. A story splits when it contains slices that are each
+   independently valuable, independently testable, and shippable on their own. Prefer vertical
+   slices that each cross the stack over horizontal ones that each add a layer, because a layer
+   on its own cannot be verified.
+
+   **If it splits:** write between two and ${{ env.MAX_SPLIT_CHILDREN }} children. Each child is
+   a complete refined story in the same format you would have written for the whole, with its own
+   acceptance criteria, its own tests section, and its own estimate of 5 or less. Never write a
+   child estimated at 1: that is a fragment, so fold it into a sibling. Call `create_issue` once
+   per child, and in each child body include:
+
+   - the line `${{ env.SPLIT_PARENT_PREFIX }}N -->` naming the parent issue number
+   - a `Blocked by #M` line naming any sibling that must land first, when order genuinely matters
+
+   Then call `update_issue` on the parent, replacing its body with a short summary of the whole
+   piece of work, the reason it was split, and a checklist linking every child. The parent keeps
+   its own honest estimate. Do not write acceptance criteria on the parent: the children own them.
+
+   **If it genuinely does not split**, because the work is one indivisible change, keep it as a
+   single story and say so in one sentence in the body, under the estimate. An honest 8 is more
+   useful than three fake threes that each break the build.
+
+8. **Record the estimate in every body you write**, parent and children alike, immediately below
+   the title line, as exactly these two lines:
+
+   ```
+   **Estimate:** N points (~N human days)
+   ${{ env.ESTIMATE_MARKER_PREFIX }}N -->
+   ```
+
+   The visible line is for people and the marker is read by the workflow, which turns it into the
+   `sp-N` label. A body without the marker gets no estimate label at all.
+
+9. Decide exactly one outcome:
 
     Labels are workflow-owned state. Do not call `add_labels` or `remove_labels`.
 
@@ -379,6 +514,13 @@ timeout-minutes: 40
 
     - If the array includes the exact label `future`: `Refinement complete. The implement label has been added. Implementation is paused until the future label is removed.`
     - Otherwise: `Refinement complete. The implement label has been added and the implement workflow will start shortly.`
+
+    **The story was split.** You estimated ${{ env.SPLIT_THRESHOLD }} or more and found real
+    seams. Call `create_issue` once per child, then `update_issue` on the parent with the
+    summary and the checklist, then `add_comment` with `${{ env.REFINE_MARKER }}`, then
+    `${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}`, then one sentence naming the estimate you gave the
+    whole and how many children you wrote. The children carry the work forward; the parent stays
+    open as their tracker and is never implemented directly.
 
 ## Diagram
 
