@@ -307,11 +307,6 @@ jobs:
           ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
         run: |
           set -euo pipefail
-          if [ -n "$FEATURE_CHAIN" ]; then
-            echo "has-open-pr=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Story of feature #$FEATURE_CHAIN; the standalone duplicate check does not apply."
-            exit 0
-          fi
           # A refine-to-implement transition emits two label events (the implement label,
           # then the worker re-adding bot-working) and each one classifies to implement.
           # The older router run wins: a younger run that finds an older live implement
