@@ -343,7 +343,11 @@ safe-outputs:
   # under noise nobody closes.
   report-failure-as-issue: false
   threat-detection: false
+  # target "*" because these workers are dispatched, not triggered by the pull request:
+  # the default "triggering" target has no pull request in context and rejects the push
+  # with "requires pull request context", so the agent's fix is computed and discarded.
   push-to-pull-request-branch:
+    target: "*"
   add-comment:
     target: "*"
 
