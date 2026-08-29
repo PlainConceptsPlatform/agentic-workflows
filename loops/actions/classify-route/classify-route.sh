@@ -9,13 +9,10 @@
 set -euo pipefail
 
 readonly AUDIT_CRON="17 1 * * 1"
+readonly MUTATION_CRON="41 2 * * 2"
 readonly AUDIT_CLOSE_CRON="43 3 * * *"
 readonly CLEANUP_ARTIFACTS_CRON="0 6 * * *"
 readonly RECONCILE_BOT_PR_RUNS_CRON="17 */2 * * *"
-# Daily, but it proposes far less often than daily: the worker holds one open
-# proposal at a time and skips while that slot is filled. The cron is a heartbeat,
-# the queue is the pacing.
-readonly PROPOSE_CRON="29 7 * * *"
 
 has_label() {
   jq -e --arg name "$1" 'index($name)' >/dev/null 2>&1 <<<"${ISSUE_LABELS:-[]}"
@@ -154,10 +151,10 @@ classify_route() {
       trigger_kind="scheduled"
       case "${SCHEDULE:-}" in
         "$AUDIT_CRON") route="audit" ;;
+        "$MUTATION_CRON") route="mutation" ;;
         "$AUDIT_CLOSE_CRON") route="audit-close" ;;
         "$CLEANUP_ARTIFACTS_CRON") route="cleanup-artifacts" ;;
         "$RECONCILE_BOT_PR_RUNS_CRON") route="reconcile-bot-pr-runs" ;;
-        "$PROPOSE_CRON") route="propose" ;;
         *) error="no route for cron '${SCHEDULE:-}'" ;;
       esac
       ;;
@@ -203,7 +200,7 @@ classify_route() {
             error="operation 'merge-gate' needs a positive pr-number, got '${INPUT_PR_NUMBER:-}'"
           fi
           ;;
-        audit | propose)
+        audit | mutation)
           route="${OPERATION}"
           trigger_kind="${INPUT_TRIGGER_KIND:-manual}"
           ;;

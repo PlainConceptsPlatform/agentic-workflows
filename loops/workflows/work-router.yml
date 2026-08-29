@@ -99,6 +99,9 @@ on:
   # Cron to route mapping lives in .github/actions/classify-route/classify-route.sh.
   schedule:
     - cron: "17 1 * * 1"
+    # Tuesday, a day clear of the Monday audit: both are long agent runs and the fleet is
+    # two VMs, so overlapping them makes each wait on the other.
+    - cron: "41 2 * * 2"
     - cron: "43 3 * * *"
     - cron: "0 6 * * *"
     - cron: "17 */2 * * *"
@@ -117,6 +120,7 @@ on:
           - apply-review
           - merge-gate
           - audit
+          - mutation
           - audit-close
           - cleanup-artifacts
           - reconcile-bot-pr-runs
@@ -489,12 +493,12 @@ jobs:
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
 
-  call-propose:
+  call-mutation:
     needs: classify
-    if: needs.classify.outputs.route == 'propose'
-    uses: ./.github/workflows/agent-propose.lock.yml
+    if: needs.classify.outputs.route == 'mutation'
+    uses: ./.github/workflows/agent-mutation.lock.yml
     concurrency:
-      group: propose
+      group: mutation
       cancel-in-progress: false
     permissions: write-all
     with:
@@ -506,7 +510,6 @@ jobs:
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-
   bot-approve:
     needs: classify
     if: >
