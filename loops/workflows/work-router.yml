@@ -249,7 +249,6 @@ jobs:
       ci-conclusion: ${{ steps.route.outputs.ci-conclusion }}
       ci-run-id: ${{ steps.route.outputs.ci-run-id }}
       refine-mode: ${{ steps.route.outputs.refine-mode }}
-      direct-mode: ${{ steps.route.outputs.direct-mode }}
       triage-mode: ${{ steps.route.outputs.triage-mode }}
       trigger-kind: ${{ steps.route.outputs.trigger-kind }}
     steps:

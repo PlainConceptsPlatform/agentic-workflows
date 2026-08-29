@@ -27,9 +27,6 @@ outputs:
   refine-mode:
     description: first or rerefine.
     value: ${{ steps.classify.outputs.refine-mode }}
-  direct-mode:
-    description: first or continue.
-    value: ${{ steps.classify.outputs.direct-mode }}
   triage-mode:
     description: first or retriage.
     value: ${{ steps.classify.outputs.triage-mode }}
