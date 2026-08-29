@@ -211,6 +211,72 @@ jobs:
             ${{ env.IMPLEMENT_MARKER }}
             ${{ env.INCOMPLETE_COMMENT }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+  # The implement-global concurrency group is held for as long as this called workflow runs,
+  # so waiting here is what makes the queue serial end to end rather than merely serial up to
+  # pull request creation. Without it the next story branches from a default branch that does
+  # not yet contain this one, and every later pull request in a batch conflicts with every
+  # earlier one: work an agent then has to redo at merge-gate time, once per pair.
+  #
+  # Hosted, not agents-arc: this job sleeps, and the fleet is capped at two VMs that the
+  # pull request's own CI needs in order to finish.
+  await_landing:
+    # agent and safe_outputs are named explicitly, not just conclude: a custom job that does
+    # not reference them is treated as pre-agent and wired as a dependency OF the agent job,
+    # which makes agent -> await_landing -> conclude -> agent a cycle and fails compilation.
+    needs: [agent, safe_outputs, conclude]
+    if: always() && needs.conclude.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Wait for the pull request to reach a terminal state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue-number }}
+          REVIEW_LABEL: ${{ env.REVIEW_LABEL }}
+          # Cap below the job timeout so the step reports rather than being killed.
+          MAX_WAIT_MINUTES: "90"
+        run: |
+          set -euo pipefail
+
+          # The pull request is recorded on the issue by the marker implement stamps; fall
+          # back to a body search for pull requests created before markers existed.
+          pr=$(gh issue view "$ISSUE" --repo "$REPO" --json body --jq '.body // ""' \
+            | grep -oE '<!-- implement-pr: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
+          if [ -z "$pr" ]; then
+            pr=$(gh pr list --repo "$REPO" --state open --json number,body \
+              --jq "[.[] | select((.body // \"\") | ascii_downcase | test(\"clos(e|es|ed) #${ISSUE}\\b|fix(es|ed)? #${ISSUE}\\b|resolves? #${ISSUE}\\b\"))][0].number // empty")
+          fi
+          if [ -z "$pr" ]; then
+            echo "::notice::No pull request found for #$ISSUE; nothing to wait for."
+            exit 0
+          fi
+
+          echo "Holding the implement slot until PR #$pr lands."
+          deadline=$(( $(date +%s) + MAX_WAIT_MINUTES * 60 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            state=$(gh pr view "$pr" --repo "$REPO" --json state --jq '.state' 2>/dev/null || echo GONE)
+            case "$state" in
+              MERGED)
+                echo "::notice::PR #$pr merged. Releasing the slot so the next story branches from it."
+                exit 0 ;;
+              CLOSED|GONE)
+                echo "::notice::PR #$pr is $state. Releasing the slot."
+                exit 0 ;;
+            esac
+            # A human now owns the change, so the queue must not wait on them.
+            if gh issue view "$ISSUE" --repo "$REPO" --json labels \
+              --jq '[.labels[].name]' | jq -e --arg l "$REVIEW_LABEL" 'index($l)' >/dev/null; then
+              echo "::notice::#$ISSUE was handed to a human ($REVIEW_LABEL). Releasing the slot."
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::warning::PR #$pr did not land within ${MAX_WAIT_MINUTES}m. Releasing the slot; the next story may branch from a default branch without these changes."
   agent:
     needs: [eligibility]
     if: needs.eligibility.outputs.eligible == 'true'
