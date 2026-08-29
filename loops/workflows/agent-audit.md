@@ -10,7 +10,8 @@ env:
 description: |
   Read-only repository audit. Finds 5-7 problems, scores each 1-10, files a single issue
   with all findings listed and the top 3 refined as actionable user stories. The issue is
-  labelled `audit` + `bug` + `implement`. Replaces .loops/recipes/guardrails-audit-loop.yaml.
+  labelled `audit` + `bug` + `refine`, so Refine sizes it and splits a multi-defect report
+  into one estimated issue per finding rather than one pull request that has to fix them all. Replaces .loops/recipes/guardrails-audit-loop.yaml.
 
   Router-only worker: triggered exclusively via workflow_call from work-router.yml.
   Contract input: trigger-kind(scheduled|manual).
@@ -107,7 +108,7 @@ jobs:
           labels: |
             audit
             bug
-            implement
+            refine
 
 safe-outputs:
   # A failed run is already a red run. An issue per failure buries the real backlog
@@ -150,6 +151,18 @@ timeout-minutes: 45
    labels. Discard any finding already tracked there. Exact-title duplicates are rejected for
    you; your job is the ones worded differently that mean the same thing.
 
+   Open issues only cover what is still open, so a finding reported weeks ago and closed
+   without a fix, or deliberately rejected, would come back every single run. Before scoring,
+   call `memory_smart_search` for prior audits of this repository and drop any finding that
+   was already reported and consciously not acted on. After you have decided what to file,
+   call `memory_save` once with a compact record of this audit: the date, each finding's file
+   and one-line description, and its disposition (filed, already tracked, or previously
+   rejected). Keep it short; it is read by the next audit, not by a person.
+
+   A finding you have reported before and that is genuinely still broken IS worth filing
+   again. What this prevents is re-filing something the team looked at and chose to live
+   with, which is the noise that makes an audit backlog get ignored.
+
 5. Call `create_issue` **once** with title "Audit: <date>". Do NOT specify labels , the
    conclude job will apply them. The body MUST have two sections:
 
@@ -160,6 +173,12 @@ timeout-minutes: 45
    findings by score into user stories in Mike Cohn's As a / I want to / so that format
    with Given/When/Then acceptance criteria, edge cases, and likely files to change. Mark
    this section clearly with a heading like `## Top 3 , To Implement`.
+
+   The issue you file goes to Refine, not straight to implementation. Refine sizes it and,
+   because a report of several unrelated defects across different files is exactly the shape
+   that does not land as one pull request, splits it into one properly estimated issue per
+   finding. Write each finding so it survives that split: self-contained, naming its own
+   files and its own acceptance criteria, never "as above" or "same as finding 2".
 
 6. If nothing met the bar, call `noop` and stop. Filing nothing is the right outcome when
    the codebase is clean.
@@ -178,7 +197,7 @@ flowchart TD
     auditTriage -.->|nothing found| auditQuiet
     auditPropose("Propose<br/>Single issue: all findings + top 3 refined") -->|✓| auditReport
     auditPropose -.->|✗| auditFail
-    auditReport(("Conclude<br/>audit+bug+implement on single issue"))
+    auditReport(("Conclude<br/>audit+bug+refine on single issue<br/>Refine sizes and splits it"))
     auditQuiet(("Quiet<br/>Nothing actionable, nothing proposed"))
     auditIdle(("Idle<br/>Reports still awaiting action"))
     auditFail(("Fail<br/>Audit or proposal failed"))
