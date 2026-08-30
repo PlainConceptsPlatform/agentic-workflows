@@ -79,10 +79,15 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      # GITHUB_TOKEN on purpose. A label applied by the app raises a labeled event, and the
+      # classifier routes bot-working straight back into this same worker: the second run
+      # queues behind this one and then executes, doing the work twice. Nothing needs to see
+      # this label event, because the worker is already running. authorize-bot-work.yml still
+      # uses the app token, which is the event that starts a human-labelled issue.
       - name: Mark the issue as in progress
         uses: ./.github/actions/add-issue-labels
         with:
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ github.token }}
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
       - name: Clear the human-needed flag
