@@ -9,7 +9,7 @@
 set -euo pipefail
 
 readonly AUDIT_CRON="17 1 * * 1"
-readonly MUTATION_CRON="41 2 * * 2"
+readonly MUTATION_CRON="41 3 * * 4"
 readonly AUDIT_CLOSE_CRON="43 3 * * *"
 readonly CLEANUP_ARTIFACTS_CRON="0 6 * * *"
 readonly RECONCILE_BOT_PR_RUNS_CRON="17 */2 * * *"

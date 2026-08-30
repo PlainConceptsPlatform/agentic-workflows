@@ -98,10 +98,15 @@ on:
 
   # Cron to route mapping lives in .github/actions/classify-route/classify-route.sh.
   schedule:
+    # Slot 0. Every consumer installs this same file, and the agent fleet is one shared,
+    # two-VM scale set, so a second repository left on slot 0 audits and mutates at the same
+    # minute as the first. Pick a free slot per repository: see "Scheduling across
+    # repositories" in the package README, and change AUDIT_CRON and MUTATION_CRON in
+    # classify-route.sh to match, or the run fires and classifies to no route.
     - cron: "17 1 * * 1"
     # Tuesday, a day clear of the Monday audit: both are long agent runs and the fleet is
     # two VMs, so overlapping them makes each wait on the other.
-    - cron: "41 2 * * 2"
+    - cron: "41 3 * * 4"
     - cron: "43 3 * * *"
     - cron: "0 6 * * *"
     - cron: "17 */2 * * *"

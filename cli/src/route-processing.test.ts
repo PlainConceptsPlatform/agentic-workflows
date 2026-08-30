@@ -19,7 +19,7 @@ on:
     - cron: "0 6 * * *"
     - cron: "*/5 * * * *"
     - cron: "0 */2 * * *"
-    - cron: "41 2 * * 2"
+    - cron: "41 3 * * 4"
 
   workflow_dispatch:
     inputs:
@@ -92,7 +92,7 @@ readonly AUDIT_CLOSE_CRON="43 3 * * *"
 readonly CLEANUP_ARTIFACTS_CRON="0 6 * * *"
 readonly RECONCILE_BOT_PR_RUNS_CRON="*/5 * * * *"
 readonly STALE_RECOVERY_CRON="0 */2 * * *"
-readonly MUTATION_CRON="41 2 * * 2"
+readonly MUTATION_CRON="41 3 * * 4"
 
 classify_route() {
   local route="none" error=""
@@ -185,7 +185,7 @@ describe("stripRouteFromRouter", () => {
   it("removes the mutation cron entry", () => {
     const result = stripRouteFromRouter(ROUTER_YAML, "mutation");
 
-    expect(result).not.toContain('cron: "41 2 * * 2"');
+    expect(result).not.toContain('cron: "41 3 * * 4"');
     expect(result).toContain('cron: "17 1 * * 1"');
   });
 
@@ -209,7 +209,7 @@ describe("stripRouteFromRouter", () => {
     const result = stripRouteFromRouter(ROUTER_YAML, "audit");
 
     expect(result).not.toContain('cron: "17 1 * * 1"');
-    expect(result).toContain('cron: "41 2 * * 2"');
+    expect(result).toContain('cron: "41 3 * * 4"');
   });
 
   it("removes the call-audit job block", () => {
@@ -335,7 +335,7 @@ describe("processRoutes", () => {
 
     const router = result.get(".github/workflows/work-router.yml")!;
     expect(router).not.toContain("call-mutation");
-    expect(router).not.toContain('cron: "41 2 * * 2"');
+    expect(router).not.toContain('cron: "41 3 * * 4"');
     expect(router).not.toMatch(/^\s+- mutation$/m);
 
     const classifier = result.get(".github/actions/classify-route/classify-route.sh")!;
