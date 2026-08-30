@@ -207,6 +207,9 @@ jobs:
             local body points
             body=$(gh issue view "$issue" --repo "$REPO" --json body --jq '.body // ""')
             points=$(printf '%s' "$body" | grep -oE '<!-- estimate: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
+            # The agent writes the readable line every time and the HTML marker only sometimes,
+            # so read the line too rather than leaving the issue with no estimate label at all.
+            [ -n "$points" ] || points=$(printf '%s' "$body" | grep -oiE '\*\*estimate:\*\*[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
             if [ -z "$points" ]; then
               echo "::warning::#$issue carries no estimate marker; no points label applied."
               return 0
@@ -227,13 +230,21 @@ jobs:
 
           label_one "$PARENT"
 
+          # safe_outputs links every child as a sub-issue of the parent, and the tool writes that
+          # link rather than the agent, so it is there even when the body marker the agent was
+          # asked for is missing, which is the usual case. The marker search stays as a fallback.
+          list_children() {
+            local found
+            found=$(gh api "repos/$REPO/issues/$PARENT/sub_issues" --jq '.[].number' 2>/dev/null || true)
+            if [ -z "$found" ]; then
+              found=$(gh issue list --repo "$REPO" --state open --limit 50 \
+                --search "\"<!-- split-parent: ${PARENT} -->\" in:body" --json number --jq '.[].number' || true)
+            fi
+            printf '%s\n' "$found"
+          }
+
           if [ "$OUTCOME" = "split" ]; then
-            parent_body=$(gh issue view "$PARENT" --repo "$REPO" --json body --jq '.body // ""')
-            # The children are the issues that name this parent, which is more reliable than
-            # parsing the parent's own checklist: the marker is written by the agent into each
-            # child, and a child that failed to create simply never appears.
-            for child in $(gh issue list --repo "$REPO" --state open --limit 50 \
-              --search "\"<!-- split-parent: ${PARENT} -->\" in:body" --json number --jq '.[].number'); do
+            for child in $(list_children); do
               [ "$child" = "$PARENT" ] && continue
               label_one "$child"
             done
@@ -256,8 +267,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          for child in $(gh issue list --repo "$REPO" --state open --limit 50 \
-            --search "\"<!-- split-parent: ${PARENT} -->\" in:body" --json number --jq '.[].number'); do
+          children=$(gh api "repos/$REPO/issues/$PARENT/sub_issues" --jq '.[].number' 2>/dev/null || true)
+          if [ -z "$children" ]; then
+            children=$(gh issue list --repo "$REPO" --state open --limit 50 \
+              --search "\"<!-- split-parent: ${PARENT} -->\" in:body" --json number --jq '.[].number' || true)
+          fi
+          for child in $children; do
             [ "$child" = "$PARENT" ] && continue
             # A child handed over earlier carries the refined label. Handing it again would start
             # a second implement run on work already in flight.
