@@ -110,15 +110,19 @@ steps:
       dotnet build "$TARGET" -c Release > "$OUT/build.log" 2>&1 \
         || fail "The target project does not build; see build.log. Mutation testing skipped."
 
+      # Run from the test project's own directory. Invoked from the repository root with
+      # --test-project, Stryker resolves the project graph through buildalyzer and dies with
+      # "System.FormatException: Commandline could not be parsed" before creating a mutant.
+      # From inside the test project it infers the test project from the working directory and
+      # only needs the name of the project under test.
+      #
       # concurrency 2 matches the runner: these VMs have 2 vCPUs, and oversubscribing makes
       # every mutant time out rather than run faster.
-      /tmp/stryker/dotnet-stryker \
+      ( cd "$(dirname "$TESTS")" && /tmp/stryker/dotnet-stryker \
         --project "$(basename "$TARGET")" \
-        --test-project "$TESTS" \
         --reporter json --reporter progress \
         --output "$OUT" \
-        --concurrency 2 \
-        > "$OUT/stryker-stdout.log" 2>&1 || true
+        --concurrency 2 ) > "$OUT/stryker-stdout.log" 2>&1 || true
 
       report=$(find "$OUT" -name 'mutation-report.json' | head -1 || true)
       if [ -z "$report" ]; then
@@ -154,19 +158,16 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - name: Apply agent output
-        id: agent-output
-        uses: ./.github/actions/apply-agent-output
-        with:
-          artifact-name: ${{ needs.activation.outputs.artifact_prefix }}agent
-          token: ${{ steps.app-token.outputs.token }}
-          create-issues: 'true'
+      # No apply-agent-output here. The safe_outputs job already created the issue and
+      # exposes its number; calling the action with create-issues would file a second copy
+      # of the same report. It was only needed while staged: true suppressed the native
+      # write, and staged is gone.
       - name: Apply mutation labels to created issues
-        if: steps.agent-output.outputs.first-issue-number != ''
+        if: needs.safe_outputs.outputs.created_issue_number != ''
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ steps.agent-output.outputs.first-issue-number }}
+          issue-number: ${{ needs.safe_outputs.outputs.created_issue_number }}
           labels: |
             mutation
             refine

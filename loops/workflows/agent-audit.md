@@ -92,19 +92,16 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - name: Apply agent output
-        id: agent-output
-        uses: ./.github/actions/apply-agent-output
-        with:
-          artifact-name: ${{ needs.activation.outputs.artifact_prefix }}agent
-          token: ${{ steps.app-token.outputs.token }}
-          create-issues: 'true'
+      # No apply-agent-output here. The safe_outputs job already created the issue and
+      # exposes its number; calling the action with create-issues would file a second copy
+      # of the same report. It was only needed while staged: true suppressed the native
+      # write, and staged is gone.
       - name: Apply audit labels to created issues
-        if: steps.agent-output.outputs.first-issue-number != ''
+        if: needs.safe_outputs.outputs.created_issue_number != ''
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ steps.agent-output.outputs.first-issue-number }}
+          issue-number: ${{ needs.safe_outputs.outputs.created_issue_number }}
           labels: |
             audit
             bug
