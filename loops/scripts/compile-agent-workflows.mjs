@@ -126,6 +126,17 @@ for (const file of readdirSync(workflowDirectory)) {
     // reporter, but gh-aw hardcodes a second one (report_failed_jobs) that files an
     // "[aw] Failed jobs" issue per red run. Same philosophy, same off switch.
     .replaceAll('GH_AW_REPORT_FAILED_JOBS: "true"', 'GH_AW_REPORT_FAILED_JOBS: "false"')
+    // gh-aw sees a custom step calling dotnet and injects its own setup-dotnet, which carries
+    // no DOTNET_INSTALL_DIR and so tries to write /usr/share/dotnet. The runner user has no
+    // sudo, so the job dies with "Permission denied" before the agent starts. The shared
+    // baseline step already redirects to the tool cache; this gives every other one the same
+    // env, including ones a future gh-aw release injects.
+    .replace(
+      /^( +)- name: Setup \.NET\n\1  uses: actions\/setup-dotnet@[^\n]*\n\1  with:\n((?:\1    [^\n]*\n)+)(?!\1  env:)/gm,
+      (_m, indent, withBody) =>
+        indent + '- name: Setup .NET\n' + indent + '  uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0\n' +
+        indent + '  with:\n' + withBody +
+        indent + '  env:\n' + indent + '    DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet\n')
     .replace(/opencode-ai@[0-9][0-9.]*/g, 'opencode-ai@' + OPENCODE_VERSION)
     // gh-aw installs with --ignore-scripts, which blocks opencode's own postinstall. That
     // script downloads the platform binary, so 1.18 fails at first use with "opencode-ai's
