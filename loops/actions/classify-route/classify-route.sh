@@ -204,7 +204,7 @@ classify_route() {
           route="${OPERATION}"
           trigger_kind="${INPUT_TRIGGER_KIND:-manual}"
           ;;
-          audit-close | cleanup-artifacts | reconcile-bot-pr-runs | validate)
+        audit-close | cleanup-artifacts | reconcile-bot-pr-runs | validate)
           route="${OPERATION}"
           ;;
         *)
