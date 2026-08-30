@@ -233,6 +233,40 @@ jobs:
               label_one "$child"
             done
           fi
+      # safe_outputs writes the children with GITHUB_TOKEN, and a label applied by that token
+      # raises no labeled event, so the router never sees a child and the split stalls with the
+      # work sitting in issues nobody picked up. Re-applying the label as the app raises the
+      # event the classifier routes on. It has to be removed first: adding a label an issue
+      # already carries is a no-op and raises nothing.
+      - name: Hand the split children to implement
+        if: needs.validate_output.outputs.outcome == 'split'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PARENT: ${{ inputs.issue-number }}
+          REFINE_LABEL: ${{ env.REFINE_LABEL }}
+          REFINED_LABEL: ${{ env.REFINED_LABEL }}
+          IMPLEMENT_LABEL: ${{ env.IMPLEMENT_LABEL }}
+        run: |
+          set -euo pipefail
+
+          for child in $(gh issue list --repo "$REPO" --state open --limit 50 \
+            --search "\"<!-- split-parent: ${PARENT} -->\" in:body" --json number --jq '.[].number'); do
+            [ "$child" = "$PARENT" ] && continue
+            # A child handed over earlier carries the refined label. Handing it again would start
+            # a second implement run on work already in flight.
+            if gh issue view "$child" --repo "$REPO" --json labels --jq '.labels[].name' \
+              | grep -qx "$REFINED_LABEL"; then
+              echo "#$child was already handed over; leaving it alone"
+              continue
+            fi
+            gh issue edit "$child" --repo "$REPO" \
+              --remove-label "$REFINE_LABEL" --remove-label "$IMPLEMENT_LABEL" >/dev/null 2>&1 || true
+            gh issue edit "$child" --repo "$REPO" --add-label "$REFINED_LABEL" >/dev/null
+            gh issue edit "$child" --repo "$REPO" --add-label "$IMPLEMENT_LABEL" >/dev/null
+            echo "#$child handed to implement"
+          done
       - name: Flag questions for review
         if: needs.validate_output.outputs.outcome == 'questions'
         uses: ./.github/actions/add-issue-labels

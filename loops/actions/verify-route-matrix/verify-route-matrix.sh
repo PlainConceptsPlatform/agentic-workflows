@@ -115,6 +115,14 @@ assert_route "the bot's own comment never re-enters triage" none \
   EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=Bot \
   'ISSUE_LABELS=["triage"]' EVENT_ISSUE_NUMBER=42
 
+echo "── Closed issues ─────────────────────────────────────────────────────────"
+assert_route "a closing comment on a refine issue does not re-refine" none   EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User   ISSUE_STATE=closed 'ISSUE_LABELS=["refine"]' EVENT_ISSUE_NUMBER=42
+assert_route "a comment on a closed issue never re-triages" none   EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User   ISSUE_STATE=closed 'ISSUE_LABELS=["triage"]' EVENT_ISSUE_NUMBER=42
+assert_route "a work label added to a closed issue routes nowhere" none   EVENT=issues ACTION=labeled LABEL=bot-working ISSUE_STATE=closed   'ISSUE_LABELS=["implement"]' EVENT_ISSUE_NUMBER=42
+assert_route "a closed issue reopened as opened still routes nowhere while closed" none   EVENT=issues ACTION=opened ISSUE_STATE=closed 'ISSUE_LABELS=[]' EVENT_ISSUE_NUMBER=42
+assert_route "a comment on a closed pull request still routes to apply-review" apply-review   EVENT=issue_comment COMMENT_ON_PR=true ISSUE_STATE=closed EVENT_ISSUE_NUMBER=7
+assert_route "an open refine issue is unaffected by the closed guard" refine   EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User   ISSUE_STATE=open 'ISSUE_LABELS=["refine"]' EVENT_ISSUE_NUMBER=42
+
 echo "── Review events ─────────────────────────────────────────────────────────"
 assert_route "a review comment routes to apply-review" apply-review \
   EVENT=pull_request_review_comment EVENT_PR_NUMBER=7

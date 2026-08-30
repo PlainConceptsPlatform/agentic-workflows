@@ -44,6 +44,7 @@ runs:
         ACTION: ${{ github.event.action }}
         LABEL: ${{ github.event.label.name }}
         ISSUE_LABELS: ${{ toJSON(github.event.issue.labels.*.name) }}
+        ISSUE_STATE: ${{ github.event.issue.state }}
         EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
         EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
         COMMENT_ON_PR: ${{ github.event.issue.pull_request != '' }}

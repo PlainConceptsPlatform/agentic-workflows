@@ -29,7 +29,10 @@ classify_route() {
 
   case "${EVENT:-}" in
     issues)
-      if [ "${ACTION:-}" = "opened" ]; then
+      # A closed issue is finished work, but label edits on one still arrive as events.
+      if [ "${ISSUE_STATE:-}" = "closed" ]; then
+        error="issue is closed"
+      elif [ "${ACTION:-}" = "opened" ]; then
         # Issue opened with a work label → skip triage.
         # The label event will trigger authorize-bot-work → bot-working → the
         # correct worker. Triage would only interfere.
@@ -100,6 +103,10 @@ classify_route() {
       if [ "${COMMENT_ON_PR:-false}" = "true" ]; then
         route="apply-review"
         pr_number="${EVENT_ISSUE_NUMBER:-}"
+      elif [ "${ISSUE_STATE:-}" = "closed" ]; then
+        # A closing comment on a refine-labelled issue used to start a full re-refine, which
+        # held a runner for 35 minutes and filed split children under an already-shut parent.
+        error="issue is closed"
       elif [ "${COMMENT_SENDER_TYPE:-}" = "Bot" ]; then
         error="comment authored by a bot"
       elif has_label triage; then
