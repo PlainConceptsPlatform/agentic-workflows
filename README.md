@@ -8,16 +8,49 @@ Source repository for Platform GitHub agentic workflows and the `@plainconceptsp
 - `cli/`: TypeScript installer and updater.
 - `docs/`: ownership and consumer guidance.
 - `skills/`: workflow-author and workflow-consumer skills.
-- `vm/`: how to build the self-hosted runner host the agent workers run on.
+- `runners/`: the ephemeral VM Scale Set fleet the agent workers run on, and the app that scales it.
 
 Consumer repositories generate and commit their own `*.lock.yml` files. This repository does not store generated workflow locks.
 
 ## Runner host
 
-The agent workers target `runs-on: [self-hosted, linux, agents]`. [`vm/`](vm/) builds that host,
+The agent workers target `runs-on: agents-arc`. [`runners/`](runners/) builds that fleet,
 and [`docs/self-hosted-runners.md`](docs/self-hosted-runners.md) explains what the compiled lock
 files do differently from what gh-aw generates, and why. Read the second one before changing
 `loops/scripts/compile-agent-workflows.mjs`.
+
+## The workflows
+
+Every worker is a `workflow_call` reusable workflow. Nothing triggers itself: `work-router.yml`
+owns all the triggers, classifies the event into exactly one route, and calls one worker. That
+is why a worker can be added or removed without touching the others, and why the route matrix
+in `verify-route-matrix.sh` is the thing to run after changing any of them.
+
+| Route | Worker | Starts when | Produces |
+|---|---|---|---|
+| `triage` | `agent-triage.md` | an outside collaborator opens an issue | a comment, and the `refine` label when the issue passes |
+| `refine` | `agent-refine.md` | the `refine` label is added | a refined story with a Fibonacci estimate, or questions for the author, or a split into several right-sized issues |
+| `implement` | `agent-implement.md` | the `implement` label is added | one branch, one pull request, one issue closed |
+| `merge-gate` | `agent-merge-gate.md` | CI reports on a bot pull request | a squash merge, a fix pushed to the same branch, or a hand-off to a human |
+| `apply-review` | `agent-apply-review.md` | someone reviews or comments on a bot pull request | the requested changes pushed to that pull request |
+| `audit` | `agent-audit.md` | Mondays, or on demand | one issue of findings, labelled `refine` so it gets sized and split |
+| `mutation` | `agent-mutation.md` | Tuesdays, or on demand | one issue naming tests that do not actually pin behaviour |
+
+Plus the plumbing, which has no agent in it: `work-router.yml` (the router itself),
+`authorize-bot-work.yml` (a human's label is checked, then the bot re-labels so the workers see
+a trusted actor), and the `classify-route` / `verify-route-matrix` composite actions.
+
+### How the routes chain
+
+The normal life of a piece of work is `refine` → `implement` → CI → `merge-gate` → merged, with
+no human in the loop unless a worker asks for one. Refine decides the size: an estimate of 8 or
+more is split into children of 5 or less, and each child walks the same path on its own. Audit
+and mutation are the two that create work rather than consume it, and both file into `refine`
+rather than straight to `implement`, so a report of several unrelated findings becomes one
+properly sized issue per finding instead of one pull request that has to fix them all.
+
+Two labels are the controls a person has: `review` parks anything for a human, and `future`
+holds a refined issue back from implementation until it is removed.
 
 ## Consumer prerequisite
 
@@ -42,13 +75,14 @@ npx @plainconceptsplatform/workflows@latest init
 npx @plainconceptsplatform/workflows@latest add
 npx @plainconceptsplatform/workflows@latest add refine implement
 npx @plainconceptsplatform/workflows@latest add triage
+npx @plainconceptsplatform/workflows@latest add audit mutation
 npx @plainconceptsplatform/workflows@latest add --template agentics-checks
 npx @plainconceptsplatform/workflows@latest add --template agentics-maintenance
 npx @plainconceptsplatform/workflows@latest add --template app-ci-dotnet-next
 npx @plainconceptsplatform/workflows@latest add --template app-ci-node-monorepo
 npx @plainconceptsplatform/workflows@latest add --template bug-report
 npx @plainconceptsplatform/workflows@latest add --template feature-request
-npx @plainconceptsplatform/workflows@latest remove propose
+npx @plainconceptsplatform/workflows@latest remove triage
 npx @plainconceptsplatform/workflows@latest update
 ```
 
@@ -86,6 +120,7 @@ Install the triage route alongside other routes:
 
 ```bash
 npx @plainconceptsplatform/workflows@latest add triage
+npx @plainconceptsplatform/workflows@latest add audit mutation
 ```
 
 ## Optional agentic maintenance templates

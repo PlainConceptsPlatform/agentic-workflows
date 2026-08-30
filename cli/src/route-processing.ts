@@ -2,6 +2,7 @@ import { routeNames, workflowRoutes, type RouteName } from "./workflow-catalog.j
 
 const routeCrons: Partial<Record<RouteName, string>> = {
   audit: "17 1 * * 1",
+  mutation: "41 2 * * 2",
 };
 
 export function stripRouteFromRouter(yaml: string, route: RouteName): string {

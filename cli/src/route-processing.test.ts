@@ -19,7 +19,7 @@ on:
     - cron: "0 6 * * *"
     - cron: "*/5 * * * *"
     - cron: "0 */2 * * *"
-    - cron: "29 7 * * *"
+    - cron: "41 2 * * 2"
 
   workflow_dispatch:
     inputs:
@@ -30,12 +30,12 @@ on:
         options:
           - refine
           - implement
-          - direct
+          - mutation
           - triage
           - apply-review
           - merge-gate
           - audit
-          - propose
+          - mutation
           - audit-close
           - cleanup-artifacts
           - reconcile-bot-pr-runs
@@ -71,10 +71,10 @@ jobs:
     secrets:
       OPENAI_API_KEY: \${{ secrets.OPENAI_API_KEY }}
 
-  call-propose:
+  call-mutation:
     needs: classify
-    if: needs.classify.outputs.route == 'propose'
-    uses: ./.github/workflows/agent-propose.lock.yml
+    if: needs.classify.outputs.route == 'mutation'
+    uses: ./.github/workflows/agent-mutation.lock.yml
     secrets:
       OPENAI_API_KEY: \${{ secrets.OPENAI_API_KEY }}
 
@@ -92,7 +92,7 @@ readonly AUDIT_CLOSE_CRON="43 3 * * *"
 readonly CLEANUP_ARTIFACTS_CRON="0 6 * * *"
 readonly RECONCILE_BOT_PR_RUNS_CRON="*/5 * * * *"
 readonly STALE_RECOVERY_CRON="0 */2 * * *"
-readonly PROPOSE_CRON="29 7 * * *"
+readonly MUTATION_CRON="41 2 * * 2"
 
 classify_route() {
   local route="none" error=""
@@ -106,7 +106,7 @@ classify_route() {
         "\$CLEANUP_ARTIFACTS_CRON") route="cleanup-artifacts" ;;
         "\$RECONCILE_BOT_PR_RUNS_CRON") route="reconcile-bot-pr-runs" ;;
         "\$STALE_RECOVERY_CRON") route="stale-recovery" ;;
-        "\$PROPOSE_CRON") route="propose" ;;
+        "\$MUTATION_CRON") route="mutation" ;;
         *) error="no route for cron '\${SCHEDULE:-}'" ;;
       esac
       ;;
@@ -114,7 +114,7 @@ classify_route() {
     workflow_dispatch)
       trigger_kind="manual"
       case "\${OPERATION:-}" in
-        refine | implement | direct)
+        refine | implement)
           route="\${OPERATION}"
           ;;
         apply-review)
@@ -123,7 +123,7 @@ classify_route() {
         merge-gate)
           route="merge-gate"
           ;;
-        audit | propose)
+        audit | mutation)
           route="\${OPERATION}"
           trigger_kind="\${INPUT_TRIGGER_KIND:-manual}"
           ;;
@@ -152,7 +152,7 @@ const MATRIX_SH = `#!/usr/bin/env bash
 set -euo pipefail
 
 echo "── Router wiring ─────────────────────────────────────────────────────────"
-for route in refine implement direct triage apply-review merge-gate audit propose bot-approve \\
+for route in refine implement triage apply-review merge-gate audit mutation bot-approve \\
   audit-close cleanup-artifacts reconcile-bot-pr-runs stale-recovery validate; do
   if grep -q "route == '\${route}'" "\$ROUTER_YML"; then
     PASS=\$((PASS + 1))
@@ -182,25 +182,25 @@ exit \$((FAIL > 0))
 `;
 
 describe("stripRouteFromRouter", () => {
-  it("removes the propose cron entry", () => {
-    const result = stripRouteFromRouter(ROUTER_YAML, "propose");
+  it("removes the mutation cron entry", () => {
+    const result = stripRouteFromRouter(ROUTER_YAML, "mutation");
 
-    expect(result).not.toContain('cron: "29 7 * * *"');
+    expect(result).not.toContain('cron: "41 2 * * 2"');
     expect(result).toContain('cron: "17 1 * * 1"');
   });
 
-  it("removes the call-propose job block", () => {
-    const result = stripRouteFromRouter(ROUTER_YAML, "propose");
+  it("removes the call-mutation job block", () => {
+    const result = stripRouteFromRouter(ROUTER_YAML, "mutation");
 
-    expect(result).not.toContain("call-propose");
+    expect(result).not.toContain("call-mutation");
     expect(result).toContain("call-refine");
     expect(result).toContain("call-audit");
   });
 
-  it("removes propose from the dispatch options", () => {
-    const result = stripRouteFromRouter(ROUTER_YAML, "propose");
+  it("removes mutation from the dispatch options", () => {
+    const result = stripRouteFromRouter(ROUTER_YAML, "mutation");
 
-    expect(result).not.toMatch(/^\s+- propose$/m);
+    expect(result).not.toMatch(/^\s+- mutation$/m);
     expect(result).toMatch(/^\s+- refine$/m);
     expect(result).toMatch(/^\s+- audit$/m);
   });
@@ -209,7 +209,7 @@ describe("stripRouteFromRouter", () => {
     const result = stripRouteFromRouter(ROUTER_YAML, "audit");
 
     expect(result).not.toContain('cron: "17 1 * * 1"');
-    expect(result).toContain('cron: "29 7 * * *"');
+    expect(result).toContain('cron: "41 2 * * 2"');
   });
 
   it("removes the call-audit job block", () => {
@@ -234,17 +234,17 @@ describe("stripRouteFromRouter", () => {
 });
 
 describe("stripRouteFromClassifier", () => {
-  it("removes the PROPOSE_CRON constant", () => {
-    const result = stripRouteFromClassifier(CLASSIFIER_SH, "propose");
+  it("removes the MUTATION_CRON constant", () => {
+    const result = stripRouteFromClassifier(CLASSIFIER_SH, "mutation");
 
-    expect(result).not.toContain('readonly PROPOSE_CRON');
+    expect(result).not.toContain('readonly MUTATION_CRON');
     expect(result).toContain('readonly AUDIT_CRON');
   });
 
-  it("removes the propose schedule case", () => {
-    const result = stripRouteFromClassifier(CLASSIFIER_SH, "propose");
+  it("removes the mutation schedule case", () => {
+    const result = stripRouteFromClassifier(CLASSIFIER_SH, "mutation");
 
-    expect(result).not.toContain('"$PROPOSE_CRON") route="propose"');
+    expect(result).not.toContain('"$MUTATION_CRON") route="mutation"');
     expect(result).toContain('"$AUDIT_CRON") route="audit"');
   });
 
@@ -252,37 +252,37 @@ describe("stripRouteFromClassifier", () => {
     const result = stripRouteFromClassifier(CLASSIFIER_SH, "audit");
 
     expect(result).not.toContain('readonly AUDIT_CRON');
-    expect(result).toContain('readonly PROPOSE_CRON');
+    expect(result).toContain('readonly MUTATION_CRON');
   });
 
   it("removes the audit schedule case", () => {
     const result = stripRouteFromClassifier(CLASSIFIER_SH, "audit");
 
     expect(result).not.toContain('"$AUDIT_CRON") route="audit"');
-    expect(result).toContain('"$PROPOSE_CRON") route="propose"');
+    expect(result).toContain('"$MUTATION_CRON") route="mutation"');
   });
 
-  it("removes propose from the dispatch case union", () => {
-    const result = stripRouteFromClassifier(CLASSIFIER_SH, "propose");
+  it("removes mutation from the dispatch case union", () => {
+    const result = stripRouteFromClassifier(CLASSIFIER_SH, "mutation");
 
-    expect(result).not.toContain("audit | propose)");
+    expect(result).not.toContain("audit | mutation)");
     expect(result).toContain("audit)");
   });
 });
 
 describe("addRouteExclusion", () => {
   it("adds an exclusion assertion for the route", () => {
-    const result = addRouteExclusion(MATRIX_SH, "propose");
+    const result = addRouteExclusion(MATRIX_SH, "mutation");
 
-    expect(result).toContain("excluded route 'propose'");
-    expect(result).toContain("propose correctly excluded from work-router.yml");
+    expect(result).toContain("excluded route 'mutation'");
+    expect(result).toContain("mutation correctly excluded from work-router.yml");
   });
 
   it("does not add the exclusion twice", () => {
-    const once = addRouteExclusion(MATRIX_SH, "propose");
-    const twice = addRouteExclusion(once, "propose");
+    const once = addRouteExclusion(MATRIX_SH, "mutation");
+    const twice = addRouteExclusion(once, "mutation");
 
-    const matchCount = (twice.match(/excluded route 'propose'/g) ?? []).length;
+    const matchCount = (twice.match(/excluded route 'mutation'/g) ?? []).length;
     expect(matchCount).toBe(1);
   });
 });
@@ -310,9 +310,9 @@ describe("processRoutes", () => {
     const result = processRoutes(files, []);
 
     const router = result.get(".github/workflows/work-router.yml")!;
-    expect(router).not.toContain("call-propose");
+    expect(router).not.toContain("call-mutation");
     expect(router).not.toContain("call-audit");
-    expect(router).not.toContain("- propose");
+    expect(router).not.toContain("- mutation");
     expect(router).not.toContain("- refine");
 
     const classifier = result.get(".github/actions/classify-route/classify-route.sh")!;
@@ -320,30 +320,30 @@ describe("processRoutes", () => {
 
     const matrix = result.get(".github/actions/verify-route-matrix/verify-route-matrix.sh")!;
     expect(matrix).toContain("Route matrix: selected routes valid");
-    expect(matrix).toContain("for route in refine implement direct triage apply-review merge-gate audit propose");
+    expect(matrix).toContain("for route in refine implement triage apply-review merge-gate audit mutation");
   });
 
-  it("strips propose from all three files when unselected", () => {
+  it("strips mutation from all three files when unselected", () => {
     const files = new Map<string, string>([
       [".github/workflows/work-router.yml", ROUTER_YAML],
       [".github/actions/classify-route/classify-route.sh", CLASSIFIER_SH],
       [".github/actions/verify-route-matrix/verify-route-matrix.sh", MATRIX_SH],
     ]);
 
-    const selectedRoutes = routeNames.filter((r) => r !== "propose") as readonly RouteName[];
+    const selectedRoutes = routeNames.filter((r) => r !== "mutation") as readonly RouteName[];
     const result = processRoutes(files, selectedRoutes);
 
     const router = result.get(".github/workflows/work-router.yml")!;
-    expect(router).not.toContain("call-propose");
-    expect(router).not.toContain('cron: "29 7 * * *"');
-    expect(router).not.toMatch(/^\s+- propose$/m);
+    expect(router).not.toContain("call-mutation");
+    expect(router).not.toContain('cron: "41 2 * * 2"');
+    expect(router).not.toMatch(/^\s+- mutation$/m);
 
     const classifier = result.get(".github/actions/classify-route/classify-route.sh")!;
     expect(classifier).toBe(CLASSIFIER_SH);
 
     const matrix = result.get(".github/actions/verify-route-matrix/verify-route-matrix.sh")!;
-    expect(matrix).toContain("for route in refine implement direct triage apply-review merge-gate audit");
-    expect(matrix).toContain("for route in propose");
+    expect(matrix).toContain("for route in refine implement triage apply-review merge-gate audit");
+    expect(matrix).toContain("for route in mutation");
   });
 
   it("strips audit from all three files when unselected", () => {
@@ -378,7 +378,7 @@ describe("processRoutes", () => {
     expect(router).toContain("call-refine");
     expect(router).toContain("call-implement");
     expect(router).not.toContain("call-audit");
-    expect(router).not.toContain("call-propose");
+    expect(router).not.toContain("call-mutation");
   });
 });
 
@@ -390,7 +390,7 @@ describe("excludedWorkerFiles", () => {
     expect(excluded.has("agent-refine.md")).toBe(false);
     expect(excluded.has("agent-implement.md")).toBe(false);
     expect(excluded.has("agent-audit.md")).toBe(true);
-    expect(excluded.has("agent-propose.md")).toBe(true);
+    expect(excluded.has("agent-mutation.md")).toBe(true);
   });
 
   it("returns an empty set when all routes are selected", () => {
@@ -402,13 +402,13 @@ describe("excludedWorkerFiles", () => {
   it("returns all worker files when no routes are selected", () => {
     const excluded = excludedWorkerFiles([]);
 
-    expect(excluded.size).toBe(8);
+    expect(excluded.size).toBe(7);
     expect(excluded.has("agent-refine.md")).toBe(true);
     expect(excluded.has("agent-implement.md")).toBe(true);
-    expect(excluded.has("agent-direct.md")).toBe(true);
+    expect(excluded.has("agent-triage.md")).toBe(true);
     expect(excluded.has("agent-apply-review.md")).toBe(true);
     expect(excluded.has("agent-merge-gate.md")).toBe(true);
     expect(excluded.has("agent-audit.md")).toBe(true);
-    expect(excluded.has("agent-propose.md")).toBe(true);
+    expect(excluded.has("agent-mutation.md")).toBe(true);
   });
 });

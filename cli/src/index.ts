@@ -30,7 +30,7 @@ Commands:
   search <query>                              Filter workflows and templates by name or description.
 
 Route names (positional arguments to add):
-  refine, implement, direct, triage, apply-review, merge-gate, audit, propose
+  refine, implement, triage, apply-review, merge-gate, audit, mutation
 
   add                                         Mandatory files only (opencode.ci.json, compile script,
                                               shared imports, actions, router, classifier, route matrix).

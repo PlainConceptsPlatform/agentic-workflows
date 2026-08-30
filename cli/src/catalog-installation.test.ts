@@ -51,7 +51,7 @@ describe("catalog installation", () => {
     expect(result.installed).not.toContain(".github/workflows/agent-refine.md");
     expect(result.installed).not.toContain(".github/workflows/agent-implement.md");
     expect(result.installed).not.toContain(".github/workflows/agent-audit.md");
-    expect(result.installed).not.toContain(".github/workflows/agent-propose.md");
+    expect(result.installed).not.toContain(".github/workflows/agent-mutation.md");
   });
 
   it("installs package-owned loops files including mandatory opencode.ci.json and compile script", async () => {
@@ -505,7 +505,7 @@ describe("route lifecycle", () => {
   it("ignores routes that are not installed", async () => {
     const repositoryPath = await createDirectory({});
 
-    await expect(removeRouteFiles(repositoryPath, ["propose"])).resolves.toEqual([]);
+    await expect(removeRouteFiles(repositoryPath, ["mutation"])).resolves.toEqual([]);
   });
 });
 

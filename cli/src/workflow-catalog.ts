@@ -1,12 +1,11 @@
 export const routeNames = [
   "refine",
   "implement",
-  "direct",
   "triage",
   "apply-review",
   "merge-gate",
   "audit",
-  "propose",
+  "mutation",
 ] as const;
 
 export type RouteName = (typeof routeNames)[number];
@@ -21,12 +20,11 @@ export interface WorkflowRoute {
 export const workflowRoutes: readonly WorkflowRoute[] = [
   { name: "refine", worker: "agent-refine.md", description: "Refines an issue into a user story, on a first pass or after the author has answered the bot's questions.", defaultEnabled: true },
   { name: "implement", worker: "agent-implement.md", description: "Implements an issue and opens a pull request. Stops there: the merge decision belongs to the merge gate.", defaultEnabled: true },
-  { name: "direct", worker: "agent-direct.md", description: "Executes a free-form instruction from an issue body and posts the results back on the same issue.", defaultEnabled: true },
   { name: "triage", worker: "agent-triage.md", description: "Triages issues opened by outside collaborators: runs 10 checks (template, security, size, danger, duplicates, clarity, reproducibility, acceptance, cross-cutting). Loops up to 3 rounds. Passes to refine or blocks.", defaultEnabled: true },
   { name: "apply-review", worker: "agent-apply-review.md", description: "Applies reviewer feedback to an open pull request the bot authored, then pushes the fixes to the same branch.", defaultEnabled: true },
   { name: "merge-gate", worker: "agent-merge-gate.md", description: "Decides what happens to a bot-authored pull request once CI has reported: merge, hand to a human, or fix CI.", defaultEnabled: true },
-  { name: "audit", worker: "agent-audit.md", description: "Read-only repository audit. Finds 5-7 problems, scores each 1-10, files a single issue with the top 3 refined as actionable user stories.", defaultEnabled: true },
-  { name: "propose", worker: "agent-propose.md", description: "Proposes the next feature. Reads the manifesto, recent history, and comparable tools, scores candidates, and files the winner as a single issue.", defaultEnabled: false },
+  { name: "audit", worker: "agent-audit.md", description: "Read-only repository audit. Finds 5-7 problems, scores each 1-10, and files a single issue that Refine then sizes and splits.", defaultEnabled: true },
+  { name: "mutation", worker: "agent-mutation.md", description: "Weekly mutation test. Stryker rewrites small parts of the target project and reruns the tests; a surviving mutant is a line whose behaviour no test pins. Files one issue naming the gaps.", defaultEnabled: false },
 ];
 
 export const packageOwnedTargets = [
