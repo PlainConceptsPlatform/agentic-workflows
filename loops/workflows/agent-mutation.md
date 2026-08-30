@@ -9,7 +9,9 @@ env:
   MUTATION_TEST_PROJECT: "apps/api/tests/Numa.UnitTests/Numa.UnitTests.csproj"
   MUTATION_REPORT_DIR: /tmp/gh-aw/agent/mutation
   MUTATION_THRESHOLD_HIGH: "80"
-  STRYKER_VERSION: "4.6.0"
+  # Must be new enough for the repo's target framework. Stryker resolves projects through
+  # buildalyzer, and a version older than the SDK dies with "Commandline could not be parsed".
+  STRYKER_VERSION: "4.16.0"
   REPO_RULES: "Read-only mutation review. Report only surviving mutants that prove a real gap in test assertions. Never weaken a test, never delete a case, never change source to kill a mutant. Do not modify files, commit, push, or run write operations."
   MUTATION_MARKER: "<!-- agent-mutation -->"
   GIT_AUTHOR_NAME: "github-actions[bot]"

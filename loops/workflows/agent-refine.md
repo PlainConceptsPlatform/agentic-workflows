@@ -142,17 +142,9 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - name: Apply agent output
-        uses: ./.github/actions/apply-agent-output
-        with:
-          artifact-name: ${{ needs.activation.outputs.artifact_prefix }}agent
-          token: ${{ steps.app-token.outputs.token }}
-          update-issues: 'true'
-          # Split children are create_issue items; without this they are silently dropped and
-          # the parent becomes a tracker pointing at issues that do not exist.
-          create-issues: 'true'
-          apply-labels: 'false'
-          fallback-issue-number: ${{ inputs.issue-number }}
+      # No apply-agent-output here. safe_outputs already creates the split children, links
+      # them as sub-issues of the parent and rewrites the parent body; running the action too
+      # filed a second unlinked, unlabelled copy of every child.
       - name: Apply complete refinement labels
         if: needs.validate_output.outputs.outcome == 'complete'
         uses: ./.github/actions/add-issue-labels
