@@ -52,6 +52,18 @@ properly sized issue per finding instead of one pull request that has to fix the
 Two labels are the controls a person has: `review` parks anything for a human, and `future`
 holds a refined issue back from implementation until it is removed.
 
+### Configuring mutation
+
+`agent-mutation.md` is the one worker that has to be pointed at the consumer's own code, through
+`MUTATION_TARGET_PROJECT` (what to mutate), `MUTATION_TEST_PROJECT` (the suite to run against each
+mutant), `MUTATION_THRESHOLD_HIGH` and `STRYKER_VERSION`. Keep the target narrow: cost is mutants
+times test time, so a whole solution takes hours and produces findings nobody reads.
+
+`STRYKER_VERSION` has to be new enough for the target's framework. Stryker resolves the project
+graph through buildalyzer, and a version older than the SDK dies with `System.FormatException:
+Commandline could not be parsed` before it creates a single mutant, which reads as a broken
+workflow rather than a version mismatch. 4.6.0 cannot analyse a `net10.0` project; 4.16.0 can.
+
 ## Scheduling across repositories
 
 Two workers run on a timer and both are long: `audit` takes about 45 minutes and `mutation` can
