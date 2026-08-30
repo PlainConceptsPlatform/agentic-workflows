@@ -1,1 +1,3 @@
 .github/workflows/*.lock.yml linguist-generated=true
+# Shell scripts run on Linux runners: a CRLF here makes bash fail on the shebang line.
+*.sh text eol=lf
