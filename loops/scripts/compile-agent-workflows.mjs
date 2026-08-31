@@ -154,5 +154,29 @@ for (const file of readdirSync(workflowDirectory)) {
     // would have to be escaped. The default has no spaces, so bare is safe shell.
     .replace(/\/tmp\/opencode-data(?!-\$\{\{)/g, () => '/tmp/opencode-data-${{ runner.name }}');
 
-  if (patched !== content) writeFileSync(path, patched);
+  let rewritten = patched;
+  // A queued implement executes hours after its run was created, but actions/checkout
+  // without a ref checks out github.sha, which GitHub pins at run creation. Five children
+  // queued together at 02:01 all carried the 02:01 base; once the first sibling merged,
+  // every later push became a rebase onto a moved parent, which gh-aw's signed-commit
+  // push cannot do (it dies with "cannot rebase: You have unstaged changes" and files the
+  // pull request as an issue instead of a pull request). Checking out the branch tip at
+  // execution time makes the commit parent current main; the implement-global queue
+  // already keeps sibling merges out of the window while the agent runs.
+  if (file === "agent-implement.lock.yml") {
+    const start = rewritten.indexOf("\n  agent:\n");
+    const rest = start === -1 ? "" : rewritten.slice(start + 1);
+    const next = rest.search(/\n  [a-z_][a-zA-Z_-]*:\n/);
+    if (start !== -1 && next !== -1) {
+      const end = start + 1 + next;
+      const span = rewritten.slice(start, end).replace(
+        /(uses: actions\/checkout@[^\n]*\n(\s+)with:\n(?:\2  [^\n]+\n)*)/,
+        (whole, _block, indent) =>
+          whole.includes("ref:") ? whole : whole + indent + "  ref: ${{ github.event.repository.default_branch }}\n",
+      );
+      rewritten = rewritten.slice(0, start) + span + rewritten.slice(end);
+    }
+  }
+
+  if (rewritten !== content) writeFileSync(path, rewritten);
 }
