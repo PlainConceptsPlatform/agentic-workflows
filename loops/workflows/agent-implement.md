@@ -59,6 +59,16 @@ jobs:
           labels=$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels \
             --jq '[.labels[].name]')
 
+          # A queued run executes long after it was dispatched, and the issue can be closed in
+          # between. Without this check the run claims a closed issue, burns an agent run on it
+          # and opens a pull request nobody asked for.
+          state=$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json state --jq .state)
+          if [ "$state" = "CLOSED" ]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Issue #$ISSUE_NUMBER is closed. Automated implementation skipped."
+            exit 0
+          fi
+
           if jq -e 'index("future")' >/dev/null <<<"$labels"; then
             echo "eligible=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Issue #$ISSUE_NUMBER has the future label. Automated implementation skipped."
