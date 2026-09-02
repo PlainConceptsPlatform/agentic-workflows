@@ -69,17 +69,17 @@ workflow rather than a version mismatch. 4.6.0 cannot analyse a `net10.0` projec
 Two workers run on a timer and both are long: `audit` takes about 45 minutes and `mutation` can
 take up to three hours. Every repository installs the same router from this package, so unless
 the schedule is changed at install time, **every consumer fires them at the same minute**. The
-agent fleet is a single VM Scale Set shared by the whole organisation, capped at two VMs, so
-two repositories auditing together already consume all of it, and two mutations together hold
-it for the rest of the morning while CI and merge gates queue behind them.
+agent fleet is shared by every consumer and deliberately small, so two repositories auditing
+together already consume all of it, and two mutations together hold it for the rest of the
+morning while CI and merge gates queue behind them.
 
 Give each repository its own slot. The scheme below puts one audit and one mutation on each day
 of the week, with the mutation starting after that day's audit has finished:
 
 | Slot | Repository | Audit | Mutation |
 |---|---|---|---|
-| 0 | Numa | `17 1 * * 1` Mon | `41 3 * * 4` Thu |
-| 1 | Odyssey | `17 1 * * 2` Tue | `41 3 * * 5` Fri |
+| 0 | first consumer | `17 1 * * 1` Mon | `41 3 * * 4` Thu |
+| 1 | second consumer | `17 1 * * 2` Tue | `41 3 * * 5` Fri |
 | 2 | *free* | `17 1 * * 3` Wed | `41 3 * * 6` Sat |
 | 3 | *free* | `17 1 * * 4` Thu | `41 3 * * 7` Sun |
 | 4 | *free* | `17 1 * * 5` Fri | `41 3 * * 1` Mon |

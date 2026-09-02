@@ -21,7 +21,7 @@ describe("repository inspection", () => {
       ".github/workflows/other.md": "# Other",
       "package.json": "{}",
       "pnpm-lock.yaml": "lockfileVersion: '9.0'",
-      "apps/api/Numa.slnx": "<Solution />",
+      "apps/api/Contoso.slnx": "<Solution />",
       "openspec/changes/.gitkeep": "",
     });
 
@@ -30,7 +30,7 @@ describe("repository inspection", () => {
       stackHints: {
         packageJson: true,
         pnpmLockfile: true,
-        solutionFiles: [join("apps", "api", "Numa.slnx")],
+        solutionFiles: [join("apps", "api", "Contoso.slnx")],
         openSpec: true,
       },
     });

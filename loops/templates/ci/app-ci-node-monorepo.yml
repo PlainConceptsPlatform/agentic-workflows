@@ -10,9 +10,9 @@ on:
 env:
   NODE_VERSION: "22"
   PNPM_VERSION: "10"
-  WEB_PACKAGE: "@orbion/web"
-  DESKTOP_PACKAGE: "@orbion/desktop"
-  MOBILE_PACKAGE: "@orbion/mobile"
+  WEB_PACKAGE: "@app/web"
+  DESKTOP_PACKAGE: "@app/desktop"
+  MOBILE_PACKAGE: "@app/mobile"
   WEB_EXPORT_PATH: apps/web/out
   PLAYWRIGHT_REPORT_PATH: apps/web/playwright-report
   DESKTOP_MAIN_PATH: apps/desktop/out/main/index.js
@@ -24,7 +24,7 @@ env:
   PLAYWRIGHT_ARTIFACT_NAME: playwright-report
   TRUFFLEHOG_IMAGE: "trufflesecurity/trufflehog:latest"
   SEMGREP_IMAGE: "semgrep/semgrep:1.168.0"
-  SBOM_ARTIFACT_NAME: orbion-sbom.cyclonedx.json
+  SBOM_ARTIFACT_NAME: app-sbom.cyclonedx.json
 
 permissions:
   contents: read

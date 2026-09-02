@@ -16,24 +16,24 @@ env:
   NODE_VERSION: "22"
   PNPM_VERSION: "10"
   API_WORKING_DIRECTORY: apps/api
-  DOTNET_SOLUTION: Numa.slnx
-  UNIT_TEST_PROJECT: tests/Numa.UnitTests/Numa.UnitTests.csproj
-  PARITY_TEST_PROJECT: tests/Numa.ParityTests/Numa.ParityTests.csproj
-  INTEGRATION_TEST_PROJECT: tests/Numa.IntegrationTests/Numa.IntegrationTests.csproj
+  DOTNET_SOLUTION: App.slnx
+  UNIT_TEST_PROJECT: tests/App.UnitTests/App.UnitTests.csproj
+  PARITY_TEST_PROJECT: tests/App.ParityTests/App.ParityTests.csproj
+  INTEGRATION_TEST_PROJECT: tests/App.IntegrationTests/App.IntegrationTests.csproj
   COVERAGE_SETTINGS: coverage.runsettings
   COVERAGE_CHECK_COMMAND: node ../../scripts/check-coverage.mjs TestResults/merged/Cobertura.xml
-  MIGRATION_PROJECT: src/Numa.Infrastructure/Numa.Infrastructure.csproj
-  MIGRATION_STARTUP_PROJECT: src/Numa.Api/Numa.Api.csproj
-  SEED_PROJECT: src/Numa.Seed
-  PRIMARY_DATABASE: numa
+  MIGRATION_PROJECT: src/App.Infrastructure/App.Infrastructure.csproj
+  MIGRATION_STARTUP_PROJECT: src/App.Api/App.Api.csproj
+  SEED_PROJECT: src/App.Seed
+  PRIMARY_DATABASE: app
   DATA_LAYER_DATABASE: numa_dl
   SQL_SA_PASSWORD: "YourStrong!Passw0rd"
-  WEB_PACKAGE: "@numa/web"
+  WEB_PACKAGE: "@app/web"
   NPM_REGISTRY_URL: "//npm.pkg.github.com/"
   TRUFFLEHOG_IMAGE: "trufflesecurity/trufflehog:latest"
   SEMGREP_IMAGE: "semgrep/semgrep:1.168.0"
-  SBOM_ARTIFACT_NAME: numa-sbom.cyclonedx.json
-  MIGRATION_CONTEXT: NumaDbContext
+  SBOM_ARTIFACT_NAME: app-sbom.cyclonedx.json
+  MIGRATION_CONTEXT: AppDbContext
 
 permissions:
   contents: read
@@ -86,7 +86,7 @@ jobs:
           done
       - name: Apply migrations and seed test data
         env:
-          ConnectionStrings__Numa: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.PRIMARY_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
+          ConnectionStrings__App: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.PRIMARY_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
           DataLayer__ConnectionString: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.DATA_LAYER_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
           DATALAYER_SEED: "true"
         run: |
@@ -94,7 +94,7 @@ jobs:
           dotnet run --project "$SEED_PROJECT" --no-build -c Release
       - name: Integration tests with coverage
         env:
-          ConnectionStrings__Numa: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.PRIMARY_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
+          ConnectionStrings__App: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.PRIMARY_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
           DataLayer__ConnectionString: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.DATA_LAYER_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
         run: dotnet test "$INTEGRATION_TEST_PROJECT" --no-build -c Release --collect:"XPlat Code Coverage" --settings "$COVERAGE_SETTINGS" --results-directory TestResults
       - name: Enforce merged coverage floor

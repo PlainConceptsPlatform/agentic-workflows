@@ -145,23 +145,23 @@ pre-agent-steps:
 describe("generateOpencodeCi", () => {
   it("adds NuGet cache and restores detected solution when .slnx is found", () => {
     const result = generateOpencodeCi(OPENCODE_CI_MD, makeInspection({
-      solutionFiles: ["apps/api/Numa.slnx"],
+      solutionFiles: ["apps/api/Contoso.slnx"],
     }));
 
     expect(result).toContain("Cache NuGet packages");
     expect(result).toContain("Restore .NET dependencies");
-    expect(result).toContain("dotnet restore apps/api/Numa.slnx");
+    expect(result).toContain("dotnet restore apps/api/Contoso.slnx");
     expect(result).toContain("\n  - name: Restore .NET dependencies\n");
     expect(result).not.toContain("\n    - name: Restore .NET dependencies\n");
   });
 
   it("uses POSIX separators for .NET restore commands", () => {
     const result = generateOpencodeCi(OPENCODE_CI_MD, makeInspection({
-      solutionFiles: ["apps\\api\\Numa.slnx"],
+      solutionFiles: ["apps\\api\\Contoso.slnx"],
     }));
 
-    expect(result).toContain("dotnet restore apps/api/Numa.slnx");
-    expect(result).not.toContain("dotnet restore apps\\api\\Numa.slnx");
+    expect(result).toContain("dotnet restore apps/api/Contoso.slnx");
+    expect(result).not.toContain("dotnet restore apps\\api\\Contoso.slnx");
   });
 
   it("adds the pinned OpenSpec CLI install step when openspec/ directory exists", () => {

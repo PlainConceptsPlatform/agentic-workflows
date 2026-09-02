@@ -54,8 +54,8 @@ app rides on for free.
 - Scaler app: $0 extra (shares the existing AgentMemory B1 plan, ~$13/mo total).
 - Public IPs: billed only while a VM exists, ≈ $6/mo worst case.
 - **Worst case ≈ $187/mo, under the $200 target. Normal expected: $10–25/mo.**
-- Budget `runner-platform-200` on the resource group emails
-  quique.fernandez@plainconcepts.com at 80% actual, 100% actual, 100% forecast.
+- Budget `runner-platform-200` on the resource group emails the platform owner
+  at 80% actual, 100% actual, 100% forecast.
 
 ## The scaler app (`runners/scaler-app`)
 

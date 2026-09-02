@@ -43,7 +43,7 @@ should the AKS path open up.
 ## CodeGraph
 
 The index (`.codegraph/` in the checkout plus the `~/.codegraph` registry) rides
-`actions/cache`, which is repository-scoped: Numa and Odyssey cannot see each other's graphs.
+`actions/cache`, which is repository-scoped: consumer repositories cannot see each other's graphs.
 Every run restores the newest snapshot via `restore-keys` and saves its own immutable key at
 job end, so concurrent runs never write one database. Centralised AgentMemory is deferred:
 ACI is policy-denied, and the URL of a dead server is worse than no URL, because the MCP shim

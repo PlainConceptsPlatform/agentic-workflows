@@ -5,8 +5,8 @@ env:
   # solution whose calculation logic lives in a Domain project. Keep the scope narrow. Cost is
   # mutants times test time, so a whole solution takes hours and produces findings nobody
   # reads. Point it at the code where a silently wrong line would actually cost money.
-  MUTATION_TARGET_PROJECT: "apps/api/src/Numa.Domain/Numa.Domain.csproj"
-  MUTATION_TEST_PROJECT: "apps/api/tests/Numa.UnitTests/Numa.UnitTests.csproj"
+  MUTATION_TARGET_PROJECT: "src/App.Domain/App.Domain.csproj"
+  MUTATION_TEST_PROJECT: "tests/App.UnitTests/App.UnitTests.csproj"
   MUTATION_REPORT_DIR: /tmp/gh-aw/agent/mutation
   MUTATION_THRESHOLD_HIGH: "80"
   # Must be new enough for the repo's target framework. Stryker resolves projects through

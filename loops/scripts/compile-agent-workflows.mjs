@@ -54,8 +54,8 @@ for (const file of readdirSync(workflowDirectory)) {
     // fixed-name files into /tmp, and a file one user creates cannot be overwritten by the
     // next. Six separate failures came from that. One host lock is the smaller trade: agent
     // jobs run one at a time, every other job still uses all the runners, and every user is
-    // the same again. The chain is serial anyway, so in practice this only queues Numa behind
-    // Odyssey. Held for the whole agent run, which is deliberate. The lock lives outside the
+    // the same again. The chain is serial anyway, so in practice this only queues one consumer behind
+    // the other. Held for the whole agent run, which is deliberate. The lock lives outside the
     // /tmp/gh-aw namespace on purpose: the keying rewrite below would otherwise make the lock
     // file per job, which is silently no lock at all.
     // Agent jobs run in parallel again. Each runner has its own Docker-in-Docker daemon, so

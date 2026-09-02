@@ -100,7 +100,7 @@ pre-agent-steps:
 
   - name: Restore the CodeGraph index
     # Ephemeral ARC runners start empty, so without this every run rebuilds the whole graph.
-    # actions/cache is repository-scoped by design, which keeps Numa and Odyssey isolated, and
+    # actions/cache is repository-scoped by design, which keeps consumers isolated, and
     # each run saves an immutable snapshot under its own key at job end (the action's built-in
     # post step), so two concurrent runs never write the same entry: the newest snapshot simply
     # wins the next restore. The index lives in .codegraph inside the checkout plus a small
