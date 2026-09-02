@@ -26,7 +26,7 @@ function makeEntry(name: string, kind: "route" | "template", installed = false):
 }
 
 function makeEntries(installed: string[] = []): CatalogEntry[] {
-  const routes = ["refine", "implement", "triage", "apply-review", "merge-gate", "audit"];
+  const routes = ["refine", "implement", "triage", "apply-review", "merge-gate", "audit", "mutation"];
   const templates = ["agentics-checks", "agentics-maintenance", "app-ci-dotnet-next", "app-ci-node-monorepo", "opencode.ci.json"];
   return [
     ...routes.map((name) => makeEntry(name, "route", installed.includes(name))),
@@ -34,13 +34,17 @@ function makeEntries(installed: string[] = []): CatalogEntry[] {
   ];
 }
 
+// Counts derive from the fixture, so adding or removing a route above cannot silently
+// desynchronise five assertions again.
+const FIXTURE_COUNT = makeEntries().length;
+
 describe("createSelectionState", () => {
   it("returns all items as visible initially", () => {
     const entries = makeEntries();
     const state = createSelectionState(entries);
 
-    expect(state.allItems).toHaveLength(13);
-    expect(state.visibleItems).toHaveLength(13);
+    expect(state.allItems).toHaveLength(FIXTURE_COUNT);
+    expect(state.visibleItems).toHaveLength(FIXTURE_COUNT);
   });
 
   it("pre-selects installed items", () => {
@@ -107,7 +111,7 @@ describe("filterItems", () => {
   const entries = makeEntries();
 
   it("returns all items when filter is empty", () => {
-    expect(filterItems(entries, "")).toHaveLength(13);
+    expect(filterItems(entries, "")).toHaveLength(FIXTURE_COUNT);
   });
 
   it("filters by name", () => {
@@ -118,7 +122,7 @@ describe("filterItems", () => {
 
   it("filters by description", () => {
     const result = filterItems(entries, "description");
-    expect(result).toHaveLength(13);
+    expect(result).toHaveLength(FIXTURE_COUNT);
   });
 
   it("filters by fuzzy subsequence over name and description", () => {
@@ -173,7 +177,7 @@ describe("clearFilter", () => {
     state = clearFilter(state);
 
     expect(state.filter).toBe("");
-    expect(state.visibleItems).toHaveLength(13);
+    expect(state.visibleItems).toHaveLength(FIXTURE_COUNT);
   });
 });
 
@@ -206,7 +210,7 @@ describe("moveCursorUp / moveCursorDown", () => {
   it("wraps cursor to bottom from top", () => {
     const state = moveCursorUp(createSelectionState(makeEntries()));
 
-    expect(state.cursor).toBe(12);
+    expect(state.cursor).toBe(FIXTURE_COUNT - 1);
   });
 
   it("does not move when list is empty", () => {

@@ -1,10 +1,9 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-
-import { catalogSourcePath } from "./catalog-installation.js";
 
 interface CompositeStep {
   name?: string;
@@ -45,7 +44,10 @@ async function collectActionYmlFiles(actionsDir: string): Promise<string[]> {
 }
 
 async function loadManifests(): Promise<{ file: string; content: string; manifest: ActionManifest }[]> {
-  const actionsDir = join(catalogSourcePath(), "actions");
+  // catalogSourcePath() resolves against the published package layout, where loops/ ships
+  // next to the compiled module. In this repository loops/ lives at the root, two levels
+  // above this test, so resolve it from the source tree instead.
+  const actionsDir = join(fileURLToPath(new URL("../../loops", import.meta.url)), "actions");
   const files = await collectActionYmlFiles(actionsDir);
   return Promise.all(files.map(async (file) => {
     const content = await readFile(file, "utf8");
