@@ -68,6 +68,7 @@ jobs:
       pr: ${{ steps.subject.outputs.pr }}
       issue: ${{ steps.subject.outputs.issue }}
       conclusion: ${{ steps.subject.outputs.conclusion }}
+      run-id: ${{ steps.subject.outputs.run-id }}
       review_blocked: ${{ steps.review.outputs.review_blocked }}
     steps:
       - name: Checkout workflow actions
@@ -436,7 +437,7 @@ steps:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       PR: ${{ needs.subject.outputs.pr }}
-      RUN_ID: ${{ inputs.ci-run-id }}
+      RUN_ID: ${{ needs.subject.outputs.run-id }}
       CONCLUSION: ${{ needs.subject.outputs.conclusion }}
     run: |
       set -euo pipefail
@@ -444,13 +445,16 @@ steps:
       gh pr diff "$PR" --repo "$REPO" > /tmp/gh-aw/agent/diff.patch
       gh pr view "$PR" --repo "$REPO" --json title,body,files,additions,deletions \
         > /tmp/gh-aw/agent/pr.json
-      if [ "$CONCLUSION" = "failure" ]; then
+      if [ "$CONCLUSION" = "failure" ] && [ -n "$RUN_ID" ]; then
         gh run view "$RUN_ID" --repo "$REPO" --log-failed \
           > /tmp/gh-aw/agent/failed-logs.txt 2>/dev/null || \
           echo "logs unavailable" > /tmp/gh-aw/agent/failed-logs.txt
         gh run view "$RUN_ID" --repo "$REPO" --json jobs \
           --jq '[.jobs[] | select(.conclusion == "failure") | {name, conclusion}]' \
           > /tmp/gh-aw/agent/failed-jobs.json
+      elif [ "$CONCLUSION" = "failure" ]; then
+        echo "[]" > /tmp/gh-aw/agent/failed-jobs.json
+        echo "CI run ID unavailable, cannot fetch logs" > /tmp/gh-aw/agent/failed-logs.txt
       fi
 
 safe-outputs:
