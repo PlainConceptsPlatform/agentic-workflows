@@ -50,7 +50,7 @@ key:          codegraph-<repository_id>-<run_id>
 restore-keys: codegraph-<repository_id>-
 ```
 
-- **Isolation**: actions/cache is repository-scoped by design — Numa can never read Odyssey's
+- **Isolation**: actions/cache is repository-scoped by design — one consumer can never read another's
   graph, no configuration needed.
 - **Concurrency**: every run saves its own key; two parallel runs never write one database.
   The newest snapshot wins the next restore, and GitHub's 10 GB per-repo cache evicts old ones.
@@ -58,4 +58,4 @@ restore-keys: codegraph-<repository_id>-
   `Cache restored from key: codegraph-…` and `codegraph init` completes incrementally instead
   of indexing from scratch.
 
-First write happened in Numa run 33125076376 (the run that produced PR #579).
+First write verified in a consumer's run on 2026-08-26.

@@ -17,7 +17,7 @@ declares.
 
 | Secret | Used by | Purpose |
 |---|---|---|
-| `FORGE_API_KEY` | every agent run | the **Forge key** (forge.plainconcepts.com), the only stored LLM credential; per-repo value (Numa and Odyssey differ) |
+| `FORGE_API_KEY` | every agent run | the **Forge key** (forge.plainconcepts.com), the only stored LLM credential; per-repo value (each consumer holds its own) |
 
 **One stored secret, three names.** gh-aw's generated locks read `OPENAI_API_KEY`,
 `CODEX_API_KEY` and `COPILOT_GITHUB_TOKEN`, but all three always held the same Forge
@@ -131,10 +131,10 @@ Issued by **Plain Concepts Forge** (forge.plainconcepts.com): create or rotate a
 per consuming repo there, then:
 
 ```bash
-gh secret set FORGE_API_KEY --repo PlainConceptsPlatform/Numa --body "<forge key>"
+gh secret set FORGE_API_KEY --repo PlainConceptsPlatform/<consumer> --body "<forge key>"
 ```
 
-Numa and Odyssey deliberately hold **different** key values. The router aliases this
+Consumers deliberately hold **different** key values. The router aliases this
 one secret into every name the locks expect (see above); no other LLM secret exists.
 
 ### Deleting the retired ones
