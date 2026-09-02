@@ -199,19 +199,16 @@ jobs:
       has_conflicts: ${{ steps.conflicts.outputs.has_conflicts || 'false' }}
     steps:
       - name: Checkout workflow actions
-        if: needs.subject.outputs.conclusion == 'failure'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Create bot token
-        if: needs.subject.outputs.conclusion == 'failure'
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
       - name: Check for merge conflicts
-        if: needs.subject.outputs.conclusion == 'failure'
         id: conflicts
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -514,7 +511,32 @@ timeout-minutes: 60
    `/tmp/gh-aw/agent/pr.json` for the shape of the change. If CI failed, also read
    `/tmp/gh-aw/agent/failed-jobs.json` and `/tmp/gh-aw/agent/failed-logs.txt`.
 
-   These files are the factual basis for every check below. Do not guess — cite what you read.
+    These files are the factual basis for every check below. Do not guess — cite what you read.
+
+4b. **Merge conflict when CI is green.** If the conclusion is `success` and
+    `has_conflicts` is `true` (current value: `${{ needs.reserve.outputs.has_conflicts }}`),
+    resolve the conflict before assessing risk. You are already on the PR branch.
+    Rebase onto `origin/${{ github.event.repository.default_branch }}`
+    (`git rebase origin/${{ github.event.repository.default_branch }}`), resolve every
+    conflict deliberately, and run the verification commands below. Do not use `--ours`,
+    `--theirs`, or a blanket conflict-marker deletion without reviewing the intended
+    behavior from both sides.
+
+    ```
+    ${{ env.VERIFY_COMMANDS }}
+    ```
+
+    Push the rebased branch using `push_to_pull_request_branch` (pr_number: ${{ needs.subject.outputs.pr }},
+    branch: the current PR branch), then emit the `add_comment` with
+    **Verdict:** remediated. CI will re-run on the updated branch and the merge gate
+    will be triggered again — the next cycle will see a clean, conflict-free PR and can
+    make a proper merge or review decision.
+
+    If the rebase fails or the conflicts are genuinely ambiguous, select the `review`
+    verdict instead and explain which conflicts could not be resolved safely.
+
+    If the conclusion is `success` and `has_conflicts` is `false`, skip this step and
+    proceed to step 5.
 
 5. Run each of these 10 checks. For each, determine a status and a short detail line.
 
@@ -639,7 +661,12 @@ flowchart TD
     gateSubject["Subject (rung 4)<br/>Our PR? Closes an implement issue?"] -->|✓| gateFacts
     gateSubject -.->|✗| gateIdle
     gateFacts("Facts (rung 3)<br/>Diff, PR shape, failing logs") --> gateCi
-    gateCi["CI<br/>What did it conclude?"] -->|success| gateTrivial
+    gateCi["CI<br/>What did it conclude?"] -->|success| gateConflict
+    gateConflict{"Merge conflicts?"}
+    gateConflict -->|yes| gateRebase
+    gateConflict -->|no| gateTrivial
+    gateRebase("Rebase<br/>Resolve conflicts, /repo-verify") -->|pushed| gateWait
+    gateRebase -.->|cannot resolve| gateHuman
     gateTrivial{"Trivial marker?"}
     gateTrivial -->|yes| gateMerge
     gateTrivial -->|no| gateAssess
@@ -661,8 +688,8 @@ flowchart TD
     classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a2a
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class gateStart start
-    class gateFacts,gateFix action
-    class gateSubject,gateCi,gateAssess,gateTrivial decision
+    class gateFacts,gateFix,gateRebase action
+    class gateSubject,gateCi,gateAssess,gateTrivial,gateConflict decision
     class gateIdle,gateWait idle
     class gateHuman failure
     class gateMerge success
