@@ -4,6 +4,7 @@ env:
   REPO_RULES: "Apply only actionable outstanding reviewer feedback to the selected bot pull request. Make minimal changes that address each comment. Preserve architecture and do not weaken tests. Run full verification after changes."
   WORKING_LABEL: bot-working
   REVIEW_LABEL: review
+  PR_PENDING_LABEL: pr-pending
   REVIEW_MARKER: "<!-- agent-apply-review -->"
   INCOMPLETE_COMMENT: "Automated review feedback ended without an outcome. The issue remains for a retry."
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
@@ -230,7 +231,7 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.WORKING_LABEL }}
+          labels: ${{ env.WORKING_LABEL }},${{ env.PR_PENDING_LABEL }}
   incomplete:
     needs: [subject, agent, safe_outputs, validate_output]
     if: >

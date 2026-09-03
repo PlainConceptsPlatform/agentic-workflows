@@ -6,6 +6,7 @@ env:
   IMPLEMENT_LABEL: implement
   WORKING_LABEL: bot-working
   REVIEW_LABEL: review
+  PR_PENDING_LABEL: pr-pending
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
   GIT_COMMITTER_NAME: "github-actions[bot]"
@@ -169,6 +170,13 @@ jobs:
           printf '%s\n\n<!-- implement-pr: %s -->\n<!-- implement-branch: %s -->' "$cleaned" "$PR_NUMBER" "$branch" > /tmp/issue-body.md
           gh issue edit "$ISSUE" --repo "$REPO" --body-file /tmp/issue-body.md
           echo "Stamped PR #$PR_NUMBER and branch $branch on issue #$ISSUE"
+      - name: Mark issue as having a pull request pending
+        if: needs.safe_outputs.outputs.created_pr_number != ''
+        uses: ./.github/actions/add-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: ${{ env.PR_PENDING_LABEL }}
       - name: Reconcile the new bot pull request
         if: needs.safe_outputs.outputs.created_pr_number != ''
         env:

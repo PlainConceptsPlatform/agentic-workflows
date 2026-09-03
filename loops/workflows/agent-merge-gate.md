@@ -6,6 +6,7 @@ env:
   WORKING_LABEL: bot-working
   IMPLEMENT_LABEL: implement
   REVIEW_LABEL: review
+  PR_PENDING_LABEL: pr-pending
   GATE_MARKER: "<!-- agent-merge-gate -->"
   INCOMPLETE_COMMENT: "Automated CI failure remediation ended without an outcome. The issue remains for a retry."
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
@@ -165,7 +166,7 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.WORKING_LABEL }}
+          labels: ${{ env.WORKING_LABEL }},${{ env.PR_PENDING_LABEL }}
       - name: Flag human review
         if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
         uses: ./.github/actions/add-issue-labels
@@ -329,14 +330,14 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.WORKING_LABEL }}
+          labels: ${{ env.WORKING_LABEL }},${{ env.PR_PENDING_LABEL }}
       - name: Clear merged issue labels
         if: needs.validate_output.outputs.outcome == 'merge'
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.IMPLEMENT_LABEL }},${{ env.WORKING_LABEL }},${{ env.REVIEW_LABEL }}
+          labels: ${{ env.IMPLEMENT_LABEL }},${{ env.WORKING_LABEL }},${{ env.REVIEW_LABEL }},${{ env.PR_PENDING_LABEL }}
   incomplete:
     needs: [subject, protected_changes, agent, safe_outputs, validate_output]
     if: >
@@ -368,7 +369,7 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.WORKING_LABEL }},${{ env.IMPLEMENT_LABEL }}
+          labels: ${{ env.WORKING_LABEL }},${{ env.IMPLEMENT_LABEL }},${{ env.PR_PENDING_LABEL }}
       - name: Flag for human review
         uses: ./.github/actions/add-issue-labels
         with:
