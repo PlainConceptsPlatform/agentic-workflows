@@ -119,10 +119,15 @@ for (const file of readdirSync(workflowDirectory)) {
       '          cp /tmp/gh-aw/aw-*.patch "${RUNNER_TEMP}/gh-aw/" 2>/dev/null || true\n' +
       '          cp /tmp/gh-aw/aw-*.bundle "${RUNNER_TEMP}/gh-aw/" 2>/dev/null || true\n' +
       '          ls -la "${RUNNER_TEMP}/gh-aw/"aw-* 2>/dev/null || true\n')
-    // Add RUNNER_TEMP patch paths to the upload glob, so patches are included in the artifact.
+    // Add patch/bundle paths to the upload glob so patches are included in the artifact.
+    // The base gh-aw template may or may not include aw-*.patch paths; ensure they're present.
     .replace(
-      '/tmp/gh-aw/aw-*.patch\n            /tmp/gh-aw/aw-*.bundle\n',
-      '/tmp/gh-aw/aw-*.patch\n            ${{ runner.temp }}/gh-aw/aw-*.patch\n            /tmp/gh-aw/aw-*.bundle\n            ${{ runner.temp }}/gh-aw/aw-*.bundle\n')
+      '/tmp/gh-aw/agent_output.json\n',
+      '/tmp/gh-aw/agent_output.json\n' +
+      '            /tmp/gh-aw/aw-*.patch\n' +
+      '            /tmp/gh-aw/aw-*.bundle\n' +
+      '            ${{ runner.temp }}/gh-aw/aw-*.patch\n' +
+      '            ${{ runner.temp }}/gh-aw/aw-*.bundle\n')
 
     // v0.87.5's arc-dind mode stages the engine CLI to a daemon-visible path but assumes the
     // Copilot engine: command -v copilot is empty under engine: opencode and cp "" fails the
