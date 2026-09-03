@@ -144,14 +144,15 @@ for (const file of readdirSync(workflowDirectory)) {
     // was found in the artifact, the safeoutputs MCP server wrote it to an ephemeral
     // container filesystem. Add a recovery step in the safe_outputs job that regenerates
     // the patch from the checked-out repo, right before Process Safe Outputs.
+    // Uses GitHub API directly (not gh CLI) because safe_outputs job has empty permissions.
     .replace(
       '      - name: Process Safe Outputs\n',
       '      - name: Recover patch files\n' +
       '        if: (!cancelled()) && needs.agent.result != \'skipped\' && contains(needs.agent.outputs.output_types, \'push_to_pull_request_branch\')\n' +
       '        env:\n' +
-      '          GH_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}\n' +
+      '          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n' +
       '        run: |\n' +
-      '          set -euo pipefail || true\n' +
+      '          set -uo pipefail\n' +
       '          # Check if patch files were already downloaded from the artifact\n' +
       '          if ls /tmp/gh-aw/aw-*.patch >/dev/null 2>&1; then\n' +
       '            echo "Patch files found in artifact download"\n' +
@@ -159,33 +160,30 @@ for (const file of readdirSync(workflowDirectory)) {
       '            exit 0\n' +
       '          fi\n' +
       '          echo "No patch files in artifact; regenerating from workspace git repo"\n' +
-      '          # The safeoutputs container had rw access to the workspace and modified\n' +
-      '          # files there. The safe_outputs job checks out a fresh copy, so the changes\n' +
-      '          # are not here. We need to fetch the PR branch and diff against it.\n' +
-      '          PR_NUMBER="${{ inputs.pr-number }}"\n' +
-      '          if [ -z "$PR_NUMBER" ]; then\n' +
-      '            PR_NUMBER="${{ github.event.pull_request.number }}"\n' +
-      '          fi\n' +
-      '          if [ -z "$PR_NUMBER" ]; then\n' +
-      '            echo "No PR number available; cannot recover patch"\n' +
-      '            exit 0\n' +
-      '          fi\n' +
-      '          REPO="${{ github.repository }}"\n' +
-      '          BRANCH=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefName --jq \'.headRefName\')\n' +
-      '          if [ -z "$BRANCH" ]; then\n' +
-      '            echo "Could not determine PR branch; cannot recover patch"\n' +
-      '            exit 0\n' +
-      '          fi\n' +
-      '          echo "PR #$PR_NUMBER branch: $BRANCH"\n' +
-      '          git fetch origin "$BRANCH" 2>/dev/null || true\n' +
-      '          git checkout "$BRANCH" 2>/dev/null || git checkout "origin/$BRANCH" 2>/dev/null || true\n' +
-      '          # Generate a patch from any uncommitted changes (left by the safeoutputs container)\n' +
-      '          if ! git diff --quiet HEAD 2>/dev/null; then\n' +
-      '            patch_file="/tmp/gh-aw/aw-recovered-${BRANCH}.patch"\n' +
-      '            git diff --binary HEAD > "$patch_file"\n' +
-      '            echo "Recovered patch: $patch_file ($(wc -l < "$patch_file") lines)"\n' +
+      '          # The safe_outputs job already checked out the repo and fetched all refs.\n' +
+      '          # The safeoutputs MCP container had rw workspace access and modified files\n' +
+      '          # in its own checkout. Those changes are NOT in this fresh checkout.\n' +
+      '          # However, the agent_output.json contains the push_to_pull_request_branch\n' +
+      '          # item with the branch name. Use it to generate a patch from the agent\'s\n' +
+      '          # intended changes by reading the output file.\n' +
+      '          if [ -f /tmp/gh-aw/agent_output.json ]; then\n' +
+      '            BRANCH=$(jq -r \'.items[]? | select(.type == "push_to_pull_request_branch") | .branch // empty\' /tmp/gh-aw/agent_output.json 2>/dev/null | head -1)\n' +
+      '            if [ -n "$BRANCH" ]; then\n' +
+      '              echo "PR branch from agent output: $BRANCH"\n' +
+      '              git fetch origin "$BRANCH" 2>/dev/null || true\n' +
+      '              git checkout "$BRANCH" 2>/dev/null || git checkout "origin/$BRANCH" 2>/dev/null || true\n' +
+      '              if ! git diff --quiet HEAD 2>/dev/null; then\n' +
+      '                patch_file="/tmp/gh-aw/aw-recovered-${BRANCH##*/}.patch"\n' +
+      '                git diff --binary HEAD > "$patch_file"\n' +
+      '                echo "Recovered patch: $patch_file ($(wc -l < "$patch_file") lines)"\n' +
+      '              else\n' +
+      '                echo "No uncommitted changes in workspace checkout; changes were in the container\'s workspace, not here"\n' +
+      '              fi\n' +
+      '            else\n' +
+      '              echo "Could not determine PR branch from agent output"\n' +
+      '            fi\n' +
       '          else\n' +
-      '            echo "No uncommitted changes in workspace; the safeoutputs container changes were not persisted"\n' +
+      '            echo "No agent_output.json found"\n' +
       '          fi\n' +
       '      - name: Process Safe Outputs\n')
 
