@@ -102,6 +102,45 @@ for (const file of readdirSync(workflowDirectory)) {
     // {"items":[]} over a run that did real work: the job goes green and the pull request
     // is silently dropped. Build the collector's input from what the agent actually emitted.
     .replaceAll("echo '{\"items\":[]}' > /tmp/gh-aw-${{ github.run_id }}/agent_output.json", "if [ -s /tmp/gh-aw-${{ github.run_id }}/safeoutputs.jsonl ]; then jq -s '{items: .}' /tmp/gh-aw-${{ github.run_id }}/safeoutputs.jsonl > /tmp/gh-aw-${{ github.run_id }}/agent_output.json; else echo '{\"items\":[]}' > /tmp/gh-aw-${{ github.run_id }}/agent_output.json; fi")
+    // The safeoutputs MCP server runs in a Docker container started by the MCP gateway
+    // (awmg-mcpg). That gateway is itself a container, so `-v /tmp/gh-aw:/tmp/gh-aw` in the
+    // safeoutputs container maps to the gateway's filesystem, not the host's. When the
+    // gateway exits, patch files it wrote are lost. The safeoutputs container also has
+    // the workspace mounted rw, so after the agent exits the workspace itself contains
+    // the changes. Generate the patch and bundle on the host from the workspace git repo
+    // before the upload step, so the artifact always includes them.
+    .replace(
+      /( *)- name: Upload agent artifacts\n\1  if: always\(\)\n\1  continue-on-error: true\n\1  uses: actions\/upload-artifact@[^\n]*\n\1  with:\n\1    name: \$\{\{ needs\.activation\.outputs\.artifact_prefix \}\}agent\n\1    path: \|\n/g,
+      (whole, indent) =>
+        indent + '- name: Recover patch files from workspace\n' +
+        indent + '  if: always()\n' +
+        indent + '  continue-on-error: true\n' +
+        indent + '  run: |\n' +
+        indent + '    set -euo pipefail || true\n' +
+        indent + '    mkdir -p "${RUNNER_TEMP}/gh-aw"\n' +
+        indent + '    # The safeoutputs container may have left patches at /tmp/gh-aw/ (host)\n' +
+        indent + '    cp /tmp/gh-aw/aw-*.patch "${RUNNER_TEMP}/gh-aw/" 2>/dev/null || true\n' +
+        indent + '    cp /tmp/gh-aw/aw-*.bundle "${RUNNER_TEMP}/gh-aw/" 2>/dev/null || true\n' +
+        indent + '    # If the patches are not there (container filesystem was ephemeral),\n' +
+        indent + '    # regenerate them from the workspace git repo.\n' +
+        indent + '    if ! ls "${RUNNER_TEMP}/gh-aw/"aw-*.patch >/dev/null 2>&1; then\n' +
+        indent + '      echo "No patch files found in /tmp/gh-aw; regenerating from workspace"\n' +
+        indent + '      cd "${GITHUB_WORKSPACE}"\n' +
+        indent + '      if git diff --quiet HEAD 2>/dev/null; then\n' +
+        indent + '        echo "No uncommitted changes in workspace; nothing to patch"\n' +
+        indent + '      else\n' +
+        indent + '        patch_file="${RUNNER_TEMP}/gh-aw/aw-recovered.patch"\n' +
+        indent + '        git diff --binary HEAD > "$patch_file"\n' +
+        indent + '        echo "Recovered patch: $patch_file ($(wc -l < "$patch_file") lines)"\n' +
+        indent + '      fi\n' +
+        indent + '    fi\n' +
+        indent + '    ls -la "${RUNNER_TEMP}/gh-aw/"aw-* 2>/dev/null || true\n' +
+        whole)
+    // Add RUNNER_TEMP patch paths to the upload glob, so recovered patches are included.
+    .replace(
+      '/tmp/gh-aw/aw-*.patch\n            /tmp/gh-aw/aw-*.bundle\n',
+      '/tmp/gh-aw/aw-*.patch\n            ${{ runner.temp }}/gh-aw/aw-*.patch\n            /tmp/gh-aw/aw-*.bundle\n            ${{ runner.temp }}/gh-aw/aw-*.bundle\n')
+
     // v0.87.5's arc-dind mode stages the engine CLI to a daemon-visible path but assumes the
     // Copilot engine: command -v copilot is empty under engine: opencode and cp "" fails the
     // job before the agent starts. OpenCode needs no staging, because npm -g installs it under
