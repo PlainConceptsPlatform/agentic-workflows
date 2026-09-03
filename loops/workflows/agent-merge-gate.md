@@ -527,6 +527,10 @@ timeout-minutes: 60
     `--theirs`, or a blanket conflict-marker deletion without reviewing the intended
     behavior from both sides.
 
+    Scope verification to the files the rebase touched: pass changed file paths to
+    lint/format tools instead of running them repository-wide (see step 6's scoped
+    verification guidance).
+
     ```
     ${{ env.VERIFY_COMMANDS }}
     ```
@@ -590,6 +594,20 @@ timeout-minutes: 60
    `/tmp/gh-aw/agent/failed-logs.txt`, which are already on disk. Load only skills required to
    fix the actual cause. Run these verification commands before a push. Do not weaken a test,
    disable a check, or push an unverified guess.
+
+   **Scoped verification.** The commands below are the full suite. This runner has limited
+   memory, and a whole-repo lint or build can be killed mid-run. Scope verification to the
+   files you actually changed first, and only escalate to the full suite when the scoped run
+   passes and you are still unsure:
+   - Lint/format (biome, eslint, prettier, ruff, etc.): pass the changed file paths as
+     arguments so the tool checks only those files (e.g. `pnpm exec biome check <files>`),
+     never the whole repository.
+   - Build: prefer building only the project(s) containing the changed files; use the full
+     solution build only when the change crosses project boundaries.
+   - Tests: run the test project covering the changed files; run the full suite only when
+     the change is cross-cutting.
+   If verification of exactly the CI-failing job is what you need, reproduce just that job's
+   command, not the entire pipeline.
 
    A PR that already contains protected files still requires remediation. You may include those
    files in the verified repair push, but the next green-CI cycle will require human review and

@@ -389,13 +389,24 @@ timeout-minutes: 45
      focused, protect secrets, and do not modify generated files unless the feedback requires it.
      Adhere to ${{ env.REPO_RULES }}.
 
- 6. Run the repository verification commands below. The issue context at
-    `${{ env.ISSUE_CONTEXT_PATH }}` defines acceptance criteria the fix must satisfy. If a check
-    fails, fix what you broke and run it again. Do not push a branch that does not pass.
+6. Run the repository verification commands below. The issue context at
+   `${{ env.ISSUE_CONTEXT_PATH }}` defines acceptance criteria the fix must satisfy. If a check
+   fails, fix what you broke and run it again. Do not push a branch that does not pass.
 
-     ```
-     ${{ env.VERIFY_COMMANDS }}
-     ```
+   **Scoped verification.** This runner has limited memory, and a whole-repo lint or build
+   can be killed mid-run. Scope verification to the files you actually changed first, and
+   only escalate to the full suite when the scoped run passes and you are still unsure:
+   - Lint/format (biome, eslint, prettier, ruff, etc.): pass the changed file paths as
+     arguments so the tool checks only those files (e.g. `pnpm exec biome check <files>`),
+     never the whole repository.
+   - Build: prefer building only the project(s) containing the changed files; use the full
+     solution build only when the change crosses project boundaries.
+   - Tests: run the test project covering the changed files; run the full suite only when
+     the change is cross-cutting.
+
+    ```
+    ${{ env.VERIFY_COMMANDS }}
+    ```
 
 7. Select one review outcome.
 
