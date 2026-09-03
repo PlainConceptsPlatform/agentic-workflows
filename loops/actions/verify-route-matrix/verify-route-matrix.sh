@@ -233,11 +233,12 @@ fi
 if [ "$VERIFY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 if grep -Fq 'protected-files: allowed' "$IMPLEMENT_WORKER_MD" &&
-  grep -Fq 'protected_changes:' "$MERGE_GATE_WORKER_MD"; then
+  grep -Fq 'protected-files: allowed' "$MERGE_GATE_WORKER_MD" &&
+  grep -Fq "needs.protected_changes.outputs.requires_review != 'true' || needs.subject.outputs.conclusion == 'failure'" "$MERGE_GATE_WORKER_MD"; then
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))
-  echo "FAIL: protected changes are not held for Merge Gate review" >&2
+  echo "FAIL: protected changes must allow failed-CI repair while remaining held from merge" >&2
 fi
 
 # This repository is public. Every route a human can start from a comment, a review or a

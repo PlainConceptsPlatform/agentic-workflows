@@ -148,33 +148,33 @@ jobs:
       issues: write
     steps:
       - name: Checkout workflow actions
-        if: needs.protected_changes.outputs.requires_review == 'true'
+        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Create bot token
-        if: needs.protected_changes.outputs.requires_review == 'true'
+        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
       - name: Release the issue
-        if: needs.protected_changes.outputs.requires_review == 'true'
+        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.WORKING_LABEL }}
       - name: Flag human review
-        if: needs.protected_changes.outputs.requires_review == 'true'
+        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.REVIEW_LABEL }}
       - name: Explain the merge hold
-        if: needs.protected_changes.outputs.requires_review == 'true'
+        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -264,10 +264,10 @@ jobs:
   conclude:
     needs: [activation, subject, protected_changes, agent, safe_outputs, validate_output]
     if: >
-      needs.agent.result == 'success' &&
-       needs.safe_outputs.result == 'success' &&
-       needs.validate_output.outputs.valid == 'true' &&
-      needs.protected_changes.outputs.requires_review != 'true'
+       needs.agent.result == 'success' &&
+        needs.safe_outputs.result == 'success' &&
+        needs.validate_output.outputs.valid == 'true' &&
+       (needs.protected_changes.outputs.requires_review != 'true' || needs.validate_output.outputs.outcome != 'merge')
     runs-on: agents-arc
     permissions:
       contents: write
@@ -340,9 +340,9 @@ jobs:
   incomplete:
     needs: [subject, protected_changes, agent, safe_outputs, validate_output]
     if: >
-      always() &&
-      needs.subject.outputs.found == 'true' &&
-      needs.protected_changes.outputs.requires_review != 'true' &&
+       always() &&
+       needs.subject.outputs.found == 'true' &&
+       (needs.protected_changes.outputs.requires_review != 'true' || needs.subject.outputs.conclusion == 'failure') &&
        (
          needs.agent.result != 'success' ||
          needs.safe_outputs.result != 'success' ||
@@ -390,9 +390,9 @@ jobs:
     # The top-level guard reads both outputs. GitHub Actions does not make a
     # dependency's dependencies available through `needs` transitively.
     needs: [subject, protected_changes]
-    if: always() && needs.protected_changes.outputs.requires_review != 'true' && needs.subject.outputs.review_blocked != 'true'
+    if: always() && (needs.protected_changes.outputs.requires_review != 'true' || needs.subject.outputs.conclusion == 'failure') && needs.subject.outputs.review_blocked != 'true'
 
-if: always() && needs.subject.outputs.found == 'true' && needs.protected_changes.outputs.requires_review != 'true' && needs.subject.outputs.review_blocked != 'true'
+if: always() && needs.subject.outputs.found == 'true' && (needs.protected_changes.outputs.requires_review != 'true' || needs.subject.outputs.conclusion == 'failure') && needs.subject.outputs.review_blocked != 'true'
 
 runs-on: agents-arc
 runs-on-slim: agents-arc
@@ -464,6 +464,10 @@ safe-outputs:
   # with "requires pull request context", so the agent's fix is computed and discarded.
   push-to-pull-request-branch:
     target: "*"
+    required-title-prefix: "[bot] "
+    # A failed bot PR may already contain protected files. Permit a verified repair push,
+    # but protected_changes still prevents the later green-CI cycle from auto-merging it.
+    protected-files: allowed
   add-comment:
     target: "*"
 
@@ -586,6 +590,10 @@ timeout-minutes: 60
    fix the actual cause. Run these verification commands before a push. Do not weaken a test,
    disable a check, or push an unverified guess.
 
+   A PR that already contains protected files still requires remediation. You may include those
+   files in the verified repair push, but the next green-CI cycle will require human review and
+   must not auto-merge the PR.
+
    **If `has_conflicts` is `true` (current value: `${{ needs.reserve.outputs.has_conflicts }}`):** You are already on the PR branch. Resolve the conflict;
    it is not a reason to hand the PR to a human. Merge `origin/${{ github.event.repository.default_branch }}`
    into the current branch, resolve every conflict deliberately, stage the resolutions, and
@@ -661,7 +669,10 @@ flowchart TD
     gateSubject["Subject (rung 4)<br/>Our PR? Closes an implement issue?"] -->|✓| gateFacts
     gateSubject -.->|✗| gateIdle
     gateFacts("Facts (rung 3)<br/>Diff, PR shape, failing logs") --> gateCi
-    gateCi["CI<br/>What did it conclude?"] -->|success| gateConflict
+    gateCi["CI<br/>What did it conclude?"] -->|success| gateProtected
+    gateProtected{"Protected files?"}
+    gateProtected -.->|yes| gateHuman
+    gateProtected -->|no| gateConflict
     gateConflict{"Merge conflicts?"}
     gateConflict -->|yes| gateRebase
     gateConflict -->|no| gateTrivial
@@ -689,7 +700,7 @@ flowchart TD
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class gateStart start
     class gateFacts,gateFix,gateRebase action
-    class gateSubject,gateCi,gateAssess,gateTrivial,gateConflict decision
+    class gateSubject,gateCi,gateAssess,gateTrivial,gateConflict,gateProtected decision
     class gateIdle,gateWait idle
     class gateHuman failure
     class gateMerge success
