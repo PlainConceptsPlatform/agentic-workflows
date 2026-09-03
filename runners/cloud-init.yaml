@@ -31,6 +31,16 @@ write_files:
       echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ noble main" > /etc/apt/sources.list.d/azure-cli.list
       apt-get update -qq
       apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin gh azure-cli >/dev/null
+      # Swap: the awf Docker stack + Node.js + pnpm + opencode can spike past 8GB on D2ads_v5.
+      # Without swap the OOM killer terminates the agent (exit 137). 8GB swap costs nothing
+      # on an ephemeral OS disk and prevents the "everything green, nothing pushed" silent
+      # failure that started when we moved from the old host to ephemeral VMs.
+      fallocate -l 8G /mnt/azure_resource_disk/swapfile || fallocate -l 8G /swapfile
+      SWAP=/mnt/azure_resource_disk/swapfile; [ -f /swapfile ] && SWAP=/swapfile
+      chmod 600 "$SWAP"
+      mkswap "$SWAP" >/dev/null
+      swapon "$SWAP"
+      echo "$SWAP none swap sw 0 0" >> /etc/fstab
       # trivy-action expects the binary on PATH and its own installer is unreliable here
       curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz" \
         | tar -xz -C /usr/local/bin trivy

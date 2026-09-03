@@ -36,7 +36,7 @@ param webhookSecret string
 param vmToken string
 
 param location string = resourceGroup().location
-param vmSku string = 'Standard_D2ads_v5'
+param vmSku string = 'Standard_D4ads_v5'
 param agentMemoryVersion string = '0.9.28'
 param iiiVersion string = '0.11.2'
 
