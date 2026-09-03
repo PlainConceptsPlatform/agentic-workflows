@@ -72,7 +72,8 @@ loops/workflows/
       call-apply-review        agent-apply-review.md        workflow_call only
       call-merge-gate          agent-merge-gate.md          workflow_call only
       call-audit               agent-audit.md               workflow_call only
-      call-propose             agent-propose.md             workflow_call only
+      call-mutation            agent-mutation.md             workflow_call only
+      call-release             agent-release.md              workflow_call only
       deterministic jobs       bot-approve, audit-close, cleanup-artifacts,
                               stale-recovery, validate
   authorize-bot-work.yml       human adds implement/refine/direct → bot adds bot-working
@@ -170,6 +171,9 @@ cost a real debugging session.
 | Merge gate never fires after CI | `workflow_run` does not fire for runs that were pending approval and then approved, and does not fire for PR-triggered CI completions on feature branches |
 | Agent wrote a plausible body or comment, but the worker stopped incomplete | Outcome validation required model-authored label changes or did not classify the output |
 | Router classified a trusted App label event, but every worker job skipped | The called worker did not set `GH_AW_ALLOWED_BOTS` in `env:`, so `check_membership.cjs` rejected the bot's role `none`. Set `GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"` in the worker's env. `on.bots:` does not work for `workflow_call` workers. |
+| Merge gate skips protected-file PRs even when CI failed | `protected_changes` blocks all agent runs, not just merge. The `review_required`, `agent`, and `incomplete` jobs must allow protected-file PRs through when `needs.subject.outputs.conclusion == 'failure'` so the agent can remediate. Auto-merge is still blocked by the `conclude` job's `requires_review != 'true'` guard on the `merge` outcome. |
+| Reconcile cron skips a PR whose CI failed again | The reconcile script compares the latest merge-gate comment timestamp against CI completion time. A prior `review` or `incomplete` verdict newer than CI prevents re-dispatch. Remove `review` or re-dispatch manually. |
+| `Invalid secret, BOT_APP_ID is not defined in the referenced workflow` | The router's caller job passes secrets the called worker does not declare in its `secrets:` block. Only pass secrets the worker declares. The release worker needs only `OPENAI_API_KEY`. |
 
 The full trap descriptions, including the caller permission trap, the artifact prefix trap, the
 composite action manifest trap, and the App-token event loop, are in

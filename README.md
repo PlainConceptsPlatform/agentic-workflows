@@ -35,6 +35,7 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | `apply-review` | `agent-apply-review.md` | someone reviews or comments on a bot pull request | the requested changes pushed to that pull request |
 | `audit` | `agent-audit.md` | Mondays, or on demand | one issue of findings, labelled `refine` so it gets sized and split |
 | `mutation` | `agent-mutation.md` | Tuesdays, or on demand | one issue naming tests that do not actually pin behaviour |
+| `release` | `agent-release.md` | on demand (`operation=release`) | a tagged GitHub Release with AI-generated release notes |
 
 Plus the plumbing, which has no agent in it: `work-router.yml` (the router itself),
 `authorize-bot-work.yml` (a human's label is checked, then the bot re-labels so the workers see
@@ -50,7 +51,9 @@ rather than straight to `implement`, so a report of several unrelated findings b
 properly sized issue per finding instead of one pull request that has to fix them all.
 
 Two labels are the controls a person has: `review` parks anything for a human, and `future`
-holds a refined issue back from implementation until it is removed.
+holds a refined issue back from implementation until it is removed. A third label, `pr-pending`,
+marks issues whose bot PR is open and awaiting merge-gate — it is informational only and does
+not route or block anything.
 
 ### Configuring mutation
 
@@ -58,6 +61,22 @@ holds a refined issue back from implementation until it is removed.
 `MUTATION_TARGET_PROJECT` (what to mutate), `MUTATION_TEST_PROJECT` (the suite to run against each
 mutant), `MUTATION_THRESHOLD_HIGH` and `STRYKER_VERSION`. Keep the target narrow: cost is mutants
 times test time, so a whole solution takes hours and produces findings nobody reads.
+
+## Releasing
+
+`agent-release.md` generates a tagged GitHub Release with AI-written release notes. Trigger it
+manually via `workflow_dispatch` with `operation=release`. The agent reads the commit log since
+the last tag, categorizes commits by conventional-commit prefix, and writes release notes to
+`/tmp/gh-aw/agent/release-notes.md`. A deterministic `conclude` job then bumps the version
+(`auto` detects `BREAKING CHANGE` → major, `feat:` → minor, else → patch), commits, tags, pushes,
+and creates the GitHub Release.
+
+```bash
+gh workflow run work-router.yml --repo PlainConceptsPlatform/<repo> -f operation=release -f version-bump=auto
+```
+
+`version-bump` accepts `auto`, `patch`, `minor`, or `major`. The worker only needs
+`OPENAI_API_KEY` — it uses `github.token` for git operations and `gh release create`.
 
 `STRYKER_VERSION` has to be new enough for the target's framework. Stryker resolves the project
 graph through buildalyzer, and a version older than the SDK dies with `System.FormatException:
@@ -99,8 +118,9 @@ A cron present in one but not the other fails silently in the direction that hur
 fires and then classifies to no route at all. `verify-route-matrix.sh` asserts both crons reach
 their routes, so run it after changing a slot.
 
-The daily and two-hourly crons (`audit-close`, `cleanup-artifacts`, `reconcile-bot-pr-runs`) do
-not need staggering: they run on GitHub-hosted runners and never touch the fleet.
+The daily and hourly crons (`audit-close`, `cleanup-artifacts`, `reconcile-bot-pr-runs`) do
+not need staggering: they run on GitHub-hosted runners and never touch the fleet. The
+reconcile cron runs hourly at minute 17.
 
 ## Consumer prerequisite
 
