@@ -128,6 +128,7 @@ on:
           - cleanup-artifacts
           - reconcile-bot-pr-runs
           - validate
+          - release
       issue-number:
         description: "Issue number (required for refine / implement / direct)"
         required: false
@@ -162,6 +163,15 @@ on:
         options:
           - manual
           - scheduled
+      version-bump:
+        description: "Release version bump: patch, minor, major, or auto"
+        required: false
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: read
@@ -513,6 +523,22 @@ jobs:
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+
+  call-release:
+    needs: [classify, authorize]
+    if: needs.classify.outputs.route == 'release' && needs.authorize.outputs.trusted == 'true'
+    uses: ./.github/workflows/agent-release.lock.yml
+    permissions: write-all
+    with:
+      version-bump: ${{ github.event.inputs.version-bump || 'auto' }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+
   bot-approve:
     needs: classify
     if: >

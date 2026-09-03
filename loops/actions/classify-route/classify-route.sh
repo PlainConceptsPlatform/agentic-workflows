@@ -214,6 +214,9 @@ classify_route() {
         audit-close | cleanup-artifacts | reconcile-bot-pr-runs | validate)
           route="${OPERATION}"
           ;;
+        release)
+          route="release"
+          ;;
         *)
           error="unknown operation '${OPERATION:-}'"
           ;;

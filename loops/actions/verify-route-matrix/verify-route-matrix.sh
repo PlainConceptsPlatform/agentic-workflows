@@ -266,7 +266,7 @@ else
 fi
 
 for route in refine implement triage apply-review merge-gate audit mutation bot-approve \
-  audit-close cleanup-artifacts reconcile-bot-pr-runs validate; do
+  audit-close cleanup-artifacts reconcile-bot-pr-runs validate release; do
   if grep -q "route == '${route}'" "$ROUTER_YML"; then
     PASS=$((PASS + 1))
   else
