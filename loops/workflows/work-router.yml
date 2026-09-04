@@ -86,13 +86,26 @@ on:
     types: [submitted]
 
   pull_request_target:
-    types: [opened, synchronize, reopened, labeled]
-  # No workflow_run trigger, on purpose. Bot PRs are created with GITHUB_TOKEN, and
-  # GitHub does not deliver workflow_run for runs whose originating event came from
-  # that token, so CI completions on bot branches never arrived here (verified
-  # 2026-08-28: every firing had a human actor). The reliable paths are app-ci's
-  # dispatch-merge-gate job (bot App token, immediate) and the reconcile cron as the
-  # belt. Keeping the trigger double-fired the gate whenever a human touched a PR.
+    # opened / reopened / synchronize feed conflict detection (detect-pr-conflicts) and
+    # bot-approve. closed feeds detect-pr-conflicts: when a PR merges, the target branch
+    # moved and previously-mergeable sibling bot PRs may now conflict.
+    types: [opened, synchronize, reopened, labeled, closed]
+
+  # CI completion on a pull request. Enabled so a FAILED CI run dispatches the Merge Gate
+  # immediately instead of waiting for the hourly reconcile. The classifier admits only
+  # conclusion == failure with an attached pull request; a green run still reaches merge
+  # through app-ci's dispatch-merge-gate and the reconcile belt, so routing success here
+  # would double-fire the gate on every passing PR.
+  #
+  # Caveat that still holds (2026-08-28): GitHub does not deliver workflow_run for CI runs
+  # whose originating event came from GITHUB_TOKEN, so a bot-opened PR's own CI completion
+  # may never arrive here — reconcile-bot-pr-runs remains the belt for that gap. Security:
+  # workflow_run runs from the default branch with secrets, but the gate's subject job
+  # rejects any PR that is not open and bot-authored, so a fork PR's failing CI cannot
+  # start privileged work.
+  workflow_run:
+    workflows: ["App: CI"]
+    types: [completed]
 
   # Cron to route mapping lives in .github/actions/classify-route/classify-route.sh.
   schedule:
@@ -566,6 +579,128 @@ jobs:
             echo "Approving run $run_id"
             gh api "repos/$REPO/actions/runs/$run_id/approve" --method POST
           done
+
+  # Conflict watcher for bot pull requests. Merge-conflict state is only available from the
+  # mergeability API, which the pure classifier cannot read, so this is an event-gated
+  # deterministic dispatcher rather than a classify route (it runs alongside bot-approve on
+  # the same pull_request_target event). It NEVER checks out or runs pull request code — it
+  # reads mergeability through the API and dispatches the Merge Gate — so it is safe on
+  # pull_request_target. Two entry points:
+  #   opened / reopened / synchronize → check the pull request that changed. Gated to this
+  #     repository's own branches so a fork PR never starts this App-token job.
+  #   closed & merged                 → the target branch moved, so re-check every open bot
+  #     pull request that may have just become conflicted (the "main changed after another PR
+  #     merged" case). A merge into the default branch is an inherently trusted internal event.
+  # It dispatches only for bot-authored, open, non-draft pull requests whose head is this
+  # repository AND whose CI has already concluded (dispatching while CI is still pending would
+  # make the gate read a 'pending' verdict and prematurely ask for human review; that PR is
+  # covered by the CI-completion route instead). The gate's subject job re-validates ownership
+  # before any agent runs.
+  detect-pr-conflicts:
+    needs: classify
+    if: >
+      github.event_name == 'pull_request_target' &&
+      (
+        (github.event.action == 'closed' && github.event.pull_request.merged == true) ||
+        (
+          (github.event.action == 'opened' ||
+           github.event.action == 'reopened' ||
+           github.event.action == 'synchronize') &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+    steps:
+      - name: Checkout for App token action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch Merge Gate for conflicting bot pull requests
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ACTION: ${{ github.event.action }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # Dispatch the Merge Gate for one pull request when it is a conflicting, open,
+          # non-draft, bot-authored pull request on this repository whose CI has concluded.
+          maybe_dispatch() {
+            pr="$1"
+            [ -n "$pr" ] || return 0
+
+            meta=$(gh api "repos/$REPO/pulls/$pr" \
+              --jq '{state:.state, draft:.draft, bot:.user.type, head:(.head.repo.full_name // "")}' \
+              2>/dev/null || echo '')
+            [ -n "$meta" ] || return 0
+            [ "$(jq -r '.state' <<<"$meta")" = "open" ] || return 0
+            [ "$(jq -r '.draft' <<<"$meta")" = "false" ] || return 0
+            [ "$(jq -r '.bot'   <<<"$meta")" = "Bot" ] || return 0
+            [ "$(jq -r '.head'  <<<"$meta")" = "$REPO" ] || return 0
+
+            # GitHub computes mergeability asynchronously; poll until it is known (not null).
+            mergeable=""
+            for _ in 1 2 3 4 5 6; do
+              mergeable=$(gh api "repos/$REPO/pulls/$pr" --jq '.mergeable // "null"' 2>/dev/null || echo null)
+              [ "$mergeable" = "null" ] || break
+              sleep 5
+            done
+            # mergeable == false means a git-level conflict (mergeable_state "dirty").
+            if [ "$mergeable" != "false" ]; then
+              echo "PR #$pr mergeable=$mergeable; no conflict dispatch."
+              return 0
+            fi
+
+            # Only dispatch when CI has already concluded. A conflict while CI is still
+            # running is handled by the CI-completion route; dispatching now would make the
+            # gate read a 'pending' conclusion and prematurely ask for human review.
+            head_sha=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
+            ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
+              --jq '[.workflow_runs[]
+                | select(.name == "App: CI" and .status == "completed"
+                         and (.conclusion == "success" or .conclusion == "failure"))]
+                | sort_by(.created_at) | last // empty')
+            if [ -z "$ci" ]; then
+              echo "PR #$pr conflicts but CI has not concluded; deferring to the CI-completion route."
+              return 0
+            fi
+            ci_conclusion=$(jq -r '.conclusion' <<<"$ci")
+            ci_run_id=$(jq -r '.id' <<<"$ci")
+
+            echo "PR #$pr is conflicting (CI $ci_conclusion); dispatching Merge Gate."
+            gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" \
+              --method POST \
+              -f ref="$DEFAULT_BRANCH" \
+              -f "inputs[operation]=merge-gate" \
+              -f "inputs[pr-number]=$pr" \
+              -f "inputs[ci-conclusion]=$ci_conclusion" \
+              -f "inputs[ci-run-id]=$ci_run_id"
+          }
+
+          if [ "$ACTION" = "closed" ]; then
+            # The target branch just moved. Any previously-mergeable bot PR may now conflict.
+            # The just-merged PR is now closed and is skipped by maybe_dispatch's state check.
+            gh api "repos/$REPO/pulls?state=open&per_page=100" \
+              --jq '.[] | select(.user.type == "Bot" and .draft == false) | .number' |
+              while IFS= read -r pr; do
+                maybe_dispatch "$pr"
+              done
+          else
+            maybe_dispatch "$EVENT_PR"
+          fi
 
   reconcile-bot-pr-runs:
     needs: classify

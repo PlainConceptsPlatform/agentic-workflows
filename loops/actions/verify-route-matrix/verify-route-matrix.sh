@@ -132,13 +132,20 @@ assert_route "a pull_request_target routes to bot-approve" bot-approve \
   EVENT=pull_request_target ACTION=opened
 
 echo "── CI completion ─────────────────────────────────────────────────────────"
-assert_route "App CI completion routes to merge-gate" merge-gate \
-  EVENT=workflow_run RUN_PR_NUMBER=7 RUN_CONCLUSION=success RUN_ID=99
-assert "merge-gate carries the CI conclusion" failure \
+assert_route "a failed App CI run on a pull request routes to merge-gate" merge-gate \
+  EVENT=workflow_run RUN_PR_NUMBER=7 RUN_CONCLUSION=failure RUN_ID=99
+assert "merge-gate carries the failing CI conclusion" failure \
   "$(route_field ci-conclusion EVENT=workflow_run RUN_PR_NUMBER=7 \
     RUN_CONCLUSION=failure RUN_ID=99)"
-assert_route "a CI run with no pull request routes nowhere" none \
-  EVENT=workflow_run RUN_PR_NUMBER= RUN_CONCLUSION=success RUN_ID=99
+assert "merge-gate carries the failing CI run id" 99 \
+  "$(route_field ci-run-id EVENT=workflow_run RUN_PR_NUMBER=7 \
+    RUN_CONCLUSION=failure RUN_ID=99)"
+assert_route "a green App CI run does not auto-trigger the gate" none \
+  EVENT=workflow_run RUN_PR_NUMBER=7 RUN_CONCLUSION=success RUN_ID=99
+assert_route "a cancelled App CI run does not auto-trigger the gate" none \
+  EVENT=workflow_run RUN_PR_NUMBER=7 RUN_CONCLUSION=cancelled RUN_ID=99
+assert_route "a failed CI run with no pull request routes nowhere" none \
+  EVENT=workflow_run RUN_PR_NUMBER= RUN_CONCLUSION=failure RUN_ID=99
 
 echo "── Schedules ─────────────────────────────────────────────────────────────"
 while read -r cron; do

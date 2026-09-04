@@ -144,10 +144,15 @@ classify_route() {
       ;;
 
     workflow_run)
-      if is_issue_number "${RUN_PR_NUMBER:-}"; then
+      # Only a FAILED CI run on an attached pull request auto-dispatches the gate. A green
+      # run reaches merge through app-ci's dispatch-merge-gate and the reconcile belt, so
+      # routing success here would double-fire the gate for every passing pull request.
+      if [ "${RUN_CONCLUSION:-}" != "failure" ]; then
+        error="CI concluded '${RUN_CONCLUSION:-}'; the gate auto-triggers only on failure"
+      elif is_issue_number "${RUN_PR_NUMBER:-}"; then
         route="merge-gate"
         pr_number="${RUN_PR_NUMBER}"
-        ci_conclusion="${RUN_CONCLUSION:-}"
+        ci_conclusion="failure"
         ci_run_id="${RUN_ID:-}"
       else
         error="CI run has no attached pull request"
