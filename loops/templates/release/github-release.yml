@@ -1,0 +1,30 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/templates/release/github-release.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: Publish GitHub release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish release
+    runs-on: [self-hosted, linux, agents]
+    timeout-minutes: 10
+    steps:
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --generate-notes
+          else
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi

@@ -1,0 +1,65 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/cleanup-artifacts/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Clean up artifacts
+description: Delete workflow artifacts older than the configured retention period.
+inputs:
+  token:
+    description: GitHub token with actions write access.
+    required: true
+  artifact-retention-days:
+    description: Retention period in days. Invalid or empty values use 3.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Delete expired artifacts
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        ARTIFACT_RETENTION_DAYS: ${{ inputs.artifact-retention-days }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          const parsedDays = Number.parseInt(process.env.ARTIFACT_RETENTION_DAYS, 10);
+          const days = Number.isInteger(parsedDays) && parsedDays > 0 ? parsedDays : 3;
+          const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+          core.info(`Retention: ${days} days (cutoff ${cutoff.toISOString()})`);
+
+          const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+            ...context.repo,
+            per_page: 100,
+          });
+
+          const expired = artifacts.filter((artifact) => new Date(artifact.created_at) < cutoff);
+
+          let deleted = 0;
+          const failed = [];
+
+          for (const artifact of expired) {
+            try {
+              await github.rest.actions.deleteArtifact({
+                ...context.repo,
+                artifact_id: artifact.id,
+              });
+
+              core.info(`Deleted ${artifact.name} (created ${artifact.created_at})`);
+              deleted += 1;
+            } catch (error) {
+              core.warning(`Could not delete ${artifact.name} (${artifact.id}): ${error.message}`);
+              failed.push(artifact.name);
+            }
+          }
+
+          await core.summary
+            .addHeading('Artifact cleanup', 2)
+            .addList([
+              `Retention: ${days} days (cutoff ${cutoff.toISOString()})`,
+              `Deleted: ${deleted}`,
+              `Failed to delete: ${failed.length}`,
+              `Within retention: ${artifacts.length - expired.length}`,
+            ])
+            .write();
+
+          if (failed.length > 0) {
+            core.setFailed(`${failed.length} artifact(s) could not be deleted: ${failed.join(', ')}`);
+          }

@@ -1,0 +1,33 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/list-open-issues/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: List open issues
+description: |
+  Writes all open issues (number, title, labels) to `/tmp/gh-aw/agent/open-issues.json`
+  so the agent can check for semantic duplicates without spending turns discovering them.
+inputs:
+  token:
+    description: GitHub token with issues:read permission.
+    required: true
+  repo:
+    description: Repository in `owner/name` format.
+    required: true
+  output-path:
+    description: Path to write the JSON output.
+    required: false
+    default: /tmp/gh-aw/agent/open-issues.json
+runs:
+  using: composite
+  steps:
+    - name: List open issues
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ inputs.repo }}
+        OUTPUT_PATH: ${{ inputs.output-path }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$(dirname "$OUTPUT_PATH")"
+        gh issue list --repo "$REPO" --state open --limit 500 \
+          --json number,title,labels \
+          --jq '[.[] | {number, title, labels: [.labels[].name]}]' \
+          > "$OUTPUT_PATH"
+        echo "Wrote $(jq 'length' "$OUTPUT_PATH") open issues to $OUTPUT_PATH"

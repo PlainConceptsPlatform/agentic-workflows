@@ -1,0 +1,120 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/identify-gate-subject/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Identify gate subject
+description: Confirm the pull request is one we authored, resolve the issue it closes, and check that issue carries the required label.
+inputs:
+  token:
+    description: GitHub token with issues and pull-requests read access.
+    required: true
+  pr-number:
+    description: Pull request number to gate.
+    required: true
+  ci-conclusion:
+    description: Conclusion reported by the CI run that triggered this gate. If empty, fetches from the PR's latest CI run.
+    required: false
+    default: ''
+  linked-issue:
+    description: Issue the pull request closes, when the router already resolved it.
+    required: false
+    default: ''
+  require-label:
+    description: Label the closing issue must carry. Empty disables the check.
+    required: false
+    default: ''
+outputs:
+  found:
+    description: Whether a valid gate subject was found.
+    value: ${{ steps.identify.outputs.found }}
+  pr:
+    description: Pull request number.
+    value: ${{ steps.identify.outputs.pr }}
+  issue:
+    description: Issue number the pull request closes.
+    value: ${{ steps.identify.outputs.issue }}
+  conclusion:
+    description: CI conclusion, passed through unchanged or fetched from latest CI run.
+    value: ${{ steps.identify.outputs.conclusion }}
+  run-id:
+    description: CI run ID when fetched.
+    value: ${{ steps.identify.outputs.run-id }}
+runs:
+  using: composite
+  steps:
+    - name: Identify pull request and closing issue
+      id: identify
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        CONCLUSION: ${{ inputs.ci-conclusion }}
+        LINKED_ISSUE: ${{ inputs.linked-issue }}
+        REQUIRE_LABEL: ${{ inputs.require-label }}
+      run: |
+        set -euo pipefail
+
+        none() {
+          echo "found=false" >> "$GITHUB_OUTPUT"
+          echo "$1"
+          exit 0
+        }
+
+        pr="$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+          --json state,author,closingIssuesReferences,body)"
+
+        [ "$(jq -r '.state' <<<"$pr")" = "OPEN" ] || none "PR #$PR_NUMBER is not open"
+
+        # Use GitHub's bot flag because App login formats differ across APIs.
+        if [ "$(jq -r '.author.is_bot' <<<"$pr")" != "true" ]; then
+          none "PR #$PR_NUMBER was authored by $(jq -r '.author.login' <<<"$pr"), a human."
+        fi
+
+        issue="$LINKED_ISSUE"
+
+        if [ -z "$issue" ]; then
+          issue="$(jq -r '.closingIssuesReferences[0].number // empty' <<<"$pr")"
+        fi
+
+        if [ -z "$issue" ]; then
+          issue="$(jq -r '.body // ""' <<<"$pr" |
+            grep -oiE '(close[sd]?|fixe?[sd]?|resolve[sd]?) +#[0-9]+' |
+            grep -oE '[0-9]+' | head -n 1 || true)"
+        fi
+
+        [ -n "$issue" ] || none "PR #$PR_NUMBER does not close a numbered issue"
+
+        if [ -n "$REQUIRE_LABEL" ]; then
+          labels="$(gh issue view "$issue" --repo "$REPO" --json labels \
+            --jq '[.labels[].name]')"
+
+          if ! jq -e --arg name "$REQUIRE_LABEL" 'index($name)' >/dev/null <<<"$labels"; then
+            none "issue #$issue does not carry $REQUIRE_LABEL (has: $(jq -r 'join(", ")' <<<"$labels"))"
+          fi
+        fi
+
+        # Fetch CI conclusion if not provided (label-triggered runs)
+        ci_conclusion="$CONCLUSION"
+        ci_run_id=""
+        if [ -z "$ci_conclusion" ]; then
+          head_sha="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')"
+          ci_run="$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
+            --jq '[.workflow_runs[] | select(.name == "App: CI" or .name == "CI")] | sort_by(.created_at) | last')"
+          
+          if [ -n "$ci_run" ] && [ "$ci_run" != "null" ]; then
+            ci_conclusion="$(jq -r '.conclusion // "pending"' <<<"$ci_run")"
+            ci_run_id="$(jq -r '.id' <<<"$ci_run")"
+            echo "::notice::Fetched CI status: $ci_conclusion (run $ci_run_id)"
+          else
+            ci_conclusion="unknown"
+            echo "::warning::No CI run found for PR #$PR_NUMBER"
+          fi
+        fi
+
+        {
+          echo "found=true"
+          echo "pr=$PR_NUMBER"
+          echo "issue=$issue"
+          echo "conclusion=$ci_conclusion"
+          echo "run-id=$ci_run_id"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "PR #$PR_NUMBER closes #$issue; CI concluded $ci_conclusion"

@@ -1,0 +1,35 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/validate-review-output/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Validate review output
+description: Verify an apply-review outcome accounts for every unresolved review thread.
+inputs:
+  output-file:
+    description: Path to agent_output.json.
+    required: true
+  pr-number:
+    description: Pull request receiving the review feedback.
+    required: true
+  review-threads-file:
+    description: JSON file containing unresolved review threads.
+    required: true
+outputs:
+  valid:
+    description: Whether the agent output is a valid review outcome.
+    value: ${{ steps.validate.outputs.valid }}
+  outcome:
+    description: "Deterministic review outcome: implemented, already-satisfied, needs-human, or invalid."
+    value: ${{ steps.validate.outputs.outcome }}
+runs:
+  using: composite
+  steps:
+    - name: Validate review outcome
+      id: validate
+      shell: bash
+      env:
+        OUTPUT_FILE: ${{ inputs.output-file }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        REVIEW_THREADS_FILE: ${{ inputs.review-threads-file }}
+      run: |
+        set -euo pipefail
+        outcome="$(bash "${{ github.action_path }}/validate-review-output.sh" "$OUTPUT_FILE" "$PR_NUMBER" "$REVIEW_THREADS_FILE")"
+        echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+        echo "valid=$([ "$outcome" != 'invalid' ] && echo true || echo false)" >> "$GITHUB_OUTPUT"

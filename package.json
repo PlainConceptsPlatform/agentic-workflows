@@ -1,0 +1,15 @@
+{
+  "name": "agentic-workflows",
+  "private": true,
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "prepare": "node cli/scripts/copy-loops.mjs",
+    "build": "pnpm --filter @plainconceptsplatform/workflows build",
+    "test": "pnpm --filter @plainconceptsplatform/workflows test",
+    "typecheck": "pnpm --filter @plainconceptsplatform/workflows typecheck",
+    "verify": "pnpm typecheck && pnpm build && pnpm test",
+    "pack": "pnpm verify && pnpm --filter @plainconceptsplatform/workflows pack --pack-destination ../../artifacts",
+    "release": "pnpm verify && pnpm --filter @plainconceptsplatform/workflows release"
+  },
+  "version": "0.5.0"
+}

@@ -1,0 +1,53 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/download-agent-output/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Download agent output
+description: Download the agent artifact and expose the output JSON and bundle paths.
+inputs:
+  artifact-name:
+    description: >-
+      Artifact name to download. gh-aw prefixes it with the value it derives from the
+      workflow's inputs, so a workflow_call worker must pass the activation job's
+      artifact_prefix output followed by "agent", not the bare name.
+    required: true
+outputs:
+  output-file:
+    description: Path to agent_output.json, or empty if not found.
+    value: ${{ steps.download.outputs.output-file }}
+  bundle-file:
+    description: Path to the git bundle, or empty if not found.
+    value: ${{ steps.download.outputs.bundle-file }}
+  item-count:
+    description: Number of items in the agent output.
+    value: ${{ steps.download.outputs.item-count }}
+runs:
+  using: composite
+  steps:
+    - name: Download agent artifact
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: agent-artifact
+    - name: Locate output and bundle
+      id: download
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+      run: |
+        set -euo pipefail
+        OUTPUT_FILE=""
+        BUNDLE_FILE=""
+        ITEM_COUNT="0"
+
+        if [ -f "agent-artifact/agent_output.json" ]; then
+          OUTPUT_FILE="agent-artifact/agent_output.json"
+          ITEM_COUNT=$(jq '.items | length' "$OUTPUT_FILE")
+          BUNDLE_FILE=$(ls agent-artifact/aw-*.bundle 2>/dev/null | head -1 || true)
+        else
+          echo "::error::Artifact '$ARTIFACT_NAME' contained no agent_output.json. Nothing the agent proposed will be applied."
+          exit 1
+        fi
+
+        echo "Artifact '$ARTIFACT_NAME' carries $ITEM_COUNT item(s)."
+
+        echo "output-file=$OUTPUT_FILE" >> "$GITHUB_OUTPUT"
+        echo "bundle-file=$BUNDLE_FILE" >> "$GITHUB_OUTPUT"
+        echo "item-count=$ITEM_COUNT" >> "$GITHUB_OUTPUT"

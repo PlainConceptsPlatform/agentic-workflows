@@ -1,0 +1,30 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/add-issue-labels/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Add issue labels
+description: Add one or more labels to an issue or pull request.
+inputs:
+  token:
+    description: GitHub token used by github-script.
+    required: true
+  issue-number:
+    description: Issue or pull request number.
+    required: true
+  labels:
+    description: Newline-delimited labels to add.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Add labels
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        LABELS: ${{ inputs.labels }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          const labels = process.env.LABELS.split(/\r?\n/).filter(Boolean);
+          await github.rest.issues.addLabels({
+            ...context.repo,
+            issue_number: Number(process.env.ISSUE_NUMBER),
+            labels,
+          });

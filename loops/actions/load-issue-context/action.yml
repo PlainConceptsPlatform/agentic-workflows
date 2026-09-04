@@ -1,0 +1,45 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/load-issue-context/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Load issue context
+description: Write issue metadata and comment context to a JSON file.
+inputs:
+  token:
+    description: GitHub token used by github-script.
+    required: true
+  issue-number:
+    description: Issue number to load.
+    required: true
+  output-path:
+    description: Absolute path where context JSON is written.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Load issue and comments
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        OUTPUT_PATH: ${{ inputs.output-path }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          const fs = require('fs');
+          const issueNumber = Number(process.env.ISSUE_NUMBER);
+          const issue = await github.rest.issues.get({ ...context.repo, issue_number: issueNumber });
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            ...context.repo, issue_number: issueNumber, per_page: 100,
+          });
+
+          fs.mkdirSync(require('path').dirname(process.env.OUTPUT_PATH), { recursive: true });
+          fs.writeFileSync(process.env.OUTPUT_PATH, JSON.stringify({
+            number: issue.data.number,
+            title: issue.data.title,
+            body: issue.data.body,
+            author: issue.data.user.login,
+            authorAssociation: issue.data.author_association,
+            labels: issue.data.labels.map(({ name }) => name),
+            comments: comments.map(({ user, author_association, body }) => ({
+              author: user.login,
+              association: author_association,
+              body,
+            })),
+          }, null, 2));

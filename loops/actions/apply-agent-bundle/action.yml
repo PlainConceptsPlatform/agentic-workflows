@@ -1,0 +1,24 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/apply-agent-bundle/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Apply agent bundle
+description: Fast-forward an intended branch to the single commit exported by a verified git bundle.
+inputs:
+  bundle-file:
+    description: Path to the git bundle from the agent artifact.
+    required: true
+  target-branch:
+    description: Branch that must fast-forward to the bundle commit.
+    required: true
+  base-branch:
+    description: Existing branch used only when target-branch does not exist.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Fast-forward branch from bundle
+      shell: bash
+      env:
+        BUNDLE_FILE: ${{ inputs.bundle-file }}
+        TARGET_BRANCH: ${{ inputs.target-branch }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
+      run: bash "$GITHUB_ACTION_PATH/apply-bundle.sh" "$BUNDLE_FILE" "$TARGET_BRANCH" "$BASE_BRANCH"

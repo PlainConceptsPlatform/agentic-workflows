@@ -1,0 +1,9 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/verify-composite-actions/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Verify composite actions
+description: Check every local composite action manifest parses and uses only contexts a composite action actually has.
+runs:
+  using: composite
+  steps:
+    - name: Validate composite action manifests
+      shell: bash
+      run: bash "${GITHUB_ACTION_PATH}/verify-composite-actions.sh"

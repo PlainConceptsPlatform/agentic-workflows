@@ -1,0 +1,121 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/templates/agentics/agentics-maintenance.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+# Derived from the gh-aw v0.83.4 maintenance workflow.
+# Copy provenance is documented in docs/ownership.md.
+name: Agentic Maintenance
+
+on:
+  schedule:
+    - cron: "37 0 * * *"
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Optional maintenance operation to run
+        required: false
+        type: choice
+        default: ""
+        options:
+          - ""
+          - disable
+          - enable
+          - update
+          - upgrade
+          - safe_outputs
+          - create_labels
+          - activity_report
+          - close_agentic_workflows_issues
+          - clean_cache_memories
+          - update_pull_request_branches
+          - validate
+          - forecast
+      run_url:
+        description: Run URL or run ID required for safe_outputs
+        required: false
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      operation:
+        required: false
+        type: string
+        default: ""
+      run_url:
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  close-expired-discussions:
+    if: ${{ !(github.event.repository.fork) && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call' || inputs.operation == '') }}
+    runs-on: ubuntu-latest
+    permissions:
+      discussions: write
+    steps:
+      - name: Setup Scripts
+        uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
+        with:
+          destination: ${{ runner.temp }}/gh-aw/actions
+      - name: Close expired discussions
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { setupGlobals } = require('${{ runner.temp }}/gh-aw/actions/setup_globals.cjs');
+            setupGlobals(core, github, context, exec, io, getOctokit);
+            const { main } = require('${{ runner.temp }}/gh-aw/actions/close_expired_discussions.cjs');
+            await main();
+  close-expired-issues:
+    if: ${{ !(github.event.repository.fork) && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call' || inputs.operation == '') }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Setup Scripts
+        uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
+        with:
+          destination: ${{ runner.temp }}/gh-aw/actions
+      - name: Close expired issues
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { setupGlobals } = require('${{ runner.temp }}/gh-aw/actions/setup_globals.cjs');
+            setupGlobals(core, github, context, exec, io, getOctokit);
+            const { main } = require('${{ runner.temp }}/gh-aw/actions/close_expired_issues.cjs');
+            await main();
+  close-expired-pull-requests:
+    if: ${{ !(github.event.repository.fork) && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call' || inputs.operation == '') }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Setup Scripts
+        uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
+        with:
+          destination: ${{ runner.temp }}/gh-aw/actions
+      - name: Close expired pull requests
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { setupGlobals } = require('${{ runner.temp }}/gh-aw/actions/setup_globals.cjs');
+            setupGlobals(core, github, context, exec, io, getOctokit);
+            const { main } = require('${{ runner.temp }}/gh-aw/actions/close_expired_pull_requests.cjs');
+            await main();
+  cleanup-cache-memory:
+    if: ${{ !(github.event.repository.fork) && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call' || inputs.operation == '' || inputs.operation == 'clean_cache_memories') }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Setup Scripts
+        uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
+        with:
+          destination: ${{ runner.temp }}/gh-aw/actions
+      - name: Cleanup outdated cache-memory entries
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { setupGlobals } = require('${{ runner.temp }}/gh-aw/actions/setup_globals.cjs');
+            setupGlobals(core, github, context, exec, io, getOctokit);
+            const { main } = require('${{ runner.temp }}/gh-aw/actions/cleanup_cache_memory.cjs');
+            await main();
+ #

@@ -1,0 +1,113 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/update-changelog/action.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: Update changelog
+description: Prepend a changelog entry for a landed issue and push it to the default branch.
+
+inputs:
+  token:
+    description: Token with contents write on the repository.
+    required: true
+  issue-number:
+    description: Issue the landed commit implements.
+    required: true
+  commit-sha:
+    description: Commit the work landed as. Its subject becomes the summary.
+    required: true
+  changelog-path:
+    description: Path to changelog.json.
+    required: false
+    default: apps/web/src/shared/data/changelog.json
+  max-entries:
+    description: Newest entries to keep.
+    required: false
+    default: "20"
+
+runs:
+  using: composite
+  steps:
+    - name: Prepend the entry and push
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        COMMIT_SHA: ${{ inputs.commit-sha }}
+        CHANGELOG_PATH: ${{ inputs.changelog-path }}
+        MAX_ENTRIES: ${{ inputs.max-entries }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        set -euo pipefail
+
+        # This used to be part of the implement prompt. It is deterministic work, and leaving it
+        # to the agent made every implement touch the same file: two runs whose branches were cut
+        # before the other merged conflicted here, produced correct code, and still failed to open
+        # a pull request. Doing it after the merge means exactly one writer, always against a
+        # current default branch.
+
+        host="${GITHUB_SERVER_URL#https://}"
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git remote set-url origin "https://x-access-token:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
+
+        git fetch --quiet origin "$DEFAULT_BRANCH"
+        git checkout --quiet -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
+
+        if [ ! -f "$CHANGELOG_PATH" ]; then
+          echo "::notice::$CHANGELOG_PATH does not exist; nothing to update."
+          exit 0
+        fi
+
+        # Idempotent: a re-run, a retry, or a second call for the same commit must not add a
+        # duplicate row.
+        short_sha="${COMMIT_SHA:0:7}"
+        if jq -e --arg c "$short_sha" '.changes[]? | select(.commit == $c)' "$CHANGELOG_PATH" >/dev/null 2>&1; then
+          echo "::notice::$short_sha is already in the changelog."
+          exit 0
+        fi
+
+        title=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json title --jq '.title')
+
+        # The commit subject carries what actually changed. Strip the conventional-commit prefix
+        # and the trailing issue reference so the summary reads as prose rather than as a commit.
+        subject=$(git log -1 --format=%s "$COMMIT_SHA")
+        summary=$(printf '%s' "$subject" \
+          | sed -E 's/^[a-z]+(\([^)]*\))?!?: *//' \
+          | sed -E 's/ *\(#[0-9]+\) *$//')
+        [ -n "$summary" ] || summary="$title"
+        # Capitalise, because a commit subject conventionally starts lowercase and this is read
+        # by people rather than by tooling.
+        summary="$(printf '%s' "${summary:0:1}" | tr '[:lower:]' '[:upper:]')${summary:1}"
+
+        timestamp=$(git log -1 --format=%cI "$COMMIT_SHA")
+
+        tmp=$(mktemp)
+        jq --argjson n "$MAX_ENTRIES" \
+           --arg ts "$timestamp" \
+           --argjson issue "$ISSUE_NUMBER" \
+           --arg title "$title" \
+           --arg summary "$summary" \
+           --arg commit "$short_sha" \
+           '.changes = ([{timestamp: $ts, issue: $issue, title: $title, summary: $summary, commit: $commit}] + (.changes // []))[:$n]' \
+           "$CHANGELOG_PATH" > "$tmp"
+        mv "$tmp" "$CHANGELOG_PATH"
+
+        if git diff --quiet -- "$CHANGELOG_PATH"; then
+          echo "::notice::changelog unchanged."
+          exit 0
+        fi
+
+        git add -- "$CHANGELOG_PATH"
+        git commit --quiet -m "docs(changelog): record #${ISSUE_NUMBER}"
+
+        # The default branch may have moved while this ran. Rebase and retry rather than fail:
+        # only this action writes the file, so a rebase here cannot produce a content conflict.
+        for attempt in 1 2 3; do
+          if git push --quiet origin "$DEFAULT_BRANCH"; then
+            echo "Recorded #${ISSUE_NUMBER} at ${short_sha} in the changelog."
+            exit 0
+          fi
+          echo "::notice::push rejected, rebasing (attempt ${attempt})"
+          git fetch --quiet origin "$DEFAULT_BRANCH"
+          git rebase --quiet "origin/$DEFAULT_BRANCH" || { git rebase --abort || true; break; }
+        done
+
+        echo "::warning::Could not push the changelog entry for #${ISSUE_NUMBER}."

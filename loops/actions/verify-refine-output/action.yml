@@ -1,0 +1,9 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/verify-refine-output/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Verify refine output validation
+description: Exercise deterministic Refine output validation regressions.
+runs:
+  using: composite
+  steps:
+    - name: Verify refinement outcomes
+      shell: bash
+      run: bash "${{ github.action_path }}/verify-refine-output.sh"

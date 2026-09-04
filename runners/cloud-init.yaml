@@ -1,0 +1,150 @@
+#cloud-config
+# One runner, one job at a time, many jobs per VM. The boot sequence: setup.sh installs the
+# toolchain, then runner-job.service asks the scaler app for a JIT config, runs exactly one
+# job, resets Docker state, and asks again. When nothing is queued for IDLE_LIMIT the VM
+# reports done and the app deletes it.
+#
+# Why the loop: gh-aw locks split a run into many stages of a few seconds each, while a VM
+# takes about three minutes to boot. One VM per stage spent roughly 78% of billed time
+# booting and added that wait to every stage. Sequential reuse keeps the isolation that
+# matters (one job at a time, never two concurrent workflows on a VM) and drops the boot
+# cost to once per burst.
+#
+# The bearer token below only lets a VM ask the app for work and for deletion; the app
+# verifies the caller is a live instance of this scale set before answering.
+package_update: true
+packages: [git, jq, curl, unzip, apt-transport-https, ca-certificates, gnupg]
+write_files:
+  - path: /opt/runner/setup.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list
+      curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli.gpg
+      echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+      # azure/login and the infra workflows expect az on PATH; the runner user has no
+      # sudo, so it has to be baked in here
+      curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg
+      echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ noble main" > /etc/apt/sources.list.d/azure-cli.list
+      apt-get update -qq
+      apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin gh azure-cli >/dev/null
+      # Swap: the awf Docker stack + Node.js + pnpm + opencode can spike past 8GB on D2ads_v5.
+      # Without swap the OOM killer terminates the agent (exit 137). 8GB swap costs nothing
+      # on an ephemeral OS disk and prevents the "everything green, nothing pushed" silent
+      # failure that started when we moved from the old host to ephemeral VMs.
+      fallocate -l 8G /mnt/azure_resource_disk/swapfile || fallocate -l 8G /swapfile
+      SWAP=/mnt/azure_resource_disk/swapfile; [ -f /swapfile ] && SWAP=/swapfile
+      chmod 600 "$SWAP"
+      mkswap "$SWAP" >/dev/null
+      swapon "$SWAP"
+      echo "$SWAP none swap sw 0 0" >> /etc/fstab
+      # trivy-action expects the binary on PATH and its own installer is unreliable here
+      curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz" \
+        | tar -xz -C /usr/local/bin trivy
+      useradd -m -s /bin/bash runner || true
+      usermod -aG docker runner
+      mkdir -p /opt/actions-runner && cd /opt/actions-runner
+      RUNNER_VERSION=$(curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name' | tr -d v)
+      curl -fsSL -o runner.tgz "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
+      tar xzf runner.tgz && rm runner.tgz
+      ./bin/installdependencies.sh >/dev/null 2>&1 || true
+      chown -R runner:runner /opt/actions-runner
+      touch /opt/runner/.ready
+  - path: /etc/runner-scaler.env
+    permissions: "0600"
+    content: |
+      SCALER_URL=https://agentrunner-scaler-01.azurewebsites.net
+      VM_TOKEN=__VM_TOKEN__
+  - path: /opt/runner/job.sh
+    permissions: "0700"
+    content: |
+      #!/bin/bash
+      # Serve jobs one at a time until the queue stays empty, then ask to be deleted.
+      set -u
+      . /etc/runner-scaler.env
+
+      FIRST_WAIT=120     # a VM that boots into no work at all dies quickly
+      IDLE_LIMIT=300     # after real work, stay warm this long for the next stage
+      MAX_JOBS=20        # bound state and disk growth on a long-lived instance
+      DISK_LIMIT=85      # percent used on / before refusing more work
+
+      for i in $(seq 1 120); do [ -f /opt/runner/.ready ] && break; sleep 5; done
+      NAME=$(curl -s -H Metadata:true "http://169.254.169.254/metadata/instance/compute/name?api-version=2021-02-01&format=text")
+      ID=${NAME##*_}
+      JOBS_RUN=0
+      LAST_WORK=$(date +%s)
+
+      # awf names its containers fixed (awf-agent, awf-squid, awf-api-proxy, awmg-mcpg), so a
+      # leftover from the previous job would collide by name. Reset Docker between jobs.
+      reset_state() {
+        docker ps -aq --filter "name=^awf-" --filter "name=^awmg-" | xargs -r docker rm -f >/dev/null 2>&1
+        docker container prune -f >/dev/null 2>&1
+        docker volume prune -f >/dev/null 2>&1
+        docker network prune -f >/dev/null 2>&1
+        rm -rf /tmp/gh-aw-* /tmp/gh-aw /tmp/opencode-data-* 2>/dev/null
+        # A later job must find a pristine workspace: a half-cleaned checkout from the
+        # previous job made actions/checkout die with exit 128. The toolcache survives,
+        # because reinstalling dotnet and node per job is the boot cost all over again.
+        find /opt/actions-runner/_work -mindepth 1 -maxdepth 1 ! -name '_tool' -exec rm -rf {} + 2>/dev/null
+      }
+
+      while true; do
+        USED=$(df --output=pcent / | tail -1 | tr -dc '0-9')
+        if [ "${USED:-0}" -ge "$DISK_LIMIT" ]; then
+          echo "disk ${USED}% >= ${DISK_LIMIT}%, retiring"
+          break
+        fi
+
+        JIT=$(curl -fsS -m 60 -X POST "$SCALER_URL/vm/jit" \
+          -H "Authorization: Bearer $VM_TOKEN" -H "Content-Type: application/json" \
+          -d "{\"instanceId\":\"$ID\"}" || true)
+
+        if [ -n "$JIT" ]; then
+          cd /opt/actions-runner
+          sudo -u runner ./run.sh --jitconfig "$JIT"
+          JOBS_RUN=$((JOBS_RUN + 1))
+          LAST_WORK=$(date +%s)
+          reset_state
+          echo "completed job $JOBS_RUN"
+          [ "$JOBS_RUN" -ge "$MAX_JOBS" ] && { echo "reached MAX_JOBS, retiring"; break; }
+          continue
+        fi
+
+        NOW=$(date +%s)
+        WAITED=$((NOW - LAST_WORK))
+        if [ "$JOBS_RUN" -eq 0 ]; then
+          LIMIT=$FIRST_WAIT
+        else
+          LIMIT=$IDLE_LIMIT
+        fi
+        if [ "$WAITED" -ge "$LIMIT" ]; then
+          echo "idle ${WAITED}s after $JOBS_RUN job(s), retiring"
+          break
+        fi
+        sleep 15
+      done
+
+      RAN=false
+      [ "$JOBS_RUN" -gt 0 ] && RAN=true
+      curl -fsS -m 60 -X POST "$SCALER_URL/vm/done" \
+        -H "Authorization: Bearer $VM_TOKEN" -H "Content-Type: application/json" \
+        -d "{\"instanceId\":\"$ID\",\"ranJob\":$RAN,\"jobsRun\":$JOBS_RUN}" || true
+  - path: /etc/systemd/system/runner-job.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Serve GitHub Actions jobs then request deletion
+      After=network-online.target docker.service
+      Wants=network-online.target
+      [Service]
+      Type=oneshot
+      ExecStart=/opt/runner/job.sh
+      TimeoutStartSec=infinity
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - [bash, /opt/runner/setup.sh]
+  - [systemctl, enable, --now, --no-block, runner-job.service]

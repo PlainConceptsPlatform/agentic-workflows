@@ -1,0 +1,108 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/apply-agent-output/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Apply agent output
+description: Download the agent artifact and apply its safe outputs in one fixed order, so every worker concludes the same way.
+inputs:
+  token:
+    description: GitHub token the writes are made with.
+    required: true
+  artifact-name:
+    description: >-
+      Name of the agent artifact. Callers pass the activation job's artifact_prefix output
+      followed by "agent"; gh-aw derives that prefix from the workflow's inputs, so it is
+      non-empty for every workflow_call worker and the bare name never resolves.
+    required: true
+  merge-pull-request:
+    description: Apply merge_pull_request items.
+    required: false
+    default: 'false'
+  push-to-branch:
+    description: Apply push_to_pull_request_branch items.
+    required: false
+    default: 'false'
+  close-issues:
+    description: Apply close_issue items.
+    required: false
+    default: 'false'
+  create-issues:
+    description: Apply create_issue items.
+    required: false
+    default: 'false'
+  update-issues:
+    description: Apply update_issue items.
+    required: false
+    default: 'false'
+  apply-labels:
+    description: Apply add_labels and remove_labels items.
+    required: false
+    default: 'true'
+  fallback-issue-number:
+    description: Issue an update_issue item targets when it names none.
+    required: false
+    default: ''
+outputs:
+  item-count:
+    description: Number of items the agent produced.
+    value: ${{ steps.output.outputs.item-count }}
+  first-issue-number:
+    description: Issue number of the first issue created, or empty.
+    value: ${{ steps.create-issues.outputs.first-issue-number }}
+runs:
+  using: composite
+  steps:
+    - name: Download agent output
+      id: output
+      uses: ./.github/actions/download-agent-output
+      with:
+        artifact-name: ${{ inputs.artifact-name }}
+
+    - name: Merge pull request
+      if: inputs.merge-pull-request == 'true' && steps.output.outputs.item-count != '0'
+      uses: ./.github/actions/merge-agent-pr
+      with:
+        output-file: ${{ steps.output.outputs.output-file }}
+        token: ${{ inputs.token }}
+
+    - name: Push to pull request branch
+      if: inputs.push-to-branch == 'true' && steps.output.outputs.item-count != '0'
+      uses: ./.github/actions/push-agent-branch
+      with:
+        output-file: ${{ steps.output.outputs.output-file }}
+        bundle-file: ${{ steps.output.outputs.bundle-file }}
+        token: ${{ inputs.token }}
+
+    - name: Close issues
+      if: inputs.close-issues == 'true' && steps.output.outputs.item-count != '0'
+      uses: ./.github/actions/close-agent-issues
+      with:
+        output-file: ${{ steps.output.outputs.output-file }}
+        token: ${{ inputs.token }}
+
+    - name: Update issues
+      if: inputs.update-issues == 'true' && steps.output.outputs.item-count != '0'
+      uses: ./.github/actions/update-agent-issues
+      with:
+        output-file: ${{ steps.output.outputs.output-file }}
+        token: ${{ inputs.token }}
+        fallback-issue-number: ${{ inputs.fallback-issue-number }}
+
+    - name: Create issues
+      id: create-issues
+      if: inputs.create-issues == 'true' && steps.output.outputs.item-count != '0'
+      uses: ./.github/actions/create-agent-issues
+      with:
+        output-file: ${{ steps.output.outputs.output-file }}
+        token: ${{ inputs.token }}
+
+    - name: Post agent comments
+      if: steps.output.outputs.item-count != '0'
+      uses: ./.github/actions/apply-agent-comments
+      with:
+        output-file: ${{ steps.output.outputs.output-file }}
+        token: ${{ inputs.token }}
+
+    - name: Apply agent label changes
+      if: inputs.apply-labels == 'true' && steps.output.outputs.item-count != '0'
+      uses: ./.github/actions/apply-agent-labels
+      with:
+        output-file: ${{ steps.output.outputs.output-file }}
+        token: ${{ inputs.token }}

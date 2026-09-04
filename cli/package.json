@@ -1,0 +1,44 @@
+{
+  "name": "@plainconceptsplatform/workflows",
+  "version": "0.5.0",
+  "description": "Install and update Platform GitHub agentic workflows.",
+  "keywords": [
+    "github-actions",
+    "agentic-workflows",
+    "plain-concepts"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PlainConceptsPlatform/Agentic-Workflows.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PlainConceptsPlatform/Agentic-Workflows/issues"
+  },
+  "homepage": "https://github.com/PlainConceptsPlatform/Agentic-Workflows#readme",
+  "license": "UNLICENSED",
+  "type": "module",
+  "bin": {
+    "workflows": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "loops",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "release": "pnpm build && pnpm test && npm publish --access public",
+    "prepack": "node ./scripts/copy-loops.mjs"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0",
+    "yaml": "^2.9.0"
+  }
+}

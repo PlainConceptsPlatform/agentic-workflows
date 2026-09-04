@@ -1,0 +1,43 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/close-agent-issues/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Close agent issues
+description: Close every close_issue item from agent_output.json.
+inputs:
+  output-file:
+    description: Path to agent_output.json.
+    required: true
+  token:
+    description: GitHub token with issues:write.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Close issues
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        AGENT_OUTPUT_LIB: ${{ github.action_path }}/../agent-output.cjs
+        OUTPUT_FILE: ${{ inputs.output-file }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          const { readAgentItems } = require(process.env.AGENT_OUTPUT_LIB);
+          const items = readAgentItems(process.env.OUTPUT_FILE, 'close_issue');
+
+          let closed = 0;
+
+          for (const item of items) {
+            if (!item.item_number) {
+              core.warning(`close_issue item has no item_number, skipping: ${JSON.stringify(item)}`);
+              continue;
+            }
+
+            await github.rest.issues.update({
+              ...context.repo,
+              issue_number: Number(item.item_number),
+              state: 'closed',
+              state_reason: item.state_reason === 'not_planned' ? 'not_planned' : 'completed',
+            });
+
+            closed += 1;
+          }
+
+          core.info(`Closed ${closed} issue(s).`);

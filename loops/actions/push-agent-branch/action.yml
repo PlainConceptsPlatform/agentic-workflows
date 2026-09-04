@@ -1,0 +1,45 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/push-agent-branch/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Push agent branch
+description: Read push_to_pull_request_branch from agent_output.json and fast-forward from its git bundle.
+inputs:
+  output-file:
+    description: Path to agent_output.json.
+    required: true
+  bundle-file:
+    description: Path to the git bundle from the agent artifact.
+    required: false
+    default: ''
+  token:
+    description: GitHub token with contents:write.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Configure git credentials
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+    - name: Read pull request branch
+      id: request
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        OUTPUT_FILE: ${{ inputs.output-file }}
+        BUNDLE_FILE: ${{ inputs.bundle-file }}
+      run: |
+        set -euo pipefail
+        [ -f "$OUTPUT_FILE" ] || exit 0
+
+        ITEM=$(jq -c '.items[] | select(.type == "push_to_pull_request_branch")' "$OUTPUT_FILE")
+        [ -n "$ITEM" ] || exit 0
+
+        BRANCH=$(echo "$ITEM" | jq -r '.branch')
+        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+    - name: Apply bundle to pull request branch
+      if: steps.request.outputs.branch != '' && inputs.bundle-file != ''
+      uses: ./.github/actions/apply-agent-bundle
+      with:
+        bundle-file: ${{ inputs.bundle-file }}
+        target-branch: ${{ steps.request.outputs.branch }}
