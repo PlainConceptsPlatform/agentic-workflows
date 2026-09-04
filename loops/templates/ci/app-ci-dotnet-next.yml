@@ -148,7 +148,7 @@ jobs:
           export PATH="$PATH:$HOME/.dotnet/tools"   # ephemeral ARC runners do not have dotnet tools on PATH
           dotnet stryker \
             --project "$MUTATION_TARGET_PROJECT" \
-            --test-project "$MUTATION_TEST_PROJECT" \
+            --test-projects "$MUTATION_TEST_PROJECT" \
             --since:"origin/$GITHUB_BASE_REF" \
             --concurrency 2 \
             --threshold-high "$MUTATION_THRESHOLD" \
