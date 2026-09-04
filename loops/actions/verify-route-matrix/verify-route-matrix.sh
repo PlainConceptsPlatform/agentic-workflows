@@ -189,8 +189,6 @@ assert_route "an unknown operation routes nowhere" none \
   EVENT=workflow_dispatch OPERATION=deploy-everything
 assert "a scheduled audit reports its trigger kind" scheduled \
   "$(route_field trigger-kind EVENT=schedule "SCHEDULE=17 1 * * 1")"
-assert_route "the weekly mutation cron routes to mutation" mutation EVENT=schedule "SCHEDULE=41 3 * * 4"
-assert_route "a dispatched mutation routes to mutation" mutation EVENT=workflow_dispatch OPERATION=mutation
 
 assert "a dispatched audit reports its trigger kind" manual \
   "$(route_field trigger-kind EVENT=workflow_dispatch OPERATION=audit INPUT_TRIGGER_KIND=manual)"
@@ -272,7 +270,7 @@ else
   echo "FAIL: route 'triage' does not dispatch outside collaborators and require a trusted worker actor" >&2
 fi
 
-for route in refine implement triage apply-review merge-gate audit mutation bot-approve \
+for route in refine implement triage apply-review merge-gate audit bot-approve \
   audit-close cleanup-artifacts reconcile-bot-pr-runs validate release; do
   if grep -q "route == '${route}'" "$ROUTER_YML"; then
     PASS=$((PASS + 1))

@@ -110,14 +110,11 @@ on:
   # Cron to route mapping lives in .github/actions/classify-route/classify-route.sh.
   schedule:
     # Slot 0. Every consumer installs this same file, and the agent fleet is one shared,
-    # two-VM scale set, so a second repository left on slot 0 audits and mutates at the same
-    # minute as the first. Pick a free slot per repository: see "Scheduling across
-    # repositories" in the package README, and change AUDIT_CRON and MUTATION_CRON in
-    # classify-route.sh to match, or the run fires and classifies to no route.
+    # two-VM scale set, so a second repository left on slot 0 audits at the same minute as
+    # the first. Pick a free slot per repository: see "Scheduling across repositories" in the
+    # package README, and change AUDIT_CRON in classify-route.sh to match, or the run fires
+    # and classifies to no route.
     - cron: "17 1 * * 1"
-    # Tuesday, a day clear of the Monday audit: both are long agent runs and the fleet is
-    # two VMs, so overlapping them makes each wait on the other.
-    - cron: "41 3 * * 4"
     - cron: "43 3 * * *"
     - cron: "0 6 * * *"
     - cron: "17 * * * *"
@@ -136,7 +133,6 @@ on:
           - apply-review
           - merge-gate
           - audit
-          - mutation
           - audit-close
           - cleanup-artifacts
           - reconcile-bot-pr-runs
@@ -507,24 +503,6 @@ jobs:
     uses: ./.github/workflows/agent-audit.lock.yml
     concurrency:
       group: audit
-      cancel-in-progress: false
-    permissions: write-all
-    with:
-      trigger-kind: ${{ needs.classify.outputs.trigger-kind }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-
-  call-mutation:
-    needs: classify
-    if: needs.classify.outputs.route == 'mutation'
-    uses: ./.github/workflows/agent-mutation.lock.yml
-    concurrency:
-      group: mutation
       cancel-in-progress: false
     permissions: write-all
     with:

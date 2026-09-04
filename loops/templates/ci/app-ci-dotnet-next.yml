@@ -20,6 +20,12 @@ env:
   UNIT_TEST_PROJECT: tests/App.UnitTests/App.UnitTests.csproj
   PARITY_TEST_PROJECT: tests/App.ParityTests/App.ParityTests.csproj
   INTEGRATION_TEST_PROJECT: tests/App.IntegrationTests/App.IntegrationTests.csproj
+  # Per-PR mutation gate. Stryker mutates only files changed since the PR base (--since),
+  # so a green unit suite that never actually pins behaviour fails here instead of shipping.
+  # dotnet-stryker is pinned in the api tools manifest (.config/dotnet-tools.json / dotnet-tools.json).
+  MUTATION_TARGET_PROJECT: src/App.Domain/App.Domain.csproj
+  MUTATION_TEST_PROJECT: tests/App.UnitTests/App.UnitTests.csproj
+  MUTATION_THRESHOLD: "60"
   COVERAGE_SETTINGS: coverage.runsettings
   COVERAGE_CHECK_COMMAND: node ../../scripts/check-coverage.mjs TestResults/merged/Cobertura.xml
   MIGRATION_PROJECT: src/App.Infrastructure/App.Infrastructure.csproj
@@ -104,6 +110,52 @@ jobs:
           reportgenerator -reports:"TestResults/**/coverage.cobertura.xml" -targetdir:TestResults/merged -reporttypes:Cobertura
           bash -c "$COVERAGE_CHECK_COMMAND"
 
+  mutation-api:
+    name: Mutation (.NET, diff)
+    if: github.event_name == 'pull_request'
+    runs-on: agents-arc
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: ${{ env.API_WORKING_DIRECTORY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Stryker --since diffs against the PR base; it needs history, not a shallow tip.
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Detect backend changes
+        id: scope
+        working-directory: ${{ github.workspace }}
+        run: |
+          git fetch origin "$GITHUB_BASE_REF" --depth=1
+          if git diff --name-only "origin/$GITHUB_BASE_REF" HEAD | grep -qE "^${API_WORKING_DIRECTORY}/"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No ${API_WORKING_DIRECTORY} changes in this PR; skipping .NET mutation."
+          fi
+      - name: Restore tools and build
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          dotnet tool restore
+          dotnet build "$DOTNET_SOLUTION" -c Release
+      - name: Stryker.NET (changed files only)
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          export PATH="$PATH:$HOME/.dotnet/tools"   # ephemeral ARC runners do not have dotnet tools on PATH
+          dotnet stryker \
+            --project "$MUTATION_TARGET_PROJECT" \
+            --test-project "$MUTATION_TEST_PROJECT" \
+            --since:"origin/$GITHUB_BASE_REF" \
+            --concurrency 2 \
+            --threshold-high "$MUTATION_THRESHOLD" \
+            --threshold-low "$MUTATION_THRESHOLD" \
+            --break-at "$MUTATION_THRESHOLD" \
+            --reporter progress --reporter json
+
   web:
     name: Web (Next.js)
     if: github.event_name != 'schedule'
@@ -134,6 +186,48 @@ jobs:
           pnpm --filter "$WEB_PACKAGE" run test
           pnpm --filter "$WEB_PACKAGE" run lint:fsd
           pnpm --filter "$WEB_PACKAGE" run build
+
+  mutation-web:
+    name: Mutation (web, diff)
+    if: github.event_name == 'pull_request'
+    runs-on: agents-arc
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Detect web changes
+        id: scope
+        run: |
+          git fetch origin "$GITHUB_BASE_REF" --depth=1
+          if git diff --name-only "origin/$GITHUB_BASE_REF" HEAD | grep -qE "^apps/web/"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No apps/web changes in this PR; skipping web mutation."
+          fi
+      - name: Configure optional private registry authentication
+        if: steps.scope.outputs.run == 'true'
+        env:
+          NPM_REGISTRY_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN }}
+        run: |
+          if [ -n "$NPM_REGISTRY_TOKEN" ]; then
+            echo "${NPM_REGISTRY_URL}:_authToken=$NPM_REGISTRY_TOKEN" >> .npmrc
+          fi
+      - name: Install and run StrykerJS (changed files only)
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter "$WEB_PACKAGE" exec stryker run --since="origin/$GITHUB_BASE_REF"
 
   secret-scan:
     name: Secret scan (TruffleHog)

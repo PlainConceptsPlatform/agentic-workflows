@@ -24,7 +24,7 @@ describe("catalog listing", () => {
     const routeNames = entries.filter((entry) => entry.kind === "route").map((entry) => entry.name);
     const templateNames = entries.filter((entry) => entry.kind === "template").map((entry) => entry.name);
 
-    expect(routeNames).toEqual(["refine", "implement", "triage", "apply-review", "merge-gate", "audit", "mutation"]);
+    expect(routeNames).toEqual(["refine", "implement", "triage", "apply-review", "merge-gate", "audit"]);
     expect(templateNames).toEqual(["agentics-checks", "agentics-maintenance", "app-ci-dotnet-next", "app-ci-node-monorepo", "bug-report", "feature-request", "github-release", "opencode.ci.json", "visual-evidence"]);
   });
 
@@ -146,7 +146,7 @@ describe("searchCatalog", () => {
 
   it("returns both routes and templates when the query matches both kinds", () => {
     const entries = [
-      { kind: "route" as const, name: "mutation", description: "Executes a CI instruction.", file: "agent-mutation.md", installed: false },
+      { kind: "route" as const, name: "audit", description: "Executes a CI instruction.", file: "agent-audit.md", installed: false },
       { kind: "template" as const, name: "app-ci-dotnet-next", description: "App CI pipeline.", file: "app-ci-dotnet-next.yml", installed: true },
     ];
     const results = searchCatalog(entries, "CI");

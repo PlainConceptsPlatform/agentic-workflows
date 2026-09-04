@@ -38,7 +38,7 @@ describe("workflows CLI", () => {
     await expect(run(["--help"])).resolves.toBe(0);
 
     const output = log.mock.calls[0]![0] as string;
-    expect(output).toContain("refine, implement, triage, apply-review, merge-gate, audit, mutation");
+    expect(output).toContain("refine, implement, triage, apply-review, merge-gate, audit");
     expect(output).toContain("add [routes]");
     log.mockRestore();
   });
@@ -57,7 +57,7 @@ describe("workflows CLI", () => {
 
     await expect(run(["add", "frobnicate"])).resolves.toBe(1);
 
-    expect(error).toHaveBeenCalledWith("Unknown route: frobnicate. Valid routes: refine, implement, triage, apply-review, merge-gate, audit, mutation.");
+    expect(error).toHaveBeenCalledWith("Unknown route: frobnicate. Valid routes: refine, implement, triage, apply-review, merge-gate, audit.");
     error.mockRestore();
   });
 
@@ -88,9 +88,9 @@ describe("workflows CLI", () => {
     // None installed: all [ ]
     const installedCount = (output.match(/\[x\]/g) ?? []).length;
     expect(installedCount).toBe(0);
-    // 8 routes + 9 templates = 17 entries
+    // 6 routes + 9 templates = 15 entries
     const uninstalledCount = (output.match(/\[ \]/g) ?? []).length;
-    expect(uninstalledCount).toBe(16);
+    expect(uninstalledCount).toBe(15);
     log.mockRestore();
   });
 
@@ -121,7 +121,7 @@ describe("workflows CLI", () => {
     expect(output).toContain("audit");
     expect(output).not.toContain("Templates:");
     // Only the audit route should be returned — no other route name should appear.
-    const visibleRoutes = ["refine", "implement", "triage", "apply-review", "merge-gate", "mutation"];
+    const visibleRoutes = ["refine", "implement", "triage", "apply-review", "merge-gate"];
     for (const route of visibleRoutes) {
       expect(output).not.toContain(`${route} —`);
     }
@@ -182,12 +182,12 @@ describe("workflows CLI", () => {
     const { installCatalog, installTemplate } = mockInstallers();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    await expect(run(["add", "implement", "refine", "mutation"])).resolves.toBe(0);
+    await expect(run(["add", "implement", "refine", "audit"])).resolves.toBe(0);
 
     expect(installCatalog).toHaveBeenCalledOnce();
     expect(installCatalog).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ selectedRoutes: ["implement", "refine", "mutation"] }),
+      expect.objectContaining({ selectedRoutes: ["implement", "refine", "audit"] }),
     );
     expect(installTemplate).not.toHaveBeenCalled();
     log.mockRestore();
@@ -314,11 +314,11 @@ describe("workflows CLI", () => {
     });
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    await expect(run(["add", "mutation"], repositoryPath)).resolves.toBe(0);
+    await expect(run(["add", "audit"], repositoryPath)).resolves.toBe(0);
 
     expect(installCatalog).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ selectedRoutes: ["mutation", "refine", "implement"] }),
+      expect.objectContaining({ selectedRoutes: ["audit", "refine", "implement"] }),
     );
     log.mockRestore();
   });

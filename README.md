@@ -34,7 +34,6 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | `merge-gate` | `agent-merge-gate.md` | CI reports on a bot pull request | a squash merge, a fix pushed to the same branch, or a hand-off to a human |
 | `apply-review` | `agent-apply-review.md` | someone reviews or comments on a bot pull request | the requested changes pushed to that pull request |
 | `audit` | `agent-audit.md` | Mondays, or on demand | one issue of findings, labelled `refine` so it gets sized and split |
-| `mutation` | `agent-mutation.md` | Tuesdays, or on demand | one issue naming tests that do not actually pin behaviour |
 | `release` | `agent-release.md` | on demand (`operation=release`) | a tagged GitHub Release with AI-generated release notes |
 
 Plus the plumbing, which has no agent in it: `work-router.yml` (the router itself),
@@ -46,21 +45,14 @@ a trusted actor), and the `classify-route` / `verify-route-matrix` composite act
 The normal life of a piece of work is `refine` → `implement` → CI → `merge-gate` → merged, with
 no human in the loop unless a worker asks for one. Refine decides the size: an estimate of 8 or
 more is split into children of 5 or less, and each child walks the same path on its own. Audit
-and mutation are the two that create work rather than consume it, and both file into `refine`
-rather than straight to `implement`, so a report of several unrelated findings becomes one
-properly sized issue per finding instead of one pull request that has to fix them all.
+creates work rather than consuming it, and files into `refine` rather than straight to
+`implement`, so a report of several unrelated findings becomes one properly sized issue per
+finding instead of one pull request that has to fix them all.
 
 Two labels are the controls a person has: `review` parks anything for a human, and `future`
 holds a refined issue back from implementation until it is removed. A third label, `pr-pending`,
 marks issues whose bot PR is open and awaiting merge-gate — it is informational only and does
 not route or block anything.
-
-### Configuring mutation
-
-`agent-mutation.md` is the one worker that has to be pointed at the consumer's own code, through
-`MUTATION_TARGET_PROJECT` (what to mutate), `MUTATION_TEST_PROJECT` (the suite to run against each
-mutant), `MUTATION_THRESHOLD_HIGH` and `STRYKER_VERSION`. Keep the target narrow: cost is mutants
-times test time, so a whole solution takes hours and produces findings nobody reads.
 
 ## Releasing
 
@@ -78,32 +70,25 @@ gh workflow run work-router.yml --repo PlainConceptsPlatform/<repo> -f operation
 `version-bump` accepts `auto`, `patch`, `minor`, or `major`. The worker only needs
 `OPENAI_API_KEY` — it uses `github.token` for git operations and `gh release create`.
 
-`STRYKER_VERSION` has to be new enough for the target's framework. Stryker resolves the project
-graph through buildalyzer, and a version older than the SDK dies with `System.FormatException:
-Commandline could not be parsed` before it creates a single mutant, which reads as a broken
-workflow rather than a version mismatch. 4.6.0 cannot analyse a `net10.0` project; 4.16.0 can.
-
 ## Scheduling across repositories
 
-Two workers run on a timer and both are long: `audit` takes about 45 minutes and `mutation` can
-take up to three hours. Every repository installs the same router from this package, so unless
-the schedule is changed at install time, **every consumer fires them at the same minute**. The
-agent fleet is shared by every consumer and deliberately small, so two repositories auditing
-together already consume all of it, and two mutations together hold it for the rest of the
-morning while CI and merge gates queue behind them.
+One worker runs on a timer and it is long: `audit` takes about 45 minutes. Every repository
+installs the same router from this package, so unless the schedule is changed at install time,
+**every consumer fires it at the same minute**. The agent fleet is shared by every consumer and
+deliberately small, so two repositories auditing together already consume all of it while CI and
+merge gates queue behind them.
 
-Give each repository its own slot. The scheme below puts one audit and one mutation on each day
-of the week, with the mutation starting after that day's audit has finished:
+Give each repository its own slot. The scheme below puts one audit on each day of the week:
 
-| Slot | Repository | Audit | Mutation |
-|---|---|---|---|
-| 0 | first consumer | `17 1 * * 1` Mon | `41 3 * * 4` Thu |
-| 1 | second consumer | `17 1 * * 2` Tue | `41 3 * * 5` Fri |
-| 2 | *free* | `17 1 * * 3` Wed | `41 3 * * 6` Sat |
-| 3 | *free* | `17 1 * * 4` Thu | `41 3 * * 7` Sun |
-| 4 | *free* | `17 1 * * 5` Fri | `41 3 * * 1` Mon |
-| 5 | *free* | `17 1 * * 6` Sat | `41 3 * * 2` Tue |
-| 6 | *free* | `17 1 * * 7` Sun | `41 3 * * 3` Wed |
+| Slot | Repository | Audit |
+|---|---|---|
+| 0 | first consumer | `17 1 * * 1` Mon |
+| 1 | second consumer | `17 1 * * 2` Tue |
+| 2 | *free* | `17 1 * * 3` Wed |
+| 3 | *free* | `17 1 * * 4` Thu |
+| 4 | *free* | `17 1 * * 5` Fri |
+| 5 | *free* | `17 1 * * 6` Sat |
+| 6 | *free* | `17 1 * * 7` Sun |
 
 Seven slots is the ceiling for this shape. Beyond that, either widen the fleet (`MAX_VMS` in
 `runners/scaler-app`) or accept that the eighth repository shares a day with the first.
@@ -112,11 +97,11 @@ A slot lives in two places that must agree, because the router schedules the cro
 classifier maps it back to a route:
 
 - `.github/workflows/work-router.yml`, in the `schedule:` block
-- `.github/actions/classify-route/classify-route.sh`, in `AUDIT_CRON` and `MUTATION_CRON`
+- `.github/actions/classify-route/classify-route.sh`, in `AUDIT_CRON`
 
 A cron present in one but not the other fails silently in the direction that hurts: the run
-fires and then classifies to no route at all. `verify-route-matrix.sh` asserts both crons reach
-their routes, so run it after changing a slot.
+fires and then classifies to no route at all. `verify-route-matrix.sh` asserts the cron reaches
+its route, so run it after changing a slot.
 
 The daily and hourly crons (`audit-close`, `cleanup-artifacts`, `reconcile-bot-pr-runs`) do
 not need staggering: they run on GitHub-hosted runners and never touch the fleet. The
@@ -145,7 +130,7 @@ npx @plainconceptsplatform/workflows@latest init
 npx @plainconceptsplatform/workflows@latest add
 npx @plainconceptsplatform/workflows@latest add refine implement
 npx @plainconceptsplatform/workflows@latest add triage
-npx @plainconceptsplatform/workflows@latest add audit mutation
+npx @plainconceptsplatform/workflows@latest add audit
 npx @plainconceptsplatform/workflows@latest add --template agentics-checks
 npx @plainconceptsplatform/workflows@latest add --template agentics-maintenance
 npx @plainconceptsplatform/workflows@latest add --template app-ci-dotnet-next
@@ -190,7 +175,7 @@ Install the triage route alongside other routes:
 
 ```bash
 npx @plainconceptsplatform/workflows@latest add triage
-npx @plainconceptsplatform/workflows@latest add audit mutation
+npx @plainconceptsplatform/workflows@latest add audit
 ```
 
 ## Optional agentic maintenance templates

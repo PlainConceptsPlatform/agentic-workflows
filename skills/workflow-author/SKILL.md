@@ -72,7 +72,6 @@ loops/workflows/
       call-apply-review        agent-apply-review.md        workflow_call only
       call-merge-gate          agent-merge-gate.md          workflow_call only
       call-audit               agent-audit.md               workflow_call only
-      call-mutation            agent-mutation.md             workflow_call only
       call-release             agent-release.md              workflow_call only
       deterministic jobs       bot-approve, audit-close, cleanup-artifacts,
                               stale-recovery, validate

@@ -5,7 +5,6 @@ export const routeNames = [
   "apply-review",
   "merge-gate",
   "audit",
-  "mutation",
 ] as const;
 
 export type RouteName = (typeof routeNames)[number];
@@ -24,7 +23,6 @@ export const workflowRoutes: readonly WorkflowRoute[] = [
   { name: "apply-review", worker: "agent-apply-review.md", description: "Applies reviewer feedback to an open pull request the bot authored, then pushes the fixes to the same branch.", defaultEnabled: true },
   { name: "merge-gate", worker: "agent-merge-gate.md", description: "Decides what happens to a bot-authored pull request once CI has reported: merge, hand to a human, or fix CI.", defaultEnabled: true },
   { name: "audit", worker: "agent-audit.md", description: "Read-only repository audit. Finds 5-7 problems, scores each 1-10, and files a single issue that Refine then sizes and splits.", defaultEnabled: true },
-  { name: "mutation", worker: "agent-mutation.md", description: "Weekly mutation test. Stryker rewrites small parts of the target project and reruns the tests; a surviving mutant is a line whose behaviour no test pins. Files one issue naming the gaps.", defaultEnabled: false },
 ];
 
 export const packageOwnedTargets = [

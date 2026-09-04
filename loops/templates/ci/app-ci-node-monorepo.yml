@@ -25,6 +25,7 @@ env:
   TRUFFLEHOG_IMAGE: "trufflesecurity/trufflehog:latest"
   SEMGREP_IMAGE: "semgrep/semgrep:1.168.0"
   SBOM_ARTIFACT_NAME: app-sbom.cyclonedx.json
+  MUTATION_THRESHOLD: "60"
 
 permissions:
   contents: read
@@ -68,6 +69,35 @@ jobs:
           path: ${{ env.WEB_EXPORT_PATH }}
           retention-days: 3
           if-no-files-found: error
+
+  mutation-web:
+    name: Mutation (web, diff)
+    if: github.event_name == 'pull_request'
+    runs-on: agents-arc
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with: { version: ${{ env.PNPM_VERSION }}, run_install: false }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: ${{ env.NODE_VERSION }}, cache: pnpm }
+      - name: Detect web changes
+        id: scope
+        run: |
+          git fetch origin "$GITHUB_BASE_REF" --depth=1
+          if git diff --name-only "origin/$GITHUB_BASE_REF" HEAD | grep -qE "^apps/web/"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No apps/web changes in this PR; skipping web mutation."
+          fi
+      - run: pnpm install --frozen-lockfile
+        if: steps.scope.outputs.run == 'true'
+      - name: StrykerJS (changed files only)
+        if: steps.scope.outputs.run == 'true'
+        run: pnpm --filter "$WEB_PACKAGE" exec stryker run --since="origin/$GITHUB_BASE_REF"
 
   e2e:
     name: E2E (Playwright)
