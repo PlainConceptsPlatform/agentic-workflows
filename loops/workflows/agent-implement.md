@@ -442,8 +442,11 @@ timeout-minutes: 90
      ${{ env.VERIFY_COMMANDS }}
      ```
 
-     If a check fails, fix the cause and rerun. Do not weaken a test, lower a threshold, or skip
-     a check to make it pass.
+      If a check fails, fix the cause and rerun. Do not weaken a test, lower a threshold, or skip
+      a check to make it pass. After all checks pass, run the project's lint fix command (e.g.
+      `pnpm lint:fix` or `pnpm exec biome check --write <changed-files>`) to auto-format the
+      files you changed. If lint:fix is not available, run lint without `--write` and fix any
+      formatting issues manually. Never create a pull request that has lint errors.
 
    5. Before creating the pull request, check whether an open bot pull request already
       exists that closes #${{ inputs.issue-number }}. Run:

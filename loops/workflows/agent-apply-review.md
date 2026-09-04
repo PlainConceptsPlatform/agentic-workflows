@@ -408,7 +408,11 @@ timeout-minutes: 45
     ${{ env.VERIFY_COMMANDS }}
     ```
 
-7. Select one review outcome.
+7. Before pushing, run the project's lint fix command (e.g. `pnpm lint:fix` or
+   `pnpm exec biome check --write <changed-files>`) to auto-format. If lint:fix is not
+   available, fix formatting manually. Never push code with lint errors.
+
+8. Select one review outcome.
 
    - **implemented**: You made the requested change, verification passed, and you will propose
      exactly one `push_to_pull_request_branch`.
@@ -416,7 +420,7 @@ timeout-minutes: 45
      reviewer must confirm this assessment.
    - **needs-human**: The feedback is ambiguous, unsafe, or cannot be applied. Do not push.
 
-8. Emit exactly one `add_comment` on PR `${{ needs.subject.outputs.pr }}`. Include every
+9. Emit exactly one `add_comment` on PR `${{ needs.subject.outputs.pr }}`. Include every
    unresolved human review thread ID and an explanation for it, then exactly one line:
    `**Review outcome:** implemented`, `**Review outcome:** already-satisfied`, or
    `**Review outcome:** needs-human`.
