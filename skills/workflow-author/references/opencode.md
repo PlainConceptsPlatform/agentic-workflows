@@ -1,9 +1,9 @@
-# The engine: opencode on Forge
+# The engine: OpenCode on an OpenAI-compatible gateway
 
 Verified against gh-aw v0.83.4 by compiling and running against worker lockfiles.
 
-Platform repositories run agentic workflows on our own model gateway. The wiring is spread across
-three files and none of it is discoverable from the gh-aw docs.
+Repositories run agentic workflows on an OpenAI-compatible model gateway. The wiring is spread
+across three files and none of it is discoverable from the gh-aw docs.
 
 ---
 
@@ -14,7 +14,7 @@ engine:
   id: opencode
   version: "1.2.14"
   env:
-    OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
+    OPENAI_BASE_URL: ${{ vars.FORGE_API_URL }}
 
 model: openai/glm-5-2
 secrets:
@@ -27,7 +27,7 @@ max-ai-credits: 5000
 network:
   allowed:
     - defaults
-    - forge.plainconcepts.com   # not in `defaults`; the firewall blocks it otherwise
+    - <gateway-host>            # not in `defaults`; the firewall blocks it otherwise
     - dotnet                    # NuGet
     - node                      # npm, pnpm, yarn
 ```
@@ -54,8 +54,8 @@ them decides anything.
 | Layer | Value | What it does |
 |---|---|---|
 | gh-aw `model:` | `openai/glm-5-2` | Satisfies the compiler's provider validation. Nothing else. |
-| `opencode.ci.json` `model` | `plainconcepts/glm-5-2` | The model opencode actually loads |
-| `opencode.ci.json` `provider.plainconcepts.api` | `http://172.30.0.30:10000` | Where the request goes: gh-aw's firewall proxy, which forwards to Forge |
+| `opencode.ci.json` `model` | `forge/glm-5-2` | The model OpenCode actually loads |
+| `opencode.ci.json` `provider.forge.api` | `{env:FORGE_API_URL}` | Where the request goes |
 | `engine.args: ["--model", ...]` | discarded | The compiler drops it. See below |
 
 The gh-aw provider segment must be one of `copilot`, `anthropic`, `openai`, `codex`. Naming our own
@@ -70,7 +70,7 @@ The segment only selects which client library gh-aw thinks it is configuring, so
 OpenAI-compatible one is enough to get past validation. The real routing is done by
 `opencode.ci.json`, whose `provider` block is not validated by gh-aw at all.
 
-A Platform repository does need a `plainconcepts` provider and does need the CI merge step that
+A repository needs a provider matching its gateway configuration and the CI merge step that
 installs it. The merge fragment lives in the consumer repository, not in this package's source.
 
 ### `engine.args` is discarded, so do not reach for it

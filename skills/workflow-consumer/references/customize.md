@@ -10,12 +10,12 @@ repository differs from the defaults:
 
 | Value | Where | Default |
 |---|---|---|
-| `OPENAI_BASE_URL` | `env:` block | `https://forge.plainconcepts.com/v1` |
+| `OPENAI_BASE_URL` | `env:` block | Consumer's OpenAI-compatible gateway URL |
 | Labels (`WORKING_LABEL`, `REVIEW_LABEL`, etc.) | `env:` block | `bot-working`, `review` |
 | Issue context path | `env: ISSUE_CONTEXT_PATH` | `/tmp/gh-aw/agent/issue-context.json` |
 | Prompt rules | `env: REPO_RULES` | Worker-specific, stack-aware base from CLI |
 | Required onboarding commands | `env:` block | Worker-specific |
-| Model gateway endpoint | `engine.env: OPENAI_BASE_URL` | `https://forge.plainconcepts.com/v1` |
+| Model gateway endpoint | `engine.env: OPENAI_BASE_URL` | Consumer's OpenAI-compatible gateway URL |
 | Turn budgets | `max-turns`, `max-turn-cache-misses`, `max-ai-credits` | `300`, `3000`, `5000` |
 | Verification commands | `env:` block | Stack-aware from CLI |
 | Permissions | `permissions:` | `read-all` |
@@ -51,8 +51,8 @@ the consumer is responsible for adding the route-specific focus areas:
 1. `env: OPENAI_BASE_URL` (top-level, visible to shell steps and the prompt)
 2. `engine.env: OPENAI_BASE_URL` (passed to the OpenCode CLI)
 
-Both must carry `https://forge.plainconcepts.com/v1`. If you change one, change the other. The
-default is correct for all Platform repositories.
+Both must carry the same URL. If you change one, change the other. The endpoint and corresponding
+secret are consumer configuration, not package defaults.
 
 ## Git identity
 

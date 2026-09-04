@@ -195,6 +195,7 @@ pre-agent-steps:
       else
         merged=$(jq -S . "$FRAGMENT")
       fi
+
       printf '%s\n' "$merged" > "$CONFIG"
 
       # gh-aw's own "Write OpenCode Config" step runs next and merges its base config with

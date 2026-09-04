@@ -16,9 +16,14 @@ repository root as `opencode.ci.json`.
 
 ### Provider
 
-- **plainconcepts** at `http://172.30.0.30:10000` with apiKey `awf-openai-proxy`.
-- Two models registered: `glm-5-2` ("GLM 5.2") and `glm-5-1` ("GLM 5.1").
-- Default model: `plainconcepts/glm-5-2`.
+- The `forge` provider is OpenAI-compatible and reads its endpoint from
+  `FORGE_API_URL` and its key from `FORGE_API_KEY` at runtime.
+- Each consumer configures its own router endpoint, credential, model IDs, and
+  capabilities. The workflow package does not assume a particular gateway
+  host, authentication system, or model vendor.
+- Model entries are fallback metadata. Consumers should set `attachment: true`
+  only for models whose router supports image input.
+- Default model: `forge/glm-5-2`.
 
 ### Agent
 
