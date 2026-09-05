@@ -11,5 +11,5 @@
     "pack": "pnpm verify && pnpm --filter @plainconceptsplatform/workflows pack --pack-destination ../../artifacts",
     "release": "pnpm verify && pnpm --filter @plainconceptsplatform/workflows release"
   },
-  "version": "0.5.0"
+  "version": "0.5.1"
 }
