@@ -119,15 +119,25 @@ for (const file of readdirSync(workflowDirectory)) {
       '          cp /tmp/gh-aw/aw-*.patch "${RUNNER_TEMP}/gh-aw/" 2>/dev/null || true\n' +
       '          cp /tmp/gh-aw/aw-*.bundle "${RUNNER_TEMP}/gh-aw/" 2>/dev/null || true\n' +
       '          ls -la "${RUNNER_TEMP}/gh-aw/"aw-* 2>/dev/null || true\n')
-    // Add patch/bundle paths to the upload glob so patches are included in the artifact.
-    // The base gh-aw template may or may not include aw-*.patch paths; ensure they're present.
+    // Add patch/bundle paths to the upload glob so the agent artifact carries what
+    // push-agent-branch needs. The anchor is the two adjacent path lines of the
+    // "...agent" upload step; the "...agent-output-fallback" upload lists them in the
+    // opposite order, so it cannot match. Anchoring matters: the first bare
+    // '/tmp/gh-aw/agent_output.json\n' in the file is the placeholder step's echo line,
+    // and replacing there corrupted the placeholder into executing the globs as
+    // commands while the upload list stayed without bundles. The artifact then carried
+    // no bundle, push-agent-branch silently skipped the push, and the gate reported
+    // "remediated" on a pull request that was never touched.
+    // Only the /tmp/gh-aw globs may be added: a ${{ runner.temp }} path as well would
+    // move the upload's least-common-ancestor from /tmp/gh-aw to /, and every file in
+    // the artifact (agent_output.json included) would gain a prefix that
+    // download-agent-output does not look for.
     .replace(
-      '/tmp/gh-aw/agent_output.json\n',
-      '/tmp/gh-aw/agent_output.json\n' +
+      '            /tmp/gh-aw/safeoutputs.jsonl\n            /tmp/gh-aw/agent_output.json\n',
+      '            /tmp/gh-aw/safeoutputs.jsonl\n' +
       '            /tmp/gh-aw/aw-*.patch\n' +
       '            /tmp/gh-aw/aw-*.bundle\n' +
-      '            ${{ runner.temp }}/gh-aw/aw-*.patch\n' +
-      '            ${{ runner.temp }}/gh-aw/aw-*.bundle\n')
+      '            /tmp/gh-aw/agent_output.json\n')
 
     // v0.87.5's arc-dind mode stages the engine CLI to a daemon-visible path but assumes the
     // Copilot engine: command -v copilot is empty under engine: opencode and cp "" fails the
@@ -202,6 +212,23 @@ for (const file of readdirSync(workflowDirectory)) {
           whole.includes("ref:") ? whole : whole + indent + "  ref: ${{ github.event.repository.default_branch }}\n",
       );
       rewritten = rewritten.slice(0, start) + span + rewritten.slice(end);
+    }
+  }
+
+  // Guard the two rewrites the compiled agent jobs cannot work without. The anchors are
+  // upstream template text: when a gh-aw upgrade reshapes either step, the silent
+  // failure mode returns (an artifact with no bundle, a skipped push, a green gate on
+  // an untouched pull request). Failing the compile is the only loud signal there is.
+  for (const check of [
+    { name: "bundle upload glob", ok: /\n( +)- name: Upload agent artifacts\n\1  if: always\(\)\n\1  continue-on-error: true\n\1  uses: actions\/upload-artifact@[^\n]*\n\1  with:\n\1    name: \$\{\{ needs\.activation\.outputs\.artifact_prefix \}\}agent\n\1    path: \|\n(?:\1      [^\n]*\n)*\1      \/tmp\/gh-aw\/aw-\*\.bundle\n/ },
+    { name: "placeholder step intact", ok: /\n( +)- name: Write agent output placeholder if missing\n\1  if: always\(\)\n\1  run: \|\n\1    if \[ ! -f \/tmp\/gh-aw\/agent_output\.json \]; then\n\1      echo '\{"items":\[\]\}' > \/tmp\/gh-aw\/agent_output\.json\n\1    fi\n/ },
+  ]) {
+    if (!check.ok.test(rewritten)) {
+      process.stderr.write(
+        `compile patch "${check.name}" no longer matches in ${file}: the gh-aw template changed. ` +
+        `Re-anchor the rewrite in loops/scripts/compile-agent-workflows.mjs, or agent pushes are silently dropped.\n`,
+      );
+      process.exitCode = 1;
     }
   }
 
