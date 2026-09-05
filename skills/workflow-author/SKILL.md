@@ -344,7 +344,7 @@ engine:
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
-model: openai/glm-5-2        # Provider segment must be `openai`. See references/opencode.md.
+model: openai/glm-5-3        # Provider segment must be `openai`. See references/opencode.md.
 
 max-turns: 300
 max-turn-cache-misses: 3000  # Forge has no prompt cache; every turn is a miss.

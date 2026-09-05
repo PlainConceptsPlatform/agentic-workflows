@@ -204,7 +204,7 @@ describe("generateOpencodeCi", () => {
 
 const OPENCODE_CI_JSON = `{
   "$schema": "https://opencode.ai/config.json",
-  "model": "plainconcepts/glm-5-2",
+  "model": "plainconcepts/glm-5-3",
   "plugin": [],
   "default_agent": "ci-workflow-agent",
   "agent": {
@@ -235,11 +235,11 @@ const OPENCODE_CI_JSON = `{
         "apiKey": "awf-openai-proxy"
       },
       "models": {
+        "glm-5-3": {
+          "name": "GLM 5.3"
+        },
         "glm-5-2": {
           "name": "GLM 5.2"
-        },
-        "glm-5-1": {
-          "name": "GLM 5.1"
         }
       }
     }
@@ -295,8 +295,8 @@ describe("generateOpencodeConfig", () => {
     }));
 
     const parsed = JSON.parse(result);
+    expect(parsed.provider.plainconcepts.models["glm-5-3"]).toBeDefined();
     expect(parsed.provider.plainconcepts.models["glm-5-2"]).toBeDefined();
-    expect(parsed.provider.plainconcepts.models["glm-5-1"]).toBeDefined();
   });
 
   it("preserves the plainconcepts provider and its API URL", () => {

@@ -101,8 +101,8 @@ install — it is mandatory, not optional. The `--template opencode.ci.json` com
 option for installing it in isolation. Includes:
 
 - OpenAI-compatible `forge` provider with endpoint and key supplied by runtime environment variables
-- `glm-5-2` ("GLM 5.2") and `glm-5-1` ("GLM 5.1") fallback model registrations
-- Default model `forge/glm-5-2`
+- `glm-5-3` ("GLM 5.3") and `glm-5-2` ("GLM 5.2") fallback model registrations
+- Default model `forge/glm-5-3`
 - `ci-workflow-agent` agent in `primary` mode with the output discipline directive
 - LSP disabled for `csharp`, `fsharp`, and `razor` (consumers can remove the `lsp` block)
 - `read` permission allow and `/tmp/**` external directory access

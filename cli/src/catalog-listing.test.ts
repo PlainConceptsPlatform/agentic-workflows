@@ -78,7 +78,7 @@ describe("catalog listing", () => {
 
   it("marks the opencode.ci.json template as installed when the file exists at repository root", async () => {
     const repositoryPath = await createRepository({
-      "opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }",
+      "opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }",
     });
 
     const entries = await listCatalog({ installedPath: repositoryPath });
@@ -93,7 +93,7 @@ describe("catalog listing", () => {
       ".github/workflows/agent-refine.md": "# Refine",
       ".github/workflows/agent-audit.md": "# Audit",
       ".github/workflows/app-ci-dotnet-next.yml": "name: CI",
-      "opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }",
+      "opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }",
     });
 
     const entries = await listCatalog({ installedPath: repositoryPath });

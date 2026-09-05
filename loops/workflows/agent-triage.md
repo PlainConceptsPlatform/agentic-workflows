@@ -262,9 +262,9 @@ engine:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
   args:
     - "--model"
-    - "plainconcepts/glm-5-2"
+    - "plainconcepts/glm-5-3"
 
-model: openai/glm-5-2
+model: openai/glm-5-3
 max-turns: 300
 max-turn-cache-misses: 3000
 max-ai-credits: 5000

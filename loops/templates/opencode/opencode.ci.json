@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "forge/glm-5-2",
+  "model": "forge/glm-5-3",
   "plugin": [],
   "default_agent": "ci-workflow-agent",
   "agent": {
@@ -35,12 +35,12 @@
         "apiKey": "{env:FORGE_API_KEY}"
       },
       "models": {
-        "glm-5-2": {
-          "name": "GLM 5.2",
+        "glm-5-3": {
+          "name": "GLM 5.3",
           "attachment": true
         },
-        "glm-5-1": {
-          "name": "GLM 5.1",
+        "glm-5-2": {
+          "name": "GLM 5.2",
           "attachment": true
         }
       }

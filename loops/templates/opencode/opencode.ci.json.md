@@ -23,7 +23,7 @@ repository root as `opencode.ci.json`.
   host, authentication system, or model vendor.
 - Model entries are fallback metadata. Consumers should set `attachment: true`
   only for models whose router supports image input.
-- Default model: `forge/glm-5-2`.
+- Default model: `forge/glm-5-3`.
 
 ### Agent
 

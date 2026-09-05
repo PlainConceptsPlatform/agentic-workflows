@@ -16,7 +16,7 @@ engine:
   env:
     OPENAI_BASE_URL: ${{ vars.FORGE_API_URL }}
 
-model: openai/glm-5-2
+model: openai/glm-5-3
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
@@ -53,8 +53,8 @@ them decides anything.
 
 | Layer | Value | What it does |
 |---|---|---|
-| gh-aw `model:` | `openai/glm-5-2` | Satisfies the compiler's provider validation. Nothing else. |
-| `opencode.ci.json` `model` | `forge/glm-5-2` | The model OpenCode actually loads |
+| gh-aw `model:` | `openai/glm-5-3` | Satisfies the compiler's provider validation. Nothing else. |
+| `opencode.ci.json` `model` | `forge/glm-5-3` | The model OpenCode actually loads |
 | `opencode.ci.json` `provider.forge.api` | `{env:FORGE_API_URL}` | Where the request goes |
 | `engine.args: ["--model", ...]` | discarded | The compiler drops it. See below |
 
@@ -75,9 +75,9 @@ installs it. The merge fragment lives in the consumer repository, not in this pa
 
 ### `engine.args` is discarded, so do not reach for it
 
-Adding `args: ["--model", "plainconcepts/glm-5-2"]` to be explicit is a reasonable instinct and it
+Adding `args: ["--model", "plainconcepts/glm-5-3"]` to be explicit is a reasonable instinct and it
 does nothing. Verified on v0.83.4 by compiling two workers that differ only in that block: neither
-lock file contains `--model` anywhere, and both set `OPENCODE_MODEL: awf-proxy/glm-5-2`.
+lock file contains `--model` anywhere, and both set `OPENCODE_MODEL: awf-proxy/glm-5-3`.
 
 So the model comes from `model:` plus `opencode.ci.json`, and the provider gh-aw hands the CLI is its
 own. A worker carrying `engine.args` is dead configuration that reads like a control, which is worse
