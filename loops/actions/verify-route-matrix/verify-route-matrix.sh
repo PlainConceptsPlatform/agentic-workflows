@@ -183,6 +183,10 @@ assert_route "merge-gate dispatch needs a pull request number" none \
   EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=0
 assert_route "merge-gate dispatch accepts a positive pull request" merge-gate \
   EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7
+assert "merge-gate dispatch defaults its attempt count to zero" 0 \
+  "$(route_field merge-gate-attempts EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7)"
+assert "merge-gate dispatch forwards the attempt count" 3 \
+  "$(route_field merge-gate-attempts EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7 INPUT_ATTEMPTS_SO_FAR=3)"
 assert_route "reconcile-bot-pr-runs dispatch needs no numbers" reconcile-bot-pr-runs \
   EVENT=workflow_dispatch OPERATION=reconcile-bot-pr-runs
 assert_route "an unknown operation routes nowhere" none \
@@ -244,6 +248,53 @@ if grep -Fq 'protected-files: allowed' "$IMPLEMENT_WORKER_MD" &&
 else
   FAIL=$((FAIL + 1))
   echo "FAIL: protected changes must allow failed-CI repair while remaining held from merge" >&2
+fi
+
+# The merge belt is serial for the whole repository: several overnight pull requests
+# mean every merge moves the default branch under the rest, and gates running at once
+# rebase onto bases other gates are about to invalidate. A per-issue group here would
+# reintroduce that race, so assert the repo-wide lock is the one in use.
+if grep -A7 'call-merge-gate:' "$ROUTER_YML" | grep -q 'group: merge-belt'; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: call-merge-gate must hold the repo-wide merge-belt lock" >&2
+fi
+
+# A verdict is the gate marker AND a `**Verdict:**` line together. Comments carrying the
+# marker alone were progress notes and failed attempts, and the reconcile belt read every
+# one of them as final: a crashed or OOM-killed gate parked its pull request for the rest
+# of the night. Attempts are counted separately, capped, and reset by any new CI run.
+BELT_OK=1
+if ! grep -q 'agent-merge-gate-attempt' "$ROUTER_YML"; then
+  BELT_OK=0; echo "FAIL: router never counts gate attempts" >&2
+fi
+if [ "$(grep -cF 'contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))' "$ROUTER_YML")" -lt 4 ]; then
+  BELT_OK=0; echo "FAIL: verdict detection must pair the gate marker with a Verdict line in both dispatch paths" >&2
+fi
+if [ "$(grep -c 'attempts-so-far' "$ROUTER_YML")" -lt 2 ]; then
+  BELT_OK=0; echo "FAIL: dispatch sites must forward attempts-so-far" >&2
+fi
+if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# The worker's own comments must keep the distinction: progress notes carry no marker,
+# failed attempts carry the attempt marker, verdicts carry the marker AND the Verdict line.
+if grep -q 'ATTEMPT_MARKER: "<!-- agent-merge-gate-attempt -->"' "$MERGE_GATE_WORKER_MD" &&
+  [ "$(grep -c '\${{ env.GATE_MARKER }}' "$MERGE_GATE_WORKER_MD")" -eq 2 ]; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: merge-gate worker must keep verdict and attempt markers distinct" >&2
+fi
+
+# A failed attempt must not strip `implement`: identify-gate-subject refuses an issue
+# without it, so the first crash would starve every retry at the subject check.
+if grep -A6 'Park the issue' "$MERGE_GATE_WORKER_MD" | grep -q 'REVIEW_LABEL' &&
+  ! grep -qF 'labels: ${{ env.WORKING_LABEL }},${{ env.IMPLEMENT_LABEL }}' "$MERGE_GATE_WORKER_MD"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the incomplete job must keep implement and only park on an exhausted budget" >&2
 fi
 
 # This repository is public. Every route a human can start from a comment, a review or a

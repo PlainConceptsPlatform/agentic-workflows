@@ -23,7 +23,7 @@ is_issue_number() {
 
 classify_route() {
   local route="none" error=""
-  local issue_number="" pr_number="" ci_conclusion="" ci_run_id=""
+  local issue_number="" pr_number="" ci_conclusion="" ci_run_id="" merge_gate_attempts="0"
   local refine_mode="" triage_mode="" trigger_kind=""
 
   case "${EVENT:-}" in
@@ -206,6 +206,7 @@ classify_route() {
             pr_number="${INPUT_PR_NUMBER}"
             ci_conclusion="${INPUT_CI_CONCLUSION:-}"
             ci_run_id="${INPUT_CI_RUN_ID:-}"
+            merge_gate_attempts="${INPUT_ATTEMPTS_SO_FAR:-0}"
           else
             error="operation 'merge-gate' needs a positive pr-number, got '${INPUT_PR_NUMBER:-}'"
           fi
@@ -237,6 +238,7 @@ issue-number=${issue_number}
 pr-number=${pr_number}
 ci-conclusion=${ci_conclusion}
 ci-run-id=${ci_run_id}
+merge-gate-attempts=${merge_gate_attempts}
 refine-mode=${refine_mode}
 triage-mode=${triage_mode}
 trigger-kind=${trigger_kind}

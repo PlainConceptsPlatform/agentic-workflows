@@ -138,6 +138,16 @@ for (const file of readdirSync(workflowDirectory)) {
       '            /tmp/gh-aw/aw-*.patch\n' +
       '            /tmp/gh-aw/aw-*.bundle\n' +
       '            /tmp/gh-aw/agent_output.json\n')
+    // "A failed run is already a red run": report-failure-as-issue: false and
+    // GH_AW_REPORT_FAILED_JOBS: "false" were supposed to silence issue creation, but
+    // 0.87.5's engine-failure reporter files an "[aw] ... failed" issue anyway (seen as
+    // Pliny-Bot #57: an OOM-killed gate produced a fresh issue nobody needs, while the
+    // retry belt is the actual remediation). `if: false` keeps the step compiled but
+    // never runs it, so the failure stays visible in the run and in the belt's attempt
+    // comment, and out of the issue tracker.
+    .replace(
+      /^([ \t]*- name: Report failed jobs\n[ \t]*id: report_failed_jobs\n)[ \t]*if: always\(\)\n/m,
+      '$1  if: false # never: failures surface in the run and the retry belt\n')
 
     // v0.87.5's arc-dind mode stages the engine CLI to a daemon-visible path but assumes the
     // Copilot engine: command -v copilot is empty under engine: opencode and cp "" fails the
@@ -222,6 +232,7 @@ for (const file of readdirSync(workflowDirectory)) {
   for (const check of [
     { name: "bundle upload glob", ok: /\n( +)- name: Upload agent artifacts\n\1  if: always\(\)\n\1  continue-on-error: true\n\1  uses: actions\/upload-artifact@[^\n]*\n\1  with:\n\1    name: \$\{\{ needs\.activation\.outputs\.artifact_prefix \}\}agent\n\1    path: \|\n(?:\1      [^\n]*\n)*\1      \/tmp\/gh-aw\/aw-\*\.bundle\n/ },
     { name: "placeholder step intact", ok: /\n( +)- name: Write agent output placeholder if missing\n\1  if: always\(\)\n\1  run: \|\n\1    if \[ ! -f \/tmp\/gh-aw\/agent_output\.json \]; then\n\1      echo '\{"items":\[\]\}' > \/tmp\/gh-aw\/agent_output\.json\n\1    fi\n/ },
+    { name: "failed-jobs reporter disabled", ok: /- name: Report failed jobs\n[^\n]*\n[^\n]*if: false[^\n]*\n/ },
   ]) {
     if (!check.ok.test(rewritten)) {
       process.stderr.write(

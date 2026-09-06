@@ -8,6 +8,8 @@ env:
   REVIEW_LABEL: review
   PR_PENDING_LABEL: pr-pending
   GATE_MARKER: "<!-- agent-merge-gate -->"
+  ATTEMPT_MARKER: "<!-- agent-merge-gate-attempt -->"
+  MAX_ATTEMPTS: "6"
   INCOMPLETE_COMMENT: "Automated CI failure remediation ended without an outcome. The issue remains for a retry."
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
   GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
@@ -51,6 +53,11 @@ on:
         description: CI workflow run ID for fetching failing logs.
         required: false
         type: string
+      attempts-so-far:
+        description: Failed gate attempts already made against this CI verdict. Parked when it reaches the cap.
+        required: false
+        type: string
+        default: '0'
 
 # Rung 4. Router has classified the event; identify-gate-subject validates PR ownership,
 # resolves the closing issue, and confirms the CI verdict.
@@ -188,6 +195,8 @@ jobs:
             Protected files:
             ${{ needs.protected_changes.outputs.files }}
 
+            **Verdict:** review
+
   reserve:
     needs: subject
     if: needs.subject.outputs.found == 'true'
@@ -230,7 +239,6 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           body: |
-            ${{ env.GATE_MARKER }}
             Problems found in PR #${{ needs.subject.outputs.pr }}. ${{ steps.conflicts.outputs.has_conflicts == 'true' && 'Merge conflicts detected.' || 'CI failed.' }}
             Bot is working on fixing it.
   validate_output:
@@ -369,22 +377,23 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.WORKING_LABEL }},${{ env.IMPLEMENT_LABEL }},${{ env.PR_PENDING_LABEL }}
-      - name: Flag for human review
+          labels: ${{ env.WORKING_LABEL }},${{ env.PR_PENDING_LABEL }}
+      - name: Park the issue for a human
+        if: fromJson(inputs.attempts-so-far) >= fromJson(env.MAX_ATTEMPTS) - 1
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.REVIEW_LABEL }}
-      - name: Report missing remediation outcome
+      - name: Report the failed attempt
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           body: |
-            ${{ env.GATE_MARKER }}
-            Bot could not resolve PR #${{ needs.subject.outputs.pr }} automatically. The `review` label is set: a human must take over.
-            ${{ env.INCOMPLETE_COMMENT }}
+            ${{ env.ATTEMPT_MARKER }}
+            Attempt ${{ inputs.attempts-so-far }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
+            ${{ fromJson(inputs.attempts-so-far) >= fromJson(env.MAX_ATTEMPTS) - 1 && format('The attempt budget for this CI verdict is exhausted. The `review` label is set: a human must take over.') || format('The issue stays reserved and the merge gate will retry.') }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
   agent:

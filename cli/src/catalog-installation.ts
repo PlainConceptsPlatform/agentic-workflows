@@ -155,6 +155,13 @@ function transformOpencodeFiles(files: Map<string, string>, inspection: Reposito
   return result;
 }
 
+// Templates that need a companion config beside the workflow file. actionlint only
+// knows GitHub-hosted runner labels, so every workflow naming a self-hosted label is an
+// error without this file; it belongs wherever the lint workflow that reads it lives.
+const templateCompanions: Partial<Record<TemplateName, readonly { source: string; target: string }[]>> = {
+  "agentics-checks": [{ source: "templates/agentics/actionlint.yaml", target: ".github/actionlint.yaml" }],
+};
+
 export async function installTemplate(
   repositoryPath: string,
   template: TemplateName,
@@ -164,18 +171,36 @@ export async function installTemplate(
   const meta = catalogTemplateMeta(template);
   const source = join(sourcePath, "templates", meta.directory, meta.file);
   const target = meta.target;
-  const destination = join(repositoryPath, target);
-  const conflicts = await exists(destination) && !(await filesMatch(source, destination)) ? [target] : [];
+  const companions = templateCompanions[template] ?? [];
+  const destinations = [
+    { source, target, companion: false as const },
+    ...companions.map((companion) => ({
+      source: join(sourcePath, companion.source),
+      target: companion.target,
+      companion: true as const,
+    })),
+  ];
+  const conflicts = (
+    await Promise.all(destinations.map(async (entry) =>
+      await exists(join(repositoryPath, entry.target)) && await exists(entry.source) && !(await filesMatch(entry.source, join(repositoryPath, entry.target)))
+        ? entry.target
+        : undefined,
+    ))
+  ).filter((file): file is string => file !== undefined);
 
   if (conflicts.length > 0 && !options.force) return { installed: [], conflicts };
 
-  await mkdir(dirname(destination), { recursive: true });
-  await copyFile(source, destination);
+  for (const entry of destinations) {
+    if (!(await exists(entry.source))) continue; // companion files may not exist for every template version
+    const destination = join(repositoryPath, entry.target);
+    await mkdir(dirname(destination), { recursive: true });
+    await copyFile(entry.source, destination);
+  }
 
   if (options.inspection !== undefined && template === "opencode.ci.json") {
     const baseContent = await readFile(source, "utf8");
     const transformed = generateOpencodeConfig(baseContent, options.inspection);
-    await writeFile(destination, transformed, "utf8");
+    await writeFile(join(repositoryPath, target), transformed, "utf8");
   }
 
   try {
@@ -184,7 +209,7 @@ export async function installTemplate(
     // compile failure is non-fatal
   }
 
-  return { installed: [target], conflicts };
+  return { installed: (await Promise.all(destinations.map(async (entry) => await exists(entry.source) ? entry.target : undefined))).filter((file): file is string => file !== undefined), conflicts };
 }
 
 export async function installMandatoryFiles(

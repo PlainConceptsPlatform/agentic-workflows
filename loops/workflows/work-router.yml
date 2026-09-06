@@ -165,6 +165,11 @@ on:
         description: "CI workflow run ID for merge-gate dispatch"
         required: false
         type: string
+      attempts-so-far:
+        description: "Failed merge-gate attempts already made against this CI verdict (filled by the router, not by humans)"
+        required: false
+        type: string
+        default: '0'
       trigger-kind:
         description: "Audit trigger: scheduled or manual"
         required: false
@@ -474,14 +479,18 @@ jobs:
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
 
-  # Shares the write-pipeline group with implement so the two never race on one issue.
-  # Falls back to the pull request number only when the closing issue cannot be resolved.
+  # The merge belt is one lock for the whole repository, not one group per pull request.
+  # A batch of six overnight pull requests means every merge moves the default branch
+  # under the other five; gates running at once would each rebase onto a base another
+  # gate is about to invalidate. Serialising the belt means each gate sees a main that
+  # only changes between gates, every merge re-arms the siblings through
+  # detect-pr-conflicts's rescan, and the queue drains one pull request at a time.
   call-merge-gate:
     needs: classify
     if: needs.classify.outputs.route == 'merge-gate'
     uses: ./.github/workflows/agent-merge-gate.lock.yml
     concurrency:
-      group: write-pipeline-${{ needs.classify.outputs.linked-issue || format('pr-{0}', needs.classify.outputs.pr-number) }}
+      group: merge-belt
       cancel-in-progress: false
     permissions: write-all
     with:
@@ -489,6 +498,7 @@ jobs:
       linked-issue: ${{ needs.classify.outputs.linked-issue }}
       ci-conclusion: ${{ needs.classify.outputs.ci-conclusion }}
       ci-run-id: ${{ needs.classify.outputs.ci-run-id }}
+      attempts-so-far: ${{ needs.classify.outputs.merge-gate-attempts }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
       CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
@@ -614,8 +624,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Dispatch the Merge Gate for one pull request when it is a conflicting, open,
-          # non-draft, bot-authored pull request on this repository whose CI has concluded.
+          # Dispatch the Merge Gate for one pull request when it is a red-CI open, non-draft,
+          # bot-authored pull request on this repository whose CI has concluded — the
+          # conflict case is one arm of that, because a conflicting PR never gets a fresh
+          # CI run of its own; a merge conflict with red or concluded CI is the same
+          # "needs the gate" signal. A green non-conflicting PR is left for the merge belt
+          # to pick up when its checks finish (bot-approve / reconcile).
           maybe_dispatch() {
             pr="$1"
             [ -n "$pr" ] || return 0
@@ -624,21 +638,10 @@ jobs:
               --jq '{state:.state, draft:.draft, bot:.user.type, head:(.head.repo.full_name // "")}' \
               2>/dev/null || echo '')
             [ -n "$meta" ] || return 0
-            [ "$(jq -r '.state' <<<"$meta")" = "open" ] || return 0
-            [ "$(jq -r '.draft' <<<"$meta")" = "false" ] || return 0
-            [ "$(jq -r '.bot'   <<<"$meta")" = "Bot" ] || return 0
-            [ "$(jq -r '.head'  <<<"$meta")" = "$REPO" ] || return 0
-
-            # GitHub computes mergeability asynchronously; poll until it is known (not null).
-            mergeable=""
-            for _ in 1 2 3 4 5 6; do
-              mergeable=$(gh api "repos/$REPO/pulls/$pr" --jq '.mergeable // "null"' 2>/dev/null || echo null)
-              [ "$mergeable" = "null" ] || break
-              sleep 5
-            done
-            # mergeable == false means a git-level conflict (mergeable_state "dirty").
-            if [ "$mergeable" != "false" ]; then
-              echo "PR #$pr mergeable=$mergeable; no conflict dispatch."
+            if [ "$(jq -r '.state' <<<"$meta")" != "open" ] \
+              || [ "$(jq -r '.draft' <<<"$meta")" != "false" ] \
+              || [ "$(jq -r '.bot'   <<<"$meta")" != "Bot" ] \
+              || [ "$(jq -r '.head'  <<<"$meta")" != "$REPO" ]; then
               return 0
             fi
 
@@ -652,20 +655,64 @@ jobs:
                          and (.conclusion == "success" or .conclusion == "failure"))]
                 | sort_by(.created_at) | last // empty')
             if [ -z "$ci" ]; then
-              echo "PR #$pr conflicts but CI has not concluded; deferring to the CI-completion route."
+              echo "PR #$pr has no concluded CI run; deferring to the CI-completion route."
               return 0
             fi
             ci_conclusion=$(jq -r '.conclusion' <<<"$ci")
+            ci_finished=$(jq -r '.updated_at' <<<"$ci")
             ci_run_id=$(jq -r '.id' <<<"$ci")
 
-            echo "PR #$pr is conflicting (CI $ci_conclusion); dispatching Merge Gate."
+            # GitHub computes mergeability asynchronously; poll until it is known (not null).
+            mergeable=""
+            for _ in 1 2 3 4 5 6; do
+              mergeable=$(gh api "repos/$REPO/pulls/$pr" --jq '.mergeable // "null"' 2>/dev/null || echo null)
+              [ "$mergeable" = "null" ] || break
+              sleep 5
+            done
+
+            if [ "$mergeable" != "false" ] && [ "$ci_conclusion" != "failure" ]; then
+              # Mergeable and green: the reconcile belt and the PR's own checks finish it.
+              return 0
+            fi
+
+            # A terminal verdict newer than this CI run means a gate already decided;
+            # failed attempts (the attempt marker) deliberately do not count.
+            verdict=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" \
+              --jq '[.[] | select((.body | contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))) | .created_at] | max // empty')
+            linked_issue=$(gh pr view "$pr" --repo "$REPO" --json closingIssuesReferences --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)
+            if [ -n "$linked_issue" ]; then
+              issue_verdict=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
+                --jq '[.[] | select((.body | contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))) | .created_at] | max // empty')
+              if [ -n "$issue_verdict" ] && { [ -z "$verdict" ] || [ "$issue_verdict" \> "$verdict" ]; }; then
+                verdict="$issue_verdict"
+              fi
+            fi
+            if [ -n "$verdict" ] && [ "$verdict" \> "$ci_finished" ]; then
+              echo "PR #$pr already has a gate verdict newer than CI; skipping."
+              return 0
+            fi
+
+            attempts=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" \
+              --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$ci_finished"'") ] | length')
+            if [ -n "$linked_issue" ]; then
+              issue_attempts=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
+                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$ci_finished"'") ] | length')
+              attempts=$((attempts + issue_attempts))
+            fi
+            if [ "$attempts" -ge 6 ]; then
+              echo "PR #$pr already consumed $attempts gate attempts on this CI verdict, parking for review."
+              return 0
+            fi
+
+            echo "PR #$pr is $([ "$mergeable" = "false" ] && echo conflicting || echo red-CI) (CI $ci_conclusion); dispatching Merge Gate (attempt $((attempts + 1)) of 6)."
             gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" \
               --method POST \
               -f ref="$DEFAULT_BRANCH" \
               -f "inputs[operation]=merge-gate" \
               -f "inputs[pr-number]=$pr" \
               -f "inputs[ci-conclusion]=$ci_conclusion" \
-              -f "inputs[ci-run-id]=$ci_run_id"
+              -f "inputs[ci-run-id]=$ci_run_id" \
+              -f "inputs[attempts-so-far]=$attempts"
           }
 
           if [ "$ACTION" = "closed" ]; then
@@ -777,32 +824,48 @@ jobs:
 
               IFS=$'\t' read -r ci_run_id ci_conclusion ci_finished <<<"$ci"
 
-              # A recorded verdict only counts when it is NEWER than the latest CI run.
-              # The old existence check made the gate one-shot per PR: after any verdict
-              # (say remediated), a later CI completion could never reopen the gate, so
-              # the fix-CI loop starved. ISO-8601 timestamps compare lexicographically.
-              latest_marker=$(gh api "repos/$REPO/issues/$pr_number/comments?per_page=100" \
-                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate -->")) | .created_at] | max // empty')
+              # A verdict is a comment carrying BOTH the gate marker and a `**Verdict:**`
+              # line; progress comments and failed attempts deliberately carry neither
+              # matching pair, so a crashed or OOM-killed gate never masks a PR from
+              # later sweeps. A recorded verdict only counts when it is NEWER than the
+              # latest CI run; the old existence check made the gate one-shot per PR.
+              # Attempts are failed gates (the attempt marker) since this CI verdict.
+              latest_verdict=$(gh api "repos/$REPO/issues/$pr_number/comments?per_page=100" \
+                --jq '[.[] | select((.body | contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))) | .created_at] | max // empty')
               linked_issue=$(gh pr view "$pr_number" --repo "$REPO" --json closingIssuesReferences --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)
               if [ -n "$linked_issue" ]; then
-                issue_marker=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
-                  --jq '[.[] | select(.body | contains("<!-- agent-merge-gate -->")) | .created_at] | max // empty')
-                if [ -n "$issue_marker" ] && { [ -z "$latest_marker" ] || [ "$issue_marker" \> "$latest_marker" ]; }; then
-                  latest_marker="$issue_marker"
+                issue_verdict=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
+                  --jq '[.[] | select((.body | contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))) | .created_at] | max // empty')
+                if [ -n "$issue_verdict" ] && { [ -z "$latest_verdict" ] || [ "$issue_verdict" \> "$latest_verdict" ]; }; then
+                  latest_verdict="$issue_verdict"
                 fi
               fi
-              if [ -n "$latest_marker" ] && [ "$latest_marker" \> "$ci_finished" ]; then
-                echo "Merge gate verdict ($latest_marker) is newer than CI ($ci_finished) for PR #$pr_number, skipping"
+              if [ -n "$latest_verdict" ] && [ "$latest_verdict" \> "$ci_finished" ]; then
+                echo "Merge gate verdict ($latest_verdict) is newer than CI ($ci_finished) for PR #$pr_number, skipping"
                 continue
               fi
-              echo "Dispatching Merge Gate for PR #$pr_number ($ci_conclusion, run $ci_run_id)"
+
+              attempts=$(gh api "repos/$REPO/issues/$pr_number/comments?per_page=100" \
+                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$ci_finished"'") ] | length')
+              if [ -n "$linked_issue" ]; then
+                issue_attempts=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
+                  --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$ci_finished"'") ] | length')
+                attempts=$((attempts + issue_attempts))
+              fi
+              if [ "$attempts" -ge 6 ]; then
+                echo "PR #$pr_number already consumed $attempts gate attempts on this CI verdict, parking for review"
+                continue
+              fi
+
+              echo "Dispatching Merge Gate for PR #$pr_number ($ci_conclusion, run $ci_run_id, attempt $((attempts + 1)) of 6)"
               gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" \
                 --method POST \
                 -f ref="$DEFAULT_BRANCH" \
                 -f "inputs[operation]=merge-gate" \
                 -f "inputs[pr-number]=$pr_number" \
                 -f "inputs[ci-conclusion]=$ci_conclusion" \
-                -f "inputs[ci-run-id]=$ci_run_id"
+                -f "inputs[ci-run-id]=$ci_run_id" \
+                -f "inputs[attempts-so-far]=$attempts"
             done
 
   audit-close:

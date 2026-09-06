@@ -37,6 +37,15 @@ jobs:
         uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
         with:
           version: ${{ env.GH_AW_VERSION }}
+      # The compile command below is a node script and an agents-arc runner ships without
+      # node, so the job failed at "node: command not found" before it read a single
+      # workflow. The hosted images have node; agents-arc does not, and nothing else in
+      # this job needed it, which is why it went unnoticed. ubuntu-latest is unaffected
+      # but a setup step is harmless there.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Compile agent workflows strictly
         run: ${{ env.AGENTICS_COMPILE_COMMAND }}
       - name: Verify generated lockfiles are current
