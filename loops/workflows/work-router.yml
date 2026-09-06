@@ -278,6 +278,7 @@ jobs:
       linked-issue: ${{ steps.route.outputs.linked-issue }}
       ci-conclusion: ${{ steps.route.outputs.ci-conclusion }}
       ci-run-id: ${{ steps.route.outputs.ci-run-id }}
+      merge-gate-attempts: ${{ steps.route.outputs.merge-gate-attempts }}
       refine-mode: ${{ steps.route.outputs.refine-mode }}
       triage-mode: ${{ steps.route.outputs.triage-mode }}
       trigger-kind: ${{ steps.route.outputs.trigger-kind }}

@@ -277,6 +277,37 @@ if [ "$(grep -c 'attempts_so_far' "$ROUTER_YML")" -lt 2 ]; then
 fi
 if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# The router forwards a fact to a worker by reading `needs.classify.outputs.<x>`; a name the
+# classify job does not export resolves to '' with no error. That is how the gate received
+# attempts_so_far='' (the classifier emitted merge-gate-attempts, the job never exported it),
+# fromJson('') killed the incomplete job before its attempt comment, and the belt re-dispatched
+# the same crash every hour. Every name the router reads must be exported by the classify job.
+CLASSIFY_EXPORTS="$(tr -d '\r' <"$ROUTER_YML" |
+  sed -n '/^  classify:$/,/^  [a-z-]*:$/p' |
+  sed -n '/^    outputs:$/,/^    [a-z]*:$/p' |
+  sed -n 's/^      \([a-zA-Z0-9_-]*\):.*/\1/p')"
+CLASSIFY_OK=1
+[ -n "$CLASSIFY_EXPORTS" ] || { CLASSIFY_OK=0; echo "FAIL: could not read the classify job's outputs from work-router.yml" >&2; }
+while read -r name; do
+  [ -n "$name" ] || continue
+  if ! grep -qx "$name" <<<"$CLASSIFY_EXPORTS"; then
+    CLASSIFY_OK=0
+    echo "FAIL: work-router.yml reads needs.classify.outputs.${name} but the classify job does not export it" >&2
+  fi
+done < <(grep -oE 'needs\.classify\.outputs\.[a-zA-Z0-9_-]+' "$ROUTER_YML" | sed 's/.*\.//' | sort -u)
+if [ "$CLASSIFY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# fromJson('') is a hard failure ("Error reading JToken"), and a workflow_call input arrives as
+# '' whenever the caller passes an empty expression, declared default or not. The gate must never
+# hand a raw input to fromJson; `inputs.x || '0'` reads the empty case as zero.
+if ! grep -qE "fromJson\(inputs\.[a-zA-Z0-9_]+\)" "$MERGE_GATE_WORKER_MD"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: merge-gate worker calls fromJson on a raw input; an empty caller value kills the job" >&2
+  grep -nE "fromJson\(inputs\.[a-zA-Z0-9_]+\)" "$MERGE_GATE_WORKER_MD" >&2
+fi
+
 # The worker's own comments must keep the distinction: progress notes carry no marker,
 # failed attempts carry the attempt marker, verdicts carry the marker AND the Verdict line.
 if grep -q 'ATTEMPT_MARKER: "<!-- agent-merge-gate-attempt -->"' "$MERGE_GATE_WORKER_MD" &&

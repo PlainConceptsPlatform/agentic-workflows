@@ -373,41 +373,50 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      # The attempt record comes first. The belt bounds its retries by counting attempt comments
+      # newer than the CI verdict, not by labels; releasing the labels before the record existed
+      # meant a failure in either step below un-reserved the issue with nothing to count, and the
+      # belt re-dispatched the same crash every cycle. The steps stay sequential on purpose: an
+      # always() release after a failed park would strip bot-working from an issue that was
+      # meant to be parked with review.
+      # attempts_so_far is a workflow_call input and arrives as '' when the caller passes an
+      # empty expression, declared default or not; fromJson('') is a hard failure, so the empty
+      # case reads as 0.
+      - name: Report the failed attempt
+        if: fromJson(inputs.attempts_so_far || '0') < fromJson(env.PARK_AT_ATTEMPT)
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ needs.subject.outputs.issue }}
+          body: |
+            ${{ env.ATTEMPT_MARKER }}
+            Attempt ${{ inputs.attempts_so_far || '0' }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
+            The issue keeps `implement`; the merge belt will retry.
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Report the exhausted attempt budget
+        if: fromJson(inputs.attempts_so_far || '0') >= fromJson(env.PARK_AT_ATTEMPT)
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ needs.subject.outputs.issue }}
+          body: |
+            ${{ env.ATTEMPT_MARKER }}
+            Attempt ${{ inputs.attempts_so_far || '0' }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
+            The attempt budget for this CI verdict is exhausted. The review label is set: a human must take over.
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Park the issue for a human
+        if: fromJson(inputs.attempts_so_far || '0') >= fromJson(env.PARK_AT_ATTEMPT)
+        uses: ./.github/actions/add-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ needs.subject.outputs.issue }}
+          labels: ${{ env.REVIEW_LABEL }}
       - name: Release the issue
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.WORKING_LABEL }},${{ env.PR_PENDING_LABEL }}
-      - name: Park the issue for a human
-        if: fromJson(inputs.attempts_so_far) >= fromJson(env.PARK_AT_ATTEMPT)
-        uses: ./.github/actions/add-issue-labels
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.REVIEW_LABEL }}
-      - name: Report the failed attempt
-        if: fromJson(inputs.attempts_so_far) < fromJson(env.PARK_AT_ATTEMPT)
-        uses: ./.github/actions/create-issue-comment
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
-          body: |
-            ${{ env.ATTEMPT_MARKER }}
-            Attempt ${{ inputs.attempts_so_far }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
-            The issue stays reserved and the merge gate will retry.
-            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-      - name: Report the exhausted attempt budget
-        if: fromJson(inputs.attempts_so_far) >= fromJson(env.PARK_AT_ATTEMPT)
-        uses: ./.github/actions/create-issue-comment
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
-          body: |
-            ${{ env.ATTEMPT_MARKER }}
-            Attempt ${{ inputs.attempts_so_far }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
-            The attempt budget for this CI verdict is exhausted. The review label is set: a human must take over.
-            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
   agent:
     # The top-level guard reads both outputs. GitHub Actions does not make a
