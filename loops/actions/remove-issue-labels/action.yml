@@ -9,7 +9,7 @@ inputs:
     description: Issue or pull request number.
     required: true
   labels:
-    description: Newline-delimited labels to remove.
+    description: Labels to remove, one per line. A comma-separated list is accepted as well.
     required: true
 runs:
   using: composite
@@ -22,7 +22,9 @@ runs:
       with:
         github-token: ${{ inputs.token }}
         script: |
-          for (const label of process.env.LABELS.split(/\r?\n/).filter(Boolean)) {
+          // Callers wrote `labels: a,b` while this split on newlines, so one label named "a,b"
+          // was removed: a 404, swallowed below, and neither label ever came off.
+          for (const label of process.env.LABELS.split(/\r?\n|,/).map((label) => label.trim()).filter(Boolean)) {
             try {
               await github.rest.issues.removeLabel({
                 ...context.repo,

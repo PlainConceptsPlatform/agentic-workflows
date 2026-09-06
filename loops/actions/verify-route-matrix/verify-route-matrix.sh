@@ -337,6 +337,24 @@ else
   echo "FAIL: merge-gate worker must keep verdict and attempt markers distinct" >&2
 fi
 
+# add-issue-labels and remove-issue-labels split `labels` on newlines. A caller that joined two
+# names with a comma removed one label called "bot-working,pr-pending": a 404 the action swallows
+# on purpose, so the release never happened and Pliny-Bot #49/#54 carried implement, pr-pending
+# and review together for a day. Callers use block scalars, one label per line; the actions also
+# accept commas so a consumer copy of an old caller keeps working.
+LABELS_OK=1
+if grep -nE '^[[:space:]]+labels: [^|>].*,' "${HERE}/../../workflows"/agent-*.md >&2; then
+  LABELS_OK=0
+  echo "FAIL: a worker passes comma-joined labels to a label action; use a block scalar, one label per line" >&2
+fi
+for action in add-issue-labels remove-issue-labels; do
+  if ! grep -qF 'split(/\r?\n|,/)' "${HERE}/../${action}/action.yml"; then
+    LABELS_OK=0
+    echo "FAIL: ${action} must accept comma-separated labels as well as one per line" >&2
+  fi
+done
+if [ "$LABELS_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 # A failed attempt must not strip `implement`: identify-gate-subject refuses an issue
 # without it, so the first crash would starve every retry at the subject check.
 if grep -A6 'Park the issue' "$MERGE_GATE_WORKER_MD" | grep -q 'REVIEW_LABEL' &&

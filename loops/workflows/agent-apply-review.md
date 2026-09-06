@@ -233,7 +233,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.WORKING_LABEL }},${{ env.PR_PENDING_LABEL }}
+          labels: |
+            ${{ env.WORKING_LABEL }}
+            ${{ env.PR_PENDING_LABEL }}
   incomplete:
     needs: [subject, agent, safe_outputs, validate_output]
     if: >

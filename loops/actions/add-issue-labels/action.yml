@@ -9,7 +9,7 @@ inputs:
     description: Issue or pull request number.
     required: true
   labels:
-    description: Newline-delimited labels to add.
+    description: Labels to add, one per line. A comma-separated list is accepted as well.
     required: true
 runs:
   using: composite
@@ -22,7 +22,7 @@ runs:
       with:
         github-token: ${{ inputs.token }}
         script: |
-          const labels = process.env.LABELS.split(/\r?\n/).filter(Boolean);
+          const labels = process.env.LABELS.split(/\r?\n|,/).map((label) => label.trim()).filter(Boolean);
           await github.rest.issues.addLabels({
             ...context.repo,
             issue_number: Number(process.env.ISSUE_NUMBER),

@@ -218,7 +218,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
-          labels: ${{ env.WORKING_LABEL }},implement
+          labels: |
+            ${{ env.WORKING_LABEL }}
+            implement
       - name: Flag for human review
         uses: ./.github/actions/add-issue-labels
         with:

@@ -181,7 +181,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.WORKING_LABEL }},${{ env.PR_PENDING_LABEL }}
+          labels: |
+            ${{ env.WORKING_LABEL }}
+            ${{ env.PR_PENDING_LABEL }}
       - name: Flag human review
         if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
         uses: ./.github/actions/add-issue-labels
@@ -346,14 +348,20 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.WORKING_LABEL }},${{ env.PR_PENDING_LABEL }}
+          labels: |
+            ${{ env.WORKING_LABEL }}
+            ${{ env.PR_PENDING_LABEL }}
       - name: Clear merged issue labels
         if: needs.validate_output.outputs.outcome == 'merge'
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.IMPLEMENT_LABEL }},${{ env.WORKING_LABEL }},${{ env.REVIEW_LABEL }},${{ env.PR_PENDING_LABEL }}
+          labels: |
+            ${{ env.IMPLEMENT_LABEL }}
+            ${{ env.WORKING_LABEL }}
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.PR_PENDING_LABEL }}
   incomplete:
     needs: [subject, protected_changes, agent, safe_outputs, validate_output]
     if: >
@@ -423,7 +431,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.WORKING_LABEL }},${{ env.PR_PENDING_LABEL }}
+          labels: |
+            ${{ env.WORKING_LABEL }}
+            ${{ env.PR_PENDING_LABEL }}
 
   agent:
     # The top-level guard reads both outputs. GitHub Actions does not make a
