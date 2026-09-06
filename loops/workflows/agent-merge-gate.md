@@ -379,7 +379,7 @@ jobs:
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.WORKING_LABEL }},${{ env.PR_PENDING_LABEL }}
       - name: Park the issue for a human
-        if: fromJson(inputs['attempts-so-far']) >= fromJson(env.MAX_ATTEMPTS) - 1
+        if: fromJson(inputs['attempts-so-far']) >= (fromJson(env.MAX_ATTEMPTS) - 1)
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -393,7 +393,7 @@ jobs:
           body: |
             ${{ env.ATTEMPT_MARKER }}
             Attempt ${{ inputs['attempts-so-far'] }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
-            ${{ fromJson(inputs['attempts-so-far']) >= fromJson(env.MAX_ATTEMPTS) - 1 && format('The attempt budget for this CI verdict is exhausted. The `review` label is set: a human must take over.') || format('The issue stays reserved and the merge gate will retry.') }}
+            ${{ fromJson(inputs['attempts-so-far']) >= (fromJson(env.MAX_ATTEMPTS) - 1) && format('The attempt budget for this CI verdict is exhausted. The `review` label is set: a human must take over.') || format('The issue stays reserved and the merge gate will retry.') }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
   agent:
