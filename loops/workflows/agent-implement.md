@@ -12,7 +12,20 @@ env:
   GIT_COMMITTER_NAME: "github-actions[bot]"
   GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
   IMPLEMENT_MARKER: "<!-- agent-implement -->"
-  INCOMPLETE_COMMENT: "Automated implementation ended without an outcome. The implement label remains for a retry."
+  ATTEMPT_MARKER: "<!-- agent-implement-attempt -->"
+  # The model provider fails in bursts: the same model answers "not found" or 401 for a minute
+  # and works again immediately after, and a run that dies that way used to burn the issue and
+  # hand it to a human. Retry those, and give up on the fifth, which is an outage not a blip.
+  MAX_ATTEMPTS: "5"
+  PARK_AT_ATTEMPT: "4"
+  # Only a run that died before it could do any work is worth repeating. A provider failure
+  # kills the run in a couple of minutes with no answer; a run that worked for half an hour and
+  # then failed produced an answer that was wrong, and repeating it costs the whole fleet the
+  # same half hour to be wrong again. Observed: "Model not found" died in seconds, while a run
+  # whose own build failed to compile had spent 182 turns, and an out-of-memory kill came after
+  # a full verification suite.
+  RETRY_UNDER_MINUTES: "6"
+  INCOMPLETE_COMMENT: "Automated implementation ran and ended without an outcome. The issue is released and flagged for review: a run that got this far and still failed will fail the same way again."
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/implementation-context.json
   GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
 description: |
@@ -42,6 +55,11 @@ on:
         description: Issue number to implement.
         required: true
         type: string
+      attempts_so_far:
+        description: Failed implement runs already made for this issue. Parked when it reaches the cap.
+        required: false
+        type: string
+        default: '0'
 jobs:
   eligibility:
     runs-on: agents-arc
@@ -202,6 +220,8 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # the retry re-enters through the router, which is a workflow_dispatch
+      actions: write
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -213,7 +233,74 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Decide whether this failure is worth repeating
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPTS: ${{ inputs.attempts_so_far || '0' }}
+          PARK_AT: ${{ env.PARK_AT_ATTEMPT }}
+          UNDER_MINUTES: ${{ env.RETRY_UNDER_MINUTES }}
+        run: |
+          set -euo pipefail
+          # The agent job belongs to this same run: a called workflow shares the caller's run id.
+          read -r started finished <<<"$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+            --jq '[.jobs[] | select(.name | endswith("agent"))] | last // empty
+                  | "\(.started_at // "") \(.completed_at // "")"')"
+          minutes=-1
+          if [ -n "${started:-}" ] && [ -n "${finished:-}" ]; then
+            minutes=$(( ( $(date -u -d "$finished" +%s) - $(date -u -d "$started" +%s) ) / 60 ))
+          fi
+          retry=false
+          # An unknown duration is treated as a long run: never retry on a guess.
+          if [ "$minutes" -ge 0 ] && [ "$minutes" -lt "$UNDER_MINUTES" ] && [ "$ATTEMPTS" -lt "$PARK_AT" ]; then
+            retry=true
+          fi
+          {
+            echo "retry=$retry"
+            echo "next=$((ATTEMPTS + 1))"
+            echo "minutes=$minutes"
+          } >> "$GITHUB_OUTPUT"
+          echo "agent job ran for ${minutes}m; attempts so far ${ATTEMPTS}; retry=${retry}"
+      # The attempt is recorded before any label moves, so a failure in the steps below leaves a
+      # run that can be counted rather than an issue released with nothing to show for it.
+      - name: Report the failed attempt
+        if: steps.decide.outputs.retry == 'true'
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            ${{ env.ATTEMPT_MARKER }}
+            Attempt ${{ steps.decide.outputs.next }} of ${{ env.MAX_ATTEMPTS }} ended after ${{ steps.decide.outputs.minutes }} minutes, before the run could produce an answer. That is what a provider outage looks like, so this is being retried.
+            The issue keeps `implement`.
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Release the reservation for the retry
+        if: steps.decide.outputs.retry == 'true'
+        uses: ./.github/actions/remove-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: ${{ env.WORKING_LABEL }}
+      - name: Send the issue back through the router
+        if: steps.decide.outputs.retry == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+          NEXT: ${{ steps.decide.outputs.next }}
+        run: |
+          set -euo pipefail
+          # The provider recovers in seconds, so pause before re-entering rather than dispatching
+          # back into the same outage. The router's own classify and authorize jobs add more.
+          sleep 30
+          gh workflow run work-router.yml --repo "$REPO" --ref "$REF" \
+            -f operation=implement -f issue-number="$ISSUE_NUMBER" -f attempts_so_far="$NEXT"
+          echo "Re-dispatched implement for #$ISSUE_NUMBER as attempt $NEXT."
       - name: Release the selected issue
+        if: steps.decide.outputs.retry != 'true'
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -222,12 +309,14 @@ jobs:
             ${{ env.WORKING_LABEL }}
             implement
       - name: Flag for human review
+        if: steps.decide.outputs.retry != 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.REVIEW_LABEL }}
       - name: Report missing implementation outcome
+        if: steps.decide.outputs.retry != 'true'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}

@@ -191,6 +191,14 @@ assert "merge-gate dispatch defaults its attempt count to zero" 0 \
   "$(route_field merge-gate-attempts EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7)"
 assert "merge-gate dispatch forwards the attempt count" 3 \
   "$(route_field merge-gate-attempts EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7 INPUT_ATTEMPTS_SO_FAR=3)"
+# The implement worker re-dispatches itself when a run dies before producing an answer, so the
+# count has to survive the round trip or the budget never advances and the retry never stops.
+assert "implement dispatch defaults its attempt count to zero" 0 \
+  "$(route_field implement-attempts EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=42)"
+assert "implement dispatch forwards the attempt count" 2 \
+  "$(route_field implement-attempts EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=42 INPUT_ATTEMPTS_SO_FAR=2)"
+assert "a refine dispatch carries no implement attempts" 0 \
+  "$(route_field implement-attempts EVENT=workflow_dispatch OPERATION=refine INPUT_ISSUE_NUMBER=42 INPUT_ATTEMPTS_SO_FAR=2)"
 assert_route "reconcile-bot-pr-runs dispatch needs no numbers" reconcile-bot-pr-runs \
   EVENT=workflow_dispatch OPERATION=reconcile-bot-pr-runs
 assert_route "an unknown operation routes nowhere" none \
@@ -403,6 +411,26 @@ if ! grep -qF "conclusion == 'failure' && (inputs.attempts_so_far || '0') == '0'
   BRANCH_OK=0; echo "FAIL: the reserve job's progress comment must be posted on the first attempt only" >&2
 fi
 if [ "$BRANCH_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# A provider outage kills a run in a couple of minutes with no answer, and the same issue used
+# to be handed to a human for it. The implement worker retries those and only those: a run that
+# worked for half an hour and then failed produced an answer that was wrong, and repeating it
+# costs the fleet the same half hour to be wrong again.
+IMPLEMENT_RETRY_OK=1
+for needle in 'RETRY_UNDER_MINUTES' 'ATTEMPT_MARKER' 'attempts_so_far' 'operation=implement'; do
+  grep -qF "$needle" "$IMPLEMENT_WORKER_MD" || {
+    IMPLEMENT_RETRY_OK=0
+    echo "FAIL: implement worker lost its retry belt: no '$needle'" >&2
+  }
+done
+# Park and retry are mutually exclusive: the retry path must never add the review label, and
+# the park path must never re-dispatch.
+grep -A3 'Flag for human review' "$IMPLEMENT_WORKER_MD" | grep -q "retry != 'true'" ||
+  grep -B3 'Flag for human review' "$IMPLEMENT_WORKER_MD" | grep -q "retry != 'true'" || {
+    IMPLEMENT_RETRY_OK=0
+    echo "FAIL: the implement worker must not flag review on a run it is about to retry" >&2
+  }
+if [ "$IMPLEMENT_RETRY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # A failed attempt must not strip `implement`: identify-gate-subject refuses an issue
 # without it, so the first crash would starve every retry at the subject check.

@@ -27,6 +27,9 @@ outputs:
   merge-gate-attempts:
     description: Failed merge-gate attempts already made against this CI verdict.
     value: ${{ steps.classify.outputs.merge-gate-attempts }}
+  implement-attempts:
+    description: Implement runs already made for this issue that died before producing an answer.
+    value: ${{ steps.classify.outputs.implement-attempts }}
   refine-mode:
     description: first or rerefine.
     value: ${{ steps.classify.outputs.refine-mode }}

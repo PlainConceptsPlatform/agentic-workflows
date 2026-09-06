@@ -280,6 +280,7 @@ jobs:
       ci-conclusion: ${{ steps.route.outputs.ci-conclusion }}
       ci-run-id: ${{ steps.route.outputs.ci-run-id }}
       merge-gate-attempts: ${{ steps.route.outputs.merge-gate-attempts }}
+      implement-attempts: ${{ steps.route.outputs.implement-attempts }}
       refine-mode: ${{ steps.route.outputs.refine-mode }}
       triage-mode: ${{ steps.route.outputs.triage-mode }}
       trigger-kind: ${{ steps.route.outputs.trigger-kind }}
@@ -402,6 +403,7 @@ jobs:
     permissions: write-all
     with:
       issue-number: ${{ needs.classify.outputs.issue-number }}
+      attempts_so_far: ${{ needs.classify.outputs.implement-attempts }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
       CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
