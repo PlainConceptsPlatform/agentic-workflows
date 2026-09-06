@@ -118,7 +118,6 @@ on:
     - cron: "43 3 * * *"
     - cron: "0 6 * * *"
     - cron: "17 * * * *"
-    - cron: "29 7 * * *"
 
   workflow_dispatch:
     inputs:
