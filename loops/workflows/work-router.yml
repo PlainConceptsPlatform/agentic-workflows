@@ -712,7 +712,7 @@ jobs:
               -f "inputs[pr-number]=$pr" \
               -f "inputs[ci-conclusion]=$ci_conclusion" \
               -f "inputs[ci-run-id]=$ci_run_id" \
-              -f "inputs[attempts-so-far]=$attempts"
+                -f "inputs[attempts_so_far]=$attempts"
           }
 
           if [ "$ACTION" = "closed" ]; then
