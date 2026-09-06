@@ -272,8 +272,8 @@ fi
 if [ "$(grep -cF 'contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))' "$ROUTER_YML")" -lt 4 ]; then
   BELT_OK=0; echo "FAIL: verdict detection must pair the gate marker with a Verdict line in both dispatch paths" >&2
 fi
-if [ "$(grep -c 'attempts-so-far' "$ROUTER_YML")" -lt 2 ]; then
-  BELT_OK=0; echo "FAIL: dispatch sites must forward attempts-so-far" >&2
+if [ "$(grep -c 'attempts_so_far' "$ROUTER_YML")" -lt 2 ]; then
+  BELT_OK=0; echo "FAIL: dispatch sites must forward attempts_so_far" >&2
 fi
 if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 

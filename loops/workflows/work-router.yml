@@ -165,7 +165,7 @@ on:
         description: "CI workflow run ID for merge-gate dispatch"
         required: false
         type: string
-      attempts-so-far:
+      attempts_so_far:
         description: "Failed merge-gate attempts already made against this CI verdict (filled by the router, not by humans)"
         required: false
         type: string
@@ -498,7 +498,7 @@ jobs:
       linked-issue: ${{ needs.classify.outputs.linked-issue }}
       ci-conclusion: ${{ needs.classify.outputs.ci-conclusion }}
       ci-run-id: ${{ needs.classify.outputs.ci-run-id }}
-      attempts-so-far: ${{ needs.classify.outputs.merge-gate-attempts }}
+      attempts_so_far: ${{ needs.classify.outputs.merge-gate-attempts }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
       CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
@@ -865,7 +865,7 @@ jobs:
                 -f "inputs[pr-number]=$pr_number" \
                 -f "inputs[ci-conclusion]=$ci_conclusion" \
                 -f "inputs[ci-run-id]=$ci_run_id" \
-                -f "inputs[attempts-so-far]=$attempts"
+                -f "inputs[attempts_so_far]=$attempts"
             done
 
   audit-close:

@@ -63,7 +63,7 @@ runs:
         INPUT_MODE: ${{ github.event.inputs.mode }}
         INPUT_CI_CONCLUSION: ${{ github.event.inputs.ci-conclusion }}
         INPUT_CI_RUN_ID: ${{ github.event.inputs.ci-run-id }}
-        INPUT_ATTEMPTS_SO_FAR: ${{ github.event.inputs.attempts-so-far }}
+        INPUT_ATTEMPTS_SO_FAR: ${{ github.event.inputs.attempts_so_far }}
         INPUT_TRIGGER_KIND: ${{ github.event.inputs.trigger-kind }}
       run: |
         set -euo pipefail
