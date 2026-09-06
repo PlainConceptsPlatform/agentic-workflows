@@ -393,7 +393,7 @@ jobs:
           body: |
             ${{ env.ATTEMPT_MARKER }}
             Attempt ${{ inputs.attempts_so_far }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
-            ${{ fromJson(inputs.attempts_so_far) >= (fromJson(env.MAX_ATTEMPTS) - 1) && format('The attempt budget for this CI verdict is exhausted. The `review` label is set: a human must take over.') || format('The issue stays reserved and the merge gate will retry.') }}
+            ${{ fromJson(inputs.attempts_so_far) >= (fromJson(env.MAX_ATTEMPTS) - 1) && format('The attempt budget for this CI verdict is exhausted. The review label is set: a human must take over.') || format('The issue stays reserved and the merge gate will retry.') }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
   agent:
