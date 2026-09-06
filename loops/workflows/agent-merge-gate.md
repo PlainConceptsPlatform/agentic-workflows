@@ -386,6 +386,7 @@ jobs:
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.REVIEW_LABEL }}
       - name: Report the failed attempt
+        if: fromJson(inputs.attempts_so_far) < (fromJson(env.MAX_ATTEMPTS) - 1)
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -393,7 +394,18 @@ jobs:
           body: |
             ${{ env.ATTEMPT_MARKER }}
             Attempt ${{ inputs.attempts_so_far }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
-            ${{ fromJson(inputs.attempts_so_far) >= (fromJson(env.MAX_ATTEMPTS) - 1) && format('The attempt budget for this CI verdict is exhausted. The review label is set: a human must take over.') || format('The issue stays reserved and the merge gate will retry.') }}
+            The issue stays reserved and the merge gate will retry.
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Report the exhausted attempt budget
+        if: fromJson(inputs.attempts_so_far) >= (fromJson(env.MAX_ATTEMPTS) - 1)
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ needs.subject.outputs.issue }}
+          body: |
+            ${{ env.ATTEMPT_MARKER }}
+            Attempt ${{ inputs.attempts_so_far }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
+            The attempt budget for this CI verdict is exhausted. The review label is set: a human must take over.
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
   agent:
