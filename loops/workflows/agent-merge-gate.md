@@ -10,6 +10,7 @@ env:
   GATE_MARKER: "<!-- agent-merge-gate -->"
   ATTEMPT_MARKER: "<!-- agent-merge-gate-attempt -->"
   MAX_ATTEMPTS: "6"
+  PARK_AT_ATTEMPT: "5"
   INCOMPLETE_COMMENT: "Automated CI failure remediation ended without an outcome. The issue remains for a retry."
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
   GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
@@ -379,14 +380,14 @@ jobs:
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.WORKING_LABEL }},${{ env.PR_PENDING_LABEL }}
       - name: Park the issue for a human
-        if: fromJson(inputs.attempts_so_far) >= (fromJson(env.MAX_ATTEMPTS) - 1)
+        if: fromJson(inputs.attempts_so_far) >= fromJson(env.PARK_AT_ATTEMPT)
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.REVIEW_LABEL }}
       - name: Report the failed attempt
-        if: fromJson(inputs.attempts_so_far) < (fromJson(env.MAX_ATTEMPTS) - 1)
+        if: fromJson(inputs.attempts_so_far) < fromJson(env.PARK_AT_ATTEMPT)
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -397,7 +398,7 @@ jobs:
             The issue stays reserved and the merge gate will retry.
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Report the exhausted attempt budget
-        if: fromJson(inputs.attempts_so_far) >= (fromJson(env.MAX_ATTEMPTS) - 1)
+        if: fromJson(inputs.attempts_so_far) >= fromJson(env.PARK_AT_ATTEMPT)
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
