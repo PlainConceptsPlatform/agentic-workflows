@@ -273,6 +273,10 @@ jobs:
   # one of the two events GITHUB_TOKEN may raise, so no App token is needed here, and the
   # router treats a dispatch as trusted. Human pull requests are left to the workflow_run
   # route, which does fire for them. The reconcile belt remains the hourly fallback.
+  #
+  # If a deploy pipeline calls this workflow with `uses:`, that caller must also grant
+  # `actions: write`. A called workflow may not request a scope its caller withheld, and the
+  # whole run fails to start with zero jobs and no annotation when it does.
   dispatch-merge-gate:
     name: Dispatch merge gate
     needs: [api, mutation-api, web, mutation-web]
