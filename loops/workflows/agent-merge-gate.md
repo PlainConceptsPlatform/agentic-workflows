@@ -535,6 +535,13 @@ steps:
       fi
 
 safe-outputs:
+  # Path B. Without this, gh-aw's own safe_outputs job writes as well as the conclude job, and
+  # it runs first: it pushed a flattened, single-parent commit with GITHUB_TOKEN while conclude
+  # was still waiting, so the agent's merge commit was lost, the pull request stayed
+  # conflicting, and GITHUB_TOKEN raises no events, so no CI ran on the new head and the belt
+  # stalled (Pliny-Bot run 34051821011). Staged runs everything and writes nothing; conclude
+  # applies the bundle and the comment with the App token, which does start CI.
+  staged: true
   # A failed run is already a red run. An issue per failure buries the real backlog
   # under noise nobody closes.
   report-failure-as-issue: false

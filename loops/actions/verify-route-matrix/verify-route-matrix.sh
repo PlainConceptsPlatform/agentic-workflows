@@ -386,6 +386,13 @@ if [ "$LABELS_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # worker must start on the pull request branch and must never say `git rebase`. Its progress
 # comment is posted on the first attempt only; retries are recorded by the attempt comment.
 BRANCH_OK=1
+# Path B: staged safe outputs, applied by conclude with the App token. Without `staged: true`
+# gh-aw's safe_outputs job writes too, and it runs first: it pushed a flattened single-parent
+# commit with GITHUB_TOKEN, which lost the agent's merge, left the pull request conflicting,
+# and started no CI, because GITHUB_TOKEN writes raise no events.
+if ! grep -qE '^  staged: true' "$MERGE_GATE_WORKER_MD"; then
+  BRANCH_OK=0; echo "FAIL: merge-gate safe-outputs must be staged; conclude owns the write path" >&2
+fi
 if grep -q 'git rebase' "$MERGE_GATE_WORKER_MD"; then
   BRANCH_OK=0; echo "FAIL: merge-gate worker tells the agent to rebase; the push is fast-forward only" >&2
 fi
