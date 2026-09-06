@@ -47,6 +47,10 @@ jobs:
     name: Verify generated agent lockfiles
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # gh-aw resolves the `github/gh-aw/...` imports through the GitHub API on every compile,
+      # and an unauthenticated gh on a hosted runner refuses API calls.
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,8 +74,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          want="$(gh aw --version | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)"
-          [ "$want" = "$GH_AW_VERSION" ] || { echo "::error::gh aw reports $want, this workflow pins $GH_AW_VERSION"; exit 1; }
+          # `gh aw --version` writes to stderr; without 2>&1 the grep saw nothing and set -e
+          # ended the step with no message at all.
+          want="$(gh aw --version 2>&1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
+          [ "$want" = "$GH_AW_VERSION" ] || { echo "::error::gh aw reports '${want:-nothing}', this workflow pins $GH_AW_VERSION"; exit 1; }
           status=0
           for lock in .github/workflows/*.lock.yml; do
             have="$(sed -n '1s/.*"compiler_version":"\([^"]*\)".*/\1/p' "$lock")"
@@ -149,13 +155,19 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bin"
           tar -xJf "$tarball" -C "$RUNNER_TEMP/bin" --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # actionlint 1.7.7 predates `concurrency.queue`, which GitHub accepts and the router uses;
+      # that one message is a known false positive and is ignored by its exact text so anything
+      # else under `concurrency` still fails. shellcheck style notes (SC2129 and friends) are
+      # opinions about consumer scripts, not defects; warnings and errors still fail the job.
       - name: Lint authored workflows
         shell: bash
+        env:
+          SHELLCHECK_OPTS: -S warning
         run: |
           set -euo pipefail
           mapfile -t authored < <(git ls-files '.github/workflows/*.yml' | grep -vE '\.lock\.yml$|agentics-maintenance\.yml$')
           if [ "${#authored[@]}" -gt 0 ]; then
-            actionlint "${authored[@]}"
+            actionlint -ignore 'unexpected key "queue" for "concurrency" section' "${authored[@]}"
           fi
       - name: Lint composite action shell
         shell: bash
