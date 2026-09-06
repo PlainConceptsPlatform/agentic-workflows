@@ -17,7 +17,10 @@ repository root as `opencode.ci.json`.
 ### Provider
 
 - The `forge` provider is OpenAI-compatible and reads its endpoint from
-  `FORGE_API_URL` and its key from `FORGE_API_KEY` at runtime.
+  `OPENAI_BASE_URL` and its key from `OPENAI_API_KEY` at runtime. Those are the
+  two variables every worker's agent job sets (`engine.env` in the worker and
+  the `OPENAI_API_KEY` secret), so the file works with no consumer wiring. An
+  earlier template read `FORGE_API_URL`/`FORGE_API_KEY`, which nothing set.
 - Each consumer configures its own router endpoint, credential, model IDs, and
   capabilities. The workflow package does not assume a particular gateway
   host, authentication system, or model vendor.

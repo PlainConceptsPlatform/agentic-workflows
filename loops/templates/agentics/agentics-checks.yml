@@ -9,18 +9,37 @@ on:
       - .github/workflows/*.yml
       - .github/workflows/aw.json
       - .github/actions/**
+  # A push to the default branch that bypassed review is exactly the case that needs the check:
+  # seven broken locks reached Pliny-Bot's main in twenty minutes with no pull request and no
+  # run of this workflow. A red run here is the detection.
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/*.md
+      - .github/workflows/shared/*.md
+      - .github/workflows/*.yml
+      - .github/workflows/aw.json
+      - .github/actions/**
 
 env:
-  GH_AW_VERSION: v0.83.4
+  # Must match the version the locks were compiled with (first line of every .lock.yml) and the
+  # `github/gh-aw/...@vX` import pin in every worker. A different compiler regenerates every lock
+  # and the freshness diff measures the version, not the change under review.
+  GH_AW_VERSION: v0.87.5
   ACTIONLINT_VERSION: 1.7.7
   ACTIONLINT_SHA256: 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
-  AGENTICS_COMPILE_COMMAND: gh aw compile --strict
+  SHELLCHECK_VERSION: 0.10.0
+  SHELLCHECK_SHA256: 6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87
+  # The same script a developer runs. It wraps `gh aw compile --strict` and applies the
+  # repository's post-processing; a bare `gh aw compile` on this side would regenerate every lock
+  # without the transform, and the diff below could never be clean.
+  AGENTICS_COMPILE_COMMAND: node scripts/compile-agent-workflows.mjs
 
 permissions:
   contents: read
 
 concurrency:
-  group: agentics-checks-${{ github.event.pull_request.number }}
+  group: agentics-checks-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -34,18 +53,40 @@ jobs:
         with:
           persist-credentials: false
       - name: Install gh-aw
-        uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
-        with:
-          version: ${{ env.GH_AW_VERSION }}
-      # The compile command below is a node script and an agents-arc runner ships without
-      # node, so the job failed at "node: command not found" before it read a single
-      # workflow. The hosted images have node; agents-arc does not, and nothing else in
-      # this job needed it, which is why it went unnoticed. ubuntu-latest is unaffected
-      # but a setup step is harmless there.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh extension install github/gh-aw --pin "$GH_AW_VERSION"
+          gh aw --version
+      # The compile command is a node script. Hosted images have node; a setup step pins the
+      # major version so the script sees the same runtime everywhere.
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+      - name: Verify the locks and the workers agree on the gh-aw version
+        shell: bash
+        run: |
+          set -euo pipefail
+          want="$(gh aw --version | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)"
+          [ "$want" = "$GH_AW_VERSION" ] || { echo "::error::gh aw reports $want, this workflow pins $GH_AW_VERSION"; exit 1; }
+          status=0
+          for lock in .github/workflows/*.lock.yml; do
+            have="$(sed -n '1s/.*"compiler_version":"\([^"]*\)".*/\1/p' "$lock")"
+            if [ "$have" != "$want" ]; then
+              echo "::error::$lock was compiled by ${have:-an unknown version}; this job runs $want. Recompile with the pinned version, or bump GH_AW_VERSION and the worker import pins together."
+              status=1
+            fi
+          done
+          while read -r file pin; do
+            if [ "$pin" != "$want" ]; then
+              echo "::error::$file imports gh-aw shared files at $pin; this job runs $want."
+              status=1
+            fi
+          done < <(grep -HoE 'github/gh-aw/[^@]*@v[0-9]+\.[0-9]+\.[0-9]+' .github/workflows/*.md | sed -E 's/^([^:]*):.*@(v[0-9.]+)$/\1 \2/' | sort -u)
+          exit "$status"
       - name: Compile agent workflows strictly
         run: ${{ env.AGENTICS_COMPILE_COMMAND }}
       - name: Verify generated lockfiles are current
@@ -62,6 +103,20 @@ jobs:
           echo "::error::Generated agent lockfiles are stale. Run '${AGENTICS_COMPILE_COMMAND}' and commit the resulting .lock.yml files."
           git diff -- .github/workflows/*.lock.yml
           exit 1
+      # gh aw compile leaves a lock alone when its hashes still match the source, so the script
+      # must recognise a lock it already processed. If a second run changes anything, the
+      # post-processing is not idempotent and every consumer's freshness check is measuring the
+      # transform instead of the drift.
+      - name: Verify a second compile changes nothing
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -R .github/workflows "$RUNNER_TEMP/first-pass"
+          ${AGENTICS_COMPILE_COMMAND}
+          if ! diff -r -I '^[[:space:]]*GH_AW_INFO_MODEL_COSTS:' "$RUNNER_TEMP/first-pass" .github/workflows; then
+            echo "::error::Running '${AGENTICS_COMPILE_COMMAND}' twice produced different locks; the post-processing is not idempotent."
+            exit 1
+          fi
 
   lint-workflows:
     name: Lint authored workflows and shell
@@ -81,6 +136,18 @@ jobs:
           echo "${ACTIONLINT_SHA256}  $tarball" | sha256sum --check --strict
           mkdir -p "$RUNNER_TEMP/bin"
           tar -xzf "$tarball" -C "$RUNNER_TEMP/bin" actionlint
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # Pinned rather than taken from the image: a copy of this job that ran on a self-hosted
+      # runner died with "shellcheck: No such file or directory".
+      - name: Install shellcheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/shellcheck.tar.xz"
+          curl -fsSL -o "$tarball" "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  $tarball" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xJf "$tarball" -C "$RUNNER_TEMP/bin" --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Lint authored workflows
         shell: bash

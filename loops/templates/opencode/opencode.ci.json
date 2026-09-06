@@ -30,9 +30,9 @@
   },
   "provider": {
     "forge": {
-      "api": "{env:FORGE_API_URL}",
+      "api": "{env:OPENAI_BASE_URL}",
       "options": {
-        "apiKey": "{env:FORGE_API_KEY}"
+        "apiKey": "{env:OPENAI_API_KEY}"
       },
       "models": {
         "glm-5-3": {
