@@ -100,8 +100,14 @@ classify_route() {
 
     issue_comment)
       if [ "${COMMENT_ON_PR:-false}" = "true" ]; then
-        route="apply-review"
-        pr_number="${EVENT_ISSUE_NUMBER:-}"
+        if [ "${COMMENT_SENDER_TYPE:-}" = "Bot" ]; then
+          # Every App-token comment on a pull request is an issue_comment event, and the
+          # workers comment on pull requests they own. None of that is reviewer feedback.
+          error="comment authored by a bot"
+        else
+          route="apply-review"
+          pr_number="${EVENT_ISSUE_NUMBER:-}"
+        fi
       elif [ "${ISSUE_STATE:-}" = "closed" ]; then
         # A closing comment on a refine-labelled issue used to start a full re-refine, which
         # held a runner for 35 minutes and filed split children under an already-shut parent.
@@ -144,8 +150,10 @@ classify_route() {
 
     workflow_run)
       # Only a FAILED CI run on an attached pull request auto-dispatches the gate. A green
-      # run reaches merge through app-ci's dispatch-merge-gate and the reconcile belt, so
-      # routing success here would double-fire the gate for every passing pull request.
+      # run reaches the gate through the consumer CI's dispatch-merge-gate job and the
+      # reconcile belt, so routing success here would double-fire the gate for every passing
+      # pull request. GitHub delivers workflow_run only for CI runs whose actor is a human;
+      # a bot pull request's CI never arrives here at all, and the same two paths cover it.
       if [ "${RUN_CONCLUSION:-}" != "failure" ]; then
         error="CI concluded '${RUN_CONCLUSION:-}'; the gate auto-triggers only on failure"
       elif is_issue_number "${RUN_PR_NUMBER:-}"; then

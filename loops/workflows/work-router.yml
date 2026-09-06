@@ -91,18 +91,19 @@ on:
     # moved and previously-mergeable sibling bot PRs may now conflict.
     types: [opened, synchronize, reopened, labeled, closed]
 
-  # CI completion on a pull request. Enabled so a FAILED CI run dispatches the Merge Gate
-  # immediately instead of waiting for the hourly reconcile. The classifier admits only
-  # conclusion == failure with an attached pull request; a green run still reaches merge
-  # through app-ci's dispatch-merge-gate and the reconcile belt, so routing success here
-  # would double-fire the gate on every passing PR.
+  # CI completion on a pull request. The classifier admits only conclusion == failure with an
+  # attached pull request; a green run reaches the gate through the consumer CI's
+  # dispatch-merge-gate job and the reconcile belt, so routing success here would double-fire
+  # the gate on every passing PR.
   #
-  # Caveat that still holds (2026-08-28): GitHub does not deliver workflow_run for CI runs
-  # whose originating event came from GITHUB_TOKEN, so a bot-opened PR's own CI completion
-  # may never arrive here — reconcile-bot-pr-runs remains the belt for that gap. Security:
-  # workflow_run runs from the default branch with secrets, but the gate's subject job
-  # rejects any PR that is not open and bot-authored, so a fork PR's failing CI cannot
-  # start privileged work.
+  # Delivery (verified 2026-09-06 in Pliny-Bot): GitHub delivers workflow_run only for CI runs
+  # whose actor is a human. A bot pull request is opened with GITHUB_TOKEN, the CI runs that
+  # follow have the bot as their actor, and no workflow_run arrives for any of them (four
+  # human-actor runs produced four router runs; three bot-actor runs produced none). For bot
+  # pull requests the consumer CI's dispatch-merge-gate job (templates/ci) and the hourly
+  # reconcile-bot-pr-runs belt are the paths. Security: workflow_run runs from the default
+  # branch with secrets, but the gate's subject job rejects any PR that is not open and
+  # bot-authored, so a fork PR's failing CI cannot start privileged work.
   workflow_run:
     workflows: ["App: CI"]
     types: [completed]
@@ -630,6 +631,20 @@ jobs:
           # CI run of its own; a merge conflict with red or concluded CI is the same
           # "needs the gate" signal. A green non-conflicting PR is left for the merge belt
           # to pick up when its checks finish (bot-approve / reconcile).
+          # A gate already queued or running for this pull request will read the same CI verdict;
+          # a second dispatch queues behind merge-belt and the single-slot queue cancels it. Same
+          # live-run test as the reconcile belt's stale-reservation sweep, keyed on the exact
+          # title run-name gives a gate dispatch.
+          gate_is_live() {
+            local pr="$1" status live
+            for status in queued in_progress waiting pending; do
+              live=$(gh api "repos/$REPO/actions/workflows/work-router.yml/runs?status=$status&per_page=100" \
+                --jq "[.workflow_runs[] | select(.display_title == \"Working (Merge Gate): PR #${pr}\")] | length" 2>/dev/null || echo 0)
+              [ "${live:-0}" -eq 0 ] || return 0
+            done
+            return 1
+          }
+
           maybe_dispatch() {
             pr="$1"
             [ -n "$pr" ] || return 0
@@ -703,6 +718,10 @@ jobs:
               echo "PR #$pr already consumed $attempts gate attempts on this CI verdict, parking for review."
               return 0
             fi
+            if gate_is_live "$pr"; then
+              echo "PR #$pr: a merge-gate run is already live; not dispatching another."
+              return 0
+            fi
 
             echo "PR #$pr is $([ "$mergeable" = "false" ] && echo conflicting || echo red-CI) (CI $ci_conclusion); dispatching Merge Gate (attempt $((attempts + 1)) of 6)."
             gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" \
@@ -762,6 +781,18 @@ jobs:
         run: |
           set -euo pipefail
 
+          # A gate already queued or running for this pull request will read the same CI verdict;
+          # a second dispatch queues behind merge-belt and the single-slot queue cancels it.
+          gate_is_live() {
+            local pr="$1" status live
+            for status in queued in_progress waiting pending; do
+              live=$(gh api "repos/$REPO/actions/workflows/work-router.yml/runs?status=$status&per_page=100" \
+                --jq "[.workflow_runs[] | select(.display_title == \"Working (Merge Gate): PR #${pr}\")] | length" 2>/dev/null || echo 0)
+              [ "${live:-0}" -eq 0 ] || return 0
+            done
+            return 1
+          }
+
           # Stale reservation sweep. Labelling ten issues at once labels all ten immediately,
           # because authorize-bot-work is keyed per issue, while implement-global lets exactly
           # one run at a time. A queued run that is cancelled therefore leaves its issue
@@ -819,6 +850,9 @@ jobs:
                     )
                   ] | sort_by(.created_at) | last // empty | [.id, .conclusion, .updated_at] | @tsv')
               if [ -z "$ci" ]; then
+                # Seen once after an App-token push: no CI run for the new head at all. The belt
+                # cannot gate a head CI never judged, and a silent skip hid that for hours.
+                echo "::warning::PR #$pr_number head $head_sha has no completed App: CI run; the belt cannot gate it until CI runs."
                 continue
               fi
 
@@ -854,6 +888,10 @@ jobs:
               fi
               if [ "$attempts" -ge 6 ]; then
                 echo "PR #$pr_number already consumed $attempts gate attempts on this CI verdict, parking for review"
+                continue
+              fi
+              if gate_is_live "$pr_number"; then
+                echo "PR #$pr_number: a merge-gate run is already live; not dispatching another."
                 continue
               fi
 

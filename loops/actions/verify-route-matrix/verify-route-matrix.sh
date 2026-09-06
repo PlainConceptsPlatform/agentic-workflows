@@ -90,6 +90,8 @@ assert "refine label starts a first pass" first \
 echo "── Comment events ────────────────────────────────────────────────────────"
 assert_route "a comment on a pull request routes to apply-review" apply-review \
   EVENT=issue_comment COMMENT_ON_PR=true EVENT_ISSUE_NUMBER=7
+assert_route "the bot's own comment on a pull request never re-enters apply-review" none \
+  EVENT=issue_comment COMMENT_ON_PR=true COMMENT_SENDER_TYPE=Bot EVENT_ISSUE_NUMBER=7
 assert_route "an author reply on a refine issue re-refines" refine \
   EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User \
   'ISSUE_LABELS=["refine","review"]' EVENT_ISSUE_NUMBER=42
@@ -294,7 +296,26 @@ fi
 if [ "$(grep -c 'attempts_so_far' "$ROUTER_YML")" -lt 2 ]; then
   BELT_OK=0; echo "FAIL: dispatch sites must forward attempts_so_far" >&2
 fi
+# A second gate for a pull request whose gate is already queued or running reads the same CI
+# verdict and is cancelled by the single-slot merge-belt queue (two cancellations on 2026-09-06).
+if [ "$(grep -c 'a merge-gate run is already live' "$ROUTER_YML")" -lt 2 ]; then
+  BELT_OK=0; echo "FAIL: both dispatch paths must skip a pull request whose gate is already live" >&2
+fi
 if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# GitHub delivers workflow_run only for CI runs whose actor is a human, so a bot pull request's
+# CI never reaches the router's CI-completion route. The package ships a dispatch-merge-gate job
+# in templates/ci that hands the verdict over from inside CI; a consumer CI workflow, where one
+# exists beside the router, must carry it or bot pull requests wait for the hourly belt.
+for ci in "${HERE}/../../workflows/ci.yml" "${HERE}/../../workflows/app-ci.yml"; do
+  [ -f "$ci" ] || continue
+  if grep -q 'operation=merge-gate' "$ci"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: $(basename "$ci") has no dispatch-merge-gate job; bot pull requests would wait for the hourly belt" >&2
+  fi
+done
 
 # The router forwards a fact to a worker by reading `needs.classify.outputs.<x>`; a name the
 # classify job does not export resolves to '' with no error. That is how the gate received
