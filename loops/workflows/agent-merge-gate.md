@@ -320,6 +320,20 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           push-to-branch: 'true'
           apply-labels: 'false'
+      # GITHUB_TOKEN on purpose: an App-token comment on a pull request is an issue_comment
+      # event, and GITHUB_TOKEN raises none. The full assessment lives on the issue, where the
+      # lifecycle is; this is what a reviewer opening the pull request sees. Carrying the
+      # marker and the Verdict line makes the router's verdict detection independent of
+      # whether the model remembered the marker.
+      - name: Show the verdict on the pull request
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ github.token }}
+          issue-number: ${{ needs.subject.outputs.pr }}
+          body: |
+            ${{ env.GATE_MARKER }}
+            **Verdict:** ${{ needs.validate_output.outputs.outcome }} (CI concluded ${{ needs.subject.outputs.conclusion }}).
+            Full assessment on the linked issue: #${{ needs.subject.outputs.issue }}. [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Merge approved pull request
         if: needs.validate_output.outputs.outcome == 'merge'
         env:

@@ -329,8 +329,10 @@ fi
 
 # The worker's own comments must keep the distinction: progress notes carry no marker,
 # failed attempts carry the attempt marker, verdicts carry the marker AND the Verdict line.
+# Three verdict sites: the review hold on the issue, the agent's assessment on the issue,
+# and conclude's short verdict on the pull request itself.
 if grep -q 'ATTEMPT_MARKER: "<!-- agent-merge-gate-attempt -->"' "$MERGE_GATE_WORKER_MD" &&
-  [ "$(grep -c '\${{ env.GATE_MARKER }}' "$MERGE_GATE_WORKER_MD")" -eq 2 ]; then
+  [ "$(grep -c '\${{ env.GATE_MARKER }}' "$MERGE_GATE_WORKER_MD")" -eq 3 ]; then
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))
