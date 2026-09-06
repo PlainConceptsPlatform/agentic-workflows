@@ -213,7 +213,7 @@ if [ -z "$empty_expr" ]; then
 else
   FAIL=$((FAIL + 1))
   echo "FAIL: workflow files contain an empty Actions expression:" >&2
-  sed 's/^/  /' <<<"$empty_expr" >&2
+  while IFS= read -r offending; do echo "  $offending" >&2; done <<<"$empty_expr"
 fi
 
 
