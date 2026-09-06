@@ -250,6 +250,25 @@ else
   echo "FAIL: protected changes must allow failed-CI repair while remaining held from merge" >&2
 fi
 
+# gh-aw folds the worker's top-level `if:` into the generated activation job but computes
+# activation's `needs` on its own: only custom jobs the prompt references AND that declare no
+# `needs:` are hoisted. A guard with its own `needs:` (protected_changes needs subject) is read
+# before it has run, resolves to '' and gates nothing, unless it is listed in `on.needs`, the
+# documented way to add jobs to pre_activation and activation. Inline list form is expected.
+TOP_IF="$(tr -d '\r' <"$MERGE_GATE_WORKER_MD" | sed -n 's/^if: //p')"
+ON_NEEDS="$(tr -d '\r' <"$MERGE_GATE_WORKER_MD" | sed -n '/^on:$/,/^[a-z]/p' |
+  sed -n 's/^  needs: *\[\(.*\)\].*/\1/p' | tr -d ' ' | tr ',' '\n')"
+ACTIVATION_OK=1
+[ -n "$TOP_IF" ] || { ACTIVATION_OK=0; echo "FAIL: could not read the merge-gate worker's top-level if" >&2; }
+for job in $(grep -oE 'needs\.[a-z_]+\.' <<<"$TOP_IF" | sed 's/^needs\.//; s/\.$//' | sort -u); do
+  if tr -d '\r' <"$MERGE_GATE_WORKER_MD" | sed -n "/^  ${job}:$/,/^  [a-z_]*:$/p" | grep -q '^    needs:' &&
+    ! grep -qx "$job" <<<"$ON_NEEDS"; then
+    ACTIVATION_OK=0
+    echo "FAIL: merge-gate top-level if reads needs.${job}, which has its own needs and is not in on.needs; activation would read it before it runs" >&2
+  fi
+done
+if [ "$ACTIVATION_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 # The merge belt is serial for the whole repository: several overnight pull requests
 # mean every merge moves the default branch under the rest, and gates running at once
 # rebase onto bases other gates are about to invalidate. A per-issue group here would

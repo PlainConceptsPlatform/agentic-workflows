@@ -59,6 +59,13 @@ on:
         required: false
         type: string
         default: '0'
+  # gh-aw folds the top-level `if:` below into the generated activation job but does not carry
+  # the jobs that `if:` reads into activation's `needs`: only prompt-referenced custom jobs with
+  # no `needs:` of their own are hoisted (subject). protected_changes needs subject, so without
+  # this entry activation read needs.protected_changes.outputs.requires_review before
+  # protected_changes had started; the value was '' and the clause was always true
+  # (Pliny-Bot run 34042143350: activation finished 18 s before protected_changes began).
+  needs: [protected_changes]
 
 # Rung 4. Router has classified the event; identify-gate-subject validates PR ownership,
 # resolves the closing issue, and confirms the CI verdict.
