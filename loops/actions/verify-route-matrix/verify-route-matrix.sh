@@ -355,6 +355,23 @@ for action in add-issue-labels remove-issue-labels; do
 done
 if [ "$LABELS_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# The agent's fix reaches the branch as a bundle applied fast-forward only (apply-agent-output).
+# gh-aw's push tool description tells the model to rebase, and a rebased branch cannot
+# fast-forward: the push is refused and the verdict is lost (Pliny-Bot run 33952565835). The
+# worker must start on the pull request branch and must never say `git rebase`. Its progress
+# comment is posted on the first attempt only; retries are recorded by the attempt comment.
+BRANCH_OK=1
+if grep -q 'git rebase' "$MERGE_GATE_WORKER_MD"; then
+  BRANCH_OK=0; echo "FAIL: merge-gate worker tells the agent to rebase; the push is fast-forward only" >&2
+fi
+if ! grep -q 'name: Check out the pull request branch' "$MERGE_GATE_WORKER_MD"; then
+  BRANCH_OK=0; echo "FAIL: merge-gate worker must check out the pull request branch before the agent starts" >&2
+fi
+if ! grep -qF "conclusion == 'failure' && (inputs.attempts_so_far || '0') == '0'" "$MERGE_GATE_WORKER_MD"; then
+  BRANCH_OK=0; echo "FAIL: the reserve job's progress comment must be posted on the first attempt only" >&2
+fi
+if [ "$BRANCH_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 # A failed attempt must not strip `implement`: identify-gate-subject refuses an issue
 # without it, so the first crash would starve every retry at the subject check.
 if grep -A6 'Park the issue' "$MERGE_GATE_WORKER_MD" | grep -q 'REVIEW_LABEL' &&

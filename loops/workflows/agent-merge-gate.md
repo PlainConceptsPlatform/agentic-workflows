@@ -242,8 +242,10 @@ jobs:
           else
             echo "has_conflicts=false" >> "$GITHUB_OUTPUT"
           fi
+      # First attempt only. Retries are recorded by the incomplete job's attempt comment, and
+      # every App comment is a router event: one issue collected sixteen of these in a day.
       - name: Comment on issue - problems found, solving them
-        if: needs.subject.outputs.conclusion == 'failure'
+        if: needs.subject.outputs.conclusion == 'failure' && (inputs.attempts_so_far || '0') == '0'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -472,6 +474,21 @@ checkout:
 # Rung 3. The diff is what the risk assessment reads, and the failing logs are what a fix
 # starts from. Both are known from the inputs, so neither costs the agent a turn.
 steps:
+  # gh-aw checks out the router's ref. Its own "Checkout PR branch" step runs only when the event
+  # carries a pull request, which a router dispatch does not, so the agent would start on main.
+  # apply-agent-output fast-forwards origin/<branch> to the bundle tip and refuses anything else,
+  # and gh-aw builds that bundle from what the agent committed on top of the checkout; both need
+  # the agent to start on the branch it pushes to.
+  - name: Check out the pull request branch
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ needs.subject.outputs.pr }}
+    run: |
+      set -euo pipefail
+      branch=$(gh pr view "$PR" --repo "$REPO" --json headRefName --jq '.headRefName')
+      git switch --track "origin/$branch" 2>/dev/null || git switch "$branch"
+      echo "On $(git branch --show-current) at $(git rev-parse --short HEAD)"
   - name: Load the issue context
     uses: ./.github/actions/load-issue-context
     with:
@@ -531,6 +548,12 @@ timeout-minutes: 60
    an issue, and that the issue carries `implement`. Do not re-check any of that, and do not
    poll for checks: the conclusion above is the answer.
 
+   You are on the pull request branch. Never rebase, reset, amend or otherwise rewrite
+   history: the workflow applies your commits as a bundle with a fast-forward-only push and
+   discards anything that is not a descendant of the branch tip. The
+   `push_to_pull_request_branch` tool's own description recommends rebasing; in this
+   repository that advice is wrong. Merge, commit, and let the workflow push.
+
 2. Read `${{ env.ISSUE_CONTEXT_PATH }}`. It contains the issue body and its discussion. When
    running `/repo-verify`, the acceptance criteria there define what the implementation must
    satisfy.
@@ -569,13 +592,13 @@ timeout-minutes: 60
 4b. **Merge conflict when CI is green.** If the conclusion is `success` and
     `has_conflicts` is `true` (current value: `${{ needs.reserve.outputs.has_conflicts }}`),
     resolve the conflict before assessing risk. You are already on the PR branch.
-    Rebase onto `origin/${{ github.event.repository.default_branch }}`
-    (`git rebase origin/${{ github.event.repository.default_branch }}`), resolve every
-    conflict deliberately, and run the verification commands below. Do not use `--ours`,
-    `--theirs`, or a blanket conflict-marker deletion without reviewing the intended
-    behavior from both sides.
+    Merge `origin/${{ github.event.repository.default_branch }}` into it
+    (`git merge origin/${{ github.event.repository.default_branch }}`), resolve every
+    conflict deliberately, commit the merge, and run the verification commands below. Do not
+    use `--ours`, `--theirs`, or a blanket conflict-marker deletion without reviewing the
+    intended behavior from both sides, and never rebase: the push is fast-forward only.
 
-    Scope verification to the files the rebase touched: pass changed file paths to
+    Scope verification to the files the merge touched: pass changed file paths to
     lint/format tools instead of running them repository-wide (see step 6's scoped
     verification guidance).
 
@@ -583,13 +606,13 @@ timeout-minutes: 60
     ${{ env.VERIFY_COMMANDS }}
     ```
 
-    Push the rebased branch using `push_to_pull_request_branch` (pr_number: ${{ needs.subject.outputs.pr }},
+    Push the merged branch using `push_to_pull_request_branch` (pr_number: ${{ needs.subject.outputs.pr }},
     branch: the current PR branch), then emit the `add_comment` with
     **Verdict:** remediated. CI will re-run on the updated branch and the merge gate
     will be triggered again — the next cycle will see a clean, conflict-free PR and can
     make a proper merge or review decision.
 
-    If the rebase fails or the conflicts are genuinely ambiguous, select the `review`
+    If the merge cannot be completed or the conflicts are genuinely ambiguous, select the `review`
     verdict instead and explain which conflicts could not be resolved safely.
 
     If the conclusion is `success` and `has_conflicts` is `false`, skip this step and
@@ -747,7 +770,7 @@ flowchart TD
     gateConflict{"Merge conflicts?"}
     gateConflict -->|yes| gateRebase
     gateConflict -->|no| gateTrivial
-    gateRebase("Rebase<br/>Resolve conflicts, /repo-verify") -->|pushed| gateWait
+    gateRebase("Merge main in<br/>Resolve conflicts, /repo-verify") -->|pushed| gateWait
     gateRebase -.->|cannot resolve| gateHuman
     gateTrivial{"Trivial marker?"}
     gateTrivial -->|yes| gateMerge
