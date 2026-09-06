@@ -9,9 +9,10 @@ actions, or templates:
 node scripts/compile-agent-workflows.mjs
 ```
 
-The script wraps `gh aw compile --strict`, patches log levels from DEBUG to ERROR, and stages
-regenerated lockfiles. It gates on changed paths so a commit touching only source code does not pay
-for a compile.
+The script wraps `gh aw compile --strict` and applies the repository's post-processing to every lock
+it writes (log levels, model routing, the safe-outputs bundle plumbing, and more). It marks each
+processed lock with a sentinel comment so a second run changes nothing, and it fails when a compiled
+job reads `needs.<x>` for a job outside its own `needs`. It stages nothing; commit the locks yourself.
 
 ## What gets generated
 
@@ -28,12 +29,15 @@ A pull request that changes workflow source must also change the generated lockf
 `agentics-checks` template enforces this:
 
 ```bash
-gh aw compile --strict
+node scripts/compile-agent-workflows.mjs
 git diff --exit-code -I '^[[:space:]]*GH_AW_INFO_MODEL_COSTS:' -- .github/workflows/*.lock.yml
 ```
 
 The `-I` flag ignores `GH_AW_INFO_MODEL_COSTS` because model prices change without a source change.
-Every other generated line must match.
+Every other generated line must match. The check runs the same script a developer runs, with the
+gh-aw version the locks were compiled with (it fails first if the versions disagree), and it runs the
+compile a second time to prove the post-processing is idempotent. It runs on pull requests and on
+pushes to the default branch, so a change that bypassed review still shows up red.
 
 If the check fails, run `node scripts/compile-agent-workflows.mjs` locally, commit the regenerated
 files, and push.

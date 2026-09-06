@@ -27,8 +27,9 @@ the router down with zero-job runs that carry no annotation.
 | `flock /tmp/agentic-awf.lock` around awf | awf's fixed container names killed concurrent jobs on a shared daemon | uncontended no-op, kept |
 | log level, model name, cost table | noise and wrong constants for per-agent routing | cosmetic |
 
-`VERIFY_COMMANDS` is split per area (`_API` / `_WEB`) so a web-only change does not pay for a
-cold .NET Release build; the route matrix asserts each variable is defined wherever printed.
+`VERIFY_COMMANDS` is consumer-owned. Some consumers split it per area (`_API` / `_WEB`) so a
+web-only change does not pay for a cold .NET Release build; the route matrix asserts that every
+`env.*` value a worker prints is defined in that worker, whichever shape the consumer chose.
 
 ## Tools on the runner
 

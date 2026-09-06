@@ -163,6 +163,10 @@ cost a real debugging session.
 | `require is not defined in ES module scope` | A `.js` helper in a repo whose `package.json` is `"type": "module"`. Rename to `.cjs` |
 | `tools:` block does nothing | Dropped entirely under `engine: opencode` |
 | Prompt receives `issue #` with no number | `needs.pre_activation.outputs.*`. Not in the agent job's `needs`, resolves empty |
+| Top-level `if:` names a guard job, `activation` runs before the guard finishes | The fold into `activation` copies the expression, not the `needs`. Only prompt-referenced custom jobs with no `needs:` of their own are hoisted; a guard with `needs:` must be listed in `on.needs:`. Compile and read `activation.needs` |
+| The agent's fix was computed and never reached the branch | The agent rebased. The push applies a bundle fast-forward only, so any history rewrite is discarded. A worker that pushes through safe-outputs must merge, never rebase, and must start on the branch it pushes to |
+| A workflow_call input arrives as `''` although it declares a `default:` | The caller passed an expression that resolved empty. An explicit empty value overrides the default; guard with `inputs.x || '0'` before `fromJson` |
+| A label removal is a no-op with no error | `labels: a,b` handed to a newline-delimited action removes one label named `a,b`; the 404 is swallowed. One label per line |
 | A shared file's `permissions: read-all` has no effect | `permissions` does not merge from an import. No warning at all |
 | The bot triggers itself in a loop | An App-token comment fires a workflow event |
 | Merge gate approves on the wrong verdict | It re-derived CI from `gh pr checks`, whose first entry is an arbitrary check |
@@ -413,6 +417,8 @@ Copy the six `classDef` lines verbatim from `references/diagram.md`.
    - No prompt step asks the model to count, sort, filter, select, or re-derive a fact.
    - Facts the agent needs are precomputed to `/tmp/gh-aw/agent/`.
    - Every guard output is named in the `if:` of what it guards, not only in `needs`.
+   - Every job the top-level `if:` reads appears in `activation.needs` after compiling; a guard
+     with a `needs:` of its own is listed under `on.needs:`.
    - Every `${{ needs.*.outputs.* }}` in the prompt names a custom job, never `pre_activation`.
    - Every job using a local action runs `actions/checkout` first.
    - Every write goes through `safe-outputs`, except an idempotent pre-agent reservation.

@@ -114,13 +114,20 @@ fails on every workflow change:
 - run: gh aw compile --strict
 
 # right: both sides apply the same post-processing
-- run: node scripts/compile-agent-workflows.mjs --force
+- run: node scripts/compile-agent-workflows.mjs
 ```
 
-Give the script a `--force` mode that compiles and patches but stages nothing, and have CI call that.
-The check stays strict about everything else. Verify the pairing by running it twice: the only
-difference should be `GH_AW_INFO_MODEL_COSTS`, which the freshness check already tolerates because
-model prices change without a source change.
+The script compiles and patches and stages nothing, so CI can call it as it is. The check stays
+strict about everything else. Verify the pairing by running it twice: the only difference should be
+`GH_AW_INFO_MODEL_COSTS`, which the freshness check already tolerates because model prices change
+without a source change.
+
+Two more things make a second run a no-op, and both bit before they were understood. `gh aw compile`
+leaves a lock alone when its frontmatter and body hashes still match the source, so the script must
+recognise a lock it already patched (it marks one with a sentinel comment) or it patches it twice.
+And the CI job must run the same gh-aw version the locks were compiled with; the version is in the
+lock's first line, and a different compiler regenerates every lock with nothing to do with the
+change under review. The `agentics-checks` template asserts the version match before compiling.
 
 The general rule: any deliberate post-processing of a generated file has to be applied on both sides
 of the freshness check, or the check is measuring the transform instead of the drift.
@@ -159,6 +166,11 @@ The exclusion is not laziness. actionlint does not model gh-aw's frontmatter ext
 (`concurrency.queue`) or the newer `job.workflow_*` context, so it reports false positives on every
 generated file. `gh aw compile --strict` already guards those properly. Excluding them keeps the
 signal usable.
+
+One thing actionlint would have caught on the generated side is checked by the compile script
+instead: a job that reads `needs.<x>` for an `x` outside its own `needs`. GitHub resolves that to
+`''` with no error, and the merge gate's activation guard shipped that way. The script fails the
+compile and names the job, the reference and the job's actual `needs`.
 
 `shellcheck -x` follows `source` directives, which a test that sources the classifier needs. Add
 `# shellcheck source-path=SCRIPTDIR` above the `source` line so it can resolve a path built from

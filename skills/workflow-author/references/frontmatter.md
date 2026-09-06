@@ -117,6 +117,32 @@ job moves to the router's classifier, where it is ordinary shell and can be test
 `pre_activation` and `activation` jobs are still generated, and a top-level `if:` is still folded
 into the activation condition, so rung 2 remains available.
 
+The fold carries the expression, not its dependencies. gh-aw computes `activation.needs` on its
+own: `pre_activation`, plus every custom job the prompt body references that declares no `needs:`
+of its own, plus whatever `on.needs:` lists. A guard with its own `needs:` (the merge gate's
+`protected_changes`, which needs `subject`) is therefore read by the activation `if:` before it has
+run; the output resolves to `''`, the clause is true, and GitHub raises no error. List it:
+
+```yaml
+on:
+  workflow_call:
+    inputs: ...
+  needs: [protected_changes]   # custom job names only; they may not depend on activation
+```
+
+`pre_activation` waits for the listed jobs too, and if a listed job is skipped by its own `if:` both
+framework jobs are skipped with it, which is the right no-op when the guard found no subject. Confirm
+after compiling, and expect every job the top-level `if:` names in the list:
+
+```bash
+awk '/^  activation:/{f=1} f&&/^    needs:/{g=1;next} g&&/^      - /{print $2; next} g{exit}' \
+  .github/workflows/agent-merge-gate.lock.yml
+```
+
+`loops/scripts/compile-agent-workflows.mjs` fails the compile when any job in a lock reads
+`needs.<x>` for an `x` outside that job's `needs`, and the route matrix asserts that every job the
+gate's top-level `if:` reads is either hoistable or listed under `on.needs`.
+
 ### Authorizing bot actors for workflow_call workers
 
 gh-aw's `pre_activation` runs `check_membership.cjs`, which checks `github.actor` permission.
@@ -183,15 +209,18 @@ heads in another repository. Guard for it and route to `none` rather than passin
 down. It is also the pull request number, never the issue number, so do not use it to key an
 issue-scoped concurrency group.
 
-`workflow_run` does not fire for PR-triggered CI completions on feature branches. This is not a gh-aw
-limitation; it is GitHub's. The trigger works for `push`-to-main CI runs, but `pull_request`-triggered
-CI on feature branches does not produce a `workflow_run` event. The merge-gate never hears about the
-failure, and the bot PR sits open.
+`workflow_run` is delivered only for CI runs whose actor is a human. This is not a gh-aw limitation;
+it is GitHub's. A bot pull request is opened with `GITHUB_TOKEN`, the CI runs that follow have the
+bot as their actor, and no `workflow_run` event arrives for any of them (verified in Pliny-Bot on
+2026-09-06: four human-actor CI runs produced four router runs, three bot-actor runs produced none).
+The merge gate never hears about the verdict, and the bot PR sits open.
 
-The mitigation is the `stale-recovery` action, which runs on a 2h cron. It queries open bot PRs,
-checks if their latest CI run concluded `failure`, and dispatches the merge-gate via
-`workflow_dispatch` with `operation=merge-gate`. This requires `actions: write` on the
-`stale-recovery` job. See `references/opencode.md` for the full trap description.
+Two paths cover the gap. The consumer's CI carries a final `dispatch-merge-gate` job
+(`loops/templates/ci/app-ci-*.yml`) that runs on bot pull requests, folds the other jobs' results
+into a conclusion, and dispatches the router with `operation=merge-gate` using `GITHUB_TOKEN`;
+`workflow_dispatch` is one of the two events that token may raise. The router's hourly
+`reconcile-bot-pr-runs` job is the fallback for anything the hook missed, and it skips a pull request
+whose gate run is already queued or running.
 
 ### `schedule`
 
@@ -320,6 +349,7 @@ already covers its subdomains.
 | `pre-agent-steps:` | Agent job, immediately before the model | Setup that must survive the base-branch restore |
 | `post-steps:` | Agent job, after the model | Collecting evidence |
 | `jobs:` | Separate jobs in the graph | Rung 4: guards, reservation, terminal jobs |
+| `on.needs:` | Added to `pre_activation` and `activation` `needs` | Guard jobs the top-level `if:` reads that have a `needs:` of their own |
 
 ### Which job's outputs the prompt can read
 
