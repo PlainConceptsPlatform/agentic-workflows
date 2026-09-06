@@ -1,6 +1,8 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-apply-review.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
+  # Printed by the prompt as the verification block. Consumers set their own commands.
+  VERIFY_COMMANDS: ""
   REPO_RULES: "Apply only actionable outstanding reviewer feedback to the selected bot pull request. Make minimal changes that address each comment. Preserve architecture and do not weaken tests. Run full verification after changes."
   WORKING_LABEL: bot-working
   REVIEW_LABEL: review
