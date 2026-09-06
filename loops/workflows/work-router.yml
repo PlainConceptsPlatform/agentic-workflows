@@ -672,8 +672,28 @@ jobs:
                          and (.conclusion == "success" or .conclusion == "failure"))]
                 | sort_by(.created_at) | last // empty')
             if [ -z "$ci" ]; then
-              echo "PR #$pr has no concluded CI run; deferring to the CI-completion route."
-              return 0
+              # A conflicting pull request has no merge ref for GitHub to build, so a
+              # `pull_request` CI workflow can never run on that head: refs/pull/N/merge is a
+              # 404 for as long as the conflict lasts. Waiting for a verdict that cannot arrive
+              # deadlocks the belt, because resolving the conflict is the gate's own job. Fall
+              # back to the branch's last verdict so the gate runs; it stays on the remediation
+              # path and cannot merge on a stale conclusion.
+              head_ref=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.ref')
+              mergeable_now=$(gh api "repos/$REPO/pulls/$pr" --jq '.mergeable // "null"' 2>/dev/null || echo null)
+              if [ "$mergeable_now" != "false" ]; then
+                echo "PR #$pr has no concluded CI run; deferring to the CI-completion route."
+                return 0
+              fi
+              ci=$(gh api "repos/$REPO/actions/runs?branch=$head_ref&per_page=100" \
+                --jq '[.workflow_runs[]
+                  | select(.name == "App: CI" and .status == "completed"
+                           and (.conclusion == "success" or .conclusion == "failure"))]
+                  | sort_by(.created_at) | last // empty')
+              if [ -z "$ci" ]; then
+                echo "PR #$pr conflicts and has no CI verdict on any head; nothing to gate on yet."
+                return 0
+              fi
+              echo "PR #$pr conflicts, so CI cannot run on $head_sha at all; gating on the branch's last verdict."
             fi
             ci_conclusion=$(jq -r '.conclusion' <<<"$ci")
             ci_finished=$(jq -r '.updated_at' <<<"$ci")
@@ -852,10 +872,29 @@ jobs:
                     )
                   ] | sort_by(.created_at) | last // empty | [.id, .conclusion, .updated_at] | @tsv')
               if [ -z "$ci" ]; then
-                # Seen once after an App-token push: no CI run for the new head at all. The belt
-                # cannot gate a head CI never judged, and a silent skip hid that for hours.
-                echo "::warning::PR #$pr_number head $head_sha has no completed App: CI run; the belt cannot gate it until CI runs."
-                continue
+                # A conflicting pull request has no merge ref for GitHub to build, so a
+                # `pull_request` CI workflow can never run on that head: refs/pull/N/merge is a
+                # 404 for as long as the conflict lasts. Waiting for a verdict that cannot arrive
+                # deadlocks the belt, because resolving the conflict is the gate's own job. Fall
+                # back to the branch's last verdict so the gate runs; it stays on the remediation
+                # path and cannot merge on a stale conclusion.
+                mergeable_now=$(gh api "repos/$REPO/pulls/$pr_number" --jq '.mergeable // "null"' 2>/dev/null || echo null)
+                if [ "$mergeable_now" = "false" ]; then
+                  ci=$(gh api "repos/$REPO/actions/runs?branch=$branch&per_page=100" \
+                    --jq '[.workflow_runs[]
+                      | select(
+                          .name == "App: CI"
+                          and .event == "pull_request"
+                          and .status == "completed"
+                          and (.conclusion == "success" or .conclusion == "failure")
+                        )
+                      ] | sort_by(.created_at) | last // empty | [.id, .conclusion, .updated_at] | @tsv')
+                fi
+                if [ -z "$ci" ]; then
+                  echo "::warning::PR #$pr_number head $head_sha has no completed App: CI run; the belt cannot gate it until CI runs."
+                  continue
+                fi
+                echo "PR #$pr_number conflicts, so CI cannot run on $head_sha at all; gating on the branch's last verdict."
               fi
 
               IFS=$'\t' read -r ci_run_id ci_conclusion ci_finished <<<"$ci"

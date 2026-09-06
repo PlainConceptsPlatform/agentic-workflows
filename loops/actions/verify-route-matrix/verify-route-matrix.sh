@@ -311,6 +311,14 @@ fi
 if [ "$(grep -c 'a merge-gate run is already live' "$ROUTER_YML")" -lt 2 ]; then
   BELT_OK=0; echo "FAIL: both dispatch paths must skip a pull request whose gate is already live" >&2
 fi
+# A conflicting pull request has no refs/pull/N/merge for GitHub to build, so a `pull_request`
+# CI workflow can never run on that head. Requiring a fresh verdict before dispatching deadlocks
+# the belt: only the gate resolves the conflict, and the gate never runs. Both paths fall back to
+# the branch's last verdict when, and only when, the pull request is conflicting.
+if [ "$(grep -c 'conflicts, so CI cannot run on' "$ROUTER_YML")" -lt 2 ]; then
+  BELT_OK=0
+  echo "FAIL: both dispatch paths must gate a conflicting pull request that can never get fresh CI" >&2
+fi
 if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # GitHub delivers workflow_run only for CI runs whose actor is a human, so a bot pull request's
