@@ -96,8 +96,10 @@ runs:
         ci_run_id=""
         if [ -z "$ci_conclusion" ]; then
           head_sha="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')"
+          # A run keeps the name it had when it ran, so a repository whose CI was renamed still
+          # carries runs under the old casing. Fold the name before comparing.
           ci_run="$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
-            --jq '[.workflow_runs[] | select(.name == "App: CI" or .name == "CI")] | sort_by(.created_at) | last')"
+            --jq '[.workflow_runs[] | select((.name | ascii_downcase) == "app: ci" or (.name | ascii_downcase) == "ci")] | sort_by(.created_at) | last')"
           
           if [ -n "$ci_run" ] && [ "$ci_run" != "null" ]; then
             ci_conclusion="$(jq -r '.conclusion // "pending"' <<<"$ci_run")"
