@@ -2,12 +2,14 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/actions/verify-route-matrix/verify-route-matrix.sh. Update with `workflows update --force`; consumer edits may be overwritten.
 # Exercise the router's real classifier. This sources classify-route.sh rather than
 # restating it, so a change to the route table cannot pass here by being copied twice.
+#
+# This file greps workflow sources for literal `${{ ... }}` expressions on purpose.
+# shellcheck disable=SC2016
 
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROUTER_YML="${HERE}/../../workflows/work-router.yml"
-AUTHORIZE_YML="${HERE}/../../workflows/authorize-bot-work.yml"
 IMPLEMENT_WORKER_MD="${HERE}/../../workflows/agent-implement.md"
 MERGE_GATE_WORKER_MD="${HERE}/../../workflows/agent-merge-gate.md"
 
@@ -211,8 +213,7 @@ if [ -z "$empty_expr" ]; then
 else
   FAIL=$((FAIL + 1))
   echo "FAIL: workflow files contain an empty Actions expression:" >&2
-  printf '  %s
-' $empty_expr >&2
+  sed 's/^/  /' <<<"$empty_expr" >&2
 fi
 
 
@@ -262,13 +263,14 @@ ON_NEEDS="$(tr -d '\r' <"$MERGE_GATE_WORKER_MD" | sed -n '/^on:$/,/^[a-z]/p' |
   sed -n 's/^  needs: *\[\(.*\)\].*/\1/p' | tr -d ' ' | tr ',' '\n')"
 ACTIVATION_OK=1
 [ -n "$TOP_IF" ] || { ACTIVATION_OK=0; echo "FAIL: could not read the merge-gate worker's top-level if" >&2; }
-for job in $(grep -oE 'needs\.[a-z_]+\.' <<<"$TOP_IF" | sed 's/^needs\.//; s/\.$//' | sort -u); do
+while read -r job; do
+  [ -n "$job" ] || continue
   if tr -d '\r' <"$MERGE_GATE_WORKER_MD" | sed -n "/^  ${job}:$/,/^  [a-z_]*:$/p" | grep -q '^    needs:' &&
     ! grep -qx "$job" <<<"$ON_NEEDS"; then
     ACTIVATION_OK=0
     echo "FAIL: merge-gate top-level if reads needs.${job}, which has its own needs and is not in on.needs; activation would read it before it runs" >&2
   fi
-done
+done < <(grep -oE 'needs\.[a-z_]+\.' <<<"$TOP_IF" | sed 's/^needs\.//; s/\.$//' | sort -u)
 if [ "$ACTIVATION_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # The merge belt is serial for the whole repository: several overnight pull requests
