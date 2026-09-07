@@ -33,7 +33,12 @@ env:
   SEED_PROJECT: src/App.Seed
   PRIMARY_DATABASE: app
   DATA_LAYER_DATABASE: numa_dl
-  SQL_SA_PASSWORD: "YourStrong!Passw0rd"
+  # Derived per run rather than written down. The container is ephemeral, bound to a random
+  # host port and reachable only from this job, so the value protects nothing, but a literal
+  # password in a config file is a policy finding wherever it sits, and this file is public.
+  # It has to be a workflow-level expression: service containers receive their environment
+  # before any step runs, so a value generated in a step would arrive too late.
+  SQL_SA_PASSWORD: "Aa1!${{ github.run_id }}"
   WEB_PACKAGE: "@app/web"
   NPM_REGISTRY_URL: "//npm.pkg.github.com/"
   TRUFFLEHOG_IMAGE: "trufflesecurity/trufflehog:latest"
