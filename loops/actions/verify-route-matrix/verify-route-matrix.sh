@@ -532,6 +532,23 @@ while read -r operation; do
 done < <(sed -n '/^      operation:/,/^      issue-number:/p' "$ROUTER_YML" |
   sed -n 's/^          - //p')
 
+# A router job that reads pull requests has to say so. audit-close listed them with only
+# contents and issues and failed nightly on a 403 that named the endpoint and nothing else.
+# Paired job-to-scope rather than parsed out of each action: the jobs that touch pull
+# requests are few and known, and naming them here is what makes the omission visible.
+for pr_job in audit-close reconcile-bot-pr-runs detect-pr-conflicts; do
+  if ! grep -q "^  ${pr_job}:$" "$ROUTER_YML"; then
+    continue
+  fi
+  pr_scopes=$(sed -n "/^  ${pr_job}:$/,/^    steps:$/p" "$ROUTER_YML")
+  if printf '%s' "$pr_scopes" | grep -qE '^      pull-requests: (read|write)$'; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: router job '${pr_job}' reads pull requests but grants no pull-requests scope" >&2
+  fi
+done
+
 # No written-down passwords in anything this repository ships. A throwaway credential for
 # a test container is still a policy finding, and one sat in every consumer's CI for weeks
 # until a scan found it rather than us. Two shapes: a password-ish name assigned a quoted

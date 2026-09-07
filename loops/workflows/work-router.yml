@@ -988,6 +988,10 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # It reads the open pull requests before closing a report, so a report whose
+      # implement workers are still in review is left alone. Without this the list
+      # call answers 403 and the nightly job fails having closed nothing.
+      pull-requests: read
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
