@@ -10,7 +10,7 @@ The primary entrypoint is the interactive TUI. Run it with no arguments:
 npx @plainconceptsplatform/workflows
 ```
 
-The TUI lists all routes and templates with install status. Arrow keys navigate, space toggles, Enter installs. Selecting routes installs only those route workers plus mandatory files (opencode.ci.json, compile script, shared imports, actions, router, classifier, route matrix). Selecting only templates installs just those templates.
+The TUI lists all routes and templates with install status. Arrow keys navigate, space toggles, Enter installs. The checked routes are the target set: checking adds a worker, unchecking removes it, and Enter on an unchanged selection refreshes every installed package file to this version. Selecting only templates installs just those templates.
 
 ## Install
 
@@ -20,7 +20,8 @@ For non-interactive use (advanced):
 
 ```bash
 npx @plainconceptsplatform/workflows@latest init
-npx @plainconceptsplatform/workflows@latest add
+npx @plainconceptsplatform/workflows@latest add refine implement
+npx @plainconceptsplatform/workflows@latest update --dry-run
 npx @plainconceptsplatform/workflows@latest update
 ```
 
@@ -35,20 +36,32 @@ pnpm exec workflows add
 
 `init` inspects the repository and reports its stack and visibility. It does not create or manage repository configuration or a manifest.
 
-`add` installs mandatory files (opencode.ci.json, compile script, shared imports, actions, router, classifier, route matrix) when called with no route arguments. Pass route names as positional arguments to install specific route workers alongside the mandatory files:
+`add` installs the mandatory files (opencode.ci.json, compile script, shared imports, actions, router, classifier, route matrix) and the workers named as positional arguments, on top of the workers already installed. With no routes it refreshes what is there:
 
 ```bash
-workflows add                        # mandatory files only, no worker .md files
-workflows add implement refine direct  # those route workers plus mandatory files
-workflows add --template agentics-checks  # named template only (no mandatory files)
-workflows add refine --template agentics-checks --force  # routes + template + mandatory, overwriting conflicts
+workflows add                              # refresh everything installed; in an empty repository, no workers
+workflows add implement refine             # those workers on top of the installed ones
+workflows add --template agentics-checks   # named template only (no mandatory files)
+workflows add refine --template agentics-checks --force  # routes + template + mandatory; --force also replaces a changed template
+workflows remove audit                     # uninstall the audit worker and drop it from the router
 ```
 
-Route names: refine, implement, direct, apply-review, merge-gate, audit, propose. Unknown arguments produce an error.
+Route names: refine, implement, triage, apply-review, merge-gate, audit, release. Unknown arguments produce an error.
 
-Use `workflows update --force` to force-overwrite managed files that differ from the package source.
+## Update
 
-Install optional standalone templates with `add --template`. Available templates are `agentics-checks`, `agentics-maintenance`, `app-ci-dotnet-next`, `app-ci-node-monorepo`, and `github-release`. CI templates are stack-specific copies, not a combined template. `github-release` publishes generated release notes when a `v*` tag is pushed. Edit their top-level `env:` values for repository paths, package names, and commands.
+`update` is `add` with no routes: it refreshes exactly the installed set to this package version. Every package-managed file is replaced and its ownership header records the version it came from:
+
+```
+# Managed by @plainconceptsplatform/workflows@0.7.0. Source: loops/workflows/work-router.yml. ...
+```
+
+The `env:` block at the top of a worker is the repository's and survives: your values are kept, keys the package added arrive with their defaults, keys only you defined stay. When the header records the version you installed from, that release is fetched from npm and used as the merge baseline, so a value you never changed follows the package when its default changes. The agent runner pool and the engine gateway URL are kept as well. Everything else in the file is the package's.
+
+- `update --dry-run` prints the plan as JSON and writes nothing.
+- A file whose ownership header was removed is consumer-owned and is skipped unless `--force` is passed.
+- Templates are consumer-owned after installation and are replaced only with `--force`.
+- `--version` prints the package version.
 
 ## List and search
 
@@ -65,6 +78,10 @@ Search by name or description:
 ```bash
 npx --yes --package @plainconceptsplatform/workflows@latest workflows search "ci"
 ```
+
+## Templates
+
+Install optional standalone templates with `add --template`. Available templates are `agentics-checks`, `agentics-maintenance`, `app-ci-dotnet-next`, `app-ci-node-monorepo`, `bug-report`, `feature-request`, `github-release`, and `opencode.ci.json`. CI templates are stack-specific copies, not a combined template. `github-release` publishes generated release notes when a `v*` tag is pushed. Edit their top-level `env:` values for repository paths, package names, and commands.
 
 ## Manual installation
 

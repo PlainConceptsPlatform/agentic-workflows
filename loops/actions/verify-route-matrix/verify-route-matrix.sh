@@ -3,19 +3,46 @@
 # Exercise the router's real classifier. This sources classify-route.sh rather than
 # restating it, so a change to the route table cannot pass here by being copied twice.
 #
+# The same file runs in every consumer, whatever subset of workers it installed: the router is
+# regenerated for that subset, so every assertion about a worker or about its router job is
+# conditional on the worker file being present. The classifier is the complete route table in
+# every repository (a route with no job is a no-op run), so its assertions are unconditional.
+#
 # This file greps workflow sources for literal `${{ ... }}` expressions on purpose.
 # shellcheck disable=SC2016
 
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROUTER_YML="${HERE}/../../workflows/work-router.yml"
-IMPLEMENT_WORKER_MD="${HERE}/../../workflows/agent-implement.md"
-MERGE_GATE_WORKER_MD="${HERE}/../../workflows/agent-merge-gate.md"
+WORKFLOWS_DIR="${HERE}/../../workflows"
+ROUTER_YML="${WORKFLOWS_DIR}/work-router.yml"
+IMPLEMENT_WORKER_MD="${WORKFLOWS_DIR}/agent-implement.md"
+MERGE_GATE_WORKER_MD="${WORKFLOWS_DIR}/agent-merge-gate.md"
 
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../classify-route/classify-route.sh
 source "${HERE}/../classify-route/classify-route.sh"
+
+# Every worker route the package knows. The ones with a worker file here are installed; the
+# others must have no job in this router. Plumbing routes are in every router.
+ALL_WORKER_ROUTES=(refine implement triage apply-review merge-gate audit release)
+PLUMBING_ROUTES=(bot-approve audit-close cleanup-artifacts reconcile-bot-pr-runs validate)
+
+worker_installed() {
+  [ -f "${WORKFLOWS_DIR}/agent-$1.md" ]
+}
+
+INSTALLED_ROUTES=()
+EXCLUDED_ROUTES=()
+for route in "${ALL_WORKER_ROUTES[@]}"; do
+  if worker_installed "$route"; then
+    INSTALLED_ROUTES+=("$route")
+  else
+    EXCLUDED_ROUTES+=("$route")
+  fi
+done
+echo "Installed workers: ${INSTALLED_ROUTES[*]:-(none)}"
+[ "${#EXCLUDED_ROUTES[@]}" -eq 0 ] || echo "Not installed: ${EXCLUDED_ROUTES[*]}"
 
 PASS=0
 FAIL=0
@@ -106,9 +133,6 @@ assert_route "the bot's own comment never re-enters refine" none \
 assert_route "a comment on an issue without refine routes nowhere" none \
   EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User \
   'ISSUE_LABELS=["bug"]' EVENT_ISSUE_NUMBER=42
-assert_route "the bot's own comment never re-enters direct" none \
-  EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=Bot \
-  'ISSUE_LABELS=["direct"]' EVENT_ISSUE_NUMBER=42
 assert_route "a comment on a triage issue re-triages" triage \
   EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User \
   'ISSUE_LABELS=["triage"]' EVENT_ISSUE_NUMBER=42
@@ -120,12 +144,22 @@ assert_route "the bot's own comment never re-enters triage" none \
   'ISSUE_LABELS=["triage"]' EVENT_ISSUE_NUMBER=42
 
 echo "── Closed issues ─────────────────────────────────────────────────────────"
-assert_route "a closing comment on a refine issue does not re-refine" none   EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User   ISSUE_STATE=closed 'ISSUE_LABELS=["refine"]' EVENT_ISSUE_NUMBER=42
-assert_route "a comment on a closed issue never re-triages" none   EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User   ISSUE_STATE=closed 'ISSUE_LABELS=["triage"]' EVENT_ISSUE_NUMBER=42
-assert_route "a work label added to a closed issue routes nowhere" none   EVENT=issues ACTION=labeled LABEL=bot-working ISSUE_STATE=closed   'ISSUE_LABELS=["implement"]' EVENT_ISSUE_NUMBER=42
-assert_route "a closed issue reopened as opened still routes nowhere while closed" none   EVENT=issues ACTION=opened ISSUE_STATE=closed 'ISSUE_LABELS=[]' EVENT_ISSUE_NUMBER=42
-assert_route "a comment on a closed pull request still routes to apply-review" apply-review   EVENT=issue_comment COMMENT_ON_PR=true ISSUE_STATE=closed EVENT_ISSUE_NUMBER=7
-assert_route "an open refine issue is unaffected by the closed guard" refine   EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User   ISSUE_STATE=open 'ISSUE_LABELS=["refine"]' EVENT_ISSUE_NUMBER=42
+assert_route "a closing comment on a refine issue does not re-refine" none \
+  EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User \
+  ISSUE_STATE=closed 'ISSUE_LABELS=["refine"]' EVENT_ISSUE_NUMBER=42
+assert_route "a comment on a closed issue never re-triages" none \
+  EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User \
+  ISSUE_STATE=closed 'ISSUE_LABELS=["triage"]' EVENT_ISSUE_NUMBER=42
+assert_route "a work label added to a closed issue routes nowhere" none \
+  EVENT=issues ACTION=labeled LABEL=bot-working ISSUE_STATE=closed \
+  'ISSUE_LABELS=["implement"]' EVENT_ISSUE_NUMBER=42
+assert_route "a closed issue reopened as opened still routes nowhere while closed" none \
+  EVENT=issues ACTION=opened ISSUE_STATE=closed 'ISSUE_LABELS=[]' EVENT_ISSUE_NUMBER=42
+assert_route "a comment on a closed pull request still routes to apply-review" apply-review \
+  EVENT=issue_comment COMMENT_ON_PR=true ISSUE_STATE=closed EVENT_ISSUE_NUMBER=7
+assert_route "an open refine issue is unaffected by the closed guard" refine \
+  EVENT=issue_comment COMMENT_ON_PR=false COMMENT_SENDER_TYPE=User \
+  ISSUE_STATE=open 'ISSUE_LABELS=["refine"]' EVENT_ISSUE_NUMBER=42
 
 echo "── Review events ─────────────────────────────────────────────────────────"
 assert_route "a review comment routes to apply-review" apply-review \
@@ -173,16 +207,12 @@ assert_route "refine dispatch rejects a non-numeric issue" none \
   EVENT=workflow_dispatch OPERATION=refine INPUT_ISSUE_NUMBER=abc
 assert_route "refine dispatch accepts a positive issue" refine \
   EVENT=workflow_dispatch OPERATION=refine INPUT_ISSUE_NUMBER=42
-assert_route "direct dispatch needs an issue number" none \
-  EVENT=workflow_dispatch OPERATION=direct INPUT_ISSUE_NUMBER=
 assert_route "triage dispatch accepts a positive issue" triage \
   EVENT=workflow_dispatch OPERATION=triage INPUT_ISSUE_NUMBER=42
 assert_route "triage dispatch needs an issue number" none \
   EVENT=workflow_dispatch OPERATION=triage INPUT_ISSUE_NUMBER=
 assert "triage dispatch defaults to first pass" first \
   "$(route_field triage-mode EVENT=workflow_dispatch OPERATION=triage INPUT_ISSUE_NUMBER=42)"
-assert_route "batch dispatch needs an issue number" none \
-  EVENT=workflow_dispatch OPERATION=batch INPUT_ISSUE_NUMBER=
 assert_route "merge-gate dispatch needs a pull request number" none \
   EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=0
 assert_route "merge-gate dispatch accepts a positive pull request" merge-gate \
@@ -199,6 +229,8 @@ assert "implement dispatch forwards the attempt count" 2 \
   "$(route_field implement-attempts EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=42 INPUT_ATTEMPTS_SO_FAR=2)"
 assert "a refine dispatch carries no implement attempts" 0 \
   "$(route_field implement-attempts EVENT=workflow_dispatch OPERATION=refine INPUT_ISSUE_NUMBER=42 INPUT_ATTEMPTS_SO_FAR=2)"
+assert_route "release dispatch needs no numbers" release \
+  EVENT=workflow_dispatch OPERATION=release
 assert_route "reconcile-bot-pr-runs dispatch needs no numbers" reconcile-bot-pr-runs \
   EVENT=workflow_dispatch OPERATION=reconcile-bot-pr-runs
 assert_route "an unknown operation routes nowhere" none \
@@ -215,7 +247,7 @@ echo "── Router wiring ─────────────────�
 # shell comments. An empty pair is not a valid expression and fails the whole file to parse,
 # with an error that points at a line number rather than saying what is wrong. Prose about
 # expressions must not contain one.
-empty_expr=$(grep -rl -e '${{[[:space:]]*}}' "${HERE}/../../workflows"/*.yml "${HERE}/../../workflows"/*.md 2>/dev/null || true)
+empty_expr=$(grep -rl -e '${{[[:space:]]*}}' "${WORKFLOWS_DIR}"/*.yml "${WORKFLOWS_DIR}"/*.md 2>/dev/null || true)
 if [ -z "$empty_expr" ]; then
   PASS=$((PASS + 1))
 else
@@ -224,15 +256,16 @@ else
   while IFS= read -r offending; do echo "  $offending" >&2; done <<<"$empty_expr"
 fi
 
-
 # A hyphen inside a ${{ }} property path is parsed as subtraction, so the reference silently
 # resolves to nothing and the rendered prompt keeps the raw expression. Underscores only.
-if ! grep -qE 'needs\.[a-z_]+\.outputs\.[a-zA-Z0-9_]*-' "$IMPLEMENT_WORKER_MD"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: implement worker reads a hyphenated job output inside an expression" >&2
-  grep -nE 'needs\.[a-z_]+\.outputs\.[a-zA-Z0-9_]*-' "$IMPLEMENT_WORKER_MD" >&2
+if worker_installed implement; then
+  if ! grep -qE 'needs\.[a-z_]+\.outputs\.[a-zA-Z0-9_]*-' "$IMPLEMENT_WORKER_MD"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: implement worker reads a hyphenated job output inside an expression" >&2
+    grep -nE 'needs\.[a-z_]+\.outputs\.[a-zA-Z0-9_]*-' "$IMPLEMENT_WORKER_MD" >&2
+  fi
 fi
 
 # A worker that prints `${{ env.NAME }}` without defining NAME in its own env: block renders
@@ -241,7 +274,8 @@ fi
 # worker prints must be defined in that worker. The values are consumer-owned (a consumer may
 # split VERIFY_COMMANDS per area, or keep one); only the wiring is asserted here.
 VERIFY_OK=1
-for worker in "${HERE}/../../workflows"/agent-*.md; do
+for worker in "${WORKFLOWS_DIR}"/agent-*.md; do
+  [ -f "$worker" ] || continue
   while read -r name; do
     [ -n "$name" ] || continue
     if ! grep -q "^  ${name}:" "$worker"; then
@@ -252,13 +286,15 @@ for worker in "${HERE}/../../workflows"/agent-*.md; do
 done
 if [ "$VERIFY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
-if grep -Fq 'protected-files: allowed' "$IMPLEMENT_WORKER_MD" &&
-  grep -Fq 'protected-files: allowed' "$MERGE_GATE_WORKER_MD" &&
-  grep -Fq "needs.protected_changes.outputs.requires_review != 'true' || needs.subject.outputs.conclusion == 'failure'" "$MERGE_GATE_WORKER_MD"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: protected changes must allow failed-CI repair while remaining held from merge" >&2
+if worker_installed implement && worker_installed merge-gate; then
+  if grep -Fq 'protected-files: allowed' "$IMPLEMENT_WORKER_MD" &&
+    grep -Fq 'protected-files: allowed' "$MERGE_GATE_WORKER_MD" &&
+    grep -Fq "needs.protected_changes.outputs.requires_review != 'true' || needs.subject.outputs.conclusion == 'failure'" "$MERGE_GATE_WORKER_MD"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: protected changes must allow failed-CI repair while remaining held from merge" >&2
+  fi
 fi
 
 # gh-aw folds the worker's top-level `if:` into the generated activation job but computes
@@ -266,36 +302,39 @@ fi
 # `needs:` are hoisted. A guard with its own `needs:` (protected_changes needs subject) is read
 # before it has run, resolves to '' and gates nothing, unless it is listed in `on.needs`, the
 # documented way to add jobs to pre_activation and activation. Inline list form is expected.
-TOP_IF="$(tr -d '\r' <"$MERGE_GATE_WORKER_MD" | sed -n 's/^if: //p')"
-ON_NEEDS="$(tr -d '\r' <"$MERGE_GATE_WORKER_MD" | sed -n '/^on:$/,/^[a-z]/p' |
-  sed -n 's/^  needs: *\[\(.*\)\].*/\1/p' | tr -d ' ' | tr ',' '\n')"
-ACTIVATION_OK=1
-[ -n "$TOP_IF" ] || { ACTIVATION_OK=0; echo "FAIL: could not read the merge-gate worker's top-level if" >&2; }
-while read -r job; do
-  [ -n "$job" ] || continue
-  if tr -d '\r' <"$MERGE_GATE_WORKER_MD" | sed -n "/^  ${job}:$/,/^  [a-z_]*:$/p" | grep -q '^    needs:' &&
-    ! grep -qx "$job" <<<"$ON_NEEDS"; then
-    ACTIVATION_OK=0
-    echo "FAIL: merge-gate top-level if reads needs.${job}, which has its own needs and is not in on.needs; activation would read it before it runs" >&2
-  fi
-done < <(grep -oE 'needs\.[a-z_]+\.' <<<"$TOP_IF" | sed 's/^needs\.//; s/\.$//' | sort -u)
-if [ "$ACTIVATION_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if worker_installed merge-gate; then
+  TOP_IF="$(tr -d '\r' <"$MERGE_GATE_WORKER_MD" | sed -n 's/^if: //p')"
+  ON_NEEDS="$(tr -d '\r' <"$MERGE_GATE_WORKER_MD" | sed -n '/^on:$/,/^[a-z]/p' |
+    sed -n 's/^  needs: *\[\(.*\)\].*/\1/p' | tr -d ' ' | tr ',' '\n')"
+  ACTIVATION_OK=1
+  [ -n "$TOP_IF" ] || { ACTIVATION_OK=0; echo "FAIL: could not read the merge-gate worker's top-level if" >&2; }
+  while read -r job; do
+    [ -n "$job" ] || continue
+    if tr -d '\r' <"$MERGE_GATE_WORKER_MD" | sed -n "/^  ${job}:$/,/^  [a-z_]*:$/p" | grep -q '^    needs:' &&
+      ! grep -qx "$job" <<<"$ON_NEEDS"; then
+      ACTIVATION_OK=0
+      echo "FAIL: merge-gate top-level if reads needs.${job}, which has its own needs and is not in on.needs; activation would read it before it runs" >&2
+    fi
+  done < <(grep -oE 'needs\.[a-z_]+\.' <<<"$TOP_IF" | sed 's/^needs\.//; s/\.$//' | sort -u)
+  if [ "$ACTIVATION_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
-# The merge belt is serial for the whole repository: several overnight pull requests
-# mean every merge moves the default branch under the rest, and gates running at once
-# rebase onto bases other gates are about to invalidate. A per-issue group here would
-# reintroduce that race, so assert the repo-wide lock is the one in use.
-if grep -A7 'call-merge-gate:' "$ROUTER_YML" | grep -q 'group: merge-belt'; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: call-merge-gate must hold the repo-wide merge-belt lock" >&2
+  # The merge belt is serial for the whole repository: several overnight pull requests
+  # mean every merge moves the default branch under the rest, and gates running at once
+  # rebase onto bases other gates are about to invalidate. A per-issue group here would
+  # reintroduce that race, so assert the repo-wide lock is the one in use.
+  if grep -A7 'call-merge-gate:' "$ROUTER_YML" | grep -q 'group: merge-belt'; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: call-merge-gate must hold the repo-wide merge-belt lock" >&2
+  fi
 fi
 
 # A verdict is the gate marker AND a `**Verdict:**` line together. Comments carrying the
 # marker alone were progress notes and failed attempts, and the reconcile belt read every
 # one of them as final: a crashed or OOM-killed gate parked its pull request for the rest
 # of the night. Attempts are counted separately, capped, and reset by any new CI run.
+# The belt lives in the router's plumbing jobs, so this holds in every repository.
 BELT_OK=1
 if ! grep -q 'agent-merge-gate-attempt' "$ROUTER_YML"; then
   BELT_OK=0; echo "FAIL: router never counts gate attempts" >&2
@@ -338,7 +377,7 @@ if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # CI never reaches the router's CI-completion route. The package ships a dispatch-merge-gate job
 # in templates/ci that hands the verdict over from inside CI; a consumer CI workflow, where one
 # exists beside the router, must carry it or bot pull requests wait for the hourly belt.
-for ci in "${HERE}/../../workflows/ci.yml" "${HERE}/../../workflows/app-ci.yml"; do
+for ci in "${WORKFLOWS_DIR}/ci.yml" "${WORKFLOWS_DIR}/app-ci.yml"; do
   [ -f "$ci" ] || continue
   if grep -q 'operation=merge-gate' "$ci"; then
     PASS=$((PASS + 1))
@@ -368,27 +407,29 @@ while read -r name; do
 done < <(grep -oE 'needs\.classify\.outputs\.[a-zA-Z0-9_-]+' "$ROUTER_YML" | sed 's/.*\.//' | sort -u)
 if [ "$CLASSIFY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
-# fromJson('') is a hard failure ("Error reading JToken"), and a workflow_call input arrives as
-# '' whenever the caller passes an empty expression, declared default or not. The gate must never
-# hand a raw input to fromJson; `inputs.x || '0'` reads the empty case as zero.
-if ! grep -qE "fromJson\(inputs\.[a-zA-Z0-9_]+\)" "$MERGE_GATE_WORKER_MD"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: merge-gate worker calls fromJson on a raw input; an empty caller value kills the job" >&2
-  grep -nE "fromJson\(inputs\.[a-zA-Z0-9_]+\)" "$MERGE_GATE_WORKER_MD" >&2
-fi
+if worker_installed merge-gate; then
+  # fromJson('') is a hard failure ("Error reading JToken"), and a workflow_call input arrives as
+  # '' whenever the caller passes an empty expression, declared default or not. The gate must never
+  # hand a raw input to fromJson; `inputs.x || '0'` reads the empty case as zero.
+  if ! grep -qE "fromJson\(inputs\.[a-zA-Z0-9_]+\)" "$MERGE_GATE_WORKER_MD"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: merge-gate worker calls fromJson on a raw input; an empty caller value kills the job" >&2
+    grep -nE "fromJson\(inputs\.[a-zA-Z0-9_]+\)" "$MERGE_GATE_WORKER_MD" >&2
+  fi
 
-# The worker's own comments must keep the distinction: progress notes carry no marker,
-# failed attempts carry the attempt marker, verdicts carry the marker AND the Verdict line.
-# Three verdict sites: the review hold on the issue, the agent's assessment on the issue,
-# and conclude's short verdict on the pull request itself.
-if grep -q 'ATTEMPT_MARKER: "<!-- agent-merge-gate-attempt -->"' "$MERGE_GATE_WORKER_MD" &&
-  [ "$(grep -c '\${{ env.GATE_MARKER }}' "$MERGE_GATE_WORKER_MD")" -eq 3 ]; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: merge-gate worker must keep verdict and attempt markers distinct" >&2
+  # The worker's own comments must keep the distinction: progress notes carry no marker,
+  # failed attempts carry the attempt marker, verdicts carry the marker AND the Verdict line.
+  # Three verdict sites: the review hold on the issue, the agent's assessment on the issue,
+  # and conclude's short verdict on the pull request itself.
+  if grep -q 'ATTEMPT_MARKER: "<!-- agent-merge-gate-attempt -->"' "$MERGE_GATE_WORKER_MD" &&
+    [ "$(grep -c '\${{ env.GATE_MARKER }}' "$MERGE_GATE_WORKER_MD")" -eq 3 ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: merge-gate worker must keep verdict and attempt markers distinct" >&2
+  fi
 fi
 
 # add-issue-labels and remove-issue-labels split `labels` on newlines. A caller that joined two
@@ -397,7 +438,7 @@ fi
 # and review together for a day. Callers use block scalars, one label per line; the actions also
 # accept commas so a consumer copy of an old caller keeps working.
 LABELS_OK=1
-if grep -nE '^[[:space:]]+labels: [^|>].*,' "${HERE}/../../workflows"/agent-*.md >&2; then
+if grep -nE '^[[:space:]]+labels: [^|>].*,' "${WORKFLOWS_DIR}"/agent-*.md >&2 2>/dev/null; then
   LABELS_OK=0
   echo "FAIL: a worker passes comma-joined labels to a label action; use a block scalar, one label per line" >&2
 fi
@@ -409,83 +450,89 @@ for action in add-issue-labels remove-issue-labels; do
 done
 if [ "$LABELS_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
-# The agent's fix reaches the branch as a bundle applied fast-forward only (apply-agent-output).
-# gh-aw's push tool description tells the model to rebase, and a rebased branch cannot
-# fast-forward: the push is refused and the verdict is lost (Pliny-Bot run 33952565835). The
-# worker must start on the pull request branch and must never say `git rebase`. Its progress
-# comment is posted on the first attempt only; retries are recorded by the attempt comment.
-BRANCH_OK=1
-# Path B: staged safe outputs, applied by conclude with the App token. Without `staged: true`
-# gh-aw's safe_outputs job writes too, and it runs first: it pushed a flattened single-parent
-# commit with GITHUB_TOKEN, which lost the agent's merge, left the pull request conflicting,
-# and started no CI, because GITHUB_TOKEN writes raise no events.
-if ! grep -qE '^  staged: true' "$MERGE_GATE_WORKER_MD"; then
-  BRANCH_OK=0; echo "FAIL: merge-gate safe-outputs must be staged; conclude owns the write path" >&2
-fi
-if grep -q 'git rebase' "$MERGE_GATE_WORKER_MD"; then
-  BRANCH_OK=0; echo "FAIL: merge-gate worker tells the agent to rebase; the push is fast-forward only" >&2
-fi
-if ! grep -q 'name: Check out the pull request branch' "$MERGE_GATE_WORKER_MD"; then
-  BRANCH_OK=0; echo "FAIL: merge-gate worker must check out the pull request branch before the agent starts" >&2
-fi
-if ! grep -qF "conclusion == 'failure' && (inputs.attempts_so_far || '0') == '0'" "$MERGE_GATE_WORKER_MD"; then
-  BRANCH_OK=0; echo "FAIL: the reserve job's progress comment must be posted on the first attempt only" >&2
-fi
-# A conflicting pull request has no CI run to read logs from, so the gate is handed empty
-# failure artifacts. Read on its own that looks like "no evidence", and the agent asked for a
-# human instead of resolving the conflict that caused it.
-if ! grep -qF 'Empty failure evidence is not a reason to ask for review' "$MERGE_GATE_WORKER_MD"; then
-  BRANCH_OK=0
-  echo "FAIL: the gate must treat empty failure evidence on a conflicting PR as the conflict to fix" >&2
-fi
-if [ "$BRANCH_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if worker_installed merge-gate; then
+  # The agent's fix reaches the branch as a bundle applied fast-forward only (apply-agent-output).
+  # gh-aw's push tool description tells the model to rebase, and a rebased branch cannot
+  # fast-forward: the push is refused and the verdict is lost (Pliny-Bot run 33952565835). The
+  # worker must start on the pull request branch and must never say `git rebase`. Its progress
+  # comment is posted on the first attempt only; retries are recorded by the attempt comment.
+  BRANCH_OK=1
+  # Path B: staged safe outputs, applied by conclude with the App token. Without `staged: true`
+  # gh-aw's safe_outputs job writes too, and it runs first: it pushed a flattened single-parent
+  # commit with GITHUB_TOKEN, which lost the agent's merge, left the pull request conflicting,
+  # and started no CI, because GITHUB_TOKEN writes raise no events.
+  if ! grep -qE '^  staged: true' "$MERGE_GATE_WORKER_MD"; then
+    BRANCH_OK=0; echo "FAIL: merge-gate safe-outputs must be staged; conclude owns the write path" >&2
+  fi
+  if grep -q 'git rebase' "$MERGE_GATE_WORKER_MD"; then
+    BRANCH_OK=0; echo "FAIL: merge-gate worker tells the agent to rebase; the push is fast-forward only" >&2
+  fi
+  if ! grep -q 'name: Check out the pull request branch' "$MERGE_GATE_WORKER_MD"; then
+    BRANCH_OK=0; echo "FAIL: merge-gate worker must check out the pull request branch before the agent starts" >&2
+  fi
+  if ! grep -qF "conclusion == 'failure' && (inputs.attempts_so_far || '0') == '0'" "$MERGE_GATE_WORKER_MD"; then
+    BRANCH_OK=0; echo "FAIL: the reserve job's progress comment must be posted on the first attempt only" >&2
+  fi
+  # A conflicting pull request has no CI run to read logs from, so the gate is handed empty
+  # failure artifacts. Read on its own that looks like "no evidence", and the agent asked for a
+  # human instead of resolving the conflict that caused it.
+  if ! grep -qF 'Empty failure evidence is not a reason to ask for review' "$MERGE_GATE_WORKER_MD"; then
+    BRANCH_OK=0
+    echo "FAIL: the gate must treat empty failure evidence on a conflicting PR as the conflict to fix" >&2
+  fi
+  if [ "$BRANCH_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
-# pr-pending means a pull request for this issue is open and waiting. Only merging retires it.
-# Every other path (the protected-files hold, a review verdict, a failed attempt) leaves the
-# pull request open, and stripping the label there produced a board where issues with open
-# pull requests looked like they had none. It went unnoticed while the label actions silently
-# removed nothing, so the two bugs hid each other.
-PENDING_OK=1
-grep -q '^  PR_PENDING_LABEL:' "$MERGE_GATE_WORKER_MD" ||
-  { PENDING_OK=0; echo "FAIL: merge gate lost its PR_PENDING_LABEL definition" >&2; }
-if [ "$(grep -c '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD")" -ne 1 ]; then
-  PENDING_OK=0
-  echo "FAIL: pr-pending must be removed in exactly one place, the merge path" >&2
-  grep -n '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD" >&2
+  # pr-pending means a pull request for this issue is open and waiting. Only merging retires it.
+  # Every other path (the protected-files hold, a review verdict, a failed attempt) leaves the
+  # pull request open, and stripping the label there produced a board where issues with open
+  # pull requests looked like they had none. It went unnoticed while the label actions silently
+  # removed nothing, so the two bugs hid each other.
+  PENDING_OK=1
+  grep -q '^  PR_PENDING_LABEL:' "$MERGE_GATE_WORKER_MD" ||
+    { PENDING_OK=0; echo "FAIL: merge gate lost its PR_PENDING_LABEL definition" >&2; }
+  if [ "$(grep -c '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD")" -ne 1 ]; then
+    PENDING_OK=0
+    echo "FAIL: pr-pending must be removed in exactly one place, the merge path" >&2
+    grep -n '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD" >&2
+  fi
+  # And that one place has to be the merge outcome, not a hold or a failed attempt.
+  grep -B12 '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD" | grep -q "outcome == 'merge'" ||
+    { PENDING_OK=0; echo "FAIL: the only pr-pending removal must sit under the merge outcome" >&2; }
+  if [ "$PENDING_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
-# And that one place has to be the merge outcome, not a hold or a failed attempt.
-grep -B12 '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD" | grep -q "outcome == 'merge'" ||
-  { PENDING_OK=0; echo "FAIL: the only pr-pending removal must sit under the merge outcome" >&2; }
-if [ "$PENDING_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
-# A provider outage kills a run in a couple of minutes with no answer, and the same issue used
-# to be handed to a human for it. The implement worker retries those and only those: a run that
-# worked for half an hour and then failed produced an answer that was wrong, and repeating it
-# costs the fleet the same half hour to be wrong again.
-IMPLEMENT_RETRY_OK=1
-for needle in 'RETRY_UNDER_MINUTES' 'ATTEMPT_MARKER' 'attempts_so_far' 'operation=implement'; do
-  grep -qF "$needle" "$IMPLEMENT_WORKER_MD" || {
-    IMPLEMENT_RETRY_OK=0
-    echo "FAIL: implement worker lost its retry belt: no '$needle'" >&2
-  }
-done
-# Park and retry are mutually exclusive: the retry path must never add the review label, and
-# the park path must never re-dispatch.
-grep -A3 'Flag for human review' "$IMPLEMENT_WORKER_MD" | grep -q "retry != 'true'" ||
-  grep -B3 'Flag for human review' "$IMPLEMENT_WORKER_MD" | grep -q "retry != 'true'" || {
-    IMPLEMENT_RETRY_OK=0
-    echo "FAIL: the implement worker must not flag review on a run it is about to retry" >&2
-  }
-if [ "$IMPLEMENT_RETRY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if worker_installed implement; then
+  # A provider outage kills a run in a couple of minutes with no answer, and the same issue used
+  # to be handed to a human for it. The implement worker retries those and only those: a run that
+  # worked for half an hour and then failed produced an answer that was wrong, and repeating it
+  # costs the fleet the same half hour to be wrong again.
+  IMPLEMENT_RETRY_OK=1
+  for needle in 'RETRY_UNDER_MINUTES' 'ATTEMPT_MARKER' 'attempts_so_far' 'operation=implement'; do
+    grep -qF "$needle" "$IMPLEMENT_WORKER_MD" || {
+      IMPLEMENT_RETRY_OK=0
+      echo "FAIL: implement worker lost its retry belt: no '$needle'" >&2
+    }
+  done
+  # Park and retry are mutually exclusive: the retry path must never add the review label, and
+  # the park path must never re-dispatch.
+  grep -A3 'Flag for human review' "$IMPLEMENT_WORKER_MD" | grep -q "retry != 'true'" ||
+    grep -B3 'Flag for human review' "$IMPLEMENT_WORKER_MD" | grep -q "retry != 'true'" || {
+      IMPLEMENT_RETRY_OK=0
+      echo "FAIL: the implement worker must not flag review on a run it is about to retry" >&2
+    }
+  if [ "$IMPLEMENT_RETRY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
 
-# A failed attempt must not strip `implement`: identify-gate-subject refuses an issue
-# without it, so the first crash would starve every retry at the subject check.
-if grep -A6 'Park the issue' "$MERGE_GATE_WORKER_MD" | grep -q 'REVIEW_LABEL' &&
-  ! grep -qF 'labels: ${{ env.WORKING_LABEL }},${{ env.IMPLEMENT_LABEL }}' "$MERGE_GATE_WORKER_MD"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: the incomplete job must keep implement and only park on an exhausted budget" >&2
+if worker_installed merge-gate; then
+  # A failed attempt must not strip `implement`: identify-gate-subject refuses an issue
+  # without it, so the first crash would starve every retry at the subject check.
+  if grep -A6 'Park the issue' "$MERGE_GATE_WORKER_MD" | grep -q 'REVIEW_LABEL' &&
+    ! grep -qF 'labels: ${{ env.WORKING_LABEL }},${{ env.IMPLEMENT_LABEL }}' "$MERGE_GATE_WORKER_MD"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the incomplete job must keep implement and only park on an exhausted budget" >&2
+  fi
 fi
 
 # This repository is public. Every route a human can start from a comment, a review or a
@@ -493,6 +540,7 @@ fi
 # writes code. Asserted here because removing the gate would otherwise be a silent, one-line
 # change that nothing fails on.
 for route in refine implement apply-review; do
+  worker_installed "$route" || continue
   if grep -qE "route == '${route}'.*needs\.authorize\.outputs\.trusted == 'true'" "$ROUTER_YML"; then
     PASS=$((PASS + 1))
   else
@@ -503,22 +551,33 @@ done
 
 # Triage runs under a trusted App identity. Outside collaborators are admitted only to
 # the deterministic dispatcher; the worker call itself requires a trusted actor.
-if grep -qE "dispatch-triage:.*" "$ROUTER_YML" && \
-   grep -qE "route == 'triage'.*is_outside_collaborator == 'true'" "$ROUTER_YML" && \
-   grep -qE "route == 'triage'.*trusted == 'true'" "$ROUTER_YML"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: route 'triage' does not dispatch outside collaborators and require a trusted worker actor" >&2
+if worker_installed triage; then
+  if grep -qE "dispatch-triage:.*" "$ROUTER_YML" && \
+     grep -qE "route == 'triage'.*is_outside_collaborator == 'true'" "$ROUTER_YML" && \
+     grep -qE "route == 'triage'.*trusted == 'true'" "$ROUTER_YML"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: route 'triage' does not dispatch outside collaborators and require a trusted worker actor" >&2
+  fi
 fi
 
-for route in refine implement triage apply-review merge-gate audit bot-approve \
-  audit-close cleanup-artifacts reconcile-bot-pr-runs validate release; do
+# Every installed worker and every plumbing route has a job; a worker that is not installed
+# has none, or the router would call a lock file that does not exist.
+for route in "${INSTALLED_ROUTES[@]}" "${PLUMBING_ROUTES[@]}"; do
   if grep -q "route == '${route}'" "$ROUTER_YML"; then
     PASS=$((PASS + 1))
   else
     FAIL=$((FAIL + 1))
     echo "FAIL: work-router.yml has no job for route '${route}'" >&2
+  fi
+done
+for route in "${EXCLUDED_ROUTES[@]}"; do
+  if grep -q "route == '${route}'" "$ROUTER_YML"; then
+    FAIL=$((FAIL + 1))
+    echo "FAIL: work-router.yml has a job for route '${route}' but agent-${route}.md is not installed" >&2
+  else
+    PASS=$((PASS + 1))
   fi
 done
 
@@ -555,7 +614,7 @@ done
 # value, and a command-line flag given one; a line containing a dollar sign is taken to be
 # an expression or a shell variable and allowed. Paths resolve relative to this script, so
 # upstream this reads the templates and in a consumer it reads the real workflows.
-PASSWORD_SCAN_DIRS=("${HERE}/../../workflows")
+PASSWORD_SCAN_DIRS=("${WORKFLOWS_DIR}")
 [ -d "${HERE}/../../templates/ci" ] && PASSWORD_SCAN_DIRS+=("${HERE}/../../templates/ci")
 [ -d "${HERE}/../../templates/agentics" ] && PASSWORD_SCAN_DIRS+=("${HERE}/../../templates/agentics")
 password_hits=$(

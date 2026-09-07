@@ -5,6 +5,7 @@ export const routeNames = [
   "apply-review",
   "merge-gate",
   "audit",
+  "release",
 ] as const;
 
 export type RouteName = (typeof routeNames)[number];
@@ -23,6 +24,7 @@ export const workflowRoutes: readonly WorkflowRoute[] = [
   { name: "apply-review", worker: "agent-apply-review.md", description: "Applies reviewer feedback to an open pull request the bot authored, then pushes the fixes to the same branch.", defaultEnabled: true },
   { name: "merge-gate", worker: "agent-merge-gate.md", description: "Decides what happens to a bot-authored pull request once CI has reported: merge, hand to a human, or fix CI.", defaultEnabled: true },
   { name: "audit", worker: "agent-audit.md", description: "Read-only repository audit. Finds 5-7 problems, scores each 1-10, and files a single issue that Refine then sizes and splits.", defaultEnabled: true },
+  { name: "release", worker: "agent-release.md", description: "Writes release notes from the commit log, then a deterministic job bumps the version, tags, and publishes a GitHub Release. Manual dispatch only (operation=release).", defaultEnabled: true },
 ];
 
 export const packageOwnedTargets = [
@@ -59,7 +61,6 @@ export const templateNames = [
   "feature-request",
   "github-release",
   "opencode.ci.json",
-  "visual-evidence",
 ] as const;
 
 export type TemplateName = (typeof templateNames)[number];
@@ -80,5 +81,4 @@ export const catalogTemplates: readonly CatalogTemplate[] = [
   { name: "feature-request", file: "feature_request.yml", description: "Feature request issue template scoped to small, well-scoped improvements (Small/Medium only; large work belongs in a planning issue).", target: ".github/ISSUE_TEMPLATE/feature_request.yml" },
   { name: "github-release", file: "github-release.yml", description: "Publishes or updates a GitHub Release with generated notes whenever a v* tag is pushed." },
   { name: "opencode.ci.json", file: "opencode.ci.json", description: "Standalone OpenCode CI config: plainconcepts provider, GLM model registration, ci-workflow-agent, and LSP defaults for consumer repositories." },
-  { name: "visual-evidence", file: "visual-evidence.yml", description: "Visual evidence: captures screenshots of UI changes on bot-authored PRs by reading the capturePlan left by the agent in evidence.json and executing it on a runner with Docker and Chrome access." },
 ];

@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 
 import { inspectRepository, parseVisibility, resolveVisibility } from "./repository-inspection.js";
-import { installCatalog, installedRoutes, installTemplate, isTemplateName, removeRouteFiles } from "./catalog-installation.js";
+import { installCatalog, installedRoutes, installTemplate, isTemplateName, removeRouteFiles, type CatalogInstallResult } from "./catalog-installation.js";
 import { formatCatalog, listCatalog, searchCatalog } from "./catalog-listing.js";
+import { packageVersion } from "./package-baseline.js";
 import { routeNames, templateNames, type RouteName, type TemplateName } from "./workflow-catalog.js";
 import { runInteractive } from "./tui.js";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const HELP_TEXT = `Workflows CLI — install and manage Plain Concepts Platform agentic workflows.
+const HELP_TEXT = `Workflows CLI — install and update Plain Concepts Platform agentic workflows.
 
 Run with no arguments to launch the interactive TUI, the primary way to select and install
 workflows and templates:
@@ -22,37 +23,41 @@ Usage: workflows <command> [options]
 Commands:
   (default)                                   Launch the interactive TUI for selecting and installing items.
   init                                        Inspect the repository and report its stack and visibility.
-  add [routes] [--template <name>] [--force]  Install route workers, a template, or mandatory files.
-  remove <routes> [--force]                   Uninstall route workers and regenerate the router without them.
-  update                                      Alias for add.
+  add [routes] [--template <name>]            Install route workers and refresh every installed package file.
+  update                                      Alias for add: refresh what is installed to this package version.
+  remove <routes>                             Uninstall route workers and regenerate the router without them.
   status                                      Print repository inspection as JSON.
   list                                        List all available workflows and templates with install status.
   search <query>                              Filter workflows and templates by name or description.
 
-Route names (positional arguments to add):
-  refine, implement, triage, apply-review, merge-gate, audit
+Route names (positional arguments to add and remove):
+  ${routeNames.join(", ")}
 
-  add                                         Mandatory files only (opencode.ci.json, compile script,
-                                              shared imports, actions, router, classifier, route matrix).
-  add implement refine direct                Installs those route workers plus mandatory files.
-  add --template agentics-checks             Installs the named template only (no mandatory files).
-  add refine --template agentics-checks      Installs routes + mandatory + the named template.
-  add refine implement --force               Forces re-install of routes plus mandatory, overwriting.
-  remove propose                             Uninstalls the propose worker and drops it from the router.
+  add                                         Refresh installed files. In an empty repository: actions, router,
+                                              classifier, matrix, shared imports, opencode.ci.json and the compile
+                                              script, with no workers.
+  add implement refine                        Install those workers on top of the ones already installed.
+  add --template agentics-checks              Install the named template only.
+  add refine --template agentics-checks       Routes plus mandatory files plus the named template.
+  remove audit                                Uninstall the audit worker and drop it from the router.
 
-add and remove keep the router consistent with what is installed: add unions the requested
-routes with the routes already present, and remove drops the requested routes from that set.
-Both regenerate the router, classifier, and route matrix from the resulting set. Changing the
-route set rewrites the package-owned router, so pass --force to overwrite it.
+What an update does to a package-managed file:
+  The file is replaced with this version's, and its ownership header records the version.
+  In a worker (agent-*.md) the env: block at the top is yours: your values are kept, keys the
+  package added arrive with their defaults, keys only you defined stay. When the header records
+  the version you installed from, that release is fetched from npm and a value you never changed
+  follows the package when its default changes. The agent runner pool and the engine gateway URL
+  are kept as well. Everything else in the file is the package's.
+  A file whose ownership header was removed is yours and is left alone unless --force is passed.
+  Templates are yours after installation and are replaced only with --force.
 
 Options:
-  --visibility public|private                 Override repository visibility (init only).
+  --dry-run                                   Print what add or update would change, write nothing.
+  --force                                     Also overwrite consumer-owned files and changed templates.
   --template <name>                           Install a standalone template alongside or instead of routes.
-                                              Templates: agentics-checks, agentics-maintenance,
-                                              app-ci-dotnet-next, app-ci-node-monorepo,
-                                              bug-report, feature-request, github-release,
-                                              opencode.ci.json.
-  --force                                     Overwrite managed files that differ from the package source.
+                                              Templates: ${templateNames.join(", ")}.
+  --visibility public|private                 Override repository visibility (init only).
+  --version                                   Print the package version.
   -h, --help                                  Show this help text.
 
 Installed workflows are marked [x] when the corresponding .github/workflows/agent-*.md
@@ -63,6 +68,11 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
 
   if (command === "--help" || command === "-h") {
     console.log(HELP_TEXT);
+    return 0;
+  }
+
+  if (command === "--version" || command === "-v") {
+    console.log(await packageVersion());
     return 0;
   }
 
@@ -104,35 +114,44 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
     const parsed = parseAddOptions(options);
     if (parsed.kind === "invalid") return fail(parsed.message);
     const inspection = await inspectRepository(repositoryPath);
-    const routes = parsed.routes;
-    const template = parsed.template;
-    const force = parsed.force;
+    const { routes, template, force, dryRun } = parsed;
 
     const allConflicts: string[] = [];
     const allInstalled: string[] = [];
+    let catalog: CatalogInstallResult | undefined;
+    const templatesPlanned: string[] = [];
 
-    if (routes.length > 0) {
+    // The installed set is always part of the target set: adding a route never drops another,
+    // and a plain update refreshes exactly what is there.
+    if (routes.length > 0 || template === undefined) {
       const selectedRoutes = unionRoutes(routes, await installedRoutes(repositoryPath));
-      const result = await installCatalog(repositoryPath, { force, selectedRoutes, inspection });
-      allConflicts.push(...result.conflicts);
-      allInstalled.push(...result.installed);
-    } else if (template === undefined) {
-      const result = await installCatalog(repositoryPath, { force, selectedRoutes: [], inspection });
-      allConflicts.push(...result.conflicts);
-      allInstalled.push(...result.installed);
+      catalog = await installCatalog(repositoryPath, { force, dryRun, selectedRoutes, inspection });
+      allConflicts.push(...catalog.conflicts);
+      allInstalled.push(...catalog.installed);
     }
 
     if (template !== undefined) {
-      const result = await installTemplate(repositoryPath, template, { force, inspection });
-      allConflicts.push(...result.conflicts);
-      allInstalled.push(...result.installed);
+      if (dryRun) {
+        templatesPlanned.push(template);
+      } else {
+        const result = await installTemplate(repositoryPath, template, { force, inspection });
+        allConflicts.push(...result.conflicts);
+        allInstalled.push(...result.installed);
+      }
     }
 
     if (allConflicts.length > 0 && !force) {
-      console.error(`Catalog conflicts found. Re-run with --force to overwrite package-managed files:\n${allConflicts.join("\n")}`);
+      console.error(`Template conflicts found. Re-run with --force to overwrite consumer-owned copies:\n${allConflicts.join("\n")}`);
       return 1;
     }
-    console.log(JSON.stringify({ command, installed: allInstalled.sort(), conflicts: allConflicts }, null, 2));
+    console.log(JSON.stringify({
+      command,
+      dryRun,
+      ...(catalog === undefined ? {} : summarize(catalog)),
+      ...(templatesPlanned.length > 0 ? { templatesPlanned } : {}),
+      installed: allInstalled.sort(),
+      conflicts: allConflicts,
+    }, null, 2));
     return 0;
   }
 
@@ -146,18 +165,26 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
     const installed = await installedRoutes(repositoryPath);
     const desiredRoutes = installed.filter((route) => !parsed.routes.includes(route));
 
-    const result = await installCatalog(repositoryPath, { force: parsed.force, selectedRoutes: desiredRoutes, inspection });
-    if (result.conflicts.length > 0 && !parsed.force) {
-      console.error(`Catalog conflicts found. Re-run with --force to overwrite package-managed files:\n${result.conflicts.join("\n")}`);
-      return 1;
-    }
-
-    const removed = await removeRouteFiles(repositoryPath, parsed.routes);
-    console.log(JSON.stringify({ command, installed: [...result.installed].sort(), removed, conflicts: result.conflicts }, null, 2));
+    const result = await installCatalog(repositoryPath, { force: parsed.force, dryRun: parsed.dryRun, selectedRoutes: desiredRoutes, inspection });
+    const removed = parsed.dryRun
+      ? parsed.routes.filter((route) => installed.includes(route)).map((route) => `.github/workflows/agent-${route}.md`)
+      : await removeRouteFiles(repositoryPath, parsed.routes);
+    console.log(JSON.stringify({ command, dryRun: parsed.dryRun, ...summarize(result), installed: [...result.installed].sort(), removed, conflicts: result.conflicts }, null, 2));
     return 0;
   }
 
   return fail(`Unknown command: ${command}`);
+}
+
+function summarize(result: CatalogInstallResult) {
+  return {
+    packageVersion: result.packageVersion,
+    installedVersions: result.installedVersions,
+    upToDate: result.upToDate,
+    baselines: result.baselines,
+    changes: result.changes.filter((change) => change.status !== "unchanged"),
+    unchanged: result.changes.filter((change) => change.status === "unchanged").length,
+  };
 }
 
 function unionRoutes(requested: readonly RouteName[], installed: readonly RouteName[]): RouteName[] {
@@ -175,7 +202,7 @@ function readVisibilityOption(options: readonly string[]): "invalid" | "public" 
 }
 
 type ParsedAddOptions =
-  | { kind: "ok"; routes: readonly RouteName[]; template: TemplateName | undefined; force: boolean }
+  | { kind: "ok"; routes: readonly RouteName[]; template: TemplateName | undefined; force: boolean; dryRun: boolean }
   | { kind: "invalid"; message: string };
 
 const TEMPLATE_NAMES = templateNames.join("|");
@@ -185,6 +212,7 @@ function parseAddOptions(options: readonly string[]): ParsedAddOptions {
   let template: TemplateName | undefined;
   let templateSeen = false;
   let force = false;
+  let dryRun = false;
   let i = 0;
 
   while (i < options.length) {
@@ -192,6 +220,12 @@ function parseAddOptions(options: readonly string[]): ParsedAddOptions {
 
     if (token === "--force") {
       force = true;
+      i++;
+      continue;
+    }
+
+    if (token === "--dry-run") {
+      dryRun = true;
       i++;
       continue;
     }
@@ -222,7 +256,7 @@ function parseAddOptions(options: readonly string[]): ParsedAddOptions {
     return invalid(`Unknown route: ${token}. Valid routes: ${routeNames.join(", ")}.`);
   }
 
-  return { kind: "ok", routes, template, force };
+  return { kind: "ok", routes, template, force, dryRun };
 }
 
 function invalid(message: string): ParsedAddOptions {

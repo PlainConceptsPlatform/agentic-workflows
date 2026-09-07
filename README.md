@@ -188,6 +188,7 @@ npx @plainconceptsplatform/workflows@latest add
 npx @plainconceptsplatform/workflows@latest add refine implement
 npx @plainconceptsplatform/workflows@latest add triage
 npx @plainconceptsplatform/workflows@latest add audit
+npx @plainconceptsplatform/workflows@latest add release
 npx @plainconceptsplatform/workflows@latest add --template agentics-checks
 npx @plainconceptsplatform/workflows@latest add --template agentics-maintenance
 npx @plainconceptsplatform/workflows@latest add --template app-ci-dotnet-next
@@ -195,26 +196,58 @@ npx @plainconceptsplatform/workflows@latest add --template app-ci-node-monorepo
 npx @plainconceptsplatform/workflows@latest add --template bug-report
 npx @plainconceptsplatform/workflows@latest add --template feature-request
 npx @plainconceptsplatform/workflows@latest remove triage
+npx @plainconceptsplatform/workflows@latest update --dry-run
 npx @plainconceptsplatform/workflows@latest update
+npx @plainconceptsplatform/workflows@latest --version
 ```
 
 `add` (catalog install) always installs `opencode.ci.json` and `scripts/compile-agent-workflows.mjs` alongside managed loop files. They are mandatory.
 
 ## Changing the installed route set
 
-The router (`work-router.yml`), classifier, and route matrix are derived files: their content is a function of which routes are installed. The CLI owns that assembly so the router always references exactly the workers on disk, never more.
+The router (`work-router.yml`) is a derived file: its content is a function of which routes are installed. The CLI owns that assembly so the router always references exactly the workers on disk, never more. The classifier is the complete route table everywhere (a route with no job is a no-op run), and the route matrix reads the installed worker files, so neither is rewritten.
 
-- `add <routes>` unions the requested routes with the routes already installed, then regenerates the router, classifier, and route matrix from the union. Adding a route later keeps the ones already there instead of dropping them.
-- `remove <routes>` drops the requested routes from that set, regenerates the same derived files, and deletes each removed worker's `agent-<route>.md` and generated `agent-<route>.lock.yml`.
-- The interactive TUI is desired-state: the checked routes are the target set. Checking a new route adds it; unchecking an installed route removes it.
+- `add <routes>` unions the requested routes with the routes already installed, then regenerates the router from the union. Adding a route later keeps the ones already there instead of dropping them.
+- `update` (and `add` with no routes) refreshes exactly the installed set. It never adds or removes a route.
+- `remove <routes>` drops the requested routes from that set, regenerates the router, and deletes each removed worker's `agent-<route>.md` and generated `agent-<route>.lock.yml`.
+- The interactive TUI is desired-state: the checked routes are the target set. Checking a new route adds it; unchecking an installed route removes it. Enter on an unchanged selection is an update.
 
-Changing the route set rewrites the package-owned router, so these operations report a conflict on `work-router.yml` unless you pass `--force`. Standalone worker `.md` files keep their own conflict protection and their consumer `env:` edits are preserved across regeneration.
+`release` is a route like the other six. A repository that never installed it does not receive it on update.
 
 For a project-local development dependency, install `@plainconceptsplatform/workflows` and run `pnpm exec workflows` with no arguments to launch the TUI, or `pnpm exec workflows <init|add|update>` for non-interactive use.
 
-Each worker declares its defaults in top-level `env:` frontmatter. Copy consumers edit those
-values directly when their endpoint, model, labels, paths, or baseline verification command differs.
-Every package-managed file includes an ownership header with its `loops/` source path. `update --force` can overwrite consumer edits to these files.
+## Updating a consumer
+
+Every installed file carries the package version in its ownership header, stamped at install
+time:
+
+```
+# Managed by @plainconceptsplatform/workflows@0.7.0. Source: loops/workflows/agent-refine.md. Update with `workflows update --force`; consumer edits may be overwritten.
+```
+
+`workflows update` replaces every package-managed file with this version's and re-stamps it.
+The `env:` block at the top of a worker is the one part of it that belongs to the repository,
+so the merge keeps it:
+
+- Your values stay. A key the package added arrives with its default. A key only you defined
+  stays at the end of the block.
+- When the header records the version you installed from, that release is fetched from npm
+  (`npm pack`) and used as the merge baseline: a value you never changed follows the package
+  when its default changes, and a key the package removed disappears if you never changed it.
+  Offline, every one of your values is kept and the result says the baseline was unavailable.
+- The agent runner pool (`runs-on`) and the engine gateway URL are kept too, because GitHub
+  gives them no home in `env:`.
+
+Everything else in a package-managed file is the package's, byte for byte: the prompt body, the
+jobs, the composite actions, the shared imports, the compile script. If a change is worth
+making, make it in `loops/` and let every repository get it; if it must differ per repository,
+it has to be an env variable. A file whose ownership header was removed is yours and is left
+alone unless `--force` is passed. Templates are yours from installation and are replaced only
+with `--force`.
+
+`update --dry-run` prints the plan as JSON without writing: per file `added`, `updated` (with
+the env keys kept and the defaults applied), `unchanged` or `skipped`, plus the installed and
+package versions.
 
 ## Triage route for outside collaborators
 

@@ -29,22 +29,14 @@ export function generateStackDefaults(inspection: RepositoryInspection): StackDe
   return { verifyCommands, repoRulesBase, hasDotnet, hasNodeOnly };
 }
 
+// Only a worker that prints a verification block declares VERIFY_COMMANDS. Adding the key to
+// the others made byte-identical workers read as changed on every update, so a worker without
+// the key is left without it.
 export function injectStackEnv(content: string, defaults: StackDefaults): string {
-  let result = content;
-
-  if (result.includes("VERIFY_COMMANDS:")) {
-    result = result.replace(
-      /  VERIFY_COMMANDS: ".*"/,
-      `  VERIFY_COMMANDS: "${defaults.verifyCommands}"`,
-    );
-  } else if (/^env:\n/m.test(result)) {
-    result = result.replace(
-      /^env:\n/m,
-      `env:\n  VERIFY_COMMANDS: "${defaults.verifyCommands}"\n`,
-    );
-  }
-
-  return result;
+  return content.replace(
+    /^  VERIFY_COMMANDS: .*$/m,
+    `  VERIFY_COMMANDS: "${defaults.verifyCommands}"`,
+  );
 }
 
 export function generateOpencodeCi(
@@ -53,28 +45,37 @@ export function generateOpencodeCi(
 ): string {
   let result = baseContent;
 
+  // Idempotent on purpose: this runs on every install and update, and the shared file already
+  // carries some of these steps. A step is added only when no step of that name exists.
   if (inspection.stackHints.solutionFiles.length > 0) {
     const solutionPath = inspection.stackHints.solutionFiles[0]!.replaceAll("\\", "/");
-    const nugetSteps = `  - name: Cache NuGet packages
+    if (!result.includes("name: Cache NuGet packages")) {
+      const nugetCache = `  - name: Cache NuGet packages
     uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
     with:
       path: ~/.nuget/packages
       key: nuget-\${{ runner.os }}-\${{ hashFiles('**/*.slnx', '**/Directory.Packages.props') }}
       restore-keys: nuget-\${{ runner.os }}-
 
-  - name: Restore .NET dependencies
-    run: dotnet restore ${solutionPath}
 `;
+      result = insertBeforeMarker(result, nugetCache, "  - name: Install workspace dependencies");
+    }
+    if (!result.includes("name: Restore .NET dependencies")) {
+      const restore = `  - name: Restore .NET dependencies
+    run: dotnet restore ${solutionPath}
 
-    result = insertBeforeMarker(result, nugetSteps, "  - name: Install workspace dependencies");
+`;
+      result = insertBeforeMarker(result, restore, "  - name: Install workspace dependencies");
+    }
   }
 
-  if (inspection.stackHints.openSpec) {
+  if (inspection.stackHints.openSpec && !result.includes("name: Install OpenSpec CLI")) {
     const openspecStep = `  - name: Install OpenSpec CLI
     run: |
       set -euo pipefail
       npm install -g "@fission-ai/openspec@1.8.0"
       openspec --version
+
 `;
 
     result = insertBeforeMarker(result, openspecStep, "  - name: Install workspace dependencies");

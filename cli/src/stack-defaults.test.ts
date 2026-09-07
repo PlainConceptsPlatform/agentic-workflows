@@ -87,9 +87,10 @@ describe("generateStackDefaults", () => {
 });
 
 describe("injectStackEnv", () => {
-  it("injects VERIFY_COMMANDS into a worker that has an env block", () => {
+  it("replaces the VERIFY_COMMANDS default of a worker that declares one", () => {
     const content = `---
 env:
+  VERIFY_COMMANDS: "dotnet restore && dotnet build -c Release --no-restore && dotnet test -c Release --no-build"
   REPO_RULES: "some rules"
 description: test
 ---`;
@@ -99,12 +100,13 @@ description: test
 
     const result = injectStackEnv(content, defaults);
 
-    expect(result).toContain('VERIFY_COMMANDS: "dotnet restore && dotnet build -c Release --no-restore && dotnet test"');
+    expect(result).toContain('  VERIFY_COMMANDS: "dotnet restore && dotnet build -c Release --no-restore && dotnet test"\n  REPO_RULES');
   });
 
-  it("injects pnpm verification when no .slnx is present", () => {
+  it("uses pnpm verification when no .slnx is present", () => {
     const content = `---
 env:
+  VERIFY_COMMANDS: ""
   REPO_RULES: "some rules"
 ---`;
     const defaults = generateStackDefaults(makeInspection({
@@ -114,6 +116,18 @@ env:
     const result = injectStackEnv(content, defaults);
 
     expect(result).toContain('VERIFY_COMMANDS: "pnpm verify"');
+  });
+
+  // A worker that never prints a verification block has no use for the key, and adding it made
+  // every such worker differ from the package on every update.
+  it("leaves a worker without VERIFY_COMMANDS without it", () => {
+    const content = `---
+env:
+  REPO_RULES: "some rules"
+---`;
+    const defaults = generateStackDefaults(makeInspection({ pnpmLockfile: true }));
+
+    expect(injectStackEnv(content, defaults)).toBe(content);
   });
 });
 
@@ -143,6 +157,20 @@ pre-agent-steps:
 ---`;
 
 describe("generateOpencodeCi", () => {
+  // The shared file already carries the NuGet cache and the OpenSpec install, and this runs on
+  // every update: a second pass over its own output must add nothing.
+  it("adds each step at most once, even when the shared file already carries it", () => {
+    const inspection = makeInspection({ solutionFiles: ["apps/api/App.slnx"], openSpec: true });
+    const once = generateOpencodeCi(OPENCODE_CI_MD, inspection);
+    const twice = generateOpencodeCi(once, inspection);
+
+    expect(twice).toBe(once);
+    expect(once.split("name: Cache NuGet packages").length - 1).toBe(1);
+    expect(once.split("name: Restore .NET dependencies").length - 1).toBe(1);
+    expect(once.split("name: Install OpenSpec CLI").length - 1).toBe(1);
+    expect(once).toContain("run: dotnet restore apps/api/App.slnx");
+  });
+
   it("adds NuGet cache and restores detected solution when .slnx is found", () => {
     const result = generateOpencodeCi(OPENCODE_CI_MD, makeInspection({
       solutionFiles: ["apps/api/Contoso.slnx"],

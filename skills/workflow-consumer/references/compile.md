@@ -80,13 +80,16 @@ next cheapest is one label toggle on a known issue.
 
 ## Rollback after a bad update
 
-Before a package update, commit or stash consumer work. If `update` reports a managed-file conflict:
+Before a package update, commit or stash consumer work, and run `update --dry-run` to read the
+plan. `update` replaces package-managed files without asking, keeping each worker's `env:` values,
+so a review afterwards is a `git diff`:
 
-1. Compare the ownership header's source path with the local edits.
-2. Choose one: keep the local consumer-owned fork (remove the header), transplant the change into a
-   source-compatible customization (move the value into the worker's `env:`), or back up then run
-   `update --force`.
-3. Compile immediately after any force update.
+1. Read the diff. Every change outside an `env:` block is the package's; an env value that moved is
+   either a default you never changed following the package, or a key the package removed.
+2. If a value you need is gone, put it back in the worker's `env:` and commit; the next update keeps
+   it. If a whole file must stay as you had it, restore it from git and remove its ownership header
+   so the package leaves it alone.
+3. Compile immediately after the update (the pre-commit hook does this on commit).
 4. Review the generated locks for expected resolved values.
 5. Run at least one real route event.
 

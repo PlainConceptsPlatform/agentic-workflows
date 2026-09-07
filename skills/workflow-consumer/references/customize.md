@@ -19,10 +19,12 @@ If a body change is worth making, make it in `loops/workflows/` and propagate. I
 per repository then it has to be an env var, the way the verification commands are. Naming
 `apps/api/` in a shared prompt is how a body stops being shareable.
 
-`workflows update --force` is the tool for this. It takes the package's worker and puts the
-consumer's `env:` values, `engine.env` `OPENAI_BASE_URL` and runner labels back, so the body comes
-from the package and the repository-specific parts survive. Runner labels only from 0.6.1; before
-that a forced update would move a repository's agents onto the package's pool.
+`workflows update` is the tool for this. It takes the package's worker and puts the consumer's
+`env:` values, `engine.env` `OPENAI_BASE_URL` and runner labels back, so the body comes from the
+package and the repository-specific parts survive. Keys the package added arrive with their defaults
+and keys only the consumer defined stay. When the worker's header records the version it was
+installed from, that release is the merge baseline: a value the consumer never changed follows the
+package when its default changes. No `--force` is needed; the file is the package's by definition.
 
 ## What each worker owns
 
@@ -59,11 +61,9 @@ the consumer is responsible for adding the route-specific focus areas:
 |---|---|
 | **implement** | Architecture constraints (layering, dependency directions), testing rules, coverage floors, naming conventions, and what must be tested before creating a PR |
 | **refine** | Domain model terminology, bounded contexts, acceptance criteria patterns, story structure the repository expects, and what constitutes an implementation-ready user story |
-| **direct** | Instruction boundaries, what the agent may and may not do, verification commands to run after execution, and how to report results |
 | **apply-review** | Minimal changes principle, preserve architecture, do not refactor beyond the review scope, keep diffs small, and respect the original author's design decisions |
 | **merge-gate** | Risk indicators specific to the repository: any calculation engine, audit chain integrity, auth flows, database migrations, and money/financial calculations. What constitutes an auto-merge risk vs a human-review trigger |
 | **audit** | What to look for: layer violations, N+1 queries, missing audit logs, security gaps, performance anti-patterns, documentation drift, and what the repository considers a critical vs minor issue |
-| **propose** | Product scope, constraints from the project radar, what the project explicitly refuses to become, and how proposed features should align with the product vision |
 
 ## Keeping Forge aligned
 

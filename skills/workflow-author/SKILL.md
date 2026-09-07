@@ -68,14 +68,15 @@ loops/workflows/
     classify                   one event in, exactly one route out
       call-refine              agent-refine.md              workflow_call only
       call-implement           agent-implement.md           workflow_call only
-      call-direct              agent-direct.md              workflow_call only
+      call-triage              agent-triage.md              workflow_call only
       call-apply-review        agent-apply-review.md        workflow_call only
       call-merge-gate          agent-merge-gate.md          workflow_call only
       call-audit               agent-audit.md               workflow_call only
-      call-release             agent-release.md              workflow_call only
-      deterministic jobs       bot-approve, audit-close, cleanup-artifacts,
-                              stale-recovery, validate
-  authorize-bot-work.yml       human adds implement/refine/direct → bot adds bot-working
+      call-release             agent-release.md             workflow_call only
+      deterministic jobs       check-implement-pr, dispatch-triage, bot-approve,
+                              detect-pr-conflicts, reconcile-bot-pr-runs,
+                              audit-close, cleanup-artifacts, validate
+  authorize-bot-work.yml       human adds implement/refine → bot adds bot-working
 ```
 
 ### Bot-working label pattern
@@ -83,7 +84,7 @@ loops/workflows/
 gh-aw's `pre_activation` rejects bot actors because bots have `permission: none`. The
 bot-working pattern ensures the bot is the actor while still involving human authorization:
 
-1. Human adds `implement`/`refine`/`direct` label (actor = human)
+1. Human adds `implement`/`refine` label (actor = human)
 2. `authorize-bot-work.yml` validates the human has write permission
 3. Bot adds `bot-working` label via App token
 4. `bot-working` label triggers the work-router (actor = bot)

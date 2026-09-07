@@ -14,8 +14,19 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+const emptyCatalogResult: catalogInstallation.CatalogInstallResult = {
+  installed: [],
+  conflicts: [],
+  changes: [],
+  packageVersion: "0.0.0-test",
+  installedVersions: [],
+  baselines: [],
+  upToDate: true,
+  dryRun: false,
+};
+
 function mockInstallers() {
-  const installCatalog = vi.spyOn(catalogInstallation, "installCatalog").mockResolvedValue({ installed: [], conflicts: [] });
+  const installCatalog = vi.spyOn(catalogInstallation, "installCatalog").mockResolvedValue(emptyCatalogResult);
   const installTemplate = vi.spyOn(catalogInstallation, "installTemplate").mockResolvedValue({ installed: [], conflicts: [] });
   return { installCatalog, installTemplate };
 }
@@ -38,8 +49,9 @@ describe("workflows CLI", () => {
     await expect(run(["--help"])).resolves.toBe(0);
 
     const output = log.mock.calls[0]![0] as string;
-    expect(output).toContain("refine, implement, triage, apply-review, merge-gate, audit");
+    expect(output).toContain("refine, implement, triage, apply-review, merge-gate, audit, release");
     expect(output).toContain("add [routes]");
+    expect(output).toContain("--dry-run");
     log.mockRestore();
   });
 
@@ -48,7 +60,7 @@ describe("workflows CLI", () => {
 
     await expect(run(["add", "--template", "unknown"])).resolves.toBe(1);
 
-    expect(error).toHaveBeenCalledWith("--template must be one of: agentics-checks|agentics-maintenance|app-ci-dotnet-next|app-ci-node-monorepo|bug-report|feature-request|github-release|opencode.ci.json|visual-evidence.");
+    expect(error).toHaveBeenCalledWith("--template must be one of: agentics-checks|agentics-maintenance|app-ci-dotnet-next|app-ci-node-monorepo|bug-report|feature-request|github-release|opencode.ci.json.");
     error.mockRestore();
   });
 
@@ -57,7 +69,7 @@ describe("workflows CLI", () => {
 
     await expect(run(["add", "frobnicate"])).resolves.toBe(1);
 
-    expect(error).toHaveBeenCalledWith("Unknown route: frobnicate. Valid routes: refine, implement, triage, apply-review, merge-gate, audit.");
+    expect(error).toHaveBeenCalledWith("Unknown route: frobnicate. Valid routes: refine, implement, triage, apply-review, merge-gate, audit, release.");
     error.mockRestore();
   });
 
@@ -262,22 +274,23 @@ describe("workflows CLI", () => {
     log.mockRestore();
   });
 
-  it("add with conflict and no force exits 1", async () => {
-    const { installCatalog } = mockInstallers();
-    installCatalog.mockResolvedValue({ installed: [], conflicts: ["opencode.ci.json"] });
+  // Package-owned files never conflict any more; only a consumer-owned template does.
+  it("add with a template conflict and no force exits 1", async () => {
+    const { installTemplate } = mockInstallers();
+    installTemplate.mockResolvedValue({ installed: [], conflicts: [".github/workflows/agentics-checks.yml"] });
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    await expect(run(["add"])).resolves.toBe(1);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining("Catalog conflicts found"));
+    await expect(run(["add", "--template", "agentics-checks"])).resolves.toBe(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("Template conflicts found"));
     error.mockRestore();
   });
 
-  it("add with conflict and --force still succeeds", async () => {
-    const { installCatalog } = mockInstallers();
-    installCatalog.mockResolvedValue({ installed: ["opencode.ci.json"], conflicts: ["opencode.ci.json"] });
+  it("add with a template conflict and --force still succeeds", async () => {
+    const { installTemplate } = mockInstallers();
+    installTemplate.mockResolvedValue({ installed: [".github/workflows/agentics-checks.yml"], conflicts: [".github/workflows/agentics-checks.yml"] });
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    await expect(run(["add", "--force"])).resolves.toBe(0);
+    await expect(run(["add", "--template", "agentics-checks", "--force"])).resolves.toBe(0);
     expect(log).toHaveBeenCalled();
     log.mockRestore();
   });
@@ -320,6 +333,72 @@ describe("workflows CLI", () => {
       expect.any(String),
       expect.objectContaining({ selectedRoutes: ["audit", "refine", "implement"] }),
     );
+    log.mockRestore();
+  });
+
+  // The complaint this fixes: `workflows update` used to install with an empty route set, which
+  // stripped every call-* job from the router and never touched the workers.
+  it("update refreshes exactly the installed route set", async () => {
+    const { installCatalog } = mockInstallers();
+    const repositoryPath = await createRepository({
+      ".github/workflows/agent-refine.md": "# Refine",
+      ".github/workflows/agent-implement.md": "# Implement",
+      ".github/workflows/agent-release.md": "# Release",
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await expect(run(["update"], repositoryPath)).resolves.toBe(0);
+
+    expect(installCatalog).toHaveBeenCalledOnce();
+    expect(installCatalog).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ selectedRoutes: ["refine", "implement", "release"], dryRun: false }),
+    );
+    log.mockRestore();
+  });
+
+  it("update --dry-run plans without writing and prints the plan", async () => {
+    const installCatalog = vi.spyOn(catalogInstallation, "installCatalog").mockResolvedValue({
+      ...emptyCatalogResult,
+      dryRun: true,
+      upToDate: false,
+      installedVersions: ["0.6.1"],
+      changes: [
+        { target: ".github/workflows/agent-refine.md", status: "updated", installedVersion: "0.6.1", keptEnv: ["REPO_RULES"] },
+        { target: ".github/workflows/work-router.yml", status: "unchanged" },
+      ],
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await expect(run(["update", "--dry-run"])).resolves.toBe(0);
+
+    expect(installCatalog).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ dryRun: true }));
+    const printed = JSON.parse(log.mock.calls[0]![0] as string) as { dryRun: boolean; upToDate: boolean; unchanged: number; changes: { target: string }[] };
+    expect(printed.dryRun).toBe(true);
+    expect(printed.upToDate).toBe(false);
+    expect(printed.unchanged).toBe(1);
+    expect(printed.changes.map((change) => change.target)).toEqual([".github/workflows/agent-refine.md"]);
+    log.mockRestore();
+  });
+
+  it("add --dry-run with a template does not install the template", async () => {
+    const { installCatalog, installTemplate } = mockInstallers();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await expect(run(["add", "--template", "agentics-checks", "--dry-run"])).resolves.toBe(0);
+
+    expect(installCatalog).not.toHaveBeenCalled();
+    expect(installTemplate).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("\"templatesPlanned\""));
+    log.mockRestore();
+  });
+
+  it("--version prints the package version", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await expect(run(["--version"])).resolves.toBe(0);
+
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\d+\.\d+\.\d+/));
     log.mockRestore();
   });
 
