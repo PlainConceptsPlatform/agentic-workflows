@@ -38,6 +38,11 @@ env:
   # password in a config file is a policy finding wherever it sits, and this file is public.
   # It has to be a workflow-level expression: service containers receive their environment
   # before any step runs, so a value generated in a step would arrive too late.
+  #
+  # The same expression is repeated inside the service's `options` above rather than read
+  # from here, because the `env` context is not available in `jobs.<id>.services` — only
+  # inside that service's own `env:`. Written as ${{ env.SQL_SA_PASSWORD }} there, the health
+  # check probes with an empty password and the service never reports healthy.
   SQL_SA_PASSWORD: "Aa1!${{ github.run_id }}"
   WEB_PACKAGE: "@app/web"
   NPM_REGISTRY_URL: "//npm.pkg.github.com/"
@@ -71,7 +76,7 @@ jobs:
         # exit code 1". Steps read the assigned port from the job.services context.
           - 1433
         options: >-
-          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P '${{ env.SQL_SA_PASSWORD }}' -Q 'SELECT 1' -C || exit 1"
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Aa1!${{ github.run_id }}' -Q 'SELECT 1' -C || exit 1"
           --health-interval 10s --health-timeout 5s --health-retries 12 --health-start-period 30s
     defaults:
       run:

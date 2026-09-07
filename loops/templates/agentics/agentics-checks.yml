@@ -172,3 +172,32 @@ jobs:
       - name: Lint composite action shell
         shell: bash
         run: find .github/actions -name '*.sh' -print0 | xargs -0 -r shellcheck -x
+      # A password written into a workflow is a finding whatever it protects, and one sat in
+      # these files for weeks: a throwaway SQL container credential, repeated inline in six
+      # to nine places per repository, found by a policy scan rather than by us. Anything a
+      # job needs at container-start time belongs in an expression or a secret, and this is
+      # the check that says so before a reviewer has to.
+      - name: No written-down passwords in workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t authored < <(git ls-files '.github/workflows/*.yml' '.github/actions/**' 2>/dev/null || true)
+          [ "${#authored[@]}" -gt 0 ] || exit 0
+          # Two passes, because "is this a literal" is the hard half. The first finds every
+          # assignment to a password-ish name whose value is quoted; the second keeps only
+          # the lines with no dollar sign, so a value built from an expression or read from a
+          # shell variable passes and a written-down word does not. A literal that happens to
+          # contain a dollar sign slips through; erring that way beats a check people learn to
+          # route around.
+          # Two shapes: a password-ish name assigned a quoted value, and a command-line
+          # flag given one. The literal these repositories carried appeared as both.
+          hits=$(grep -nEi \
+            -e "(password|passwd|pwd)[\"']?[[:space:]]*[:=][[:space:]]*[\"'][^\"']" \
+            -e "(^|[[:space:]])(-P|--password)[[:space:]=]*[\"'][^\"']" \
+            "${authored[@]}" | grep -v '[$]' || true)
+          if [ -n "$hits" ]; then
+            printf '%s\n' "$hits"
+            echo "::error::A password is written into a workflow. Use a secret, or derive it per run from an expression."
+            exit 1
+          fi
+          echo "No written-down passwords."

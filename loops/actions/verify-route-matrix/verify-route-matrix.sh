@@ -532,6 +532,31 @@ while read -r operation; do
 done < <(sed -n '/^      operation:/,/^      issue-number:/p' "$ROUTER_YML" |
   sed -n 's/^          - //p')
 
+# No written-down passwords in anything this repository ships. A throwaway credential for
+# a test container is still a policy finding, and one sat in every consumer's CI for weeks
+# until a scan found it rather than us. Two shapes: a password-ish name assigned a quoted
+# value, and a command-line flag given one; a line containing a dollar sign is taken to be
+# an expression or a shell variable and allowed. Paths resolve relative to this script, so
+# upstream this reads the templates and in a consumer it reads the real workflows.
+PASSWORD_SCAN_DIRS=("${HERE}/../../workflows")
+[ -d "${HERE}/../../templates/ci" ] && PASSWORD_SCAN_DIRS+=("${HERE}/../../templates/ci")
+[ -d "${HERE}/../../templates/agentics" ] && PASSWORD_SCAN_DIRS+=("${HERE}/../../templates/agentics")
+password_hits=$(
+  find "${PASSWORD_SCAN_DIRS[@]}" -type f \( -name '*.yml' -o -name '*.yaml' \) \
+    -not -name '*.lock.yml' -print0 |
+    xargs -0 -r grep -nEi \
+      -e "(password|passwd|pwd)[\"']?[[:space:]]*[:=][[:space:]]*[\"'][^\"']" \
+      -e "(^|[[:space:]])(-P|--password)[[:space:]=]*[\"'][^\"']" |
+    grep -v '[$]' || true
+)
+if [ -z "$password_hits" ]; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: a password is written down in a shipped workflow; use a secret or derive it per run" >&2
+  printf '%s\n' "$password_hits" >&2
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "Route matrix: ${PASS} passed"
