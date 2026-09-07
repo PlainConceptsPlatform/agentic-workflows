@@ -320,7 +320,7 @@ async function installSelected(
     return 1;
   }
 
-  const changed = result.changes.filter((change) => change.status === "added" || change.status === "updated");
+  const changed = result.changes.filter((change) => change.status === "added" || change.status === "updated" || change.status === "removed");
   const skipped = result.changes.filter((change) => change.status === "skipped");
   console.log(`Package ${result.packageVersion}${result.installedVersions.length > 0 ? ` (was ${result.installedVersions.join(", ")})` : ""}`);
   if (changed.length === 0 && allRemoved.length === 0 && templates.length === 0) {

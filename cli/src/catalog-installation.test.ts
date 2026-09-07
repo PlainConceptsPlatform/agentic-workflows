@@ -366,7 +366,9 @@ describe("catalog installation", () => {
     await expect(access(join(repositoryPath, ".husky", "pre-commit"), constants.F_OK)).rejects.toThrow();
   });
 
-  it("keeps a CRLF checkout's line endings when it rewrites a file", async () => {
+  // Everything here ends up on a Linux runner, and a shell script with CRLF fails on its shebang.
+  // Preserving a legacy CRLF file's endings only carried the problem forward.
+  it("writes LF even when the consumer's copy was CRLF, and keeps its env values", async () => {
     const sourcePath = await createDirectory({
       "workflows/agent-check.md": worker("  REPO_RULES: \"package rules\"\n"),
       "scripts/compile-agent-workflows.mjs": "compile\n",
@@ -380,8 +382,60 @@ describe("catalog installation", () => {
 
     const written = await readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8");
     expect(written).toContain("workflows@0.7.0. Source:");
-    expect(written).toContain("  REPO_RULES: \"my rules\"\r\n");
-    expect(written).not.toMatch(/[^\r]\n/);
+    expect(written).toContain("  REPO_RULES: \"my rules\"\n");
+    expect(written).not.toContain("\r");
+  });
+
+  // A file deleted upstream used to sit in every consumer forever; that is how two actions
+  // outlived the code that called them.
+  it("prunes a managed action the package no longer ships, and leaves everything else", async () => {
+    const sourcePath = await createDirectory({
+      "actions/keep/action.yml": header("loops/actions/keep/action.yml") + "name: Keep\n",
+      "workflows/shared/defaults.md": "---\n" + header("loops/workflows/shared/defaults.md") + "---\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      ".github/actions/keep/action.yml": header("loops/actions/keep/action.yml", "0.7.0") + "name: Keep\n",
+      ".github/actions/gone/action.yml": header("loops/actions/gone/action.yml", "0.7.0") + "name: Gone\n",
+      ".github/actions/gone/gone.sh": "#!/usr/bin/env bash\n# " + header("loops/actions/gone/gone.sh", "0.7.0").slice(2),
+      ".github/actions/mine/action.yml": "name: My own action\n",
+      ".github/workflows/shared/defaults.md": "---\n" + header("loops/workflows/shared/defaults.md", "0.7.0") + "---\n",
+      ".github/workflows/shared/orphan.md": "---\n" + header("loops/workflows/shared/orphan.md", "0.7.0") + "---\n",
+      // A worker outside the selected route set is not an orphan; `remove` owns those.
+      ".github/workflows/agent-audit.md": worker("  REPO_RULES: \"x\"\n", "0.7.0"),
+    });
+
+    const result = await installCatalog(repositoryPath, { sourcePath, selectedRoutes: [], packageVersion: "0.8.0", baseline: offline });
+
+    expect(result.changes.filter((change) => change.status === "removed").map((change) => change.target)).toEqual([
+      ".github/actions/gone/action.yml",
+      ".github/actions/gone/gone.sh",
+      ".github/workflows/shared/orphan.md",
+    ]);
+    await expect(access(join(repositoryPath, ".github/actions/gone"), constants.F_OK)).rejects.toThrow();
+    // Kept: a package file still shipped, a consumer's own action, and a worker.
+    await expect(readFile(join(repositoryPath, ".github/actions/keep/action.yml"), "utf8")).resolves.toContain("Keep");
+    await expect(readFile(join(repositoryPath, ".github/actions/mine/action.yml"), "utf8")).resolves.toBe("name: My own action\n");
+    await expect(readFile(join(repositoryPath, ".github/workflows/agent-audit.md"), "utf8")).resolves.toContain("REPO_RULES");
+  });
+
+  it("reports nothing to do when there is no orphan and no change", async () => {
+    const sourcePath = await createDirectory({
+      "actions/keep/action.yml": header("loops/actions/keep/action.yml") + "name: Keep\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      ".github/actions/keep/action.yml": header("loops/actions/keep/action.yml", "0.8.0") + "name: Keep\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "opencode.ci.json": "{}\n",
+    });
+
+    const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.8.0", baseline: offline });
+
+    expect(result.upToDate).toBe(true);
+    expect(result.changes.every((change) => change.status === "unchanged")).toBe(true);
   });
 
   // The stack default is a first-install convenience. Afterwards the value is the consumer's.

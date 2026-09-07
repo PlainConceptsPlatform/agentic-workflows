@@ -1,3 +1,18 @@
+# Check every text file out with LF on all platforms. Everything under loops/ is copied verbatim
+# into a consumer repository, every consumer declares `* text=auto eol=lf`, and the workers run on
+# Linux runners. Without this a Windows clone (core.autocrlf=true) gets CRLF here, the installer
+# copies CRLF in, and git in the consumer then reports every one of those files as needing
+# normalisation on the next commit: a wall of warnings and a diff that is nothing but line endings.
+* text=auto eol=lf
+
+# Binary assets git should never touch.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pfx binary
+
 .github/workflows/*.lock.yml linguist-generated=true
 # Shell scripts run on Linux runners: a CRLF here makes bash fail on the shebang line.
 *.sh text eol=lf

@@ -69,6 +69,13 @@ installed set, one of four statuses and reports them in `changes`:
 | `updated` | The consumer's copy differs from this version's (after the env merge for a worker) |
 | `unchanged` | Byte-equal after normalising line endings; the file is not rewritten |
 | `skipped` | The consumer's copy has no ownership header (consumer-owned) and `--force` was not passed |
+| `removed` | The file carries our ownership header, sits under `.github/actions/` or `.github/workflows/shared/`, and the package no longer ships it |
+
+`removed` is `orphanedManagedFiles()`. Without it a file deleted upstream stays in every consumer
+forever, which is how `stale-recovery` and `update-changelog` outlived the code that called them.
+It is deliberately scoped to the two directories that belong wholly to the package: under
+`.github/workflows/` a missing worker means the route is not installed rather than deleted, and
+`remove` owns that. It never touches a file without our header, which is how a fork opts out.
 
 Only `added` and `updated` files are written. Line endings of an existing file are kept.
 `conflicts` is empty for catalog files; only `installTemplate()` reports conflicts, because

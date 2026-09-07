@@ -15,7 +15,7 @@ import type { RepositoryInspection } from "./repository-inspection.js";
 
 const execFileAsync = promisify(execFile);
 
-export type ChangeStatus = "added" | "updated" | "unchanged" | "skipped";
+export type ChangeStatus = "added" | "updated" | "unchanged" | "skipped" | "removed";
 
 export interface FileChange {
   readonly target: string;
@@ -114,14 +114,15 @@ export async function installCatalog(
   }
   let processed = processRoutes(packageContents, selectedRoutes);
 
-  // The consumer's current copies, with their line endings remembered so a rewrite does not
-  // flip every line of a CRLF checkout.
-  const existing = new Map<string, { text: string; eol: "\n" | "\r\n" }>();
+  // Read and write LF, always. Every one of these files ends up on a Linux runner, the package
+  // and every consumer declare `* text=auto eol=lf`, and a shell script with CRLF fails on its
+  // shebang. Preserving whatever a file happened to have instead only carried legacy CRLF
+  // forward, which git then reported as needing normalisation on every later commit.
+  const existing = new Map<string, string>();
   for (const target of processed.keys()) {
     const path = join(repositoryPath, target);
     if (!await exists(path)) continue;
-    const raw = await readFile(path, "utf8");
-    existing.set(target, { text: normalizeEol(raw), eol: raw.includes("\r\n") ? "\r\n" : "\n" });
+    existing.set(target, normalizeEol(await readFile(path, "utf8")));
   }
 
   if (options.inspection !== undefined) {
@@ -149,13 +150,13 @@ export async function installCatalog(
     let change: FileChange = { target, status: "added" };
 
     if (current !== undefined) {
-      const recorded = carriesHeader(target) ? installedVersion(current.text) : undefined;
+      const recorded = carriesHeader(target) ? installedVersion(current) : undefined;
       if (recorded !== undefined) installedVersions.add(recorded);
 
       if (isWorker(target) || isRouter(target)) {
         const baselineText = recorded === undefined ? undefined : await baselineSource(await baselineFor(recorded), target);
         const merge = isRouter(target) ? mergeRouter : mergeWorker;
-        const merged = merge(packageText, current.text, baselineText);
+        const merged = merge(packageText, current, baselineText);
         text = merged.content;
         change = {
           target,
@@ -173,16 +174,19 @@ export async function installCatalog(
 
     text = stampVersion(text, version);
 
-    if (current !== undefined && text === current.text) {
+    if (current !== undefined && text === current) {
       change = { ...change, status: "unchanged" };
-    } else if (current !== undefined && carriesHeader(target) && !hasOwnershipHeader(current.text) && !options.force) {
+    } else if (current !== undefined && carriesHeader(target) && !hasOwnershipHeader(current) && !options.force) {
       // Removing the ownership header is how a consumer takes a file over.
       change = { target, status: "skipped", reason: "consumer-owned: the ownership header was removed; pass --force to reclaim it" };
     } else {
-      updates.push({ target, content: current === undefined ? text : text.replaceAll("\n", current.eol) });
+      updates.push({ target, content: text });
     }
     changes.push(change);
   }
+
+  const removals = await orphanedManagedFiles(repositoryPath, new Set(processed.keys()));
+  for (const target of removals) changes.push({ target, status: "removed" });
 
   const baselines: BaselineStatus[] = [];
   for (const [requested, pending] of baselineDirectories) {
@@ -196,11 +200,15 @@ export async function installCatalog(
     packageVersion: version,
     installedVersions: [...installedVersions].sort(),
     baselines,
-    upToDate: updates.length === 0,
+    upToDate: updates.length === 0 && removals.length === 0,
     dryRun: options.dryRun ?? false,
   };
 
   if (options.dryRun) return result;
+
+  // Deletions go first: a pruned action must be gone before the compile reads the tree, or a
+  // worker still referencing it would compile against a file that is about to disappear.
+  await removeFiles(repositoryPath, removals);
 
   if (updates.length > 0) {
     const stagedLocks = await validateStagedCatalog(repositoryPath, updates, options.compile);
@@ -233,6 +241,45 @@ function applyStackDefaults(
     }
   }
   return result;
+}
+
+// Directories that belong wholly to the package. A file here that carries our ownership header
+// and is no longer in the package was deleted upstream, and without this it would sit in every
+// consumer forever: that is how `stale-recovery` and `update-changelog` outlived the code that
+// called them. Deliberately not `.github/workflows/`, where a worker's absence means the route
+// is not installed rather than gone, and never anything without a header, which is a fork.
+const pruneRoots = [".github/actions", ".github/workflows/shared"] as const;
+
+async function orphanedManagedFiles(repositoryPath: string, keep: ReadonlySet<string>): Promise<string[]> {
+  const orphans: string[] = [];
+
+  for (const root of pruneRoots) {
+    const directory = join(repositoryPath, root);
+    if (!await exists(directory)) continue;
+
+    for (const file of await filesIn(directory)) {
+      const target = `${root}/${file.replaceAll("\\", "/")}`;
+      if (keep.has(target)) continue;
+      if (!carriesHeader(target) && !target.endsWith(".cjs") && !target.endsWith(".js")) continue;
+      const content = await readFile(join(directory, file), "utf8");
+      if (hasOwnershipHeader(content)) orphans.push(target);
+    }
+  }
+
+  return orphans.sort();
+}
+
+async function removeFiles(repositoryPath: string, targets: readonly string[]): Promise<void> {
+  for (const target of targets) {
+    await rm(join(repositoryPath, target), { force: true });
+    // An action is a directory with one manifest in it; leaving the empty shell behind is litter.
+    const directory = dirname(join(repositoryPath, target));
+    try {
+      if ((await readdir(directory)).length === 0) await rm(directory, { recursive: true, force: true });
+    } catch {
+      // the directory is gone or not empty, either of which is fine
+    }
+  }
 }
 
 async function baselineSource(loops: string | undefined, target: string): Promise<string | undefined> {
