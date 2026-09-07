@@ -440,6 +440,24 @@ if ! grep -qF 'Empty failure evidence is not a reason to ask for review' "$MERGE
 fi
 if [ "$BRANCH_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# pr-pending means a pull request for this issue is open and waiting. Only merging retires it.
+# Every other path (the protected-files hold, a review verdict, a failed attempt) leaves the
+# pull request open, and stripping the label there produced a board where issues with open
+# pull requests looked like they had none. It went unnoticed while the label actions silently
+# removed nothing, so the two bugs hid each other.
+PENDING_OK=1
+grep -q '^  PR_PENDING_LABEL:' "$MERGE_GATE_WORKER_MD" ||
+  { PENDING_OK=0; echo "FAIL: merge gate lost its PR_PENDING_LABEL definition" >&2; }
+if [ "$(grep -c '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD")" -ne 1 ]; then
+  PENDING_OK=0
+  echo "FAIL: pr-pending must be removed in exactly one place, the merge path" >&2
+  grep -n '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD" >&2
+fi
+# And that one place has to be the merge outcome, not a hold or a failed attempt.
+grep -B12 '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD" | grep -q "outcome == 'merge'" ||
+  { PENDING_OK=0; echo "FAIL: the only pr-pending removal must sit under the merge outcome" >&2; }
+if [ "$PENDING_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 # A provider outage kills a run in a couple of minutes with no answer, and the same issue used
 # to be handed to a human for it. The implement worker retries those and only those: a run that
 # worked for half an hour and then failed produced an answer that was wrong, and repeating it

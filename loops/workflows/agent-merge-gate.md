@@ -175,15 +175,17 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      # Only the reservation comes off. pr-pending says a pull request for this issue is open
+      # and waiting, which is still true when the gate hands it to a human, so taking it off
+      # here left a board where three issues with three open pull requests looked like they
+      # had none. The merge path is the one place the label stops being true.
       - name: Release the issue
         if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: |
-            ${{ env.WORKING_LABEL }}
-            ${{ env.PR_PENDING_LABEL }}
+          labels: ${{ env.WORKING_LABEL }}
       - name: Flag human review
         if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
         uses: ./.github/actions/add-issue-labels
@@ -358,15 +360,15 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.REVIEW_LABEL }}
+      # The reservation only. The pull request is still open and still waiting, so pr-pending
+      # stays until the merge path below retires it.
       - name: Release review outcome
         if: needs.validate_output.outputs.outcome == 'review'
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: |
-            ${{ env.WORKING_LABEL }}
-            ${{ env.PR_PENDING_LABEL }}
+          labels: ${{ env.WORKING_LABEL }}
       - name: Clear merged issue labels
         if: needs.validate_output.outputs.outcome == 'merge'
         uses: ./.github/actions/remove-issue-labels
@@ -442,14 +444,14 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.REVIEW_LABEL }}
+      # The reservation only. A failed attempt does not close the pull request, so pr-pending
+      # is still true and the board should keep saying so.
       - name: Release the issue
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: |
-            ${{ env.WORKING_LABEL }}
-            ${{ env.PR_PENDING_LABEL }}
+          labels: ${{ env.WORKING_LABEL }}
 
   agent:
     # The top-level guard reads both outputs. GitHub Actions does not make a
