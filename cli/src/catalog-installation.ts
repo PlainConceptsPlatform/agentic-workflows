@@ -9,7 +9,7 @@ import { parse as parseYaml } from "yaml";
 import { catalogTemplates, mandatoryFiles, routeNames, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
 import { processRoutes, excludedWorkerFiles } from "./route-processing.js";
 import { generateOpencodeCi, generateOpencodeConfig, generateStackDefaults, injectStackEnv } from "./stack-defaults.js";
-import { mergeWorker } from "./worker-env.js";
+import { mergeRouter, mergeWorker, mirrorRouterLiterals } from "./worker-env.js";
 import { fetchBaseline, hasOwnershipHeader, installedVersion, packageVersion, stampVersion, type BaselineFetcher } from "./package-baseline.js";
 import type { RepositoryInspection } from "./repository-inspection.js";
 
@@ -89,6 +89,7 @@ export function catalogSourcePath(modulePath = fileURLToPath(import.meta.url)): 
 }
 
 const isWorker = (target: string): boolean => target.startsWith(".github/workflows/agent-") && target.endsWith(".md");
+const isRouter = (target: string): boolean => target === ".github/workflows/work-router.yml";
 const carriesHeader = (target: string): boolean => /\.(ya?ml|md|sh|mjs|cjs)$/.test(target);
 const normalizeEol = (text: string): string => text.replaceAll("\r\n", "\n");
 
@@ -151,9 +152,10 @@ export async function installCatalog(
       const recorded = carriesHeader(target) ? installedVersion(current.text) : undefined;
       if (recorded !== undefined) installedVersions.add(recorded);
 
-      if (isWorker(target)) {
-        const baselineText = recorded === undefined ? undefined : await baselineWorker(await baselineFor(recorded), target);
-        const merged = mergeWorker(packageText, current.text, baselineText);
+      if (isWorker(target) || isRouter(target)) {
+        const baselineText = recorded === undefined ? undefined : await baselineSource(await baselineFor(recorded), target);
+        const merge = isRouter(target) ? mergeRouter : mergeWorker;
+        const merged = merge(packageText, current.text, baselineText);
         text = merged.content;
         change = {
           target,
@@ -233,7 +235,7 @@ function applyStackDefaults(
   return result;
 }
 
-async function baselineWorker(loops: string | undefined, target: string): Promise<string | undefined> {
+async function baselineSource(loops: string | undefined, target: string): Promise<string | undefined> {
   if (loops === undefined) return undefined;
   const path = join(loops, "workflows", target.slice(".github/workflows/".length));
   if (!await exists(path)) return undefined;

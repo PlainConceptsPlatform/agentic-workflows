@@ -307,6 +307,33 @@ describe("catalog installation", () => {
     await expect(readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8")).resolves.toContain("  INCOMPLETE_COMMENT: \"old wording\"\n");
   });
 
+  // The router is package-owned like everything else, but its own env: block carries the two
+  // values GitHub will not let a job read where they are also needed.
+  it("keeps the router's env values and mirrors them into the trigger and the audit cron", async () => {
+    const routerFile = (ci: string, cron: string, job: string) =>
+      `# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/work-router.yml. Update with \`workflows update --force\`; consumer edits may be overwritten.\nname: "All Work Router"\n\nenv:\n  CI_WORKFLOW_NAME: "${ci}"\n  AUDIT_CRON: "${cron}"\n\non:\n  workflow_run:\n    workflows: ["${ci}"]\n    types: [completed]\n\n  schedule:\n    - cron: "${cron}" # audit slot, mirrored from env.AUDIT_CRON by the installer\n\njobs:\n  classify:\n    runs-on: ${job}\n`;
+    const sourcePath = await createDirectory({
+      "workflows/work-router.yml": routerFile("App: CI", "17 1 * * 1", "ubuntu-latest"),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      ".github/workflows/work-router.yml": routerFile("Build", "17 1 * * 5", "hand-edited"),
+    });
+
+    const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", baseline: offline });
+
+    expect(result.changes.find((change) => change.target === ".github/workflows/work-router.yml"))
+      .toMatchObject({ status: "updated", keptEnv: ["CI_WORKFLOW_NAME", "AUDIT_CRON"] });
+    const written = await readFile(join(repositoryPath, ".github/workflows/work-router.yml"), "utf8");
+    expect(written).toContain('  CI_WORKFLOW_NAME: "Build"\n');
+    expect(written).toContain('    workflows: ["Build"]\n');
+    expect(written).toContain('    - cron: "17 1 * * 5" # audit slot');
+    // Everything outside env: comes back from the package.
+    expect(written).toContain("    runs-on: ubuntu-latest\n");
+    expect(written).not.toContain("hand-edited");
+  });
+
   it("dry-run computes the plan and writes nothing", async () => {
     const sourcePath = await createDirectory({
       "actions/check/action.yml": header("loops/actions/check/action.yml") + "name: Check\n",

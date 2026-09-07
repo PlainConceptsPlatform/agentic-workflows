@@ -13,9 +13,11 @@ inputs:
     description: Commit the work landed as. Its subject becomes the summary.
     required: true
   changelog-path:
-    description: Path to changelog.json.
-    required: false
-    default: apps/web/src/shared/data/changelog.json
+    description: >-
+      Path to changelog.json. Required, and deliberately without a default: the previous one
+      named one repository's layout, and everywhere else the action found no file and exited
+      having done nothing, which reads as success.
+    required: true
   max-entries:
     description: Newest entries to keep.
     required: false

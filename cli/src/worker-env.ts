@@ -35,19 +35,34 @@ export interface WorkerMergeReport {
 
 const ENTRY = /^  ([A-Za-z_][A-Za-z0-9_.-]*):(.*)$/;
 
+/** The `env:` block of a worker, which lives inside the markdown frontmatter. */
 export function parseWorkerEnv(content: string): WorkerEnv {
   const lines = content.split("\n");
-  const none: WorkerEnv = { present: false, before: lines, entries: [], trailing: [], after: [] };
-  if (lines[0] !== "---") return none;
+  if (lines[0] !== "---") return absent(lines);
 
   const end = lines.findIndex((line, index) => index > 0 && line === "---");
-  if (end === -1) return none;
+  if (end === -1) return absent(lines);
 
-  const envIndex = lines.findIndex((line, index) => index > 0 && index < end && line === "env:");
-  if (envIndex === -1) return none;
+  return parseEnvBlock(lines, lines.findIndex((line, index) => index > 0 && index < end && line === "env:"));
+}
 
+/** The top-level `env:` block of a plain YAML workflow, such as the router. */
+export function parseYamlEnv(content: string): WorkerEnv {
+  const lines = content.split("\n");
+  return parseEnvBlock(lines, lines.indexOf("env:"));
+}
+
+function absent(lines: readonly string[]): WorkerEnv {
+  return { present: false, before: lines, entries: [], trailing: [], after: [] };
+}
+
+function parseEnvBlock(lines: readonly string[], envIndex: number): WorkerEnv {
+  if (envIndex === -1) return absent(lines);
+
+  // The block runs to the first line that is neither blank nor indented into it. That is the
+  // closing `---` of a frontmatter and the next top-level key of a plain YAML file alike.
   let cursor = envIndex + 1;
-  while (cursor < end && (lines[cursor] === "" || lines[cursor]!.startsWith("  "))) cursor += 1;
+  while (cursor < lines.length && (lines[cursor] === "" || lines[cursor]!.startsWith("  "))) cursor += 1;
 
   const entries: EnvEntry[] = [];
   let leading: string[] = [];
@@ -95,13 +110,14 @@ export function mergeWorkerEnv(
   packageContent: string,
   consumerContent: string,
   baselineContent?: string,
+  parse: (content: string) => WorkerEnv = parseWorkerEnv,
 ): { content: string; report: WorkerMergeReport } {
   const report = { keptEnv: [] as string[], updatedDefaults: [] as string[], consumerOnlyEnv: [] as string[], droppedEnv: [] as string[] };
-  const pkg = parseWorkerEnv(packageContent);
-  const consumer = parseWorkerEnv(consumerContent);
+  const pkg = parse(packageContent);
+  const consumer = parse(consumerContent);
   if (!pkg.present || !consumer.present) return { content: packageContent, report };
 
-  const baseline = baselineContent === undefined ? undefined : parseWorkerEnv(baselineContent);
+  const baseline = baselineContent === undefined ? undefined : parse(baselineContent);
   const consumerByKey = new Map(consumer.entries.map((entry) => [entry.key, entry]));
   const baselineByKey = new Map((baseline?.entries ?? []).map((entry) => [entry.key, entry]));
   const packageKeys = new Set(pkg.entries.map((entry) => entry.key));
@@ -168,6 +184,40 @@ function preserveRunnerPool(packageContent: string, consumerContent: string): st
     (line, prefix: string, pool: string, tail: string) =>
       pool === "ubuntu-latest" ? line : `${prefix}${mine[0]}${tail}`,
   );
+}
+
+// GitHub evaluates no expression in a `workflow_run.workflows:` list or in a `cron:`, so the two
+// router values that are also needed there cannot be read from `env:` at those two lines. The
+// installer copies them in instead, which is what keeps the pair in step across an update; the
+// route matrix asserts the copies still agree.
+const CI_NAME_TRIGGER = /^(\s*workflows: \[")[^"]*("\]\s*)$/m;
+const AUDIT_CRON_LINE = /^(\s*- cron: ")[^"]*(" # audit slot.*)$/m;
+
+/** Copy the router's own `env:` values into the two literal lines that cannot read them. */
+export function mirrorRouterLiterals(router: string): string {
+  const values = new Map(parseYamlEnv(router).entries.map((entry) => [entry.key, unquote(entryValue(entry))]));
+
+  const ciName = values.get("CI_WORKFLOW_NAME");
+  const auditCron = values.get("AUDIT_CRON");
+  let result = router;
+  if (ciName !== undefined) result = result.replace(CI_NAME_TRIGGER, `$1${ciName}$2`);
+  if (auditCron !== undefined) result = result.replace(AUDIT_CRON_LINE, `$1${auditCron}$2`);
+  return result;
+}
+
+function unquote(value: string): string {
+  const match = /^(["'])([\s\S]*)\1$/.exec(value);
+  return match === null ? value : match[2]!;
+}
+
+/** The package's router with the consumer's `env:` values put back and mirrored into place. */
+export function mergeRouter(
+  packageContent: string,
+  consumerContent: string,
+  baselineContent?: string,
+): { content: string; report: WorkerMergeReport } {
+  const { content, report } = mergeWorkerEnv(packageContent, consumerContent, baselineContent, parseYamlEnv);
+  return { content: mirrorRouterLiterals(content), report };
 }
 
 /** The package's worker with the consumer's customisable values put back. */

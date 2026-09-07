@@ -19,6 +19,15 @@ ROUTER_YML="${WORKFLOWS_DIR}/work-router.yml"
 IMPLEMENT_WORKER_MD="${WORKFLOWS_DIR}/agent-implement.md"
 MERGE_GATE_WORKER_MD="${WORKFLOWS_DIR}/agent-merge-gate.md"
 
+# The audit slot is per repository and lives in the router's own env: block, which a real run
+# exports into the classify step. Export it here too, or this file would test the classifier's
+# fallback rather than the cron the router actually fires on.
+router_env() {
+  sed -n "s/^  $1: *//p" "$ROUTER_YML" | head -1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+AUDIT_CRON="$(router_env AUDIT_CRON)"
+export AUDIT_CRON
+
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../classify-route/classify-route.sh
 source "${HERE}/../classify-route/classify-route.sh"
@@ -196,7 +205,7 @@ while read -r cron; do
     PASS=$((PASS + 1))
     echo "  ${cron} -> ${selected}"
   fi
-done < <(sed -n 's/^ *- cron: "\(.*\)"$/\1/p' "$ROUTER_YML")
+done < <(sed -n 's/^ *- cron: "\([^"]*\)".*/\1/p' "$ROUTER_YML")
 
 assert_route "an unknown cron routes nowhere" none EVENT=schedule "SCHEDULE=0 0 30 2 *"
 
@@ -242,6 +251,38 @@ assert "a dispatched audit reports its trigger kind" manual \
   "$(route_field trigger-kind EVENT=workflow_dispatch OPERATION=audit INPUT_TRIGGER_KIND=manual)"
 
 echo "── Router wiring ─────────────────────────────────────────────────────────"
+
+# Two router values are needed where GitHub evaluates no expression, so the installer mirrors
+# them out of env: into a literal. A copy that drifts fails in the direction that hurts: the
+# gate silently reads a CI workflow nobody runs, or the audit fires on a cron the classifier
+# maps to no route. Neither produces a red run, so assert the copies here.
+MIRROR_OK=1
+ci_name="$(router_env CI_WORKFLOW_NAME)"
+trigger_name="$(sed -n 's/^ *workflows: \["\(.*\)"\] *$/\1/p' "$ROUTER_YML" | head -1)"
+if [ -z "$ci_name" ]; then
+  MIRROR_OK=0; echo "FAIL: work-router.yml defines no CI_WORKFLOW_NAME in its env: block" >&2
+elif [ "$ci_name" != "$trigger_name" ]; then
+  MIRROR_OK=0
+  echo "FAIL: the workflow_run trigger names '${trigger_name}' but env.CI_WORKFLOW_NAME is '${ci_name}'" >&2
+fi
+# The audit cron only exists in a router that installed the audit worker.
+if worker_installed audit; then
+  cron_line="$(sed -n 's/^ *- cron: "\([^"]*\)" # audit slot.*/\1/p' "$ROUTER_YML" | head -1)"
+  if [ -z "$AUDIT_CRON" ]; then
+    MIRROR_OK=0; echo "FAIL: work-router.yml defines no AUDIT_CRON in its env: block" >&2
+  elif [ "$AUDIT_CRON" != "$cron_line" ]; then
+    MIRROR_OK=0
+    echo "FAIL: the audit slot cron is '${cron_line}' but env.AUDIT_CRON is '${AUDIT_CRON}'" >&2
+  fi
+fi
+# And nothing may go back to naming the CI workflow directly: a second literal is a second
+# thing to keep in step, and the one that gets forgotten is the one inside a jq filter.
+if [ "$(grep -c '"App: CI"' "$ROUTER_YML")" -gt 2 ]; then
+  MIRROR_OK=0
+  echo "FAIL: work-router.yml hardcodes the CI workflow name outside env: and the mirrored trigger" >&2
+  grep -n '"App: CI"' "$ROUTER_YML" >&2
+fi
+if [ "$MIRROR_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # GitHub evaluates every Actions expression in a workflow file, including ones written inside
 # shell comments. An empty pair is not a valid expression and fails the whole file to parse,

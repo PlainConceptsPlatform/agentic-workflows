@@ -65,6 +65,20 @@ the consumer is responsible for adding the route-specific focus areas:
 | **merge-gate** | Risk indicators specific to the repository: any calculation engine, audit chain integrity, auth flows, database migrations, and money/financial calculations. What constitutes an auto-merge risk vs a human-review trigger |
 | **audit** | What to look for: layer violations, N+1 queries, missing audit logs, security gaps, performance anti-patterns, documentation drift, and what the repository considers a critical vs minor issue |
 
+## What the router owns
+
+The router is package-owned like everything else, with one exception: the `env:` block at the top
+of `work-router.yml`, which `update` keeps the same way it keeps a worker's.
+
+| Value | What it is | Getting it wrong |
+|---|---|---|
+| `CI_WORKFLOW_NAME` | The CI workflow the merge belt reads its verdict from. Must equal that workflow's `name:` exactly | No gate at all. The belt logs no completed CI run and the pull request waits, with no red run anywhere |
+| `AUDIT_CRON` | This repository's audit slot. See "Scheduling across repositories" in the package README | The audit fires and classifies to no route, so nothing happens and nothing complains |
+
+Both are also needed where GitHub evaluates no expression, in the `workflow_run.workflows:` list
+and in a `cron:`. The installer copies them into those two literal lines, so change the value in
+`env:` and run `workflows update`. `verify-route-matrix.sh` asserts the copies agree.
+
 ## Keeping Forge aligned
 
 `OPENAI_BASE_URL` appears in two places in each worker:

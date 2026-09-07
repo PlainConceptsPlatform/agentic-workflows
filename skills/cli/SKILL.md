@@ -74,6 +74,15 @@ Only `added` and `updated` files are written. Line endings of an existing file a
 `conflicts` is empty for catalog files; only `installTemplate()` reports conflicts, because
 templates are consumer-owned from installation and are replaced only with `--force`.
 
+The router (`work-router.yml`) is merged the same way, through `mergeRouter`, because its own
+`env:` block carries the two values a repository must set: `CI_WORKFLOW_NAME` and `AUDIT_CRON`.
+Both are also needed where GitHub evaluates no expression (a `workflow_run.workflows:` list and a
+`cron:`), so `mirrorRouterLiterals` copies them from `env:` into those two literal lines after the
+merge. The audit cron line is found by its `# audit slot` marker comment. Everything inside a job
+reads the values from `env:`, including `classify-route.sh`, whose `AUDIT_CRON` is
+`"${AUDIT_CRON:-<package default>}"`. `verify-route-matrix.sh` asserts the copies still agree and
+that no third literal appears.
+
 A worker (`agent-*.md`) is merged by `worker-env.ts`: the package file with the consumer's `env:`
 values put back. Package comments in the block are kept; consumer values replace package values;
 keys the package added get their defaults; keys only the consumer defines are appended. With a

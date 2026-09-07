@@ -75,6 +75,26 @@ run-name: >-
   && format('schedule {0}', github.event.schedule)
   || github.event_name }}
 
+# The two values a repository is expected to change, and the only part of this file that is
+# not the package's. `workflows update` keeps whatever is here and puts the package's router
+# around it, so change them here and nowhere else.
+#
+# Neither can be read where it is also needed: GitHub evaluates no expression in a
+# `workflow_run.workflows:` list or in a `cron:`. The installer therefore mirrors both values
+# into those two literal lines below, and the route matrix asserts the copies still agree.
+# Everything that runs inside a job reads them from here, including the classifier, which
+# takes AUDIT_CRON from this environment.
+env:
+  # The CI workflow the merge belt reads its verdict from. A repository whose CI has another
+  # name gets no gate at all: the belt logs "no completed CI run" and the pull request waits
+  # forever, which is a silent failure rather than a red run.
+  CI_WORKFLOW_NAME: "App: CI"
+  # Slot 0. Every consumer installs this same router, and the agent fleet is one shared,
+  # two-VM scale set, so a second repository left on slot 0 audits at the same minute as the
+  # first and the two of them consume the whole fleet. Pick a free slot per repository: see
+  # "Scheduling across repositories" in the package README.
+  AUDIT_CRON: "17 1 * * 1"
+
 on:
   issues:
     types: [opened, labeled]
@@ -105,17 +125,13 @@ on:
   # branch with secrets, but the gate's subject job rejects any PR that is not open and
   # bot-authored, so a fork PR's failing CI cannot start privileged work.
   workflow_run:
+    # Mirrored from env.CI_WORKFLOW_NAME by the installer. A trigger evaluates no expression.
     workflows: ["App: CI"]
     types: [completed]
 
   # Cron to route mapping lives in .github/actions/classify-route/classify-route.sh.
   schedule:
-    # Slot 0. Every consumer installs this same file, and the agent fleet is one shared,
-    # two-VM scale set, so a second repository left on slot 0 audits at the same minute as
-    # the first. Pick a free slot per repository: see "Scheduling across repositories" in the
-    # package README, and change AUDIT_CRON in classify-route.sh to match, or the run fires
-    # and classifies to no route.
-    - cron: "17 1 * * 1"
+    - cron: "17 1 * * 1" # audit slot, mirrored from env.AUDIT_CRON by the installer
     - cron: "43 3 * * *"
     - cron: "0 6 * * *"
     - cron: "17 * * * *"
@@ -710,7 +726,7 @@ jobs:
             head_sha=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
             ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
               --jq '[.workflow_runs[]
-                | select(.name == "App: CI" and .status == "completed"
+                | select(.name == env.CI_WORKFLOW_NAME and .status == "completed"
                          and (.conclusion == "success" or .conclusion == "failure"))]
                 | sort_by(.created_at) | last // empty')
             if [ -z "$ci" ]; then
@@ -728,7 +744,7 @@ jobs:
               fi
               ci=$(gh api "repos/$REPO/actions/runs?branch=$head_ref&per_page=100" \
                 --jq '[.workflow_runs[]
-                  | select(.name == "App: CI" and .status == "completed"
+                  | select(.name == env.CI_WORKFLOW_NAME and .status == "completed"
                            and (.conclusion == "success" or .conclusion == "failure"))]
                   | sort_by(.created_at) | last // empty')
               if [ -z "$ci" ]; then
@@ -911,7 +927,7 @@ jobs:
                 --jq '.workflow_runs[]
                   | select(
                       .event == "pull_request"
-                      and .name == "App: CI"
+                      and .name == env.CI_WORKFLOW_NAME
                     )
                   | .id' |
                 while IFS= read -r run_id; do
@@ -922,7 +938,7 @@ jobs:
               ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
                 --jq '[.workflow_runs[]
                   | select(
-                      .name == "App: CI"
+                      .name == env.CI_WORKFLOW_NAME
                       and .event == "pull_request"
                       and .status == "completed"
                       and (.conclusion == "success" or .conclusion == "failure")
@@ -940,7 +956,7 @@ jobs:
                   ci=$(gh api "repos/$REPO/actions/runs?branch=$branch&per_page=100" \
                     --jq '[.workflow_runs[]
                       | select(
-                          .name == "App: CI"
+                          .name == env.CI_WORKFLOW_NAME
                           and .event == "pull_request"
                           and .status == "completed"
                           and (.conclusion == "success" or .conclusion == "failure")
@@ -948,7 +964,7 @@ jobs:
                       ] | sort_by(.created_at) | last // empty | [.id, .conclusion, .updated_at] | @tsv')
                 fi
                 if [ -z "$ci" ]; then
-                  echo "::warning::PR #$pr_number head $head_sha has no completed App: CI run; the belt cannot gate it until CI runs."
+                  echo "::warning::PR #$pr_number head $head_sha has no completed $CI_WORKFLOW_NAME run; the belt cannot gate it until CI runs."
                   continue
                 fi
                 echo "PR #$pr_number conflicts, so CI cannot run on $head_sha at all; gating on the branch's last verdict."

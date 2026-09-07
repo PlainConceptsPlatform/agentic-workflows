@@ -150,15 +150,17 @@ Give each repository its own slot. The scheme below puts one audit on each day o
 Seven slots is the ceiling for this shape. Beyond that, either widen the fleet (`MAX_VMS` in
 `runners/scaler-app`) or accept that the eighth repository shares a day with the first.
 
-A slot lives in two places that must agree, because the router schedules the cron and the
-classifier maps it back to a route:
+A slot is one value: `AUDIT_CRON` in the `env:` block at the top of
+`.github/workflows/work-router.yml`. The classifier reads it from there, and `workflows update`
+copies it into the `schedule:` line below, which has to be a literal because GitHub evaluates no
+expression in a `cron:`. Change it in `env:` and run `workflows update`, or edit both together;
+`verify-route-matrix.sh` asserts the two agree and that the cron reaches its route, because a
+cron in one place and not the other fails in the direction that hurts, with the run firing and
+then classifying to no route at all.
 
-- `.github/workflows/work-router.yml`, in the `schedule:` block
-- `.github/actions/classify-route/classify-route.sh`, in `AUDIT_CRON`
-
-A cron present in one but not the other fails silently in the direction that hurts: the run
-fires and then classifies to no route at all. `verify-route-matrix.sh` asserts the cron reaches
-its route, so run it after changing a slot.
+The other value in that block is `CI_WORKFLOW_NAME`, the name of the CI workflow the merge belt
+reads its verdict from. It works the same way, mirrored into the `workflow_run` trigger, and
+getting it wrong is equally quiet: the belt logs no completed CI run and the pull request waits.
 
 The daily and hourly crons (`audit-close`, `cleanup-artifacts`, `reconcile-bot-pr-runs`) do
 not need staggering: they run on GitHub-hosted runners and never touch the fleet. The

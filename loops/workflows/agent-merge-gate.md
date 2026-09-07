@@ -3,6 +3,13 @@
 env:
   VERIFY_COMMANDS: ""
   REPO_RULES: "Make a risk-based merge decision for the selected bot pull request. Merge only when CI is green and no risk indicators are present. Review risk indicators defined in the repository's guardrails or project documentation. Any of these require human review. Do not merge protected file changes."
+  # Paths a bot may change but never merge on its own: an extended regular expression matched
+  # against every changed path in the pull request. The default names this stack's dependency
+  # and toolchain manifests plus everything under a dotted directory, and is wrong for a
+  # repository built on anything else, which is the failure worth knowing about: an unmatched
+  # list protects nothing and reports nothing. A match holds the merge for a human; it does not
+  # stop the agent repairing failed CI on the same files.
+  PROTECTED_PATHS: '^(\.|AGENTS\.md$|ARCHITECTURE\.md$|opencode\.jsonc$|package\.json$|pnpm-lock\.yaml$|Directory\.Packages\.props$|global\.json$)'
   WORKING_LABEL: bot-working
   IMPLEMENT_LABEL: implement
   REVIEW_LABEL: review
@@ -136,10 +143,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ needs.subject.outputs.pr }}
+          PROTECTED_PATHS: ${{ env.PROTECTED_PATHS }}
         run: |
           set -euo pipefail
           files=$(gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" --jq '.[].filename')
-          protected=$(printf '%s\n' "$files" | grep -E '^(\.|AGENTS\.md$|ARCHITECTURE\.md$|opencode\.jsonc$|package\.json$|pnpm-lock\.yaml$|Directory\.Packages\.props$|global\.json$)' || true)
+          protected=$(printf '%s\n' "$files" | grep -E "$PROTECTED_PATHS" || true)
 
           if [ -n "$protected" ]; then
             echo "requires_review=true" >> "$GITHUB_OUTPUT"

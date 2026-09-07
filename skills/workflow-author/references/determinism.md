@@ -329,8 +329,11 @@ steps: (gh CLI to /tmp/gh-aw/agent/)  ->  agent reads files  ->  safe outputs ap
 ### MonitorOps
 
 A route triggered by another workflow's completion. `merge-gate` is this. The trap is the `name:`
-match: `workflows: ["App: CI"]` must equal the target's `name:` exactly, and renaming either side
-breaks it silently.
+match: the trigger's `workflows:` entry must equal the target's `name:` exactly, and renaming
+either side breaks it silently. The router keeps that name in `env.CI_WORKFLOW_NAME`, which every
+job reads; the trigger itself carries a copy because GitHub evaluates no expression in a
+`workflow_run.workflows:` list, and the installer mirrors the value into it. Never write the name
+a third time.
 
 A second trap is that `workflow_run` does not fire for `pull_request`-triggered CI completions on
 feature branches. The trigger works for push-to-main, but bot PRs whose CI was triggered by

@@ -8,7 +8,11 @@
 
 set -euo pipefail
 
-readonly AUDIT_CRON="17 1 * * 1"
+# The audit slot is per repository, so it comes from the router's own env: block rather than
+# from here. The fallback is the package default and matches the cron the router ships; a run
+# fired on a cron this file does not know classifies to no route and dies silently, so the
+# route matrix asserts the two still agree.
+readonly AUDIT_CRON="${AUDIT_CRON:-17 1 * * 1}"
 readonly AUDIT_CLOSE_CRON="43 3 * * *"
 readonly CLEANUP_ARTIFACTS_CRON="0 6 * * *"
 readonly RECONCILE_BOT_PR_RUNS_CRON="17 * * * *"
