@@ -3,6 +3,27 @@
 Every installed `agent-*.md` worker is complete at its own top-level `env:`. No `repo-config` file
 exists. Do not add one.
 
+## The prompt body is not yours
+
+Everything after the frontmatter is the package's, byte for byte, in every repository. Only the
+frontmatter values below may differ. A difference in the body is drift rather than customisation, and
+the fix for it belongs upstream so every repository gets it.
+
+This is what the package is for, not a style preference. Measured on 2026-09-07, the four consuming
+repositories' `agent-implement.md` bodies differed from the package by 21, 21, 21 and 46 lines, and
+those differences had survived precisely because each looked deliberate enough to preserve. Three of
+them shared the same 21 lines, which is the tell: they were not drifting apart from each other, they
+had all improved something the package lacked and nobody had sent it back.
+
+If a body change is worth making, make it in `loops/workflows/` and propagate. If it has to differ
+per repository then it has to be an env var, the way the verification commands are. Naming
+`apps/api/` in a shared prompt is how a body stops being shareable.
+
+`workflows update --force` is the tool for this. It takes the package's worker and puts the
+consumer's `env:` values, `engine.env` `OPENAI_BASE_URL` and runner labels back, so the body comes
+from the package and the repository-specific parts survive. Runner labels only from 0.6.1; before
+that a forced update would move a repository's agents onto the package's pool.
+
 ## What each worker owns
 
 Each worker's frontmatter owns these values. Edit them directly after installation when the
@@ -19,7 +40,7 @@ repository differs from the defaults:
 | Turn budgets | `max-turns`, `max-turn-cache-misses`, `max-ai-credits` | `300`, `3000`, `5000` |
 | Verification commands | `env:` block | Stack-aware from CLI |
 | Permissions | `permissions:` | `read-all` |
-| Runner | `runs-on`, `runs-on-slim` | `ubuntu-latest` |
+| Runner | `runs-on`, `runs-on-slim` | The package's agent pool; `ubuntu-latest` for framework jobs |
 | Safe Outputs policy | `safe-outputs:` | Worker-specific |
 | Timeout | `timeout-minutes` | Worker-specific |
 
