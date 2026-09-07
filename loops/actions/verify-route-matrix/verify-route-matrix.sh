@@ -322,9 +322,15 @@ fi
 # That fallback has to read the computed mergeable state. The REST boolean is null until GitHub
 # recomputes it, and stays null for a pull request nobody has opened recently, which is exactly
 # the stale conflicting pull request the fallback exists for: it never fired once in production.
-if [ "$(grep -c 'json mergeable --jq' "$ROUTER_YML")" -lt 2 ]; then
+# The state has to be polled, not read once. GitHub computes mergeability on demand and the
+# first read answers UNKNOWN (or null through REST) while it works it out, so a single read
+# reports "not conflicting" for exactly the stale pull requests the fallback is for. Observed
+# twice in production: the fallback logged "no completed CI run" for a pull request that
+# `gh pr view` reported as CONFLICTING from a warm cache seconds later.
+if [ "$(grep -c 'mergeable_state()' "$ROUTER_YML")" -lt 2 ] ||
+  [ "$(grep -c 'mergeable_now=$(mergeable_state' "$ROUTER_YML")" -lt 2 ]; then
   BELT_OK=0
-  echo "FAIL: the conflict fallback must read mergeable via gh pr view, not the null-until-computed REST field" >&2
+  echo "FAIL: both dispatch paths must poll the mergeable state; a single read answers UNKNOWN" >&2
 fi
 if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 

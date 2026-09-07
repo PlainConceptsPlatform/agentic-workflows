@@ -633,6 +633,21 @@ jobs:
           # CI run of its own; a merge conflict with red or concluded CI is the same
           # "needs the gate" signal. A green non-conflicting PR is left for the merge belt
           # to pick up when its checks finish (bot-approve / reconcile).
+          # GitHub computes mergeability on demand. The first read of a pull request nobody has
+          # opened recently answers UNKNOWN through the API and null through REST, while it works
+          # the answer out in the background. Reading once therefore reports "not conflicting"
+          # for precisely the stale conflicting pull requests that need the gate. Ask until it
+          # settles.
+          mergeable_state() {
+            local pr="$1" state=UNKNOWN
+            for _ in 1 2 3 4 5 6; do
+              state=$(gh pr view "$pr" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo UNKNOWN)
+              [ "$state" = "UNKNOWN" ] || break
+              sleep 5
+            done
+            echo "$state"
+          }
+
           # A gate already queued or running for this pull request will read the same CI verdict;
           # a second dispatch queues behind merge-belt and the single-slot queue cancels it. Same
           # live-run test as the reconcile belt's stale-reservation sweep, keyed on the exact
@@ -679,11 +694,7 @@ jobs:
               # back to the branch's last verdict so the gate runs; it stays on the remediation
               # path and cannot merge on a stale conclusion.
               head_ref=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.ref')
-              # `gh pr view` reads the computed mergeable state; the REST boolean is null until
-              # GitHub recomputes it and stays null on every read for a pull request nobody has
-              # opened recently, which made this fallback dead code on exactly the pull requests
-              # it exists for.
-              mergeable_now=$(gh pr view "$pr" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo UNKNOWN)
+              mergeable_now=$(mergeable_state "$pr")
               if [ "$mergeable_now" != "CONFLICTING" ]; then
                 echo "PR #$pr has no concluded CI run; deferring to the CI-completion route."
                 return 0
@@ -807,6 +818,21 @@ jobs:
         run: |
           set -euo pipefail
 
+          # GitHub computes mergeability on demand. The first read of a pull request nobody has
+          # opened recently answers UNKNOWN through the API and null through REST, while it works
+          # the answer out in the background. Reading once therefore reports "not conflicting"
+          # for precisely the stale conflicting pull requests that need the gate. Ask until it
+          # settles.
+          mergeable_state() {
+            local pr="$1" state=UNKNOWN
+            for _ in 1 2 3 4 5 6; do
+              state=$(gh pr view "$pr" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo UNKNOWN)
+              [ "$state" = "UNKNOWN" ] || break
+              sleep 5
+            done
+            echo "$state"
+          }
+
           # A gate already queued or running for this pull request will read the same CI verdict;
           # a second dispatch queues behind merge-belt and the single-slot queue cancels it.
           gate_is_live() {
@@ -882,11 +908,7 @@ jobs:
                 # deadlocks the belt, because resolving the conflict is the gate's own job. Fall
                 # back to the branch's last verdict so the gate runs; it stays on the remediation
                 # path and cannot merge on a stale conclusion.
-                # `gh pr view` reads the computed mergeable state; the REST boolean is null until
-                # GitHub recomputes it and stays null on every read for a pull request nobody has
-                # opened recently, which made this fallback dead code on exactly the pull requests
-                # it exists for.
-                mergeable_now=$(gh pr view "$pr_number" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo UNKNOWN)
+                mergeable_now=$(mergeable_state "$pr_number")
                 if [ "$mergeable_now" = "CONFLICTING" ]; then
                   ci=$(gh api "repos/$REPO/actions/runs?branch=$branch&per_page=100" \
                     --jq '[.workflow_runs[]
