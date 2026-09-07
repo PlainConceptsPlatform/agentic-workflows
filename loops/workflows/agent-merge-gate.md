@@ -505,6 +505,17 @@ steps:
       branch=$(gh pr view "$PR" --repo "$REPO" --json headRefName --jq '.headRefName')
       git switch --track "origin/$branch" 2>/dev/null || git switch "$branch"
       echo "On $(git branch --show-current) at $(git rev-parse --short HEAD)"
+  # Every merge into the default branch invalidates every other open pull request that added a
+  # changelog entry, because they all insert at the top of the same list. The conflict is real
+  # and never interesting: both entries belong, newest first. Without a driver it costs a model
+  # run per sibling pull request, and it recurs on every merge while more than one is in flight.
+  # A consumer opts in by naming its own changelog in .gitattributes with `merge=changelog`;
+  # repositories that do not are unaffected, because git only calls a driver a path asks for.
+  - name: Teach git how to merge a changelog
+    run: |
+      set -euo pipefail
+      git config merge.changelog.name "newest-first changelog entries"
+      git config merge.changelog.driver "node $GITHUB_WORKSPACE/scripts/merge-changelog.mjs %O %A %B"
   - name: Load the issue context
     uses: ./.github/actions/load-issue-context
     with:
