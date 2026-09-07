@@ -679,8 +679,12 @@ jobs:
               # back to the branch's last verdict so the gate runs; it stays on the remediation
               # path and cannot merge on a stale conclusion.
               head_ref=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.ref')
-              mergeable_now=$(gh api "repos/$REPO/pulls/$pr" --jq '.mergeable // "null"' 2>/dev/null || echo null)
-              if [ "$mergeable_now" != "false" ]; then
+              # `gh pr view` reads the computed mergeable state; the REST boolean is null until
+              # GitHub recomputes it and stays null on every read for a pull request nobody has
+              # opened recently, which made this fallback dead code on exactly the pull requests
+              # it exists for.
+              mergeable_now=$(gh pr view "$pr" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo UNKNOWN)
+              if [ "$mergeable_now" != "CONFLICTING" ]; then
                 echo "PR #$pr has no concluded CI run; deferring to the CI-completion route."
                 return 0
               fi
@@ -878,8 +882,12 @@ jobs:
                 # deadlocks the belt, because resolving the conflict is the gate's own job. Fall
                 # back to the branch's last verdict so the gate runs; it stays on the remediation
                 # path and cannot merge on a stale conclusion.
-                mergeable_now=$(gh api "repos/$REPO/pulls/$pr_number" --jq '.mergeable // "null"' 2>/dev/null || echo null)
-                if [ "$mergeable_now" = "false" ]; then
+                # `gh pr view` reads the computed mergeable state; the REST boolean is null until
+                # GitHub recomputes it and stays null on every read for a pull request nobody has
+                # opened recently, which made this fallback dead code on exactly the pull requests
+                # it exists for.
+                mergeable_now=$(gh pr view "$pr_number" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo UNKNOWN)
+                if [ "$mergeable_now" = "CONFLICTING" ]; then
                   ci=$(gh api "repos/$REPO/actions/runs?branch=$branch&per_page=100" \
                     --jq '[.workflow_runs[]
                       | select(

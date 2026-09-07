@@ -319,6 +319,13 @@ if [ "$(grep -c 'conflicts, so CI cannot run on' "$ROUTER_YML")" -lt 2 ]; then
   BELT_OK=0
   echo "FAIL: both dispatch paths must gate a conflicting pull request that can never get fresh CI" >&2
 fi
+# That fallback has to read the computed mergeable state. The REST boolean is null until GitHub
+# recomputes it, and stays null for a pull request nobody has opened recently, which is exactly
+# the stale conflicting pull request the fallback exists for: it never fired once in production.
+if [ "$(grep -c 'json mergeable --jq' "$ROUTER_YML")" -lt 2 ]; then
+  BELT_OK=0
+  echo "FAIL: the conflict fallback must read mergeable via gh pr view, not the null-until-computed REST field" >&2
+fi
 if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # GitHub delivers workflow_run only for CI runs whose actor is a human, so a bot pull request's
