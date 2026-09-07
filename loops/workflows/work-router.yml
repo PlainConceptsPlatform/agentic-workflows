@@ -207,6 +207,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
           EVENT: ${{ github.event_name }}
+          # Who GitHub says this person is relative to the repository, straight from the
+          # payload. OWNER and MEMBER are the organisation's own; COLLABORATOR is repository
+          # access without organisation membership, which is what triage is for. Read from
+          # here because a repository-scoped GITHUB_TOKEN cannot query org membership.
+          AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || github.event.comment.author_association || github.event.pull_request.author_association }}
         run: |
           set -euo pipefail
 
@@ -233,18 +238,40 @@ jobs:
           permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" \
             --jq '.permission' 2>/dev/null || echo "none")
 
-          # Check if the actor is an organization member. Outside collaborators can have
-          # write/maintain permission on a repo without being org members. Triage is for
-          # outside collaborators only — a non-member with write access is still outside.
+          # Is this person one of the organisation's own, or somebody with repository access
+          # from outside it? Triage exists for the second kind.
+          #
+          # The payload answers it. The org API cannot: `orgs/{org}/members/{user}` needs an
+          # org-scoped token and GITHUB_TOKEN is scoped to this repository, so that call failed
+          # for everybody and every admin who opened an issue was declared an outside
+          # collaborator and triaged. It is kept only as a fallback for events that carry no
+          # association, and it can no longer decide "outside" on its own.
           org=$(echo "$GITHUB_REPOSITORY" | cut -d/ -f1)
-          is_member=false
-          if gh api "orgs/$org/members/$ACTOR" >/dev/null 2>&1; then
-            is_member=true
-          fi
+          case "${AUTHOR_ASSOCIATION:-}" in
+            OWNER | MEMBER)
+              is_member=true
+              ;;
+            COLLABORATOR)
+              is_member=false
+              ;;
+            *)
+              # No association in this payload. Ask the org, and believe a yes rather than a
+              # no: a failed call here is indistinguishable from a real non-member.
+              if gh api "orgs/$org/members/$ACTOR" >/dev/null 2>&1; then
+                is_member=true
+              else
+                is_member=unknown
+              fi
+              ;;
+          esac
 
           case "$permission" in
             admin | maintain | write)
-              if [ "$is_member" = "true" ]; then
+              # "unknown" counts as inside. Somebody with write or better whose membership
+              # cannot be established is far more likely to be a colleague than an outside
+              # collaborator, and treating them as outside starts a triage agent nobody asked
+              # for — which, with a four-hour timeout, holds a runner for the afternoon.
+              if [ "$is_member" != "false" ]; then
                 echo "trusted=true" >> "$GITHUB_OUTPUT"
                 echo "is_outside_collaborator=false" >> "$GITHUB_OUTPUT"
                 echo "::notice::$ACTOR has $permission permission and is an org member."
