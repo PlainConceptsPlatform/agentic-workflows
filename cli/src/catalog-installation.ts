@@ -123,7 +123,33 @@ function mergeWorkerEnv(packageContent: string, consumerContent: string): string
   if (endpoint !== undefined) {
     result = result.replace(/^    OPENAI_BASE_URL: .+$/m, `    OPENAI_BASE_URL: ${endpoint}`);
   }
-  return result;
+  return preserveRunnerPool(result, consumerContent);
+}
+
+// Which self-hosted pool a worker's agent jobs run on. gh-aw cannot share runs-on through
+// an import, so every worker names it, and it belongs with the env values rather than with
+// the prompt: a forced update that rewrote it would move a repository's agents onto another
+// pool, and one of ours has two machines in it. ubuntu-latest is excluded, being GitHub's
+// own runner, used by the deterministic jobs everywhere and chosen by nobody.
+function runnerPools(content: string): string[] {
+  const found = new Set<string>();
+  for (const match of content.matchAll(/^\s*runs-on(?:-slim)?: (\S+)\s*$/gm)) {
+    if (match[1] !== "ubuntu-latest") found.add(match[1]!);
+  }
+  return [...found];
+}
+
+function preserveRunnerPool(packageContent: string, consumerContent: string): string {
+  const mine = runnerPools(consumerContent);
+  const theirs = runnerPools(packageContent);
+  // Only an unambiguous swap. A consumer naming several pools has drifted rather than
+  // decided, and guessing which it meant is worse than leaving the package's.
+  if (mine.length !== 1 || theirs.length !== 1 || mine[0] === theirs[0]) return packageContent;
+  return packageContent.replace(
+    /^(\s*runs-on(?:-slim)?: )(\S+)(\s*)$/gm,
+    (line, prefix: string, pool: string, tail: string) =>
+      pool === "ubuntu-latest" ? line : `${prefix}${mine[0]}${tail}`,
+  );
 }
 
 function workerEnvValues(content: string): Map<string, string> {
