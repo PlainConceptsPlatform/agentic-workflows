@@ -431,6 +431,13 @@ fi
 if ! grep -qF "conclusion == 'failure' && (inputs.attempts_so_far || '0') == '0'" "$MERGE_GATE_WORKER_MD"; then
   BRANCH_OK=0; echo "FAIL: the reserve job's progress comment must be posted on the first attempt only" >&2
 fi
+# A conflicting pull request has no CI run to read logs from, so the gate is handed empty
+# failure artifacts. Read on its own that looks like "no evidence", and the agent asked for a
+# human instead of resolving the conflict that caused it.
+if ! grep -qF 'Empty failure evidence is not a reason to ask for review' "$MERGE_GATE_WORKER_MD"; then
+  BRANCH_OK=0
+  echo "FAIL: the gate must treat empty failure evidence on a conflicting PR as the conflict to fix" >&2
+fi
 if [ "$BRANCH_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # A provider outage kills a run in a couple of minutes with no answer, and the same issue used

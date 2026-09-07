@@ -687,6 +687,15 @@ timeout-minutes: 60
    fix the actual cause. Run these verification commands before a push. Do not weaken a test,
    disable a check, or push an unverified guess.
 
+   **Empty failure evidence is not a reason to ask for review.** If `failed-jobs.json` is `[]`
+   or the logs say they were unavailable, then no CI run judged this head. That is the normal
+   state of a conflicting pull request: GitHub cannot build `refs/pull/N/merge` while the
+   conflict lasts, so no `pull_request` CI can run on it and there is nothing to read. The
+   conflict is the failure to fix. Resolve it as described above, push, and select
+   `remediated`; CI runs on the result and the next cycle gets a real verdict. Select `review`
+   for missing evidence only when `has_conflicts` is `false`, because then there is genuinely
+   nothing to act on.
+
    **Scoped verification.** The commands below are the full suite. This runner has limited
    memory, and a whole-repo lint or build can be killed mid-run. Scope verification to the
    files you actually changed first, and only escalate to the full suite when the scoped run
