@@ -294,7 +294,12 @@ safe-outputs:
     target: "*"
 
 
-timeout-minutes: 30
+# Four hours while the model provider is intermittently slow. Measured on a real run: 36.7
+# of 40.2 agent minutes were spent waiting on the gateway, over 21 requests that all
+# returned 200, with about five minutes of actual work in there. The clock was killing runs
+# for the provider's pace. Turns are the loop guard now, not this; for a custom model the
+# credit ceiling is models.dev fallback pricing and guards nothing.
+timeout-minutes: 240
 ---
 
 1. You are triaging the triggering issue **#${{ inputs.issue-number }}**. Do not choose

@@ -115,7 +115,12 @@ safe-outputs:
   create-issue:
     max: 1
 
-timeout-minutes: 45
+# Four hours while the model provider is intermittently slow. Measured on a real run: 36.7
+# of 40.2 agent minutes were spent waiting on the gateway, over 21 requests that all
+# returned 200, with about five minutes of actual work in there. The clock was killing runs
+# for the provider's pace. Turns are the loop guard now, not this; for a custom model the
+# credit ceiling is models.dev fallback pricing and guards nothing.
+timeout-minutes: 240
 ---
 
 1. Call skill("pc-repo-audit"), then run `/repo-audit` as a read-only audit of this

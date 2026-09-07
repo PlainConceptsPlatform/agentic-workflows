@@ -363,7 +363,9 @@ engine:
     - "plainconcepts/glm-5-3"
 
 model: openai/glm-5-3
-max-turns: 500
+# 150 rather than 500. With a four-hour clock this is the loop guard, and the worst
+# observed run used 44 turns, so this leaves better than three times the worst case.
+max-turns: 150
 max-turn-cache-misses: 4000
 max-ai-credits: 8000
 
@@ -399,12 +401,12 @@ safe-outputs:
     max: 6
 
 
-# Sixty rather than forty. A real run wrote the whole refined story and was killed by the
-# clock four short turns later, on its way to submitting it: 36 model turns, most of them
-# under 110 output tokens and still over a minute each, so the budget buys about that many
-# turns whatever the issue is. Not ninety, which is what implement gets for writing code
-# and running a build; this reads a repository and rewrites one issue body.
-timeout-minutes: 60
+# Four hours while the model provider is intermittently slow. Measured on a real run: 36.7
+# of 40.2 agent minutes were spent waiting on the gateway, over 21 requests that all
+# returned 200, with about five minutes of actual work in there. The clock was killing runs
+# for the provider's pace. Turns are the loop guard now, not this; for a custom model the
+# credit ceiling is models.dev fallback pricing and guards nothing.
+timeout-minutes: 240
 ---
 
 1. You are refining the triggering issue **#${{ inputs.issue-number }}**. Do not choose
