@@ -36,17 +36,32 @@ runs:
           const failed = [];
 
           for (const artifact of expired) {
-            try {
-              await github.rest.actions.deleteArtifact({
-                ...context.repo,
-                artifact_id: artifact.id,
-              });
+            // GitHub answers a delete with a 5xx now and then. Three tries, because the
+            // alternative is a red daily run over one artifact that tomorrow's run would
+            // have removed anyway.
+            let lastError;
+            for (let attempt = 1; attempt <= 3; attempt += 1) {
+              try {
+                await github.rest.actions.deleteArtifact({
+                  ...context.repo,
+                  artifact_id: artifact.id,
+                });
 
-              core.info(`Deleted ${artifact.name} (created ${artifact.created_at})`);
-              deleted += 1;
-            } catch (error) {
-              core.warning(`Could not delete ${artifact.name} (${artifact.id}): ${error.message}`);
-              failed.push(artifact.name);
+                core.info(`Deleted ${artifact.name} (created ${artifact.created_at})`);
+                deleted += 1;
+                lastError = undefined;
+                break;
+              } catch (error) {
+                lastError = error;
+                if (attempt < 3) await new Promise((wait) => setTimeout(wait, attempt * 2000));
+              }
+            }
+
+            if (lastError) {
+              core.warning(
+                `Could not delete ${artifact.name} (${artifact.id}) after 3 tries: ${lastError.message}`,
+              );
+              failed.push({ name: artifact.name, status: lastError.status });
             }
           }
 
@@ -60,6 +75,17 @@ runs:
             ])
             .write();
 
-          if (failed.length > 0) {
-            core.setFailed(`${failed.length} artifact(s) could not be deleted: ${failed.join(', ')}`);
+          // Deleting nothing at all while expired artifacts exist is a permission or
+          // configuration problem, and has to be loud. One stubborn artifact among many is
+          // the API having a bad minute: tomorrow's run picks it up, and failing here only
+          // teaches people to ignore a red cleanup. A 4xx is never transient, so it fails
+          // whatever else succeeded.
+          const names = failed.map((entry) => entry.name).join(', ');
+          const structural = failed.some((entry) => entry.status && entry.status < 500);
+          if (failed.length > 0 && (deleted === 0 || structural)) {
+            core.setFailed(`${failed.length} artifact(s) could not be deleted: ${names}`);
+          } else if (failed.length > 0) {
+            core.warning(
+              `${failed.length} artifact(s) survived this run and will be retried tomorrow: ${names}`,
+            );
           }
