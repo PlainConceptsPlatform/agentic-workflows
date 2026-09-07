@@ -566,6 +566,12 @@ timeout-minutes: 90
      safeoutputs/create_pull_request(title="[bot] Fix X", body="Closes #${{ inputs.issue-number }}\n\n...", branch="fix/x")
     ```
 
+    Send it complete, first time. Each of these has an allowance of one call per run, and a
+    call that fails still spends it: a short payload sent to find out what the tool accepts
+    can come back a success, take the allowance with it, and leave the real call refused as
+    over the limit. That has happened, and the run ends having done all the work and
+    published none of it. Do not probe, and do not send a partial payload to test the shape.
+
     Choose exactly one:
 
       - **`safeoutputs/create_pull_request`** , propose a pull request against `main` with
