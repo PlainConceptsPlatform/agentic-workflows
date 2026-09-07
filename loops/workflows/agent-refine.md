@@ -382,8 +382,16 @@ safe-outputs:
   # under noise nobody closes.
   report-failure-as-issue: false
   threat-detection: false
+  # The refined story replaces the issue body, which is one call carrying the whole
+  # thing. The allowance is three rather than one because a single malformed call the
+  # bridge accepts as spent would otherwise end the run with the body unwritten and a
+  # comment already claiming success: seen on a real run, "the first update_issue call
+  # was sent with an incorrect parameter shape (20 bytes, missing body) and was accepted
+  # with success by the bridge, consuming the 1-per-run quota". The prompt still says to
+  # send the body once.
   update-issue:
     target: "*"
+    max: 3
   add-comment:
   # Split children. An oversized story becomes several implementable ones rather than
   # one issue nobody can land; the cap stops a runaway decomposition.
@@ -553,13 +561,24 @@ timeout-minutes: 40
    them is a domain expert, not an engineer.
 
     **The story is complete.** You answered every exploration question yourself and none remain
-    for the author. Call `update_issue` with the replacement body and `add_comment`
+    for the author.
+
+    Call `update_issue` first, with the replacement body, and wait for it to come back. Send
+    the whole body in that one call: it is the only thing this step has to get right, and a
+    call sent to see what the tool accepts still counts against your allowance even when it
+    fails. Do not send a partial payload, and do not probe.
+
+    Only once that call has succeeded, call `add_comment`
     with `${{ env.REFINE_MARKER }}`, then `${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}`,
     then exactly one of these messages, based only on the `labels` array in the supplied issue
     context:
 
     - If the array includes the exact label `future`: `Refinement complete. The implement label has been added. Implementation is paused until the future label is removed.`
     - Otherwise: `Refinement complete. The implement label has been added and the implement workflow will start shortly.`
+
+    If `update_issue` did not succeed, do not post either message: an issue that reads as
+    refined with its body untouched is worse than one that says the run failed. Call
+    `report_incomplete` with what the tool told you, and let the run be retried.
 
     **The story was split.** You estimated ${{ env.SPLIT_THRESHOLD }} or more and found real
     seams. Call `create_issue` once per child, then `update_issue` on the parent with the

@@ -30,8 +30,17 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
       (.body | type == "string") and (.body | test("[^[:space:]]")) and
       (.title | type == "string") and (.title | test("[^[:space:]]")))] | length;
 
+  # Signals about the run rather than about the issue. A worker reports these alongside
+  # its real work, and they say nothing about where that work was aimed, so they are not
+  # counted when deciding whether a run stayed on its own issue. Counting them meant a run
+  # that refined the issue perfectly and also noted a difficulty was judged invalid and
+  # its work discarded.
+  def is_run_signal:
+    .type == "report_incomplete" or .type == "missing_tool"
+    or .type == "missing_data" or .type == "noop";
+
   def has_only_source_items:
-    all(.items[];
+    all(.items[] | select(is_run_signal | not);
       (
         .type == "update_issue" and
         (.item_number == null or (.item_number | tostring) == $issue)
@@ -41,6 +50,12 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
         (.item_number | tostring) == $issue
       ) or
       .type == "create_issue");
+
+  # The agent saying it did not finish. Survivable when it left real work behind, never
+  # when all it left was a comment: a failed run must not be read as a question, or the
+  # loop waits for an answer to something nobody asked.
+  def reported_incomplete:
+    any(.items[]; .type == "report_incomplete");
 
   def has_clarification:
     any(.items[]; .type == "add_comment" and (.item_number | tostring) == $issue and
@@ -54,7 +69,8 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
   if child_count >= 2 and has_replacement_body and has_only_source_items then "split"
   elif child_count > 0 then "invalid"
   elif has_replacement_body and has_only_source_items then "complete"
-  elif has_clarification and (has_update | not) and has_only_source_items then "questions"
+  elif has_clarification and (has_update | not) and has_only_source_items
+    and (reported_incomplete | not) then "questions"
   else "invalid"
   end
 ' "$output_file"
