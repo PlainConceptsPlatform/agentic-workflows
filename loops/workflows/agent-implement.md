@@ -516,7 +516,8 @@ timeout-minutes: 90
       expects you to use good judgment. If two approaches are equally valid, pick one and
       proceed. You can always iterate based on PR feedback.
 
-4. Verify before you conclude. From the repository root:
+4. Verify before you conclude, running only what your change can affect. From the
+   repository root:
 
      **Scoped verification.** This runner has limited memory, and a whole-repo lint or build
      can be killed mid-run. Scope verification to the files you actually changed first, and
@@ -532,6 +533,10 @@ timeout-minutes: 90
      ```
      ${{ env.VERIFY_COMMANDS }}
      ```
+
+     Run only the parts your change can affect, and none of them for a change that touches
+     only documentation. A cold Release build takes minutes on a shared runner, and running
+     it for a change that never left the front end is time the run does not get back.
 
       If a check fails, fix the cause and rerun. Do not weaken a test, lower a threshold, or skip
       a check to make it pass. After all checks pass, run the project's lint fix command (e.g.
