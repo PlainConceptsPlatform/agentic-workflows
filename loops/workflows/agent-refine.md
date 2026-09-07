@@ -399,7 +399,12 @@ safe-outputs:
     max: 6
 
 
-timeout-minutes: 40
+# Sixty rather than forty. A real run wrote the whole refined story and was killed by the
+# clock four short turns later, on its way to submitting it: 36 model turns, most of them
+# under 110 output tokens and still over a minute each, so the budget buys about that many
+# turns whatever the issue is. Not ninety, which is what implement gets for writing code
+# and running a build; this reads a repository and rewrites one issue body.
+timeout-minutes: 60
 ---
 
 1. You are refining the triggering issue **#${{ inputs.issue-number }}**. Do not choose
