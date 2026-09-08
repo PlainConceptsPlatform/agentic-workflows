@@ -1,6 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -391,6 +391,40 @@ describe("workflows CLI", () => {
     expect(installTemplate).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("\"templatesPlanned\""));
     log.mockRestore();
+  });
+
+  // Rolling out an unpublished version leaves the merge two-way, which keeps the package
+  // defaults a consumer never chose. A local baseline restores the three-way merge.
+  it("update --baseline passes a fixed baseline resolver instead of the npm fetcher", async () => {
+    const { installCatalog } = mockInstallers();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await expect(run(["update", "--baseline", "some/loops"])).resolves.toBe(0);
+
+    const options = installCatalog.mock.calls[0]![1]!;
+    expect(options.baseline).toBeTypeOf("function");
+    await expect(options.baseline!("0.10.1")).resolves.toBe(resolve("some/loops"));
+    // Any recorded version resolves to the same directory: the caller chose it deliberately.
+    await expect(options.baseline!("0.6.1")).resolves.toBe(resolve("some/loops"));
+    log.mockRestore();
+  });
+
+  it("update without --baseline leaves the npm fetcher in place", async () => {
+    const { installCatalog } = mockInstallers();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await expect(run(["update"])).resolves.toBe(0);
+
+    expect(installCatalog.mock.calls[0]![1]!.baseline).toBeUndefined();
+    log.mockRestore();
+  });
+
+  it("--baseline requires a path", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await expect(run(["update", "--baseline"])).resolves.toBe(1);
+    expect(error).toHaveBeenCalledWith("--baseline requires a path.");
+    error.mockRestore();
   });
 
   it("--version prints the package version", async () => {

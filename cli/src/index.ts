@@ -54,6 +54,11 @@ What an update does to a package-managed file:
 Options:
   --dry-run                                   Print what add or update would change, write nothing.
   --force                                     Also overwrite consumer-owned files and changed templates.
+  --baseline <path>                           Use this loops/ directory as the merge baseline instead of
+                                              fetching the installed version from npm. For rolling out a
+                                              version that is not published yet: without a baseline the
+                                              merge is two-way and keeps every consumer value, including
+                                              the package defaults the consumer never chose.
   --template <name>                           Install a standalone template alongside or instead of routes.
                                               Templates: ${templateNames.join(", ")}.
   --visibility public|private                 Override repository visibility (init only).
@@ -115,6 +120,7 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
     if (parsed.kind === "invalid") return fail(parsed.message);
     const inspection = await inspectRepository(repositoryPath);
     const { routes, template, force, dryRun } = parsed;
+    const baseline = localBaseline(parsed.baseline);
 
     const allConflicts: string[] = [];
     const allInstalled: string[] = [];
@@ -125,7 +131,7 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
     // and a plain update refreshes exactly what is there.
     if (routes.length > 0 || template === undefined) {
       const selectedRoutes = unionRoutes(routes, await installedRoutes(repositoryPath));
-      catalog = await installCatalog(repositoryPath, { force, dryRun, selectedRoutes, inspection });
+      catalog = await installCatalog(repositoryPath, { force, dryRun, selectedRoutes, inspection, baseline });
       allConflicts.push(...catalog.conflicts);
       allInstalled.push(...catalog.installed);
     }
@@ -165,7 +171,7 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
     const installed = await installedRoutes(repositoryPath);
     const desiredRoutes = installed.filter((route) => !parsed.routes.includes(route));
 
-    const result = await installCatalog(repositoryPath, { force: parsed.force, dryRun: parsed.dryRun, selectedRoutes: desiredRoutes, inspection });
+    const result = await installCatalog(repositoryPath, { force: parsed.force, dryRun: parsed.dryRun, selectedRoutes: desiredRoutes, inspection, baseline: localBaseline(parsed.baseline) });
     const removed = parsed.dryRun
       ? parsed.routes.filter((route) => installed.includes(route)).map((route) => `.github/workflows/agent-${route}.md`)
       : await removeRouteFiles(repositoryPath, parsed.routes);
@@ -187,6 +193,15 @@ function summarize(result: CatalogInstallResult) {
   };
 }
 
+// A fixed baseline for every recorded version, instead of asking npm. Rolling out a version that
+// is not published yet leaves the merge two-way, which keeps every consumer value, including the
+// package defaults a consumer never chose and would rather have replaced.
+function localBaseline(path: string | undefined): ((version: string) => Promise<string | undefined>) | undefined {
+  if (path === undefined) return undefined;
+  const resolved = resolve(path);
+  return async () => resolved;
+}
+
 function unionRoutes(requested: readonly RouteName[], installed: readonly RouteName[]): RouteName[] {
   const result = [...requested];
   for (const route of installed) {
@@ -202,7 +217,7 @@ function readVisibilityOption(options: readonly string[]): "invalid" | "public" 
 }
 
 type ParsedAddOptions =
-  | { kind: "ok"; routes: readonly RouteName[]; template: TemplateName | undefined; force: boolean; dryRun: boolean }
+  | { kind: "ok"; routes: readonly RouteName[]; template: TemplateName | undefined; force: boolean; dryRun: boolean; baseline: string | undefined }
   | { kind: "invalid"; message: string };
 
 const TEMPLATE_NAMES = templateNames.join("|");
@@ -213,6 +228,7 @@ function parseAddOptions(options: readonly string[]): ParsedAddOptions {
   let templateSeen = false;
   let force = false;
   let dryRun = false;
+  let baseline: string | undefined;
   let i = 0;
 
   while (i < options.length) {
@@ -227,6 +243,13 @@ function parseAddOptions(options: readonly string[]): ParsedAddOptions {
     if (token === "--dry-run") {
       dryRun = true;
       i++;
+      continue;
+    }
+
+    if (token === "--baseline") {
+      if (i + 1 >= options.length) return invalid("--baseline requires a path.");
+      baseline = options[i + 1]!;
+      i += 2;
       continue;
     }
 
@@ -256,7 +279,7 @@ function parseAddOptions(options: readonly string[]): ParsedAddOptions {
     return invalid(`Unknown route: ${token}. Valid routes: ${routeNames.join(", ")}.`);
   }
 
-  return { kind: "ok", routes, template, force, dryRun };
+  return { kind: "ok", routes, template, force, dryRun, baseline };
 }
 
 function invalid(message: string): ParsedAddOptions {
