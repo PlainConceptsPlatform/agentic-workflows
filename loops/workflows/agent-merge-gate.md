@@ -7,12 +7,8 @@ env:
   # sentence inside REPO_RULES telling the agent to consult "the repository's guardrails or
   # project documentation", which named no list at all and left the most consequential check in
   # the pipeline resolving against nothing. Name the areas this repository will not auto-merge.
-  RISK_INDICATORS: |-
-    Any diff touching authentication, authorization or session handling.
-    Any change to a calculation or pricing engine, or to code handling money.
-    Any database migration, or a change to an entity or schema.
-    Any change to an audit or event log, or anything that could break its continuity.
-    Any change to a public API contract or a shared library other repositories consume.
+  # One line: gh-aw joins a multi-line env value onto a single line when it compiles the lock.
+  RISK_INDICATORS: "Any diff touching authentication, authorization or session handling. Any change to a calculation or pricing engine, or to code handling money. Any database migration, or a change to an entity or schema. Any change to an audit or event log, or anything that could break its continuity. Any change to a public API contract or a shared library other repositories consume."
   # Paths a bot may change but never merge on its own: an extended regular expression matched
   # against every changed path in the pull request. The default names this stack's dependency
   # and toolchain manifests plus everything under a dotted directory, and is wrong for a
@@ -705,10 +701,7 @@ timeout-minutes: 240
    Flag if the diff is materially larger or smaller than expected.
 
    **Check 8 — Repository risk indicators.** Does the diff touch any of these?
-
-   ```
    ${{ env.RISK_INDICATORS }}
-   ```
 
    Name the specific indicator you matched. A match is not a defect, it is a reason this
    pull request needs a person, so do not argue it away because the change looks correct.

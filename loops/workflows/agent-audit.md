@@ -5,12 +5,8 @@ env:
   # Split out of REPO_RULES, which carried both the read-only discipline above and the list
   # below. All four consuming repositories had customised the list and none could touch it
   # without restating the discipline; they are different kinds of rule with different owners.
-  AUDIT_FOCUS: |-
-    Architectural layer violations and dependencies pointing the wrong way.
-    Missing or misleading tests around behaviour that already shipped.
-    Security gaps: unvalidated input, missing authorization, secrets in code.
-    Performance anti-patterns, N+1 queries in particular.
-    Documentation that no longer matches the code it describes.
+  # One line: gh-aw joins a multi-line env value onto a single line when it compiles the lock.
+  AUDIT_FOCUS: "Architectural layer violations and dependencies pointing the wrong way. Missing or misleading tests around behaviour that already shipped. Security gaps: unvalidated input, missing authorization, secrets in code. Performance anti-patterns, N+1 queries in particular. Documentation that no longer matches the code it describes."
   AUDIT_MARKER: "<!-- agent-audit -->"
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
@@ -137,11 +133,7 @@ timeout-minutes: 240
 
 2. Apply repository documentation and established conventions while auditing. Focus on
    concrete defects and avoid recommendations that weaken security, tests, or checks.
-   Adhere to ${{ env.REPO_RULES }}. Look for:
-
-   ```
-   ${{ env.AUDIT_FOCUS }}
-   ```
+   Adhere to ${{ env.REPO_RULES }}. Look for: ${{ env.AUDIT_FOCUS }}
 
    From the audit report, find **5 to 7 problems**. For each finding, verify it meets ALL
    of these criteria before keeping it:

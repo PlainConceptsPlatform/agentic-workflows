@@ -5,22 +5,15 @@ env:
   # The estimate decides whether a story gets split, and the prompt tells the agent these bands
   # come from this repository's own merged pull requests. They have to actually come from it, or
   # the claim is false and every repository sizes work on another one's diffs.
-  ESTIMATE_BANDS: |-
-    | 1 | ~1 | one or two files, under about 50 changed lines, no new concepts: a wording, style or single-value fix |
-    | 2 | ~2 | up to about four files and 150 lines, all inside one layer, no schema or contract change |
-    | 3 | ~3 | a vertical slice through one boundary (API and database, or UI and API), up to about eight files and 400 lines, with new tests |
-    | 5 | ~5 | several layers together, or a schema migration, or a new contract: up to about sixteen files and 1000 lines |
-    | 8 or more | more than a week | beyond those bounds, or it needs a pattern or subsystem that does not exist yet, or it still holds real unknowns |
+  #
+  # One line, and every value in this block must stay one line: gh-aw joins a multi-line env
+  # value onto a single line when it compiles the lock, so a table written across five lines
+  # here arrives at the agent as one unreadable row. verify-route-matrix.sh asserts it.
+  ESTIMATE_BANDS: "1 point (~1 day) = one or two files, under about 50 changed lines, no new concepts: a wording, style or single-value fix. 2 points = up to about four files and 150 lines, all inside one layer, no schema or contract change. 3 points = a vertical slice through one boundary (API and database, or UI and API), up to about eight files and 400 lines, with new tests. 5 points = several layers together, or a schema migration, or a new contract: up to about sixteen files and 1000 lines. 8 or more = beyond those bounds, or it needs a pattern or subsystem that does not exist yet, or it still holds real unknowns."
   # What counts as a change small enough to skip the story format. The default names this stack's
   # tools, so a repository built on anything else can never match it and always takes the long,
-  # expensive path. One condition per line; all of them must hold.
-  TRIVIAL_CRITERIA: |-
-    It touches 1-3 files: stylesheets, style utility classes, text labels or markup only.
-    No business logic: no services, controllers, domain models, calculations, validations.
-    No data model: no entities, migrations, DTOs, API contracts.
-    No security surface: no auth, authorization, secrets, tokens, permissions.
-    No infrastructure: no deployment templates, containers, CI or deploy configuration.
-    No cross-cutting change: it does not touch shared libraries or multi-team contracts.
+  # expensive path. Every condition must hold for a change to be trivial.
+  TRIVIAL_CRITERIA: "It touches 1-3 files: stylesheets, style utility classes, text labels or markup only. No business logic: no services, controllers, domain models, calculations, validations. No data model: no entities, migrations, DTOs, API contracts. No security surface: no auth, authorization, secrets, tokens, permissions. No infrastructure: no deployment templates, containers, CI or deploy configuration. It does not touch shared libraries or multi-team contracts."
   REFINE_LABEL: refine
   REFINED_LABEL: refined
   WORKING_LABEL: bot-working
@@ -470,10 +463,7 @@ timeout-minutes: 240
 
 4. **Classify the change complexity.** Based on your exploration, determine whether this is a
    trivial change. A change is **trivial** only if every one of these holds:
-
-   ```
    ${{ env.TRIVIAL_CRITERIA }}
-   ```
 
    If all hold → **trivial path** (step 4a). If any fails → **standard path** (step 5).
 
@@ -518,8 +508,6 @@ timeout-minutes: 240
    come from this repository's own merged pull requests, so compare the story against them
    rather than against an abstract scale:
 
-   | Points | Human days | Shape of the change |
-   |---|---|---|
    ${{ env.ESTIMATE_BANDS }}
 
    Elapsed clock time is not evidence. A large change can land in minutes and a small one can

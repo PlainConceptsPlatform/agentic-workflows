@@ -291,6 +291,20 @@ for worker in "${WORKFLOWS_DIR}"/agent-*.md; do
     PROMPT_OK=0
     echo "FAIL: ${name}'s prompt repeats step number(s): ${dupes}" >&2
   fi
+
+  # A multi-line env value does not survive compilation: gh-aw joins it onto one line in the
+  # lock, so a Markdown table written across five lines in the source reaches the agent as a
+  # single unreadable row. Verified against a compiled lock. Block the YAML block scalars that
+  # produce one, so the flattening is a failed check rather than a silently useless value.
+  block_scalars=$(awk '
+    /^env:$/ { inenv = 1; next }
+    inenv && /^[^ ]/ { inenv = 0 }
+    inenv && /^  [A-Za-z_][A-Za-z0-9_]*: *[|>]-?[0-9]* *$/ { print $1 }
+  ' "$worker" | tr -d ':' | tr '\n' ' ')
+  if [ -n "${block_scalars// /}" ]; then
+    PROMPT_OK=0
+    echo "FAIL: ${name} declares env value(s) as a multi-line block, which the compiler flattens: ${block_scalars}" >&2
+  fi
 done
 if [ "$PROMPT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 

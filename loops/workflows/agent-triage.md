@@ -6,14 +6,8 @@ env:
   # proposal instead. This is business policy, so it belongs to the repository rather than to
   # the package: it is also the check that closes somebody's issue, which is the last place a
   # borrowed default belongs.
-  PRODUCT_SCOPE: |-
-    In scope: user experience and workflows, branding and content, business rules, and
-    business formulas. The issue must describe the desired product outcome rather than
-    prescribe technical means.
-    Out of scope, and blocked even when clear, small, local or testable: architecture,
-    infrastructure, developer tooling, deployment, security, authentication, authorization,
-    data storage, data models, migrations, APIs, service composition, framework adoption,
-    and solution or project structure.
+  # One line: gh-aw joins a multi-line env value onto a single line when it compiles the lock.
+  PRODUCT_SCOPE: "In scope: user experience and workflows, branding and content, business rules, and business formulas. The issue must describe the desired product outcome rather than prescribe technical means. Out of scope, and blocked even when clear, small, local or testable: architecture, infrastructure, developer tooling, deployment, security, authentication, authorization, data storage, data models, migrations, APIs, service composition, framework adoption, and solution or project structure."
   TRIAGE_LABEL: triage
   WORKING_LABEL: bot-working
   REVIEW_LABEL: review
@@ -377,11 +371,7 @@ timeout-minutes: 240
    dependencies, contracts, or schemas that multiple teams depend on.
 
     **Check 10 — Product-owner eligibility.** Judge the issue against this repository's
-    intake scope:
-
-    ```
-    ${{ env.PRODUCT_SCOPE }}
-    ```
+    intake scope: ${{ env.PRODUCT_SCOPE }}
 
     An out-of-scope request is a block, and the reason to give is that it needs a
     maintainer-owned technical proposal, not that it is a bad idea.
