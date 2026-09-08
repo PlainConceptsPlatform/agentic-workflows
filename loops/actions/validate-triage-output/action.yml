@@ -13,7 +13,7 @@ outputs:
     description: Whether the output contains a usable triage comment with a verdict.
     value: ${{ steps.validate.outputs.valid }}
   outcome:
-    description: "Deterministic triage outcome: pass, needs-info, block, or invalid."
+    description: "Deterministic triage outcome: pass, needs-info, needs-maintainer, block, or invalid."
     value: ${{ steps.validate.outputs.outcome }}
 runs:
   using: composite

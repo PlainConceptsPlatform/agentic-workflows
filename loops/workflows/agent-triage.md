@@ -24,15 +24,25 @@ env:
   GIT_COMMITTER_NAME: "github-actions[bot]"
   GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
 description: |
-  Triages issues opened by outside collaborators (read-permission users). Runs 10
-  structured checks: template completeness, security risk, change size, danger level,
-  duplicate detection, clarity, reproducibility, acceptance criteria quality,
-  cross-cutting impact, and area suggestion. Loops up to 3 rounds (needs-info →
-  author or write+ user replies → re-triage). On pass, adds the refine label to
-   enter the normal pipeline. On block, closes the issue with an explanation.
+  Triages issues opened by outside collaborators. Runs 10 structured checks: template
+  completeness, security risk, change size, danger level, duplicate detection, clarity,
+  reproducibility, acceptance criteria quality, cross-cutting impact, and product-owner
+  eligibility. Loops up to 3 rounds (needs-info → author or write+ user replies →
+  re-triage).
 
-  Write+ users skip triage entirely — the authorize job gates on
-  is_outside_collaborator (read permission only).
+  Four outcomes. pass adds the refine label and enters the normal pipeline.
+  needs-info asks the author for more and keeps the triage label so the next comment
+  re-runs the round. needs-maintainer means the request is legitimate but outside
+  product-owner intake: the issue stays open with the review label, and a maintainer
+  takes it on by adding refine. Only block closes the issue, and only for work that
+  cannot be done, is a security risk, is too dangerous, or is still ambiguous after
+  three rounds.
+
+  The gate is organisation membership, not permission level. The authorize job sets
+  is_outside_collaborator for read permission, and also for write or better when the
+  author association is COLLABORATOR — repository access without being one of the
+  organisation's own. An org member with write skips triage; an outside collaborator
+  with write does not.
 
   Router-only worker: triggered exclusively via workflow_call from work-router.yml.
   Contract inputs: issue-number, mode(first|retriage).
@@ -185,6 +195,31 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
+      # Out of scope is not a rejection: the issue is legitimate work addressed to the wrong
+      # intake, so it stays open with the review label and a maintainer takes it on by adding
+      # refine. Numa#654 was a reproducible authorization defect that scored nine checks green
+      # and was closed as not_planned with every label stripped, which is how a real bug
+      # becomes invisible.
+      #
+      # `triage` comes off here, unlike on needs-info, which keeps it on purpose so the next
+      # comment re-runs the round. Leaving it on would send every later comment back into
+      # triage, to be put out of scope again, for ever.
+      - name: Flag needs-maintainer for review
+        if: needs.validate_output.outputs.outcome == 'needs-maintainer'
+        uses: ./.github/actions/add-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: ${{ env.REVIEW_LABEL }}
+      - name: Release the needs-maintainer issue
+        if: needs.validate_output.outputs.outcome == 'needs-maintainer'
+        uses: ./.github/actions/remove-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: |-
+            ${{ env.TRIAGE_LABEL }}
+            ${{ env.WORKING_LABEL }}
       - name: Clear triage on block
         if: needs.validate_output.outputs.outcome == 'block'
         uses: ./.github/actions/remove-issue-labels
@@ -328,8 +363,9 @@ timeout-minutes: 45
 4. Count the round you are on. Scan the comments for the marker `${{ env.TRIAGE_MARKER }}`. Each
    occurrence is a previous triage pass. You are on round N of ${{ env.MAX_TRIAGE_ROUNDS }}.
 
-   - If this is round ${{ env.MAX_TRIAGE_ROUNDS }}, **needs-info is no longer a valid verdict.**
-     You must pick `pass` or `block`. If the issue still lacks information after
+   - If this is round ${{ env.MAX_TRIAGE_ROUNDS }}, **needs-info is no longer a valid verdict**,
+     because it asks the author for another round and there is no round left. You must pick
+     `pass`, `needs-maintainer` or `block`. If the issue still lacks information after
      ${{ env.MAX_TRIAGE_ROUNDS }} rounds, block with "unable to triage after
      ${{ env.MAX_TRIAGE_ROUNDS }} rounds".
 
@@ -376,8 +412,10 @@ timeout-minutes: 45
     **Check 10 — Product-owner eligibility.** Judge the issue against this repository's
     intake scope: ${{ env.PRODUCT_SCOPE }}
 
-    An out-of-scope request is a block, and the reason to give is that it needs a
-    maintainer-owned technical proposal, not that it is a bad idea.
+    An out-of-scope request is **not** a block. Out of scope means the wrong door, not a bad
+    idea: it is `needs-maintainer`, and the reason to give is that it needs a maintainer-owned
+    technical proposal. A clear, reproducible, well-specified defect that happens to be
+    technical is exactly this case, and closing it loses it.
 
 6. Decide exactly one verdict:
 
@@ -389,15 +427,25 @@ timeout-minutes: 45
    what information is missing and what the author should provide. The review label will be
    added; the author or a write+ user can comment to re-trigger triage.
 
-    **block.** The issue is outside product-owner eligibility, cannot be done, is a security
-    risk, is too dangerous to automate, or is too ambiguous after ${{ env.MAX_TRIAGE_ROUNDS }}
-    rounds of triage. State the reason clearly. The issue will be closed.
+    **needs-maintainer.** The request is legitimate and well-formed, but it is outside
+    product-owner intake: check 10 puts it out of scope. Say which area of the scope rule it
+    falls under and what a technical proposal would have to settle. The issue stays **open**
+    and gets the review label so a maintainer sees it; it is not closed and no work is lost.
+
+    **block.** The issue cannot be done, is a security risk, is too dangerous to automate, or
+    is still too ambiguous after ${{ env.MAX_TRIAGE_ROUNDS }} rounds of triage. State the
+    reason clearly. The issue will be closed. Do not use this for work that is merely outside
+    product-owner scope — that is `needs-maintainer`.
 
 7. Emit exactly one `add_comment` targeting issue `${{ inputs.issue-number }}` with:
    1. `${{ env.TRIAGE_MARKER }}`
    2. `${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}` (round N of ${{ env.MAX_TRIAGE_ROUNDS }})
    3. A structured assessment with all 10 check results
-   4. A line `**Verdict:** pass` or `**Verdict:** needs-info` or `**Verdict:** block`
+   4. A line `**Verdict:** pass`, `**Verdict:** needs-info`, `**Verdict:** needs-maintainer`
+      or `**Verdict:** block`
+   5. On a `needs-maintainer` verdict only, a closing line telling the reader how the work is
+      picked up: a maintainer takes it on by adding the `${{ env.REFINE_LABEL }}` label to
+      this issue, which sends it through the normal pipeline.
 
    Format the checks as a list with status indicators:
 
@@ -414,6 +462,7 @@ timeout-minutes: 45
     **Product eligibility:** ✅ Product request / ❌ Technical request: [area]
    ```
 
-8. Issue state is workflow-owned. Do not call tools other than the one `add_comment`; the workflow
-   handles labels and closes a block verdict after applying your comment.
+8. Issue state is workflow-owned. Do not call tools other than the one `add_comment`. After
+   applying your comment the workflow moves the labels for you, and closes the issue on a
+   `block` verdict and only on a `block` verdict.
 

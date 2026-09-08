@@ -34,7 +34,7 @@ without touching the others.
 flowchart TD
     ev{"One GitHub event"} --> classify
     classify["classify (rung 1)<br/>pure shell, no network<br/>one event in, one route out"] --> authorize
-    authorize{"authorize (rung 1)<br/>Does the actor have write?"}
+    authorize{"authorize (rung 1)<br/>Write permission, and is the<br/>actor one of the org's own?"}
     authorize -->|"human, trusted"| work
     authorize -->|"outside collaborator"| triageOnly
     authorize -.->|"no permission"| idle
@@ -111,8 +111,13 @@ instead of one pull request that has to fix them all.
 
 ## agent-triage.md
 
-The front door for issues opened by people without write access. Write+ users skip it entirely and
-self-label into the pipeline.
+The front door for issues opened from outside the organisation. The gate is membership, not permission
+level: an org member with write skips triage and self-labels into the pipeline, while an outside
+collaborator goes through it even when they hold write.
+
+Four outcomes, and only one of them closes anything. `needs-maintainer` is the one worth knowing: the
+request is legitimate but addressed to the wrong intake, so the issue stays open with `review` and a
+maintainer takes it on by adding `refine`.
 
 ```mermaid
 flowchart TD
@@ -127,12 +132,14 @@ flowchart TD
     triValidate -.->|no| triIncomplete
     triOutcome{"Verdict"} -->|pass| triPass
     triOutcome -->|needs-info| triReview
+    triOutcome -->|needs-maintainer| triMaintainer
     triOutcome -->|block| triBlocked
     triRound -.->|"round 3: needs-info<br/>is no longer allowed"| triAgent
     triPass(("Passed<br/>refine added, triage removed<br/>enters the pipeline, no human"))
-    triReview(("Needs info<br/>questions posted, review added"))
+    triReview(("Needs info<br/>questions posted, review added<br/>triage kept, so a reply re-runs it"))
     triReview -->|"author or write+ replies<br/>re-enters via the router"| triStart
-    triBlocked(("Blocked<br/>issue closed with a reason"))
+    triMaintainer(("Needs a maintainer<br/>out of product-owner scope, so it stays<br/>OPEN with review; triage removed.<br/>Add refine to take it on"))
+    triBlocked(("Blocked<br/>cannot be done, unsafe, or still<br/>ambiguous: closed with a reason"))
     triIdle(("Idle<br/>write+ user, skipped"))
     triIncomplete(("Incomplete<br/>review added, label kept for a retry"))
 
@@ -147,7 +154,7 @@ flowchart TD
     class triPick,triRound,triValidate,triOutcome decision
     class triIdle idle
     class triIncomplete,triBlocked failure
-    class triPass,triReview success
+    class triPass,triReview,triMaintainer success
 ```
 
 ---

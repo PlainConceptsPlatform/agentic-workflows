@@ -695,6 +695,69 @@ if worker_installed triage; then
   fi
 fi
 
+# Out of scope is the wrong door, not a rejection, and it must never close an issue. Numa#654
+# was a reproducible authorization defect that passed nine of ten checks and was closed as
+# not_planned with every label stripped, so nobody would ever have found it. The verdict for
+# that case is needs-maintainer: open, review label, a maintainer adds refine to take it on.
+# Only block closes, and only for work that cannot be done or is unsafe.
+if worker_installed triage; then
+  TRIAGE_WORKER_MD="${WORKFLOWS_DIR}/agent-triage.md"
+  VALIDATE_TRIAGE_SH="${HERE}/../validate-triage-output/validate-triage-output.sh"
+  TRIAGE_OK=1
+
+  # The validator is what turns the agent's prose into the outcome the jobs branch on. A
+  # verdict it does not know becomes "invalid", which skips conclude entirely and reports the
+  # run incomplete, so the prompt and this script have to agree on all four names.
+  # Comment lines stripped first: the file explains the verdicts in prose above the program,
+  # and a plain search finds the name there even after it has been dropped from the jq
+  # alternation, which is exactly the regression this is meant to catch.
+  validate_program=$(grep -v '^[[:space:]]*#' "$VALIDATE_TRIAGE_SH")
+  for verdict in pass needs-info needs-maintainer block; do
+    if [ "$(grep -c -- "$verdict" <<<"$validate_program")" -lt 3 ]; then
+      TRIAGE_OK=0
+      echo "FAIL: validate-triage-output.sh does not accept the '${verdict}' verdict in test(), capture() and the guard" >&2
+    fi
+    if ! grep -qF "\`**Verdict:** ${verdict}\`" "$TRIAGE_WORKER_MD"; then
+      TRIAGE_OK=0
+      echo "FAIL: the triage prompt does not offer '**Verdict:** ${verdict}'" >&2
+    fi
+  done
+
+  # The assertion this whole route turns on: exactly one step closes an issue, and it is
+  # reached only by a block verdict.
+  closes=$(grep -c "state: 'closed'" "$TRIAGE_WORKER_MD")
+  if [ "$closes" -ne 1 ]; then
+    TRIAGE_OK=0
+    echo "FAIL: agent-triage.md closes an issue in ${closes} places; expected exactly one" >&2
+  elif ! grep -B12 "state: 'closed'" "$TRIAGE_WORKER_MD" | grep -q "outcome == 'block'"; then
+    TRIAGE_OK=0
+    echo "FAIL: the triage close step is not guarded on a block verdict alone" >&2
+  fi
+  if grep -q "outcome == 'needs-maintainer'" "$TRIAGE_WORKER_MD"; then
+    if grep -A6 "outcome == 'needs-maintainer'" "$TRIAGE_WORKER_MD" | grep -q "state: 'closed'"; then
+      TRIAGE_OK=0
+      echo "FAIL: a needs-maintainer verdict closes the issue; it must stay open" >&2
+    fi
+  else
+    TRIAGE_OK=0
+    echo "FAIL: agent-triage.md has no needs-maintainer branch in conclude" >&2
+  fi
+
+  # Parked, not looping: review goes on so a human sees it, triage comes off so a later
+  # comment does not re-enter triage and put it out of scope again for ever.
+  maintainer_block=$(sed -n "/outcome == 'needs-maintainer'/,/outcome == 'block'/p" "$TRIAGE_WORKER_MD")
+  grep -q 'env.REVIEW_LABEL' <<<"$maintainer_block" || {
+    TRIAGE_OK=0
+    echo "FAIL: the needs-maintainer branch does not add the review label" >&2
+  }
+  grep -q 'env.TRIAGE_LABEL' <<<"$maintainer_block" || {
+    TRIAGE_OK=0
+    echo "FAIL: the needs-maintainer branch does not remove the triage label, so comments would re-trigger triage" >&2
+  }
+
+  if [ "$TRIAGE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 # Every installed worker and every plumbing route has a job; a worker that is not installed
 # has none, or the router would call a lock file that does not exist.
 for route in "${INSTALLED_ROUTES[@]}" "${PLUMBING_ROUTES[@]}"; do

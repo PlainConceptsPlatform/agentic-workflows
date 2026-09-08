@@ -64,6 +64,7 @@ the consumer is responsible for adding the route-specific focus areas:
 | **apply-review** | Minimal changes principle, preserve architecture, do not refactor beyond the review scope, keep diffs small, and respect the original author's design decisions |
 | **merge-gate** | Risk indicators specific to the repository: any calculation engine, audit chain integrity, auth flows, database migrations, and money/financial calculations. What constitutes an auto-merge risk vs a human-review trigger |
 | **audit** | What to look for: layer violations, N+1 queries, missing audit logs, security gaps, performance anti-patterns, documentation drift, and what the repository considers a critical vs minor issue |
+| **triage** | `PRODUCT_SCOPE` rather than `REPO_RULES`: what a product owner may ask for, and what has to become a maintainer-owned technical proposal. It now decides park-versus-close, not just close — an out-of-scope issue gets the `needs-maintainer` verdict and stays open with `review`, so write this list as "wrong door" rather than "rejected" |
 
 ## What the router owns
 

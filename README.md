@@ -34,7 +34,7 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 
 | Route | Worker | Starts when | Produces |
 |---|---|---|---|
-| `triage` | `agent-triage.md` | an outside collaborator opens an issue | a comment, and the `refine` label when the issue passes |
+| `triage` | `agent-triage.md` | someone outside the organisation opens an issue | a comment, and either the `refine` label when it passes, the `review` label when it needs a person, or a close when it is genuinely rejected |
 | `refine` | `agent-refine.md` | the `refine` label is added | a refined story with a Fibonacci estimate, or questions for the author, or a split into several right-sized issues |
 | `implement` | `agent-implement.md` | the `implement` label is added | one branch, one pull request, one issue closed |
 | `merge-gate` | `agent-merge-gate.md` | CI reports on a bot pull request | a squash merge, a fix pushed to the same branch, or a hand-off to a human |
@@ -259,15 +259,27 @@ package versions.
 
 ## Triage route for outside collaborators
 
-The `triage` route gates issues opened by outside collaborators (GitHub Read permission / Outside Collaborator role). Write+ users skip triage entirely — they can self-label into the pipeline as usual.
+The `triage` route gates issues opened from outside the organisation. **The gate is organisation
+membership, not permission level.** The `authorize` job marks an actor an outside collaborator when they
+have Read permission, and also when they have Write or better but their author association is
+`COLLABORATOR` — repository access without being one of the organisation's own. So an org member with
+write skips triage; an outside collaborator with write does not.
 
-When an outside collaborator opens an issue, the triage agent runs 10 checks (template completeness, security risk, change size, danger level, duplicate detection, clarity, reproducibility, acceptance criteria quality, cross-cutting impact, area suggestion) and loops up to 3 rounds. The author or any write+ user can comment to re-trigger triage after a `needs-info` verdict.
+When such an issue is opened, the triage agent runs 10 checks (template completeness, security risk, change
+size, danger level, duplicate detection, clarity, reproducibility, acceptance criteria quality,
+cross-cutting impact, product-owner eligibility) and loops up to 3 rounds. The author or any write+ user can
+comment to re-trigger triage after a `needs-info` verdict.
 
 - **pass**: all checks pass → bot adds `refine` label → enters the normal pipeline (refine → implement) with no human in the loop.
-- **needs-info**: needs clarification → bot posts questions, adds `review` label → author or write+ user replies → re-triage.
-- **block**: outside product-owner scope, cannot be done, security risk, or too dangerous → bot closes the issue with an explanation.
+- **needs-info**: needs clarification → bot posts questions, adds `review` label, keeps `triage` → author or write+ user replies → re-triage.
+- **needs-maintainer**: legitimate work, wrong door. Outside product-owner scope, so it needs a maintainer-owned technical proposal → the issue **stays open**, gets `review`, and loses `triage` so later comments do not re-trigger triage. A maintainer takes it on by adding `refine`.
+- **block**: cannot be done, security risk, too dangerous to automate, or still ambiguous after 3 rounds → bot closes the issue with an explanation.
 
-At round 3, `needs-info` is no longer valid — the agent must `pass` or `block`.
+Only `block` closes. Out-of-scope work used to close too, which lost it: a reproducible authorization
+defect that passed nine of the ten checks was closed as `not_planned` with every label stripped, and
+nothing distinguished it from junk somebody rejected. That is what `needs-maintainer` exists for.
+
+At round 3, `needs-info` is no longer valid — the agent must `pass`, `needs-maintainer` or `block`.
 
 Install the triage route alongside other routes:
 
