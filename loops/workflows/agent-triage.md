@@ -6,7 +6,7 @@ env:
   # proposal instead. This is business policy, so it belongs to the repository rather than to
   # the package: it is also the check that closes somebody's issue, which is the last place a
   # borrowed default belongs.
-  PRODUCT_SCOPE: >-
+  PRODUCT_SCOPE: |-
     In scope: user experience and workflows, branding and content, business rules, and
     business formulas. The issue must describe the desired product outcome rather than
     prescribe technical means.

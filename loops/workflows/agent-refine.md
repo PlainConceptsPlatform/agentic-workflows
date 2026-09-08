@@ -5,7 +5,7 @@ env:
   # The estimate decides whether a story gets split, and the prompt tells the agent these bands
   # come from this repository's own merged pull requests. They have to actually come from it, or
   # the claim is false and every repository sizes work on another one's diffs.
-  ESTIMATE_BANDS: >-
+  ESTIMATE_BANDS: |-
     | 1 | ~1 | one or two files, under about 50 changed lines, no new concepts: a wording, style or single-value fix |
     | 2 | ~2 | up to about four files and 150 lines, all inside one layer, no schema or contract change |
     | 3 | ~3 | a vertical slice through one boundary (API and database, or UI and API), up to about eight files and 400 lines, with new tests |
@@ -14,7 +14,7 @@ env:
   # What counts as a change small enough to skip the story format. The default names this stack's
   # tools, so a repository built on anything else can never match it and always takes the long,
   # expensive path. One condition per line; all of them must hold.
-  TRIVIAL_CRITERIA: >-
+  TRIVIAL_CRITERIA: |-
     It touches 1-3 files: stylesheets, style utility classes, text labels or markup only.
     No business logic: no services, controllers, domain models, calculations, validations.
     No data model: no entities, migrations, DTOs, API contracts.

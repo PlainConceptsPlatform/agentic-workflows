@@ -5,7 +5,7 @@ env:
   # Split out of REPO_RULES, which carried both the read-only discipline above and the list
   # below. All four consuming repositories had customised the list and none could touch it
   # without restating the discipline; they are different kinds of rule with different owners.
-  AUDIT_FOCUS: >-
+  AUDIT_FOCUS: |-
     Architectural layer violations and dependencies pointing the wrong way.
     Missing or misleading tests around behaviour that already shipped.
     Security gaps: unvalidated input, missing authorization, secrets in code.

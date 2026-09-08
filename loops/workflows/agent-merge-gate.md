@@ -7,7 +7,7 @@ env:
   # sentence inside REPO_RULES telling the agent to consult "the repository's guardrails or
   # project documentation", which named no list at all and left the most consequential check in
   # the pipeline resolving against nothing. Name the areas this repository will not auto-merge.
-  RISK_INDICATORS: >-
+  RISK_INDICATORS: |-
     Any diff touching authentication, authorization or session handling.
     Any change to a calculation or pricing engine, or to code handling money.
     Any database migration, or a change to an entity or schema.
