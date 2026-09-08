@@ -58,6 +58,18 @@ jobs:
           echo "root=$root cli=$cli"
           [ "$root" = "$cli" ] || { echo "::error::package.json ($root) and cli/package.json ($cli) disagree"; exit 1; }
 
+      # `dist/` is published. It once carried eleven compiled test files, one of them 48 kB, to
+      # every consumer, because the build used the same tsconfig as the typecheck.
+      - name: Published build carries no tests
+        run: |
+          set -euo pipefail
+          if compgen -G "cli/dist/*.test.*" > /dev/null; then
+            echo "::error::cli/dist contains compiled tests; build with tsconfig.build.json"
+            ls cli/dist/*.test.*
+            exit 1
+          fi
+          echo "dist is clean: $(find cli/dist -name '*.js' | wc -l) runtime file(s)"
+
   workflows:
     name: Workflow sources
     runs-on: ubuntu-latest
