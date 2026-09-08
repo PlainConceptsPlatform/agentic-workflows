@@ -94,6 +94,11 @@ env:
   # first and the two of them consume the whole fleet. Pick a free slot per repository: see
   # "Scheduling across repositories" in the package README.
   AUDIT_CRON: "17 1 * * 1"
+  # The bot identities whose label changes and pull requests this router trusts. Space
+  # separated, and every login the same account can present: GitHub reports an App as
+  # `name[bot]` on some endpoints and `app/name` on others, so both spellings belong here.
+  # Adding a third bot used to mean finding four hand-written comparisons across this file.
+  TRUSTED_BOTS: "github-actions[bot] app/github-actions platform-devbox[bot]"
 
 on:
   issues:
@@ -245,11 +250,13 @@ jobs:
           # Platform bot owns Safe Outputs. Its label changes must be able to
           # start the follow-on worker, even though GitHub does not report it
           # as a repository collaborator.
-          if [ "$ACTOR" = "github-actions[bot]" ] || [ "$ACTOR" = "platform-devbox[bot]" ]; then
-            echo "trusted=true" >> "$GITHUB_OUTPUT"
-            echo "is_outside_collaborator=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          for bot in $TRUSTED_BOTS; do
+            if [ "$ACTOR" = "$bot" ]; then
+              echo "trusted=true" >> "$GITHUB_OUTPUT"
+              echo "is_outside_collaborator=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
 
           permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" \
             --jq '.permission' 2>/dev/null || echo "none")
@@ -916,7 +923,7 @@ jobs:
             jq -r --arg repo "$REPO" '
               .[]
               | select(
-                    (.user.login == "github-actions[bot]" or .user.login == "app/github-actions" or .user.login == "platform-devbox[bot]")
+                    ((env.TRUSTED_BOTS | split(" ")) | index(.user.login) != null)
                     and .draft == false
                     and .head.repo.full_name == $repo
                  )

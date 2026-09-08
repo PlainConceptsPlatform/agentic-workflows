@@ -340,6 +340,26 @@ if [ "$(grep -c '"App: CI"' "$ROUTER_YML")" -gt 2 ]; then
   echo "FAIL: work-router.yml hardcodes the CI workflow name outside env: and the mirrored trigger" >&2
   grep -n '"App: CI"' "$ROUTER_YML" >&2
 fi
+
+# Bot logins are the same shape of problem. Most sites read env.TRUSTED_BOTS, but a job-level
+# `if:` cannot: GitHub does not expose the env context there, so bot-approve keeps literals and
+# they have to agree. Assert every bot login written anywhere in the router is in the list.
+trusted="$(router_env TRUSTED_BOTS)"
+if [ -z "$trusted" ]; then
+  MIRROR_OK=0; echo "FAIL: work-router.yml defines no TRUSTED_BOTS in its env: block" >&2
+else
+  while IFS= read -r login; do
+    [ -n "$login" ] || continue
+    case " $trusted " in
+      *" $login "*) ;;
+      *)
+        MIRROR_OK=0
+        echo "FAIL: work-router.yml names bot '${login}' but env.TRUSTED_BOTS does not list it" >&2
+        ;;
+    esac
+  done < <(grep -oE "'(app/[a-z-]+|[a-z-]+\[bot\])'|\"(app/[a-z-]+|[a-z-]+\[bot\])\"" "$ROUTER_YML" |
+    tr -d "'\"" | sort -u)
+fi
 if [ "$MIRROR_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # GitHub evaluates every Actions expression in a workflow file, including ones written inside
@@ -385,10 +405,24 @@ for worker in "${WORKFLOWS_DIR}"/agent-*.md; do
 done
 if [ "$VERIFY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# A protected path holds the merge for a human but must never stop the agent repairing failed
+# CI on those same files, or the pull request strands with nobody able to fix it. That pair of
+# conditions is decided once, in protected_changes.outputs.holds_review, and read everywhere
+# else; it used to be restated at eight call sites. Auto-merge stays blocked separately, by
+# conclude's own guard on requires_review, which holds even when CI failed.
 if worker_installed implement && worker_installed merge-gate; then
-  if grep -Fq 'protected-files: allowed' "$IMPLEMENT_WORKER_MD" &&
-    grep -Fq 'protected-files: allowed' "$MERGE_GATE_WORKER_MD" &&
-    grep -Fq "needs.protected_changes.outputs.requires_review != 'true' || needs.subject.outputs.conclusion == 'failure'" "$MERGE_GATE_WORKER_MD"; then
+  PROTECTED_OK=1
+  grep -Fq 'protected-files: allowed' "$IMPLEMENT_WORKER_MD" || PROTECTED_OK=0
+  grep -Fq 'protected-files: allowed' "$MERGE_GATE_WORKER_MD" || PROTECTED_OK=0
+  grep -Fq "holds_review: \${{ steps.files.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure' }}" "$MERGE_GATE_WORKER_MD" || PROTECTED_OK=0
+  # The decision must not be re-derived anywhere: one definition, everything else reads it.
+  if [ "$(grep -c "requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'" "$MERGE_GATE_WORKER_MD")" -ne 1 ]; then
+    PROTECTED_OK=0
+    echo "FAIL: the protected-files hold is derived in more than one place; read holds_review instead" >&2
+  fi
+  # And conclude must still refuse to merge a protected pull request whatever CI said.
+  grep -Fq "needs.protected_changes.outputs.requires_review != 'true' || needs.validate_output.outputs.outcome != 'merge'" "$MERGE_GATE_WORKER_MD" || PROTECTED_OK=0
+  if [ "$PROTECTED_OK" -eq 1 ]; then
     PASS=$((PASS + 1))
   else
     FAIL=$((FAIL + 1))

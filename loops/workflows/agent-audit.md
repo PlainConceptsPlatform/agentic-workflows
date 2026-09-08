@@ -120,12 +120,15 @@ safe-outputs:
   create-issue:
     max: 1
 
-# Four hours while the model provider is intermittently slow. Measured on a real run: 36.7
-# of 40.2 agent minutes were spent waiting on the gateway, over 21 requests that all
-# returned 200, with about five minutes of actual work in there. The clock was killing runs
-# for the provider's pace. Turns are the loop guard now, not this; for a custom model the
-# credit ceiling is models.dev fallback pricing and guards nothing.
-timeout-minutes: 240
+# The fleet is two machines, so this clock is also how long a stuck run can hold half of it.
+# 240 went on to every worker at once when the provider was slow, which fixed the deaths and
+# made every worker equally expensive to hang. These numbers are per worker: enough headroom
+# for a slow gateway on the work it actually does, and not four hours for a run that reads one
+# issue. Turns remain the guard against a confused agent looping; for a custom model the credit
+# ceiling is models.dev fallback pricing and guards nothing.
+#
+# Sweeps the repository read-only and writes one findings issue. Observed around 45 minutes.
+timeout-minutes: 90
 ---
 
 1. Call skill("pc-repo-audit"), then run `/repo-audit` as a read-only audit of this

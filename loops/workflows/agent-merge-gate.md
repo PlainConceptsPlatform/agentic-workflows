@@ -142,6 +142,12 @@ jobs:
     outputs:
       requires_review: ${{ steps.files.outputs.requires_review }}
       files: ${{ steps.files.outputs.files }}
+      # The decision, computed once. A protected path holds the merge for a human, but it must
+      # not stop the agent repairing failed CI on those same files: blocking there strands the
+      # pull request with nobody able to fix it. That pair of conditions used to be restated at
+      # eight call sites, five of them steps of one job, and the trap table documents it because
+      # it has already been got wrong. `holds_review` is the only place it is decided now.
+      holds_review: ${{ steps.files.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure' }}
     steps:
       - name: Require review for protected pull request files
         id: files
@@ -178,12 +184,12 @@ jobs:
       issues: write
     steps:
       - name: Checkout workflow actions
-        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
+        if: needs.protected_changes.outputs.holds_review == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Create bot token
-        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
+        if: needs.protected_changes.outputs.holds_review == 'true'
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -194,21 +200,21 @@ jobs:
       # here left a board where three issues with three open pull requests looked like they
       # had none. The merge path is the one place the label stops being true.
       - name: Release the issue
-        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
+        if: needs.protected_changes.outputs.holds_review == 'true'
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.WORKING_LABEL }}
       - name: Flag human review
-        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
+        if: needs.protected_changes.outputs.holds_review == 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.REVIEW_LABEL }}
       - name: Explain the merge hold
-        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
+        if: needs.protected_changes.outputs.holds_review == 'true'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -399,7 +405,7 @@ jobs:
     if: >
        always() &&
        needs.subject.outputs.found == 'true' &&
-       (needs.protected_changes.outputs.requires_review != 'true' || needs.subject.outputs.conclusion == 'failure') &&
+       needs.protected_changes.outputs.holds_review != 'true' &&
        (
          needs.agent.result != 'success' ||
          needs.safe_outputs.result != 'success' ||
@@ -471,9 +477,9 @@ jobs:
     # The top-level guard reads both outputs. GitHub Actions does not make a
     # dependency's dependencies available through `needs` transitively.
     needs: [subject, protected_changes]
-    if: always() && (needs.protected_changes.outputs.requires_review != 'true' || needs.subject.outputs.conclusion == 'failure') && needs.subject.outputs.review_blocked != 'true'
+    if: always() && needs.protected_changes.outputs.holds_review != 'true' && needs.subject.outputs.review_blocked != 'true'
 
-if: always() && needs.subject.outputs.found == 'true' && (needs.protected_changes.outputs.requires_review != 'true' || needs.subject.outputs.conclusion == 'failure') && needs.subject.outputs.review_blocked != 'true'
+if: always() && needs.subject.outputs.found == 'true' && needs.protected_changes.outputs.holds_review != 'true' && needs.subject.outputs.review_blocked != 'true'
 
 runs-on: agents-arc
 runs-on-slim: agents-arc
@@ -585,12 +591,15 @@ safe-outputs:
   add-comment:
     target: "*"
 
-# Four hours while the model provider is intermittently slow. Measured on a real run: 36.7
-# of 40.2 agent minutes were spent waiting on the gateway, over 21 requests that all
-# returned 200, with about five minutes of actual work in there. The clock was killing runs
-# for the provider's pace. Turns are the loop guard now, not this; for a custom model the
-# credit ceiling is models.dev fallback pricing and guards nothing.
-timeout-minutes: 240
+# The fleet is two machines, so this clock is also how long a stuck run can hold half of it.
+# 240 went on to every worker at once when the provider was slow, which fixed the deaths and
+# made every worker equally expensive to hang. These numbers are per worker: enough headroom
+# for a slow gateway on the work it actually does, and not four hours for a run that reads one
+# issue. Turns remain the guard against a confused agent looping; for a custom model the credit
+# ceiling is models.dev fallback pricing and guards nothing.
+#
+# Reads CI failure evidence and may fix, verify and re-push, so it can do implement's work on a smaller diff.
+timeout-minutes: 120
 ---
 
 1. You are gating pull request **#${{ needs.subject.outputs.pr }}**, which closes issue

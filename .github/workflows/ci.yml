@@ -1,0 +1,186 @@
+name: CI
+
+# The package had no CI at all. Every check it ships to consumers — the route matrix, the
+# composite-action manifests, the prompt-hygiene rules, shellcheck — was only ever run by hand
+# on somebody's machine, in a repository whose whole purpose is enforcing those checks elsewhere.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cli:
+    name: CLI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v5.0.0
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # typecheck, build and vitest. The build has to pass before the checks below, because
+      # `loops/` is copied into the package payload by the same script the release runs.
+      - run: pnpm verify
+
+      # `loops/` is the payload consumers receive; `cli/loops/` is generated from it. A commit
+      # that edits one and not the other ships a CLI whose files disagree with its own source.
+      - name: Payload matches loops/
+        run: |
+          set -euo pipefail
+          node cli/scripts/copy-loops.mjs
+          if ! diff -r -q --exclude='*.lock.yml' loops cli/loops; then
+            echo "::error::cli/loops is stale. Run node cli/scripts/copy-loops.mjs and commit."
+            exit 1
+          fi
+          echo "payload matches"
+
+      # The version is stamped into every consumer's ownership header, and the two manifests
+      # have to agree or the header records a version the package does not call itself.
+      - name: Versions agree
+        run: |
+          set -euo pipefail
+          root=$(node -p "require('./package.json').version")
+          cli=$(node -p "require('./cli/package.json').version")
+          echo "root=$root cli=$cli"
+          [ "$root" = "$cli" ] || { echo "::error::package.json ($root) and cli/package.json ($cli) disagree"; exit 1; }
+
+  workflows:
+    name: Workflow sources
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The same three checks the package installs into every consumer, run on the source they
+      # are generated from. The route matrix carries the prompt-hygiene rules with it: no `gh`
+      # in a prompt, no Mermaid diagram, no duplicate step number, no multi-line env value.
+      - name: Route matrix
+        run: bash loops/actions/verify-route-matrix/verify-route-matrix.sh
+      - name: Composite action manifests
+        run: bash loops/actions/verify-composite-actions/verify-composite-actions.sh
+      - name: Refine output validation
+        run: bash loops/actions/verify-refine-output/verify-refine-output.sh
+
+      # Default severity, which is what the consumers' own checks use. A composite action's
+      # script runs on a Linux runner and a shell bug there fails a job with no useful output.
+      - name: Shellcheck
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          find loops/actions -name '*.sh' -print0 | xargs -0 shellcheck -x
+          echo "shellcheck clean"
+
+      # Every worker source must parse, and every `${{ env.NAME }}` it prints must be defined in
+      # that same worker: an undefined one renders empty and the model fills the gap itself.
+      # That is how a child once shipped a build against an unrestored workspace.
+      - name: Worker frontmatter
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, re, sys, yaml
+
+          failed = False
+          for path in sorted(glob.glob("loops/workflows/agent-*.md")):
+              text = open(path, encoding="utf8").read().replace("\r\n", "\n")
+              parts = text.split("---\n")
+              if len(parts) < 3:
+                  print(f"::error file={path}::no frontmatter")
+                  failed = True
+                  continue
+              try:
+                  front = yaml.safe_load(parts[1])
+              except yaml.YAMLError as error:
+                  print(f"::error file={path}::frontmatter is not valid YAML: {error}")
+                  failed = True
+                  continue
+              env = front.get("env") or {}
+              for name in sorted(set(re.findall(r"\$\{\{ *env\.([A-Z_][A-Z0-9_]*) *\}\}", text))):
+                  if name not in env:
+                      print(f"::error file={path}::prints env.{name} without defining it")
+                      failed = True
+              for key, value in env.items():
+                  if isinstance(value, str) and "\n" in value:
+                      print(f"::error file={path}::env.{key} is multi-line; the compiler flattens it")
+                      failed = True
+              print(f"{path}: {len(env)} env values, ok")
+
+          sys.exit(1 if failed else 0)
+          PY
+
+  diagrams:
+    name: Diagrams
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v5.0.0
+        with:
+          node-version: 20
+      # A broken diagram renders as a code block on GitHub instead of failing, so nothing would
+      # tell us. Structural checks only, deliberately: rendering needs a browser, and a check
+      # that flakes gets ignored, which is worse than one that is narrow. The nine diagrams were
+      # rendered through mermaid in a browser when they were written.
+      - name: Diagrams are structurally sound and cover every worker
+        run: |
+          set -euo pipefail
+          node - <<'JS'
+          const { readFileSync, readdirSync } = require("node:fs");
+
+          const text = readFileSync("docs/diagrams.md", "utf8").replace(/\r\n/g, "\n");
+          const fences = (text.match(/^```/gm) || []).length;
+          const blocks = [...text.matchAll(/```mermaid\n([\s\S]*?)\n```/g)].map((m) => m[1]);
+          const problems = [];
+
+          if (fences % 2 !== 0) problems.push(`${fences} code fences: one is unclosed`);
+          if (blocks.length === 0) problems.push("no diagrams at all");
+
+          blocks.forEach((source, index) => {
+            const where = `diagram ${index + 1}`;
+            if (!/^\s*(flowchart|graph|sequenceDiagram|stateDiagram)/.test(source)) {
+              problems.push(`${where} declares no diagram type on its first line`);
+            }
+            // Every id a `class` line styles must appear somewhere else in the diagram, or
+            // mermaid throws at render time on an id it has never seen.
+            const styled = new Set(
+              [...source.matchAll(/^\s*class ([^\n]+?) [A-Za-z][A-Za-z0-9_]*\s*$/gm)]
+                .flatMap((m) => m[1].split(",").map((s) => s.trim()))
+                .filter(Boolean),
+            );
+            const body = source.replace(/^\s*class .*$/gm, "").replace(/^\s*classDef .*$/gm, "");
+            for (const id of styled) {
+              if (!new RegExp(`(^|[^A-Za-z0-9_])${id}([^A-Za-z0-9_]|$)`, "m").test(body)) {
+                problems.push(`${where} styles '${id}', which is never used as a node`);
+              }
+            }
+          });
+
+          // One diagram per worker, so adding a route cannot quietly ship without its picture.
+          const workers = readdirSync("loops/workflows")
+            .filter((f) => /^agent-.*\.md$/.test(f))
+            .map((f) => f.replace(/\.md$/, ""));
+          for (const worker of workers) {
+            if (!text.includes(`## ${worker}.md`)) problems.push(`no section for ${worker}.md`);
+          }
+
+          console.log(`${blocks.length} diagram(s), ${workers.length} worker(s)`);
+          for (const problem of problems) console.error(`::error file=docs/diagrams.md::${problem}`);
+          process.exit(problems.length === 0 ? 0 : 1);
+          JS
