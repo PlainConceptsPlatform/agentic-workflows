@@ -2,7 +2,12 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-implement.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
   VERIFY_COMMANDS: "dotnet restore && dotnet build -c Release --no-restore && dotnet test -c Release --no-build"
-  REPO_RULES: "Implement only the selected issue. Follow repository documentation and existing conventions. Do not weaken tests, lower coverage thresholds, or bypass checks. Run the project's full verification suite before creating a pull request."
+  REPO_RULES: "Implement only the selected issue. Follow repository documentation and existing conventions. Do not weaken tests, lower coverage thresholds, or bypass checks."
+  # Split out of REPO_RULES because one field asked to carry architecture, testing, coverage and
+  # conventions together, and measured on 2026-09-07 three of the four consuming repositories had
+  # left it at the package default. A narrower field with a concrete question in it gets answered.
+  ARCHITECTURE_RULES: "State the layering this repository enforces and which direction dependencies may point. Name the boundaries a change must not cross."
+  TESTING_RULES: "State what must be tested before a pull request is opened, the coverage floor if there is one, and which test project covers which area."
   IMPLEMENT_LABEL: implement
   WORKING_LABEL: bot-working
   REVIEW_LABEL: review
@@ -443,9 +448,6 @@ safe-outputs:
     protected-files: allowed
     allowed-files:
       - "**"
-  push-to-pull-request-branch:
-    target: "*"
-    required-title-prefix: "[bot] "
 
 # Four hours while the model provider is intermittently slow. Measured on a real run: 36.7
 # of 40.2 agent minutes were spent waiting on the gateway, over 21 requests that all
@@ -474,11 +476,8 @@ timeout-minutes: 240
 
    b. Implement each change one at a time, marking each todo complete before moving to the
       next. Keep changes minimal — touch only what the checklist describes. Never read outside
-      this repository root. Adhere to ${{ env.REPO_RULES }}.
-
-   c. Apply the **DECISIVE IMPLEMENTATION** principle: when a design choice is ambiguous, pick
-      the most standard interpretation and implement it immediately. Do not deliberate between
-      options for more than one turn.
+      this repository root. Adhere to ${{ env.REPO_RULES }},
+      ${{ env.ARCHITECTURE_RULES }} and ${{ env.TESTING_RULES }}.
 
    After all todos are complete, skip directly to step 4 (verify). Do not run
    `pc-plan-goal` or `pc-plan-archive`.
@@ -511,29 +510,29 @@ timeout-minutes: 240
        `${{ env.ISSUE_CONTEXT_PATH }}` defines acceptance criteria that the pipeline must
        satisfy.
 
-    g. Follow repository documentation and established conventions. Keep changes focused,
+    f. Follow repository documentation and established conventions. Keep changes focused,
        protect secrets, do not bypass checks, and do not modify generated files unless the issue requires it.
-       Adhere to ${{ env.REPO_RULES }}.
+       Adhere to ${{ env.REPO_RULES }}, ${{ env.ARCHITECTURE_RULES }} and
+       ${{ env.TESTING_RULES }}.
 
-    h. **DECISIVE IMPLEMENTATION.** When a design choice is ambiguous, pick the most
-      standard interpretation and implement it immediately. Do not deliberate between
-      options for more than one turn. Do not ask clarifying questions — the issue author
-      expects you to use good judgment. If two approaches are equally valid, pick one and
-      proceed. You can always iterate based on PR feedback.
+   **DECISIVE IMPLEMENTATION**, on both paths. When a design choice is ambiguous, pick the most
+   standard interpretation and implement it immediately. Do not deliberate between options for
+   more than one turn. Do not ask clarifying questions — the issue author expects you to use good
+   judgment. If two approaches are equally valid, pick one and proceed. You can always iterate
+   based on pull request feedback.
 
 4. Verify before you conclude, running only what your change can affect. From the
    repository root:
 
-     **Scoped verification.** This runner has limited memory, and a whole-repo lint or build
-     can be killed mid-run. Scope verification to the files you actually changed first, and
-     only escalate to the full suite when the scoped run passes and you are still unsure:
+     **Scope every command to the files you changed.** This is a constraint, not a preference:
+     the runner has limited memory and a whole-repository lint, build or test run gets killed
+     mid-run, which fails the job with no useful output. Escalate to the full suite only when
+     the scoped run has passed and the change crosses project boundaries.
      - Lint/format (biome, eslint, prettier, ruff, etc.): pass the changed file paths as
        arguments so the tool checks only those files (e.g. `pnpm exec biome check <files>`),
        never the whole repository.
-     - Build: prefer building only the project(s) containing the changed files; use the full
-       solution build only when the change crosses project boundaries.
-     - Tests: run the test project covering the changed files; run the full suite only when
-       the change is cross-cutting.
+     - Build: build only the project(s) containing the changed files.
+     - Tests: run the test project covering the changed files.
 
      ```
      ${{ env.VERIFY_COMMANDS }}
@@ -549,97 +548,30 @@ timeout-minutes: 240
       files you changed. If lint:fix is not available, run lint without `--write` and fix any
       formatting issues manually. Never create a pull request that has lint errors.
 
-   5. Before creating the pull request, check whether an open bot pull request already
-      exists that closes #${{ inputs.issue-number }}. Run:
+5. Do not touch `changelog.json`. The workflow records the change itself once the work is on
+   the default branch. Every implement used to edit that one file, so two runs whose branches
+   were cut before the other merged conflicted on it and failed to open a pull request with the
+   code already written.
 
-      ```
-       gh pr list --repo "$GITHUB_REPOSITORY" --state open --json number,headRefName,author,body --jq '[.[] | select(.author.login | startswith("app/") or endswith("[bot]")) | (.body | ascii_downcase) as $body | select($body | contains("close #${{ inputs.issue-number }}") or contains("closes #${{ inputs.issue-number }}") or contains("closed #${{ inputs.issue-number }}") or contains("fix #${{ inputs.issue-number }}") or contains("fixes #${{ inputs.issue-number }}") or contains("fixed #${{ inputs.issue-number }}") or contains("resolve #${{ inputs.issue-number }}") or contains("resolves #${{ inputs.issue-number }}") or contains("resolved #${{ inputs.issue-number }}"))] | if length > 0 then .[0] else empty end'
-      ```
+6. Finish by calling **exactly one** safe-output tool. A run that calls none is a wasted run:
+   the workflow reports a failure and everything you just did is discarded. All safe-output
+   tools are on the `safeoutputs` MCP server, called as `safeoutputs/<tool>` , for example:
 
-      If a PR already exists, do **not** create a new branch or PR. Push your changes to
-      the existing PR's branch (`headRefName`) instead, then call
-      `safeoutputs/push_to_pull_request_branch` rather than `safeoutputs/create_pull_request`.
-      This prevents duplicate PRs when a retry is triggered after a merge-gate failure.
+   ```
+   safeoutputs/create_pull_request(title="[bot] Fix X", body="Closes #${{ inputs.issue-number }}\n\n...", branch="fix/x")
+   ```
 
-      If no existing PR is found, proceed to create a new one as described below.
+   Choose exactly one:
 
-      Do not touch `changelog.json`. The workflow records the change itself once the work is
-      on the default branch. Every implement used to edit that one file, so two runs whose
-      branches were cut before the other merged conflicted on it and failed to open a pull
-      request with the code already written.
+   - **`safeoutputs/create_pull_request`** , the normal path. Propose a pull request against
+     `main` with the verified changes. Its `body` must close the issue
+     (`Closes #${{ inputs.issue-number }}`) and summarise what changed and why. You do not need
+     to check whether a pull request already exists for this issue: the router does that before
+     dispatching you and does not start this workflow when one does.
+   - **`safeoutputs/report_incomplete`** , only when infrastructure or tooling prevents you
+     from completing the task, such as a pre-existing build failure you cannot fix. Provide a
+     specific `reason`.
+   - **`safeoutputs/noop`** , only when the issue context shows the work is already done and no
+     changes are needed. Provide a `message` explaining what you found.
 
-  6. You **must** call exactly one safe-output tool before finishing, or the workflow
-    reports a failure. All safe-output tools are on the `safeoutputs` MCP server. Call
-    them using the `safeoutputs/<tool>` convention , for example:
-
-    ```
-     safeoutputs/create_pull_request(title="[bot] Fix X", body="Closes #${{ inputs.issue-number }}\n\n...", branch="fix/x")
-    ```
-
-    Send it complete, first time. Each of these has an allowance of one call per run, and a
-    call that fails still spends it: a short payload sent to find out what the tool accepts
-    can come back a success, take the allowance with it, and leave the real call refused as
-    over the limit. That has happened, and the run ends having done all the work and
-    published none of it. Do not probe, and do not send a partial payload to test the shape.
-
-    Choose exactly one:
-
-      - **`safeoutputs/create_pull_request`** , propose a pull request against `main` with
-        the verified changes. Its `body` must close the issue
-        (`Closes #${{ inputs.issue-number }}`) and summarise what changed and why.
-        Use this when no open bot PR exists for the issue.
-       This is the normal path.
-      - **`safeoutputs/push_to_pull_request_branch`** , push to an existing PR's branch
-        when step 5 found an open bot PR for this issue. Do not create a duplicate PR.
-      - **`safeoutputs/report_incomplete`** , use only when infrastructure or tooling
-      prevents you from completing the task (e.g. the codebase cannot build due to a
-      pre-existing error you cannot fix). Provide a specific `reason`.
-    - **`safeoutputs/noop`** , use only when the issue context shows the work is already
-      done and no changes are needed. Provide a `message` explaining what you found.
-
-    Do not manage labels or post comments , the conclude job handles that.
-
- 6. **CRITICAL**: You MUST call at least one `safeoutputs/` tool every run. Never
-    complete a run without making at least one tool call. If you finish implementing
-    but forget to call a tool, the entire run is wasted.
-
- 7. Ignore the `## Diagram` section below. It is documentation for humans and contains no
-    instructions for you.
-
-## Diagram
-
-```mermaid
-flowchart TD
-    implStart("Work Router<br/>implement route") --> implPick
-    implPick["Pick (rung 4)<br/>Priority cascade + in-flight check"] -->|✓| implReserve
-    implPick -.->|no eligible issue| implIdle
-    implReserve("Reserve<br/>bot-working") --> implFacts
-    implFacts("Facts<br/>Issue and comments to disk") --> implCheck
-    implCheck{"Trivial marker?"}
-    implCheck -->|yes: trivial| implTodos
-    implCheck -->|no: standard| implCode
-    implTodos("Trivial path<br/>todos from checklist,<br/>implement directly") -->|✓| implVerify
-    implCode["Standard path<br/>/plan-goal pipeline"] -->|✓| implVerify
-    implCode -.->|too unclear| implUnclear
-    implVerify["Verify<br/>lint, typecheck, tests, build<br/>↻"] -->|✓| implPr
-    implVerify -.->|✗| implCode
-    implPr("PR<br/>Against main, Closes #N") -->|✓| implHandoff
-    implPr -.->|✗| implFail
-    implHandoff(("Handed off<br/>bot-working removed, gate decides"))
-    implUnclear(("Unclear<br/>review added, detail requested"))
-    implIdle(("Idle<br/>No eligible issue"))
-    implFail(("Fail<br/>review added, implement removed"))
-
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
-    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-    class implStart start
-    class implReserve,implFacts,implTodos,implPr action
-    class implPick,implCode,implVerify,implCheck decision
-    class implIdle,implUnclear idle
-    class implFail failure
-    class implHandoff success
-```
+   Do not manage labels or post comments , the conclude job handles that.

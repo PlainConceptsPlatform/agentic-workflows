@@ -402,16 +402,15 @@ timeout-minutes: 240
    `${{ env.ISSUE_CONTEXT_PATH }}` defines acceptance criteria the fix must satisfy. If a check
    fails, fix what you broke and run it again. Do not push a branch that does not pass.
 
-   **Scoped verification.** This runner has limited memory, and a whole-repo lint or build
-   can be killed mid-run. Scope verification to the files you actually changed first, and
-   only escalate to the full suite when the scoped run passes and you are still unsure:
+   **Scope every command to the files you changed.** This is a constraint, not a preference:
+   the runner has limited memory and a whole-repository lint, build or test run gets killed
+   mid-run, which fails the job with no useful output. Escalate to the full suite only when
+   the scoped run has passed and the change crosses project boundaries.
    - Lint/format (biome, eslint, prettier, ruff, etc.): pass the changed file paths as
      arguments so the tool checks only those files (e.g. `pnpm exec biome check <files>`),
      never the whole repository.
-   - Build: prefer building only the project(s) containing the changed files; use the full
-     solution build only when the change crosses project boundaries.
-   - Tests: run the test project covering the changed files; run the full suite only when
-     the change is cross-cutting.
+   - Build: build only the project(s) containing the changed files.
+   - Tests: run the test project covering the changed files.
 
     ```
     ${{ env.VERIFY_COMMANDS }}
@@ -434,41 +433,6 @@ timeout-minutes: 240
    `**Review outcome:** implemented`, `**Review outcome:** already-satisfied`, or
    `**Review outcome:** needs-human`.
 
-9. Do not merge, close, or change labels. The workflow validates your outcome and owns those
-   state transitions.
+10. Do not merge, close, or change labels. The workflow validates your outcome and owns those
+    state transitions.
 
-10. Ignore the `## Diagram` section below. It is documentation for humans and contains no
-    instructions for you.
-
-## Diagram
-
-```mermaid
-flowchart TD
-    fbStart("Work Router<br/>apply-review route<br/>(review on bot PR)") --> fbSubject
-    fbSubject["Subject (rung 4)<br/>Our open PR? Substantive review?"] -->|✓| fbFacts
-    fbSubject -.->|✗| fbIdle
-    fbFacts("Facts (rung 3)<br/>Threads, comments, diff to disk") --> fbTriage
-    fbTriage["Triage<br/>Anything actionable and outstanding?"] -->|✓| fbReserve
-    fbTriage -.->|nothing| fbIdle
-    fbReserve("Reserve<br/>Propose bot-working on the issue") -->|✓| fbApply
-    fbApply("Apply<br/>Only what the feedback justifies") -->|✓| fbVerify
-    fbApply -.->|✗| fbFail
-    fbVerify["Verify<br/>/repo-verify passes?<br/>↻"] -->|✓| fbPush
-    fbVerify -.->|✗| fbApply
-    fbPush(("Pushed<br/>Same branch, bot-working removed"))
-    fbIdle(("Idle<br/>Not ours, or nothing to do"))
-    fbFail(("Fail<br/>review added, bot-working removed"))
-
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
-    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-    class fbStart start
-    class fbFacts,fbReserve,fbApply action
-    class fbSubject,fbTriage,fbVerify decision
-    class fbIdle idle
-    class fbFail failure
-    class fbPush success
-```

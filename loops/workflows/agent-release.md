@@ -239,25 +239,3 @@ jobs:
 
 5. Call `noop` and stop. The deterministic `conclude` job reads the notes you wrote
    and handles version bumping, tagging, and release creation.
-
-## Diagram
-
-```mermaid
-flowchart TD
-    relStart("Work Router<br/>release route<br/>(manual dispatch)") --> relActivation
-    relActivation("Activation<br/>Prepare prompt + env") --> relPreAgent
-    relPreAgent["Pre-agent<br/>Write git log + version to /tmp"] --> relAgent
-    relAgent["Agent<br/>Read commit log<br/>Write release-notes.md"] --> relNoop
-    relNoop("Safe Outputs<br/>Process noop") --> relConclude
-    relConclude["Conclude<br/>Bump version, commit, tag<br/>push, create GitHub Release"]
-    relConclude --> relDone(("Released<br/>Tag + GitHub Release created"))
-    relConclude -.->|failure| relFail(("Failed<br/>No tag created"))
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a2a
-    class relStart start
-    class relActivation,relPreAgent,relAgent action
-    class relDone success
-    class relFail failure
-```

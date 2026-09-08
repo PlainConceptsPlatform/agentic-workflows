@@ -24,6 +24,13 @@ frontmatter is fed to the model as instructions.
 That sentence is the source of every mistake in this format. A heading you added for humans is an
 instruction. A Mermaid diagram at the bottom is an instruction.
 
+Which is why no worker carries one any more. Diagrams live in `docs/diagrams.md`, and
+`verify-route-matrix.sh` fails a prompt that grows one back, a `gh` command (the CLI is
+unauthenticated in CI, so a prompt ordering one burns turns and fails), or a duplicate step number
+in its instruction list. All three were real: seven diagrams charged on every run and then skipped,
+an unreachable `gh pr list` in implement, and three prompts with a repeated step where one of the
+duplicates contradicted the other.
+
 Anyone can write an agentic workflow. Trigger on everything, grant broad permissions, and write a
 paragraph asking the model to sort it out. It will appear to work, and it will be slow, expensive,
 and non-reproducible, because a model was asked to do arithmetic that a `gh` command answers

@@ -21,6 +21,12 @@ files do differently from what gh-aw generates, and why. Read the second one bef
 
 ## The workflows
 
+[`docs/diagrams.md`](docs/diagrams.md) draws all of it: the router's one-event-one-route
+selection, how the routes chain into each other, and one diagram per worker. Those diagrams used
+to sit at the bottom of each worker's markdown, which is the prompt, so every run paid for about
+240 lines of Mermaid and then read an instruction telling it to ignore them. `verify-route-matrix.sh`
+now fails if one reappears in a prompt.
+
 Every worker is a `workflow_call` reusable workflow. Nothing triggers itself: `work-router.yml`
 owns all the triggers, classifies the event into exactly one route, and calls one worker. That
 is why a worker can be added or removed without touching the others, and why the route matrix

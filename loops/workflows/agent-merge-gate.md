@@ -2,7 +2,17 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-merge-gate.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
   VERIFY_COMMANDS: ""
-  REPO_RULES: "Make a risk-based merge decision for the selected bot pull request. Merge only when CI is green and no risk indicators are present. Review risk indicators defined in the repository's guardrails or project documentation. Any of these require human review. Do not merge protected file changes."
+  REPO_RULES: "Make a risk-based merge decision for the selected bot pull request. Merge only when CI is green and no risk indicator is present. Do not merge protected file changes."
+  # The list that decides whether a machine merges without a human looking. It used to be a
+  # sentence inside REPO_RULES telling the agent to consult "the repository's guardrails or
+  # project documentation", which named no list at all and left the most consequential check in
+  # the pipeline resolving against nothing. Name the areas this repository will not auto-merge.
+  RISK_INDICATORS: >-
+    Any diff touching authentication, authorization or session handling.
+    Any change to a calculation or pricing engine, or to code handling money.
+    Any database migration, or a change to an entity or schema.
+    Any change to an audit or event log, or anything that could break its continuity.
+    Any change to a public API contract or a shared library other repositories consume.
   # Paths a bot may change but never merge on its own: an extended regular expression matched
   # against every changed path in the pull request. The default names this stack's dependency
   # and toolchain manifests plus everything under a dotted directory, and is wrong for a
@@ -694,11 +704,14 @@ timeout-minutes: 240
    number of files changed and lines added/removed against the complexity the issue described.
    Flag if the diff is materially larger or smaller than expected.
 
-   **Check 8 — Repository risk indicators.** Does the diff touch any risk indicator defined in
-   ${{ env.REPO_RULES }}? Review the repository guardrails for domain-specific risk areas such
-   as calculation engines, audit chains, authentication, database migrations, or money handling.
-   Flag any
-   match and name the specific indicator.
+   **Check 8 — Repository risk indicators.** Does the diff touch any of these?
+
+   ```
+   ${{ env.RISK_INDICATORS }}
+   ```
+
+   Name the specific indicator you matched. A match is not a defect, it is a reason this
+   pull request needs a person, so do not argue it away because the change looks correct.
 
    **Check 9 — Mergeability.** Can the PR be merged cleanly? The value is
    `${{ needs.reserve.outputs.has_conflicts }}`. If conflicts exist, this is ❌ but not a
@@ -808,50 +821,3 @@ timeout-minutes: 240
 
    Then a line `**Verdict:** merge` / `**Verdict:** review` / `**Verdict:** remediated`
 
-9. Ignore the `## Diagram` section below. It is documentation for humans and contains no
-   instructions for you.
-
-## Diagram
-
-```mermaid
-flowchart TD
-    gateStart("Work Router<br/>merge-gate route<br/>(CI completed)") --> gateSubject
-    gateSubject["Subject (rung 4)<br/>Our PR? Closes an implement issue?"] -->|✓| gateFacts
-    gateSubject -.->|✗| gateIdle
-    gateFacts("Facts (rung 3)<br/>Diff, PR shape, failing logs") --> gateCi
-    gateCi["CI<br/>What did it conclude?"] -->|success| gateProtected
-    gateProtected{"Protected files?"}
-    gateProtected -.->|yes| gateHuman
-    gateProtected -->|no| gateConflict
-    gateConflict{"Merge conflicts?"}
-    gateConflict -->|yes| gateRebase
-    gateConflict -->|no| gateTrivial
-    gateRebase("Merge main in<br/>Resolve conflicts, /repo-verify") -->|pushed| gateWait
-    gateRebase -.->|cannot resolve| gateHuman
-    gateTrivial{"Trivial marker?"}
-    gateTrivial -->|yes| gateMerge
-    gateTrivial -->|no| gateAssess
-    gateCi -.->|failure| gateFix
-    gateCi -.->|no verdict| gateHuman
-    gateAssess["Assessment (10 checks)<br/>CI, Auth, API, Tests, CI/CD<br/>Protected, Scope, Risk, Merge, Confidence"] -->|all ✅| gateMerge
-    gateAssess -.->|any ⚠️/❌| gateHuman
-    gateFix("Fix<br/>Read logs, fix the cause, /repo-verify") -->|pushed| gateWait
-    gateFix -.->|cannot fix| gateHuman
-    gateMerge(("Merged<br/>Issue closed, review+labels removed"))
-    gateWait(("Pushed<br/>CI will re-run and re-trigger via Router"))
-    gateHuman(("Review<br/>review label, reason explained"))
-    gateIdle(("Idle<br/>Not our pull request"))
-
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
-    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a2a
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-    class gateStart start
-    class gateFacts,gateFix,gateRebase action
-    class gateSubject,gateCi,gateAssess,gateTrivial,gateConflict,gateProtected decision
-    class gateIdle,gateWait idle
-    class gateHuman failure
-    class gateMerge success
-```

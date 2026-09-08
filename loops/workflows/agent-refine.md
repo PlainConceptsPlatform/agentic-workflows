@@ -2,6 +2,25 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-refine.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
   REPO_RULES: "Refine only the selected issue into a grounded, implementation-ready user story. Read repository documentation for domain context. Write acceptance criteria that match existing patterns. Do not implement code."
+  # The estimate decides whether a story gets split, and the prompt tells the agent these bands
+  # come from this repository's own merged pull requests. They have to actually come from it, or
+  # the claim is false and every repository sizes work on another one's diffs.
+  ESTIMATE_BANDS: >-
+    | 1 | ~1 | one or two files, under about 50 changed lines, no new concepts: a wording, style or single-value fix |
+    | 2 | ~2 | up to about four files and 150 lines, all inside one layer, no schema or contract change |
+    | 3 | ~3 | a vertical slice through one boundary (API and database, or UI and API), up to about eight files and 400 lines, with new tests |
+    | 5 | ~5 | several layers together, or a schema migration, or a new contract: up to about sixteen files and 1000 lines |
+    | 8 or more | more than a week | beyond those bounds, or it needs a pattern or subsystem that does not exist yet, or it still holds real unknowns |
+  # What counts as a change small enough to skip the story format. The default names this stack's
+  # tools, so a repository built on anything else can never match it and always takes the long,
+  # expensive path. One condition per line; all of them must hold.
+  TRIVIAL_CRITERIA: >-
+    It touches 1-3 files: stylesheets, style utility classes, text labels or markup only.
+    No business logic: no services, controllers, domain models, calculations, validations.
+    No data model: no entities, migrations, DTOs, API contracts.
+    No security surface: no auth, authorization, secrets, tokens, permissions.
+    No infrastructure: no deployment templates, containers, CI or deploy configuration.
+    No cross-cutting change: it does not touch shared libraries or multi-team contracts.
   REFINE_LABEL: refine
   REFINED_LABEL: refined
   WORKING_LABEL: bot-working
@@ -450,16 +469,13 @@ timeout-minutes: 240
    self-asked questions or their answers to the issue.
 
 4. **Classify the change complexity.** Based on your exploration, determine whether this is a
-   trivial change. A change is **trivial** if ALL of these are true:
+   trivial change. A change is **trivial** only if every one of these holds:
 
-   - It touches 1-3 files: CSS, Tailwind classes, text labels, markup, or styling only
-   - No business logic: no services, controllers, domain models, calculations, validations
-   - No data model: no entities, migrations, DTOs, API contracts
-   - No security surface: no auth, authorization, secrets, tokens, permissions
-   - No infrastructure: no Bicep, Docker, CI, deploy configuration
-   - No cross-cutting: doesn't touch shared libraries or multi-team contracts
+   ```
+   ${{ env.TRIVIAL_CRITERIA }}
+   ```
 
-   If ALL pass → **trivial path** (step 4a). If ANY fail → **standard path** (step 5).
+   If all hold → **trivial path** (step 4a). If any fails → **standard path** (step 5).
 
    **4a. Trivial path.** Skip `/plan-story`. Do not write Gherkin acceptance criteria or
    Mermaid diagrams. Instead, prepare the replacement issue body as valid Markdown:
@@ -476,7 +492,8 @@ timeout-minutes: 240
    No "As a / I want / so that" form. No Given/When/Then. No Mermaid. Just the marker,
    the summary, and the checklist.
 
-   Load `@humanizer` and prepare the replacement issue body, then go directly to step 6.
+   Load `@humanizer` and prepare the replacement issue body, then go directly to step 7
+   (estimate). Skip steps 5 and 6.
 
 5. Before writing the story, verify coverage: list every work unit and confirm each one has
    exploration findings concrete enough for acceptance criteria. If any unit is missing, go back
@@ -491,28 +508,24 @@ timeout-minutes: 240
      Apply repository documentation and established conventions before finalizing the story.
      Adhere to ${{ env.REPO_RULES }}.
 
-5. Load `@humanizer` and prepare the complete replacement issue body as valid Markdown.
+6. Load `@humanizer` and prepare the complete replacement issue body as valid Markdown.
 
-6. **Estimate the story in points.** Use the Fibonacci scale, where one point is roughly one
+7. **Estimate the story in points.** Use the Fibonacci scale, where one point is roughly one
    human day of work for a developer who knows this codebase. Estimate the whole story: code,
    tests, and the edge cases the acceptance criteria imply.
 
-   Judge by the shape of the diff the story will produce, not by how long it feels. The bands
-   below are calibrated from this repository's own merged pull requests, so compare the story
-   against them rather than against an abstract scale:
+   Judge by the shape of the diff the story will produce, not by how long it feels. These bands
+   come from this repository's own merged pull requests, so compare the story against them
+   rather than against an abstract scale:
 
    | Points | Human days | Shape of the change |
    |---|---|---|
-   | 1 | ~1 | one or two files, under about 50 changed lines, no new concepts: a wording, style or single-value fix |
-   | 2 | ~2 | up to about four files and 150 lines, all inside one layer, no schema or contract change |
-   | 3 | ~3 | a vertical slice through one boundary (API and database, or UI and API), up to about eight files and 400 lines, with new tests |
-   | 5 | ~5 | several layers together, or a schema migration, or a new contract: up to about sixteen files and 1000 lines |
-   | 8 or more | more than a week | beyond those bounds, or it needs a pattern or subsystem that does not exist yet, or it still holds real unknowns |
+   ${{ env.ESTIMATE_BANDS }}
 
    Elapsed clock time is not evidence. A large change can land in minutes and a small one can
    wait days for a human, so never reason from how long anything took.
 
-7. **Split when the estimate is ${{ env.SPLIT_THRESHOLD }} or more.** An oversized story is the
+8. **Split when the estimate is ${{ env.SPLIT_THRESHOLD }} or more.** An oversized story is the
    single best predictor of a pull request that never lands.
 
    First test whether it *can* split. A story splits when it contains slices that are each
@@ -537,7 +550,7 @@ timeout-minutes: 240
    single story and say so in one sentence in the body, under the estimate. An honest 8 is more
    useful than three fake threes that each break the build.
 
-8. **Record the estimate in every body you write**, parent and children alike, immediately below
+9. **Record the estimate in every body you write**, parent and children alike, immediately below
    the title line, as exactly these two lines:
 
    ```
@@ -548,14 +561,9 @@ timeout-minutes: 240
    The visible line is for people and the marker is read by the workflow, which turns it into the
    `sp-N` label. A body without the marker gets no estimate label at all.
 
-9. Decide exactly one outcome:
+10. Decide exactly one outcome:
 
     Labels are workflow-owned state. Do not call `add_labels` or `remove_labels`.
-
-    **Do not probe safe-output tools.** Never call `update_issue` or `add_comment` with
-    empty or test arguments — each safe-output type has a per-run limit of 1 call, and a
-    probe call consumes that quota. Call a safe-output tool exactly once, with the full
-    final payload, when you are ready to commit to the outcome.
 
     **Questions remain.** You set aside one or more questions for the author that the codebase
     could not answer. Leave the body unchanged. Call `add_comment` once with:
@@ -571,9 +579,7 @@ timeout-minutes: 240
     for the author.
 
     Call `update_issue` first, with the replacement body, and wait for it to come back. Send
-    the whole body in that one call: it is the only thing this step has to get right, and a
-    call sent to see what the tool accepts still counts against your allowance even when it
-    fails. Do not send a partial payload, and do not probe.
+    the whole body in that one call: it is the only thing this step has to get right.
 
     Only once that call has succeeded, call `add_comment`
     with `${{ env.REFINE_MARKER }}`, then `${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}`,
@@ -593,43 +599,3 @@ timeout-minutes: 240
     `${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}`, then one sentence naming the estimate you gave the
     whole and how many children you wrote. The children carry the work forward; the parent stays
     open as their tracker and is never implemented directly.
-
-## Diagram
-
-```mermaid
-flowchart TD
-    refStart{"Work Router<br/>refine route"} --> refPick
-    refPick{"Issue eligible?"} -->|yes| refReserve
-    refPick -.->|no| refIdle
-    refReserve("Reserve<br/>bot-working") --> refFacts
-    refFacts("Facts<br/>Issue and comments to disk") --> refExplore
-    refExplore("Explore<br/>pc-plan-explore per work unit,<br/>self-answer, bounded") --> refClassify
-    refClassify{"Trivial change?"}
-    refClassify -->|yes: trivial path| refTrivial
-    refClassify -->|no: standard path| refStory
-    refTrivial("Trivial plan<br/>marker + summary + checklist") -->|✓| refProse
-    refStory("Story<br/>/plan-story, grounded in the code") -->|✓| refProse
-    refStory -.->|✗| refFail
-    refProse("Prose<br/>@humanizer over the final text") -->|✓| refOutcome
-    refOutcome["Outcome<br/>Any questions left?"] -->|no| refDone
-    refOutcome -.->|yes| refAsk
-    refDone(("Refined<br/>refine+review removed<br/>refined+implement added"))
-    refAsk(("Questions<br/>review added, bot-working removed"))
-    refAsk -->|author or assignee replies<br/>via Work Router| refStart
-    refIdle(("Idle<br/>No eligible issue"))
-    refFail(("Fail<br/>review added, refine kept"))
-
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
-    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-
-    class refStart start
-    class refReserve,refFacts,refExplore,refStory,refTrivial,refProse action
-    class refPick,refOutcome,refClassify decision
-    class refIdle idle
-    class refFail failure
-    class refDone,refAsk success
-```

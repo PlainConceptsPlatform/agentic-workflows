@@ -1,7 +1,16 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-audit.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
-  REPO_RULES: "Read-only repository audit. Report only reproducible, actionable defects with evidence. Look for: architectural layer violations, missing tests, security gaps, performance issues, and documentation drift. Do not modify files, commit, push, or run write operations."
+  REPO_RULES: "Read-only repository audit. Report only reproducible, actionable defects with evidence. Do not modify files, commit, push, or run write operations."
+  # Split out of REPO_RULES, which carried both the read-only discipline above and the list
+  # below. All four consuming repositories had customised the list and none could touch it
+  # without restating the discipline; they are different kinds of rule with different owners.
+  AUDIT_FOCUS: >-
+    Architectural layer violations and dependencies pointing the wrong way.
+    Missing or misleading tests around behaviour that already shipped.
+    Security gaps: unvalidated input, missing authorization, secrets in code.
+    Performance anti-patterns, N+1 queries in particular.
+    Documentation that no longer matches the code it describes.
   AUDIT_MARKER: "<!-- agent-audit -->"
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
@@ -126,11 +135,15 @@ timeout-minutes: 240
 1. Call skill("pc-repo-audit"), then run `/repo-audit` as a read-only audit of this
    repository. Do not modify any file, do not commit, and do not push.
 
-  2. Apply repository documentation and established conventions while auditing. Focus on
-     concrete defects and avoid recommendations that weaken security, tests, or checks.
-     Adhere to ${{ env.REPO_RULES }}.
+2. Apply repository documentation and established conventions while auditing. Focus on
+   concrete defects and avoid recommendations that weaken security, tests, or checks.
+   Adhere to ${{ env.REPO_RULES }}. Look for:
 
-    From the audit report, find **5 to 7 problems**. For each finding, verify it meets ALL
+   ```
+   ${{ env.AUDIT_FOCUS }}
+   ```
+
+   From the audit report, find **5 to 7 problems**. For each finding, verify it meets ALL
    of these criteria before keeping it:
    - A specific, reproducible problem in a specific file or component.
    - Has real impact: security risk, data loss, crash, or broken functionality.
@@ -184,35 +197,3 @@ timeout-minutes: 240
 
 6. If nothing met the bar, call `noop` and stop. Filing nothing is the right outcome when
    the codebase is clean.
-
-## Diagram
-
-```mermaid
-flowchart TD
-    auditStart("Work Router<br/>audit route<br/>(Mondays or dispatch)") --> auditBackpressure
-    auditBackpressure["Backpressure (rung 1)<br/>Fewer than 3 open reports?"] -->|✓| auditTracked
-    auditBackpressure -.->|✗| auditIdle
-    auditTracked("Tracked (rung 3)<br/>Open issue titles to disk") --> auditRun
-    auditRun("Audit<br/>/repo-audit, read-only") -->|✓| auditTriage
-    auditRun -.->|✗| auditFail
-    auditTriage["Triage<br/>Find 5-7 problems, score 1-10, dedupe"] -->|✓| auditPropose
-    auditTriage -.->|nothing found| auditQuiet
-    auditPropose("Propose<br/>Single issue: all findings + top 3 refined") -->|✓| auditReport
-    auditPropose -.->|✗| auditFail
-    auditReport(("Conclude<br/>audit+bug+refine on single issue<br/>Refine sizes and splits it"))
-    auditQuiet(("Quiet<br/>Nothing actionable, nothing proposed"))
-    auditIdle(("Idle<br/>Reports still awaiting action"))
-    auditFail(("Fail<br/>Audit or proposal failed"))
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
-    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a2a
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-    class auditStart start
-    class auditTracked,auditRun,auditPropose action
-    class auditBackpressure,auditTriage decision
-    class auditQuiet,auditIdle idle
-    class auditFail failure
-    class auditReport success
-```

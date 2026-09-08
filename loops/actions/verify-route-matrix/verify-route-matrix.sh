@@ -250,6 +250,50 @@ assert "a scheduled audit reports its trigger kind" scheduled \
 assert "a dispatched audit reports its trigger kind" manual \
   "$(route_field trigger-kind EVENT=workflow_dispatch OPERATION=audit INPUT_TRIGGER_KIND=manual)"
 
+echo "── Prompt hygiene ────────────────────────────────────────────────────────"
+
+# Everything below a worker's frontmatter is the prompt. Three things must not be in one.
+#
+# A `gh` call, because the shared CI agent config says the GitHub CLI is intentionally
+# unauthenticated and the agent must never use it for GitHub reads or writes. A prompt that
+# orders one burns turns and fails; implement carried a `gh pr list` for weeks, asking the agent
+# to redo a check the router had already done before dispatching it.
+#
+# A duplicate step number, because these are ordered instruction lists and a step that says
+# "go to step 6" cannot resolve when there are two. implement had two 6s with contradictory
+# rules ("exactly one" and "at least one" safe output), refine had two 5s, apply-review two 9s.
+#
+# A Mermaid diagram, because it is documentation that the model is charged for on every run and
+# then told to ignore. They live in docs/diagrams.md.
+PROMPT_OK=1
+for worker in "${WORKFLOWS_DIR}"/agent-*.md; do
+  [ -f "$worker" ] || continue
+  name=$(basename "$worker")
+  # The prompt starts after the closing --- of the frontmatter.
+  fm_end=$(awk 'NR>1 && /^---[[:space:]]*$/{print NR; exit}' "$worker")
+  [ -n "$fm_end" ] || { PROMPT_OK=0; echo "FAIL: ${name} has no frontmatter terminator" >&2; continue; }
+  prompt=$(tail -n "+$((fm_end + 1))" "$worker")
+
+  if grep -qE '(^|[^[:alnum:]_-])gh (pr|issue|api|run|release|workflow|auth) ' <<<"$prompt"; then
+    PROMPT_OK=0
+    echo "FAIL: ${name}'s prompt tells the agent to run gh; the CLI is unauthenticated in CI" >&2
+    grep -nE '(^|[^[:alnum:]_-])gh (pr|issue|api|run|release|workflow|auth) ' <<<"$prompt" >&2
+  fi
+
+  if grep -q '```mermaid' <<<"$prompt"; then
+    PROMPT_OK=0
+    echo "FAIL: ${name}'s prompt contains a Mermaid diagram; diagrams belong in docs/diagrams.md" >&2
+  fi
+
+  # Top-level steps only: an indented "1." is a sub-list and numbers restart legitimately.
+  dupes=$(grep -oE '^[0-9]+\. ' <<<"$prompt" | tr -d '. ' | sort -n | uniq -d | tr '\n' ' ')
+  if [ -n "${dupes// /}" ]; then
+    PROMPT_OK=0
+    echo "FAIL: ${name}'s prompt repeats step number(s): ${dupes}" >&2
+  fi
+done
+if [ "$PROMPT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 echo "── Router wiring ─────────────────────────────────────────────────────────"
 
 # Two router values are needed where GitHub evaluates no expression, so the installer mirrors

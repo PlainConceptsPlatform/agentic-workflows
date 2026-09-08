@@ -2,6 +2,18 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-triage.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
   REPO_RULES: "Triage issues opened by outside collaborators. Assess template completeness, security risk, change size, danger level, duplicates, clarity, reproducibility, acceptance criteria, and cross-cutting impact. Do not implement code. Do not modify the issue body."
+  # What a product owner may ask for, and what has to become a maintainer-owned technical
+  # proposal instead. This is business policy, so it belongs to the repository rather than to
+  # the package: it is also the check that closes somebody's issue, which is the last place a
+  # borrowed default belongs.
+  PRODUCT_SCOPE: >-
+    In scope: user experience and workflows, branding and content, business rules, and
+    business formulas. The issue must describe the desired product outcome rather than
+    prescribe technical means.
+    Out of scope, and blocked even when clear, small, local or testable: architecture,
+    infrastructure, developer tooling, deployment, security, authentication, authorization,
+    data storage, data models, migrations, APIs, service composition, framework adoption,
+    and solution or project structure.
   TRIAGE_LABEL: triage
   WORKING_LABEL: bot-working
   REVIEW_LABEL: review
@@ -364,14 +376,15 @@ timeout-minutes: 240
    API contracts, database schemas, or other repositories? Flag any mention of shared
    dependencies, contracts, or schemas that multiple teams depend on.
 
-    **Check 10 — Product-owner eligibility.** Product-owner intake is limited to user
-    experience and workflows, branding/content, business rules, and business formulas.
-    The issue must describe the desired product outcome, not prescribe technical means.
-    Block requests for architecture, infrastructure, developer tooling, deployment,
-    security/authentication/authorization, data storage/models/migrations, APIs, service
-    composition, framework adoption, solution/project structure, or other technical
-    fundamentals. These require a maintainer-owned technical proposal, even when clear,
-    small, local-only, or testable.
+    **Check 10 — Product-owner eligibility.** Judge the issue against this repository's
+    intake scope:
+
+    ```
+    ${{ env.PRODUCT_SCOPE }}
+    ```
+
+    An out-of-scope request is a block, and the reason to give is that it needs a
+    maintainer-owned technical proposal, not that it is a bad idea.
 
 6. Decide exactly one verdict:
 
@@ -411,42 +424,3 @@ timeout-minutes: 240
 8. Issue state is workflow-owned. Do not call tools other than the one `add_comment`; the workflow
    handles labels and closes a block verdict after applying your comment.
 
-9. Ignore the `## Diagram` section below. It is documentation for humans and contains no
-   instructions for you.
-
-## Diagram
-
-```mermaid
-flowchart TD
-    triStart{"Work Router<br/>triage route"} --> triPick
-    triPick{"Issue opened by<br/>outside collaborator?"} -->|yes| triReserve
-    triPick -.->|no| triIdle
-    triReserve("Reserve<br/>bot-working + triage") --> triFacts
-    triFacts("Facts<br/>Issue, comments, open issues to disk") --> triAgent
-    triAgent("Agent<br/>10 checks, round counting, verdict") --> triValidate
-    triValidate{"Valid outcome?"} -->|yes| triOutcome
-    triValidate -.->|no| triIncomplete
-    triOutcome["Verdict"] -->|pass| triPass
-    triOutcome -->|needs-info| triReview
-    triOutcome -->|block| triBlocked
-    triPass(("Passed<br/>refine added, triage removed"))
-    triReview(("Needs info<br/>review added, bot-working removed"))
-    triReview -->|author or write+ replies<br/>via Work Router| triStart
-    triBlocked(("Blocked<br/>issue closed, triage removed"))
-    triIdle(("Idle<br/>Write+ user, skipped"))
-    triIncomplete(("Incomplete<br/>review added, retry"))
-
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
-    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-
-    class triStart start
-    class triReserve,triFacts,triAgent,triValidate action
-    class triPick,triOutcome decision
-    class triIdle idle
-    class triIncomplete failure
-    class triPass,triReview,triBlocked success
-```
