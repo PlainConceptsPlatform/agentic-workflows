@@ -405,6 +405,83 @@ else
 fi
 if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# The two guards in the stale-reservation sweep, executed rather than read.
+#
+# Both were dead in production for as long as they existed. They matched `#N` with a `\b` word
+# boundary written as `\\b` inside a double-quoted bash string -- and bash halves that to `\b`,
+# which jq's string parser reads as a BACKSPACE (0x08), not as a boundary. So the regex hunted
+# for a character no title or body contains, both guards returned 0 every time, and the sweep
+# cleared `bot-working` off every issue that carried it: live queued runs included. Watched it
+# happen in the dogfood repository twenty minutes after that repository existed.
+#
+# Implement carries the same filter to decide whether a pull request already closes its issue,
+# and it was dead the same way, which is the most likely source of the same-day duplicate pull
+# requests in the backlog.
+#
+# There is no backslash in the fix and no way to reintroduce one by accident: the subject gains a
+# trailing space, so a number at the end of a body is still followed by a non-digit, and the
+# pattern matches `[^0-9]`. Four quoting layers cannot eat a character class.
+SWEEP_OK=1
+if ! grep -qF 'test(\"#${issue}[^0-9]\")' "$ROUTER_YML"; then
+  SWEEP_OK=0
+  echo "FAIL: the stale-reservation sweep does not match a run title with a character class; a word boundary there is eaten by bash and jq" >&2
+else
+  sweep_runs='{"workflow_runs":[
+    {"status":"queued","display_title":"Working (Refine): a thing (#1)"},
+    {"status":"completed","display_title":"Working (Refine): another (#2)"},
+    {"status":"in_progress","display_title":"Working (Implement): more (#10)"}
+  ]}'
+  # The same program the router runs, with the same escaping, expanded the same way.
+  live_for() {
+    jq "[.workflow_runs[]
+      | select(.status == \"queued\" or .status == \"in_progress\" or .status == \"pending\" or .status == \"waiting\")
+      | select((.display_title + \" \") | test(\"#${1}[^0-9]\"))] | length" <<<"$sweep_runs"
+  }
+  for probe in "1:1" "2:0" "10:1" "3:0"; do
+    issue="${probe%%:*}"; want="${probe##*:}"
+    got=$(live_for "$issue" 2>&1)
+    if [ "$got" != "$want" ]; then
+      SWEEP_OK=0
+      echo "FAIL: the sweep's live-run check said ${got} live run(s) for #${issue}, expected ${want}" >&2
+    fi
+  done
+
+  sweep_pulls='[
+    {"number":11,"body":"Closes #1 and some detail."},
+    {"number":12,"body":"fixes #22"},
+    {"number":13,"body":"Mentions #9 but closes nothing."},
+    {"number":14,"body":"closes #5"}
+  ]'
+  has_pr_for() {
+    jq "[.[] | select(((.body // \"\") + \" \") | ascii_downcase | test(\"clos(e|es|ed) #${1}[^0-9]|fix(es|ed)? #${1}[^0-9]|resolves? #${1}[^0-9]\"))] | length" <<<"$sweep_pulls"
+  }
+  # The last cases are what the boundary is for: a bare mention is not a close, `#22` must not
+  # answer for `#2`, and the trailing space is what makes `closes #5` at the end of a body match.
+  for probe in "1:1" "22:1" "9:0" "2:0" "5:1" "999:0"; do
+    issue="${probe%%:*}"; want="${probe##*:}"
+    got=$(has_pr_for "$issue" 2>&1)
+    if [ "$got" != "$want" ]; then
+      SWEEP_OK=0
+      echo "FAIL: the open-pull-request guard found ${got} for #${issue}, expected ${want}" >&2
+    fi
+  done
+fi
+if [ "$SWEEP_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# And nothing may go back to a word boundary in a double-quoted jq program anywhere, because the
+# failure is silent in both directions: the filter matches nothing and the job stays green.
+BOUNDARY_OK=1
+for candidate in "$ROUTER_YML" "${WORKFLOWS_DIR}"/agent-*.md; do
+  [ -f "$candidate" ] || continue
+  offenders=$(grep -n -- '--jq "' "$candidate" 2>/dev/null | grep -F '\b' || true)
+  if [ -n "$offenders" ]; then
+    BOUNDARY_OK=0
+    echo "FAIL: $(basename "$candidate") uses a word boundary inside a double-quoted jq program, which bash and jq turn into a backspace:" >&2
+    printf '  %s\n' "$offenders" | cut -c1-160 >&2
+  fi
+done
+if [ "$BOUNDARY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 # `review` must not be a one-way door. It used to be: authorize-bot-work refused to fire on an
 # issue carrying it, and the classifier refuses to route while it is set, so a person adding
 # `refine` to a parked issue got nothing at all — no run, no comment, no error. Triage's own

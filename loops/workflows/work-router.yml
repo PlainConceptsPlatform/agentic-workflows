@@ -943,11 +943,11 @@ jobs:
               live=$(gh api "repos/$REPO/actions/runs?per_page=100" \
                 --jq "[.workflow_runs[]
                   | select(.status == \"queued\" or .status == \"in_progress\" or .status == \"pending\" or .status == \"waiting\")
-                  | select(.display_title | test(\"#${issue}\\b\"))] | length")
+                  | select((.display_title + \" \") | test(\"#${issue}[^0-9]\"))] | length")
               [ "${live:-0}" -eq 0 ] || continue
 
               has_pr=$(gh pr list --repo "$REPO" --state open --json body \
-                --jq "[.[] | select((.body // \"\") | ascii_downcase | test(\"clos(e|es|ed) #${issue}\\b|fix(es|ed)? #${issue}\\b|resolves? #${issue}\\b\"))] | length")
+                --jq "[.[] | select(((.body // \"\") + \" \") | ascii_downcase | test(\"clos(e|es|ed) #${issue}[^0-9]|fix(es|ed)? #${issue}[^0-9]|resolves? #${issue}[^0-9]\"))] | length")
               [ "${has_pr:-0}" -eq 0 ] || continue
 
               echo "Clearing a stale bot-working reservation on #$issue: no run, no pull request."

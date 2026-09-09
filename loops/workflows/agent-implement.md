@@ -404,7 +404,7 @@ jobs:
             | grep -oE '<!-- implement-pr: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
           if [ -z "$pr" ]; then
             pr=$(gh pr list --repo "$REPO" --state open --json number,body \
-              --jq "[.[] | select((.body // \"\") | ascii_downcase | test(\"clos(e|es|ed) #${ISSUE}\\b|fix(es|ed)? #${ISSUE}\\b|resolves? #${ISSUE}\\b\"))][0].number // empty")
+              --jq "[.[] | select(((.body // \"\") + \" \") | ascii_downcase | test(\"clos(e|es|ed) #${ISSUE}[^0-9]|fix(es|ed)? #${ISSUE}[^0-9]|resolves? #${ISSUE}[^0-9]\"))][0].number // empty")
           fi
           if [ -z "$pr" ]; then
             echo "::notice::No pull request found for #$ISSUE; nothing to wait for."
