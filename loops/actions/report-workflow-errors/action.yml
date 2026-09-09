@@ -62,10 +62,17 @@ runs:
           const since = new Date(Date.now() - Number(process.env.LOOKBACK_HOURS) * 3600 * 1000);
 
           // Only workflows this package ships. A consumer's own workflow name is theirs and can
-          // describe a product, a customer or an environment -- Lyceum really does have
-          // `name: Deploy app to ${{ inputs.environment }}` -- so an allowlist by filename is the
-          // boundary, and it is the only thing keeping those names out. Anything not matching is
-          // counted and otherwise ignored.
+          // describe a product, a customer or an environment -- one consumer really does have a
+          // job named "Deploy app to" followed by an interpolated environment input -- so an
+          // allowlist by filename is the boundary, and it is the only thing keeping those names
+          // out. Anything not matching is counted and otherwise ignored.
+          //
+          // That example is described rather than quoted on purpose. An Actions expression is
+          // interpolated into this script by the runner BEFORE the JavaScript is parsed, comments
+          // included, so quoting one here made the comment a live substitution -- flagged by
+          // semgrep as github-script-injection, and invisible to a `node --check` pass because
+          // the checker has to mask the expression to parse the file at all. Everything this
+          // script needs arrives through `env:` above; nothing is interpolated into it.
           //
           // Exactly the filenames the package installs, and no pattern that admits a name it does
           // not. The previous version was written as a shape (`\.(yml|lock\.yml)$` over a group of

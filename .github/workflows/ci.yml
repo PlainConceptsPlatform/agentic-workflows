@@ -89,6 +89,73 @@ jobs:
       - name: Refine output validation
         run: bash loops/actions/verify-refine-output/verify-refine-output.sh
 
+      # Every shipped YAML has to parse, and no `${{ }}` may sit inside a github-script block.
+      #
+      # Both of these shipped. `app-ci-node-monorepo.yml` carried twelve lines of
+      # `with: { version: ${{ env.PNPM_VERSION }}, ... }` -- an unquoted expression inside a YAML
+      # flow mapping, where `{` opens a nested map, so the file was not valid YAML at all and
+      # GitHub would have refused to load it. No consumer had installed that template, so it sat
+      # there waiting for whoever did.
+      #
+      # And an Actions expression inside a `script:` block is interpolated by the runner before
+      # the JavaScript is parsed, comments included. One appeared in a comment in
+      # report-workflow-errors that quoted a consumer's workflow to explain the allowlist;
+      # semgrep flagged it as github-script-injection and it was invisible to the node --check
+      # pass, because that check has to mask the expression to parse the file at all. Everything
+      # those scripts need arrives through `env:`, so the rule is simply: none, ever.
+      - name: Shipped YAML parses, and no expression reaches a github-script block
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, re, sys, yaml
+
+          root = pathlib.Path(".")
+          problems = []
+          scripts = 0
+
+          targets = sorted(root.glob("loops/actions/*/action.yml"))
+          targets += sorted(root.glob("loops/workflows/*.yml"))
+          targets += sorted(root.glob("loops/templates/*/*.yml"))
+          targets += sorted(root.glob(".github/workflows/*.yml"))
+          targets = [p for p in targets if not p.name.endswith(".lock.yml")]
+
+          for path in targets:
+              text = path.read_text(encoding="utf-8")
+              try:
+                  doc = yaml.safe_load(text) or {}
+              except yaml.YAMLError as error:
+                  first = str(error).split("\n")[0]
+                  problems.append(f"{path}: not valid YAML: {first}")
+                  continue
+
+              # `loops/actions` is the package's own JavaScript. Templates under `loops/templates`
+              # are gh-aw generated or consumer-owned, and `${{ runner.temp }}` in the generated
+              # maintenance workflow is a runner constant, not user input; those are left alone.
+              if "loops/actions" not in path.as_posix():
+                  continue
+
+              steps = ((doc.get("runs") or {}).get("steps")) or []
+              for step in steps:
+                  if not isinstance(step, dict) or "github-script" not in str(step.get("uses", "")):
+                      continue
+                  body = (step.get("with") or {}).get("script")
+                  if not isinstance(body, str):
+                      continue
+                  scripts += 1
+                  for number, line in enumerate(body.split("\n"), start=1):
+                      found = re.search(r"\$\{\{[^}]*\}\}", line)
+                      if found:
+                          problems.append(
+                              f"{path}: step {step.get('name', '?')!r} line {number} interpolates "
+                              f"{found.group(0)} into JavaScript; pass it through env: instead"
+                          )
+
+          print(f"{len(targets)} YAML file(s), {scripts} github-script block(s)")
+          for problem in problems:
+              print(f"::error::{problem}")
+          sys.exit(1 if problems else 0)
+          PY
+
       # Default severity, which is what the consumers' own checks use. A composite action's
       # script runs on a Linux runner and a shell bug there fails a job with no useful output.
       - name: Shellcheck
