@@ -362,6 +362,39 @@ else
 fi
 if [ "$MIRROR_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# Run the belt's own jq, rather than reading it. The filter that picks which open pull requests
+# the hourly reconcile job acts on was written as
+#   ((env.TRUSTED_BOTS | split(" ")) | index(.user.login) != null)
+# which dies at runtime with `Cannot index array with string "user"`, because inside index() the
+# input is the array, not the pull request. Every assertion here passed: one checked the bot
+# logins were listed in TRUSTED_BOTS, another that the router named no bot outside that list.
+# Nothing executed the program. It failed hourly in production for a day, on the one job whose
+# purpose is to keep stuck pull requests moving. Extract it and give it inputs.
+BELT_OK=1
+bot_pr_filter=$(awk '/jq -r --arg repo "\$REPO"/{found=1;next} found && /^ *'"'"' \|$/{exit} found' "$ROUTER_YML")
+if [ -z "$bot_pr_filter" ]; then
+  BELT_OK=0
+  echo "FAIL: could not extract the open-pull-request filter from work-router.yml" >&2
+else
+  # One of each: a trusted App under both spellings, a human, a draft, and a fork.
+  belt_fixture='[
+    {"number":11,"draft":false,"user":{"login":"app/github-actions"},"head":{"ref":"a","sha":"s1","repo":{"full_name":"o/r"}}},
+    {"number":12,"draft":false,"user":{"login":"platform-devbox[bot]"},"head":{"ref":"b","sha":"s2","repo":{"full_name":"o/r"}}},
+    {"number":13,"draft":false,"user":{"login":"a-person"},"head":{"ref":"c","sha":"s3","repo":{"full_name":"o/r"}}},
+    {"number":14,"draft":true,"user":{"login":"app/github-actions"},"head":{"ref":"d","sha":"s4","repo":{"full_name":"o/r"}}},
+    {"number":15,"draft":false,"user":{"login":"app/github-actions"},"head":{"ref":"e","sha":"s5","repo":{"full_name":"fork/r"}}}
+  ]'
+  if ! selected=$(printf '%s' "$belt_fixture" |
+    TRUSTED_BOTS="$trusted" jq -r --arg repo "o/r" "$bot_pr_filter" 2>&1 | cut -f1 | tr '\n' ' '); then
+    BELT_OK=0
+    echo "FAIL: the open-pull-request filter does not run: ${selected}" >&2
+  elif [ "$(echo "$selected" | tr -s ' ')" != "11 12 " ]; then
+    BELT_OK=0
+    echo "FAIL: the belt selected pull requests [${selected}]; expected the two bot-authored ones (11 12)" >&2
+  fi
+fi
+if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 # GitHub evaluates every Actions expression in a workflow file, including ones written inside
 # shell comments. An empty pair is not a valid expression and fails the whole file to parse,
 # with an error that points at a line number rather than saying what is wrong. Prose about

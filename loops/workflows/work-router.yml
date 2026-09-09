@@ -923,7 +923,10 @@ jobs:
             jq -r --arg repo "$REPO" '
               .[]
               | select(
-                    ((env.TRUSTED_BOTS | split(" ")) | index(.user.login) != null)
+                    # Bind the login first. Inside index(...) the input is the array, so a bare
+                    # .user.login there indexes the array and jq dies with "Cannot index array
+                    # with string \"user\"", taking the whole hourly belt with it.
+                    ((.user.login) as $login | (env.TRUSTED_BOTS | split(" ")) | index($login) != null)
                     and .draft == false
                     and .head.repo.full_name == $repo
                  )
