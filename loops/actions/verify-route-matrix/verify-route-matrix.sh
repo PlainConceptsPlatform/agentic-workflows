@@ -1159,8 +1159,65 @@ if [ -f "$ERROR_REPORT_YML" ]; then
 
   # 2. The allowlist. A consumer's own workflow name can describe a product, a customer or an
   # environment; only the names this package gives its own files may be reported.
-  er 'const OWNED = /\^\(work-router' 'has no workflow allowlist, so a repository-specific workflow name could be reported'
-  er 'skippedForeign' 'does not account for the workflows it declined to inspect'
+  er 'const OWNED = new Set\(\[' 'has no workflow allowlist, so a repository-specific workflow name could be reported'
+  # Assert the increment on the guard, not the symbol. `er 'skippedForeign'` passed with the
+  # increment deleted, because the name survives in the job summary that prints the total -- the
+  # fifth assertion in this file to fail that way. A count that never counts makes the report
+  # claim it inspected everything.
+  er 'if \(!OWNED\.has\(file\)\) \{ skippedForeign \+= 1; continue; \}' 'does not count the workflows it declined to inspect'
+
+  # The allowlist has to be a SUBSET of what the package ships, not a shape that happens to cover
+  # it. Written as a regex over stems it admitted 22 names of which 11 were never installed --
+  # `agent-refine.yml` (the workers ship as .md compiled to .lock.yml), `work-router.lock.yml` --
+  # so a consumer file at one of those names would have been read and reported. Derive the real
+  # set from the tree and compare.
+  admitted=$( { sed -n "/const OWNED = new Set(\[/,/^          \]);$/p" "$ERROR_REPORT_YML" |
+      grep -oE "'[A-Za-z0-9.-]+\.(yml|lock\.yml)'" | tr -d "'"
+    # The worker names are built from a route list by a template literal, so expand that list the
+    # same way rather than looking for filenames the file never spells out.
+    sed -n "/const OWNED = new Set(\[/,/^          \]);$/p" "$ERROR_REPORT_YML" |
+      grep -oE "'(refine|implement|triage|apply-review|merge-gate|audit|release)'" | tr -d "'" |
+      sed 's|^|agent-|; s|$|.lock.yml|'
+  } | sort -u )
+  shipped=$( {
+    # Globs rather than `ls |`, so a filename with a space cannot split into two names.
+    for path in "${WORKFLOWS_DIR}"/*.yml; do
+      [ -e "$path" ] || continue
+      name="${path##*/}"
+      [ "$name" = "agentics-error-report.yml" ] || echo "$name"
+    done
+    # The workers are compiled from .md, and it is the .lock.yml the API reports.
+    for path in "${WORKFLOWS_DIR}"/agent-*.md; do
+      [ -e "$path" ] || continue
+      name="${path##*/}"
+      echo "${name%.md}.lock.yml"
+    done
+    # Templates that are workflows and that the package installs.
+    for candidate in agentics-checks.yml agentics-maintenance.yml; do
+      [ -f "${HERE}/../../templates/agentics/${candidate}" ] && echo "$candidate"
+    done
+  } | sort -u )
+  # Every admitted name must be shipped. The reverse is not required: a repository that installed
+  # only some workers still runs this file, and the report simply never sees the others.
+  unshipped=$(comm -23 <(printf '%s\n' "$admitted") <(printf '%s\n' "$shipped") | tr '\n' ' ')
+  if [ -n "$admitted" ] && [ -z "${unshipped// /}" ]; then
+    PASS=$((PASS + 1))
+  else
+    ER_OK=0
+    echo "FAIL: the error report's allowlist admits name(s) this package does not ship: ${unshipped:-(the allowlist could not be read)}" >&2
+  fi
+
+  # 2b. The runner label is the one value on a finding that the CONSUMER writes -- the installer
+  # preserves their `runs-on` pool across updates -- so it must be bucketed, never passed through.
+  # The finding-shape check below compares field NAMES and would re-bless a raw label without
+  # noticing, which is exactly how this shipped in the first place.
+  if grep -qE "runnerLabels\.add\(label === 'ubuntu-latest' \? 'github-hosted' : 'self-hosted'\)" "$ERROR_REPORT_YML" &&
+     [ "$(count -cE 'runnerLabels\.add\(' "$ERROR_REPORT_YML")" -eq 1 ]; then
+    PASS=$((PASS + 1))
+  else
+    ER_OK=0
+    echo "FAIL: report-workflow-errors does not bucket the runner label; a pool named for a customer or an environment would be filed upstream verbatim" >&2
+  fi
 
   # 3. No raw log text. The catalogue matches the log tail and only the matched entry's id is
   # kept; a change that put the matched text in the report would be the leak.

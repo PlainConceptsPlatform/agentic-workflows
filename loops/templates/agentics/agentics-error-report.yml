@@ -1,4 +1,4 @@
-# Managed by @plainconceptsplatform/workflows. Source: templates/agentics/agentics-error-report.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+# Managed by @plainconceptsplatform/workflows. Source: loops/templates/agentics/agentics-error-report.yml. Update with `workflows update --force`; consumer edits may be overwritten.
 name: "Agentics: Error Report"
 
 # Once a day, look at how the workflows this package ships behaved in this repository and file
@@ -25,8 +25,9 @@ run-name: "Error report: last ${{ github.event.inputs.lookback-hours || '24' }}h
 
 on:
   schedule:
-    # Slot this per repository the same way as the audit cron: the report is cheap, but four
-    # repositories waking at the same minute still queue against one another.
+    # One slot for every repository, unlike the audit cron. This job runs on a GitHub-hosted
+    # runner and never touches the shared agent fleet, and separate repositories do not queue
+    # against one another on hosted runners, so there is nothing to stagger.
     - cron: "11 7 * * *"
   workflow_dispatch:
     inputs:

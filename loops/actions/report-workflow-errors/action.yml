@@ -62,10 +62,25 @@ runs:
           const since = new Date(Date.now() - Number(process.env.LOOKBACK_HOURS) * 3600 * 1000);
 
           // Only workflows this package ships. A consumer's own workflow name is theirs and can
-          // describe a product, a customer or an environment ("Deploy: <customer> staging"), so
-          // an allowlist by filename is the boundary. Anything not matching is counted and
-          // otherwise ignored.
-          const OWNED = /^(work-router|agent-(refine|implement|triage|apply-review|merge-gate|audit|release)|authorize-bot-work|agentics-(checks|maintenance))\.(yml|lock\.yml)$/;
+          // describe a product, a customer or an environment -- Lyceum really does have
+          // `name: Deploy app to ${{ inputs.environment }}` -- so an allowlist by filename is the
+          // boundary, and it is the only thing keeping those names out. Anything not matching is
+          // counted and otherwise ignored.
+          //
+          // Exactly the filenames the package installs, and no pattern that admits a name it does
+          // not. The previous version was written as a shape (`\.(yml|lock\.yml)$` over a group of
+          // stems) and so admitted 22 names of which 11 are never shipped: the seven workers exist
+          // as `.md` sources compiled to `.lock.yml`, never as `agent-refine.yml`, and there is no
+          // `work-router.lock.yml`. A consumer writing their own `agent-release.yml` would have had
+          // its job and step names read and reported.
+          const OWNED = new Set([
+            'work-router.yml',
+            'authorize-bot-work.yml',
+            'agentics-checks.yml',
+            'agentics-maintenance.yml',
+            ...['refine', 'implement', 'triage', 'apply-review', 'merge-gate', 'audit', 'release']
+              .map((route) => `agent-${route}.lock.yml`),
+          ]);
           const ownedName = (path) => (path ?? '').split('/').pop() ?? '';
 
           // The catalogue. Each entry is a failure shape worth fixing in the package. Only the
@@ -151,7 +166,7 @@ runs:
 
           for (const run of runs) {
             const file = ownedName(run.path);
-            if (!OWNED.test(file)) { skippedForeign += 1; continue; }
+            if (!OWNED.has(file)) { skippedForeign += 1; continue; }
             ownedRuns += 1;
 
             if (['queued', 'waiting', 'pending'].includes(run.status) &&
@@ -216,7 +231,17 @@ runs:
               };
               seen.count += 1;
               seen.attempts.add(run.run_attempt ?? 1);
-              for (const label of job.labels ?? []) seen.runnerLabels.add(label);
+              // A pool label is the one value on a finding that the CONSUMER writes, and the
+              // installer deliberately preserves theirs across updates (preserveRunnerPool in
+              // cli/src/worker-env.ts). A pool named for a customer, a tenant or an environment --
+              // `contoso-prod-arc`, `retail-eu-runners` -- would have been filed upstream verbatim,
+              // and no leak check would have caught it: the scanner looks for this repository's
+              // name, its owner, URLs, emails, paths and token shapes, and a pool name is none of
+              // those. Bucket it. The catalogue asks whether the self-hosted fleet was involved,
+              // never what it is called, so the bucket loses no diagnostic value.
+              for (const label of job.labels ?? []) {
+                seen.runnerLabels.add(label === 'ubuntu-latest' ? 'github-hosted' : 'self-hosted');
+              }
               findings.set(signature, seen);
             }
           }
@@ -286,6 +311,10 @@ runs:
               `Runs from workflows this package ships: ${ownedRuns}`,
               `Of those, failed: ${ownedFailures}`,
               `Runs from the repository's own workflows, not inspected: ${skippedForeign}`,
+              // This job's own workflow is not on the allowlist, which is right -- it would be
+              // reporting on itself -- but it means a failure here reaches nobody upstream. Say so
+              // where someone reading a run will see it, rather than leaving it to be found out.
+              'This report does not cover itself: a failure in this job shows up in this repository only.',
               `Runs still queued after 45 minutes, so no runner ever took them: ${stuckInQueue}`,
               `Distinct failure signatures: ${ranked.length}`,
               queueWaitCount > 0

@@ -81,7 +81,9 @@ npx --yes --package @plainconceptsplatform/workflows@latest workflows search "ci
 
 ## Templates
 
-Install optional standalone templates with `add --template`. Available templates are `agentics-checks`, `agentics-maintenance`, `app-ci-dotnet-next`, `app-ci-node-monorepo`, `bug-report`, `feature-request`, `github-release`, and `opencode.ci.json`. CI templates are stack-specific copies, not a combined template. `github-release` publishes generated release notes when a `v*` tag is pushed. Edit their top-level `env:` values for repository paths, package names, and commands.
+Install optional standalone templates with `add --template`. Available templates are `agentics-checks`, `agentics-error-report`, `agentics-maintenance`, `app-ci-dotnet-next`, `app-ci-node-monorepo`, `bug-report`, `feature-request`, `github-release`, and `opencode.ci.json`. CI templates are stack-specific copies, not a combined template. `github-release` publishes generated release notes when a `v*` tag is pushed. Edit their top-level `env:` values for repository paths, package names, and commands.
+
+`agentics-error-report` is worth installing everywhere. Once a day it classifies how *this package's* workflows behaved in the repository and files what broke upstream, so the package gets fixed instead of every repository working around the same bug. It is deterministic — no model runs, because a model asked to summarise a failure paraphrases whatever the log held — and it sends only the names this package gives its own workflows, jobs and steps, a conclusion, a bucketed runner label, a count and a classification id. No log line, branch, title, path or issue number leaves the repository, the repository's own workflows are counted and never inspected, and a leak scanner withholds any report mentioning the repository or its owner and fails the run rather than filing it. Clear `UPSTREAM_NAME` in its `env:` to compute the report into the job summary and file nothing.
 
 ## Manual installation
 
