@@ -814,6 +814,40 @@ if worker_installed merge-gate; then
 fi
 
 if worker_installed implement; then
+  # "No pull request" has two causes and they need different words. gh-aw pushes through the
+  # GraphQL signed-commits API, which rebases onto the current parent, so a `main` that moved
+  # under a long run conflicts; gh-aw then keeps the work by filing the patch as an issue rather
+  # than dropping it, and reports that in `code_push_failure_count`. Numa #657 hit this: a 50 KB
+  # patch that passed every validation gate, filed as issue #658, while the worker told the
+  # reader "nothing landed" and flagged a retry that would conflict the same way. The two paths
+  # must stay distinguishable, and both must be driven by that count rather than by parsing prose.
+  PUSH_FALLBACK_OK=1
+  if ! grep -qF 'code_push_failure_count' "$IMPLEMENT_WORKER_MD"; then
+    PUSH_FALLBACK_OK=0
+    echo "FAIL: implement does not read code_push_failure_count, so a conflicted push reads as 'nothing landed'" >&2
+  fi
+  for needed in 'PUSH_CONFLICT_COMMENT' 'NO_PULL_REQUEST_COMMENT'; do
+    grep -qF "env.${needed}" "$IMPLEMENT_WORKER_MD" || {
+      PUSH_FALLBACK_OK=0
+      echo "FAIL: implement no longer says env.${needed} on any path" >&2
+    }
+  done
+  # Collapsing them back into one message is the regression this guards: each is defined once in
+  # the env block and printed on exactly one path, so two usages of either means the conditions
+  # have been merged or duplicated.
+  if [ "$(count -cF 'env.PUSH_CONFLICT_COMMENT' "$IMPLEMENT_WORKER_MD")" -ne 1 ] ||
+     [ "$(count -cF 'env.NO_PULL_REQUEST_COMMENT' "$IMPLEMENT_WORKER_MD")" -ne 1 ]; then
+    PUSH_FALLBACK_OK=0
+    echo "FAIL: implement should print each no-pull-request message on exactly one path" >&2
+  fi
+  # And the two paths must be mutually exclusive, or a conflicted push gets both comments.
+  if [ "$(count -cF "code_push_failure_count != '0'" "$IMPLEMENT_WORKER_MD")" -lt 2 ] ||
+     [ "$(count -cF "code_push_failure_count == '0'" "$IMPLEMENT_WORKER_MD")" -lt 2 ]; then
+    PUSH_FALLBACK_OK=0
+    echo "FAIL: the conflicted-push and no-patch paths in implement are not mutually exclusive" >&2
+  fi
+  if [ "$PUSH_FALLBACK_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
   # A provider outage kills a run in a couple of minutes with no answer, and the same issue used
   # to be handed to a human for it. The implement worker retries those and only those: a run that
   # worked for half an hour and then failed produced an answer that was wrong, and repeating it

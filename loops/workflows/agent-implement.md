@@ -17,6 +17,13 @@ env:
   STALLED_LABEL: stalled
   PR_PENDING_LABEL: pr-pending
   NO_PULL_REQUEST_COMMENT: "The implementation run finished without producing a pull request. Nothing was lost, but nothing landed either: the issue keeps `implement` and is flagged for a retry."
+  # Said when the agent DID write the code and the push failed. gh-aw pushes through the GraphQL
+  # signed-commits API, which rebases onto the current parent, so a `main` that moved under a long
+  # run conflicts; gh-aw keeps the work by filing the patch as an issue rather than dropping it,
+  # and comments the link on this issue itself. Telling someone "nothing landed" over the top of
+  # that sends them to reimplement work that already exists. One line: the compiler flattens a
+  # multi-line env value.
+  PUSH_CONFLICT_COMMENT: "The implementation produced a patch, but pushing it failed: it no longer applies to `main`, which moved while this ran. gh-aw filed the patch as a separate issue rather than losing it, and linked it in its own comment above. The work is there and needs rebasing onto current `main`, not writing again."
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
   GIT_COMMITTER_NAME: "github-actions[bot]"
@@ -227,8 +234,36 @@ jobs:
       # comment, and no bot-working — which also hid it from the hourly stale-reservation sweep.
       # Comments do not re-trigger implement, so nothing on any path would ever look at it again.
       # It was the only failure in the fleet that signalled nobody at all.
+      #
+      # There are two ways to reach "no pull request", and telling a person they are the same
+      # thing wastes their time. gh-aw pushes through the GraphQL signed-commits API, which
+      # rebases the commit range onto the current parent; when `main` has moved under a long run
+      # the rebase conflicts, and gh-aw keeps the work by filing the patch as an issue instead of
+      # dropping it. It reports that in `code_push_failure_count` and comments the link on this
+      # issue itself. Saying "nothing landed" over the top of that is false: a 50 KB patch exists
+      # and needs rebasing, not reimplementing. Seen on Numa #657, where the same change had
+      # landed on main by hand while the agent was writing it.
+      - name: Flag a patch that could not be pushed
+        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.code_push_failure_count != '0' && needs.safe_outputs.outputs.code_push_failure_count != ''
+        uses: ./.github/actions/add-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
+      - name: Say where the patch went
+        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.code_push_failure_count != '0' && needs.safe_outputs.outputs.code_push_failure_count != ''
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            ${{ env.IMPLEMENT_MARKER }}
+            ${{ env.PUSH_CONFLICT_COMMENT }}
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Flag a run that produced no pull request
-        if: needs.safe_outputs.outputs.created_pr_number == ''
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.code_push_failure_count == '0' || needs.safe_outputs.outputs.code_push_failure_count == '')
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -237,7 +272,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
       - name: Say so on the issue
-        if: needs.safe_outputs.outputs.created_pr_number == ''
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.code_push_failure_count == '0' || needs.safe_outputs.outputs.code_push_failure_count == '')
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
