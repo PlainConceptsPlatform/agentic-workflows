@@ -8,6 +8,9 @@ inputs:
   marker:
     description: Comment marker removed before evaluating clarification content.
     required: true
+  draft-marker:
+    description: Marker that identifies a temporal draft body written while questions remain.
+    required: true
   comment-prefix:
     description: Comment prefix removed before evaluating clarification content.
     required: true
@@ -19,7 +22,7 @@ outputs:
     description: Whether the output contains a usable replacement body or clarification comment.
     value: ${{ steps.validate.outputs.valid }}
   outcome:
-    description: "Deterministic refinement outcome: complete, questions, or invalid."
+    description: "Deterministic refinement outcome: complete, split, questions, or invalid."
     value: ${{ steps.validate.outputs.outcome }}
 runs:
   using: composite
@@ -29,13 +32,14 @@ runs:
       shell: bash
       env:
         COMMENT_PREFIX: ${{ inputs.comment-prefix }}
+        DRAFT_MARKER: ${{ inputs.draft-marker }}
         ISSUE_NUMBER: ${{ inputs.issue-number }}
         MARKER: ${{ inputs.marker }}
         OUTPUT_FILE: ${{ inputs.output-file }}
       run: |
         set -euo pipefail
 
-        outcome="$(bash "${{ github.action_path }}/validate-refine-output.sh" "$OUTPUT_FILE" "$MARKER" "$COMMENT_PREFIX" "$ISSUE_NUMBER")"
+        outcome="$(bash "${{ github.action_path }}/validate-refine-output.sh" "$OUTPUT_FILE" "$MARKER" "$COMMENT_PREFIX" "$ISSUE_NUMBER" "$DRAFT_MARKER")"
         echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
         echo "valid=$([ "$outcome" != 'invalid' ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 

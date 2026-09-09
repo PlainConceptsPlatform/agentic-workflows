@@ -8,6 +8,7 @@ env:
   IMPLEMENT_LABEL: implement
   REVIEW_LABEL: review
   REFINE_MARKER: "<!-- agent-refine -->"
+  DRAFT_MARKER: "<!-- agent-refine-draft -->"
   INITIAL_MODE: first
   RESPONSE_MODE: rerefine
   MAX_SELF_QUESTIONS: "5"
@@ -30,6 +31,10 @@ env:
 description: |
   Refines an issue into a user story, on a first pass or after the author has answered the
   bot's questions. Replaces .loops/recipes/refine-loop.yaml.
+
+  The refined story is wrapped in the repository's own issue template when one matches.
+  When questions remain, the worker leaves that template-wrapped temporal draft on the
+  issue and asks every remaining question in a single batched comment.
 
   Before writing the story, the agent explores the codebase per work unit (each bullet in a
   bullet-list issue is its own unit), answering its own questions where the code can and
@@ -124,6 +129,7 @@ jobs:
         with:
           output-file: ${{ steps.output.outputs.output-file }}
           marker: ${{ env.REFINE_MARKER }}
+          draft-marker: ${{ env.DRAFT_MARKER }}
           comment-prefix: ${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}
           issue-number: ${{ inputs.issue-number }}
   conclude:
@@ -403,7 +409,9 @@ timeout-minutes: 40
 
    - On a `${{ env.INITIAL_MODE }}` pass, refine from scratch.
    - On a `${{ env.RESPONSE_MODE }}` pass, incorporate only the supplied answers from the issue author or an
-     assignee. Do not use answers from other commenters.
+     assignee. Do not use answers from other commenters. The body may already hold the
+     temporal draft from the earlier pass: reuse what still holds, and resolve its pending
+     marks with the author's answers.
 
 3. Explore before you write. Call skill("pc-plan-explore") and hold its stance for this step:
    read-only, no plans, no files, no branches. You are only building understanding here, never
@@ -461,7 +469,7 @@ timeout-minutes: 40
    No "As a / I want / so that" form. No Given/When/Then. No Mermaid. Just the marker,
    the summary, and the checklist.
 
-   Load `@humanizer` and prepare the replacement issue body, then go directly to step 6.
+   Load `@humanizer` and prepare the replacement issue body, then go directly to step 8.
 
 5. Before writing the story, verify coverage: list every work unit and confirm each one has
    exploration findings concrete enough for acceptance criteria. If any unit is missing, go back
@@ -476,9 +484,36 @@ timeout-minutes: 40
      Apply repository documentation and established conventions before finalizing the story.
      Adhere to ${{ env.REPO_RULES }}.
 
-5. Load `@humanizer` and prepare the complete replacement issue body as valid Markdown.
+6. **Wrap the story in the repository's issue form.** The body people read must follow the
+   repository's own issue template when one exists; the story is the content, the template
+   is the shape.
 
-6. **Estimate the story in points.** Use the Fibonacci scale, where one point is roughly one
+   Find the form first:
+
+   - List the YAML and Markdown forms under `.github/ISSUE_TEMPLATE/`, plus a legacy
+     `.github/issue_template.md` or a root `template.yml`. `config.yml` there only declares
+     contact links, which are not forms: ignore it.
+   - When a form filters by labels and the issue carries one of those labels, that form
+     wins. Otherwise use the repository's default form.
+   - When the repository has no form at all, keep the free-form story shape from step 5:
+     there is nothing to wrap around.
+
+   Then fill it:
+
+   - Draw every field's content from your exploration findings. Required fields always get
+     real content; optional fields only when you genuinely have something for them.
+   - The story narrative lands in the field that asks for it — proposal, description, or
+     what-happened, depending on the form.
+   - The Given/When/Then scenarios go into the form's acceptance-criteria field when it has
+     one; otherwise they stay a section of their own. The Mermaid diagram goes where it
+     reads best inside the filled form.
+   - The machine-readable lines the later steps add — split markers in step 9, estimate
+     lines in step 10 — always sit at the very top of the body, above the form's first
+     heading, so the workflow can read them whatever the form's shape.
+
+7. Load `@humanizer` and prepare the complete replacement issue body as valid Markdown.
+
+8. **Estimate the story in points.** Use the Fibonacci scale, where one point is roughly one
    human day of work for a developer who knows this codebase. Estimate the whole story: code,
    tests, and the edge cases the acceptance criteria imply.
 
@@ -497,7 +532,7 @@ timeout-minutes: 40
    Elapsed clock time is not evidence. A large change can land in minutes and a small one can
    wait days for a human, so never reason from how long anything took.
 
-7. **Split when the estimate is ${{ env.SPLIT_THRESHOLD }} or more.** An oversized story is the
+9. **Split when the estimate is ${{ env.SPLIT_THRESHOLD }} or more.** An oversized story is the
    single best predictor of a pull request that never lands.
 
    First test whether it *can* split. A story splits when it contains slices that are each
@@ -506,7 +541,7 @@ timeout-minutes: 40
    on its own cannot be verified.
 
    **If it splits:** write between two and ${{ env.MAX_SPLIT_CHILDREN }} children. Each child is
-   a complete refined story in the same format you would have written for the whole, with its own
+   a complete refined story wrapped in the same issue form, with its own
    acceptance criteria, its own tests section, and its own estimate of 5 or less. Never write a
    child estimated at 1: that is a fragment, so fold it into a sibling. Call `create_issue` once
    per child, and in each child body include:
@@ -522,7 +557,7 @@ timeout-minutes: 40
    single story and say so in one sentence in the body, under the estimate. An honest 8 is more
    useful than three fake threes that each break the build.
 
-8. **Record the estimate in every body you write**, parent and children alike, immediately below
+10. **Record the estimate in every body you write**, parent and children alike, immediately below
    the title line, as exactly these two lines:
 
    ```
@@ -533,7 +568,7 @@ timeout-minutes: 40
    The visible line is for people and the marker is read by the workflow, which turns it into the
    `sp-N` label. A body without the marker gets no estimate label at all.
 
-9. Decide exactly one outcome:
+11. Decide exactly one outcome:
 
     Labels are workflow-owned state. Do not call `add_labels` or `remove_labels`.
 
@@ -543,7 +578,17 @@ timeout-minutes: 40
     final payload, when you are ready to commit to the outcome.
 
     **Questions remain.** You set aside one or more questions for the author that the codebase
-    could not answer. Leave the body unchanged. Call `add_comment` once with:
+    could not answer. Leave the partial work visible: first call `update_issue` with a
+    temporal draft, then call `add_comment` once with the questions.
+
+    The temporal draft is the replacement body your path would have written — the filled
+    issue form from step 6 on the standard path, the marker, summary and checklist from
+    step 4a on the trivial path — holding everything you already established, with every
+    part the questions leave open marked `_pending — see questions below_`. Its very
+    first line is `${{ env.DRAFT_MARKER }}`; the next run replaces the draft wholesale
+    with the final body.
+
+    The comment carries:
    1. `${{ env.REFINE_MARKER }}`
    2. `${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}`
    3. `I have some questions about this issue. Please reply in one comment and I'll process your answers.`
@@ -553,7 +598,7 @@ timeout-minutes: 40
    them is a domain expert, not an engineer.
 
     **The story is complete.** You answered every exploration question yourself and none remain
-    for the author. Call `update_issue` with the replacement body and `add_comment`
+    for the author. Call `update_issue` with the wrapped replacement body and `add_comment`
     with `${{ env.REFINE_MARKER }}`, then `${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}`,
     then exactly one of these messages, based only on the `labels` array in the supplied issue
     context:
@@ -588,7 +633,7 @@ flowchart TD
     refOutcome["Outcome<br/>Any questions left?"] -->|no| refDone
     refOutcome -.->|yes| refAsk
     refDone(("Refined<br/>refine+review removed<br/>refined+implement added"))
-    refAsk(("Questions<br/>review added, bot-working removed"))
+    refAsk(("Questions<br/>draft left on the issue<br/>review added, bot-working removed"))
     refAsk -->|author or assignee replies<br/>via Work Router| refStart
     refIdle(("Idle<br/>No eligible issue"))
     refFail(("Fail<br/>review added, refine kept"))
