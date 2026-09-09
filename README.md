@@ -77,6 +77,15 @@ creates work rather than consuming it, and files into `refine` rather than strai
 `implement`, so a report of several unrelated findings becomes one properly sized issue per
 finding instead of one pull request that has to fix them all.
 
+A merge-gate verdict parks the **code** it was given on, not the CI run that prompted it. Both
+paths that dispatch the gate compare the standing verdict against the newest commit on the
+branch: re-run CI as often as you like and the park holds, but push a commit -- which is what
+apply-review and a `remediated` verdict both do -- and the gate decides again, because that is
+new code nobody has ruled on. They used to compare against the CI *finish time*, which made the
+park worthless: any later run on the same commits was newer than the verdict, so the belt
+re-dispatched a pull request a human already owned and handed it a fresh budget of six ~120-minute
+gate runs at the same time. One pull request sat parked for six days while that happened.
+
 Two labels are the controls a person has: `review` parks anything for a human, and `future`
 holds a refined issue back from implementation until it is removed. A third label, `pr-pending`,
 marks issues whose bot PR is open and awaiting merge-gate — it is informational only and does
@@ -204,6 +213,7 @@ repository's to change:
 | `HOUSEKEEPING_STALE_PR_DAYS` | `3` | a bot pull request older than this with no gate verdict is reported, never closed |
 | `HOUSEKEEPING_DIGEST_TITLE` | `Needs a human` | the one issue listing what needs a person; empty turns the digest off |
 | `AUDIT_STALE_AFTER_DAYS` | `14` | when an unactioned audit report stops blocking the next audit |
+| `MAX_GATE_ATTEMPTS` | `6` | failed merge-gate attempts one pull request head may consume before the belt parks it |
 
 ## Consumer prerequisite
 

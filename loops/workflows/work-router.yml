@@ -115,6 +115,11 @@ env:
   # backpressure ignores a stale report, so three abandoned reports can no longer disable the
   # weekly audit for good; the digest lists them instead. Two missed weekly cycles.
   AUDIT_STALE_AFTER_DAYS: "14"
+  # How many failed merge-gate attempts one pull request head may consume before the belt
+  # parks it for a person. It was written as the literal 6 in four places here while the
+  # merge-gate worker carried its own MAX_ATTEMPTS; the route matrix now asserts the two
+  # agree, because a belt that gives up later than the worker says burns whole runs.
+  MAX_GATE_ATTEMPTS: "6"
 
 on:
   issues:
@@ -812,20 +817,27 @@ jobs:
                 verdict="$issue_verdict"
               fi
             fi
-            if [ -n "$verdict" ] && [ "$verdict" \> "$ci_finished" ]; then
-              echo "PR #$pr already has a gate verdict newer than CI; skipping."
+            # A verdict parks the CODE it was given on, not the CI run that prompted it.
+            # Comparing against the CI finish time meant any later run on the same commits
+            # reopened a park a human already owned. The newest commit on the branch is the
+            # right key: push, and the gate decides again; re-run CI, and the park holds.
+            head_committed=$(gh pr view "$pr" --repo "$REPO" \
+              --json commits --jq '[.commits[].committedDate] | max // empty' 2>/dev/null || true)
+            horizon="${head_committed:-$ci_finished}"
+            if [ -n "$verdict" ] && [ "$verdict" \> "$horizon" ]; then
+              echo "PR #$pr has a gate verdict newer than its head commit; the park holds, skipping."
               return 0
             fi
 
             attempts=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" \
-              --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$ci_finished"'") ] | length')
+              --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$horizon"'") ] | length')
             if [ -n "$linked_issue" ]; then
               issue_attempts=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
-                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$ci_finished"'") ] | length')
+                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$horizon"'") ] | length')
               attempts=$((attempts + issue_attempts))
             fi
-            if [ "$attempts" -ge 6 ]; then
-              echo "PR #$pr already consumed $attempts gate attempts on this CI verdict, parking for review."
+            if [ "$attempts" -ge "$MAX_GATE_ATTEMPTS" ]; then
+              echo "PR #$pr already consumed $attempts gate attempts on this head, parking for review."
               return 0
             fi
             if gate_is_live "$pr"; then
@@ -833,7 +845,7 @@ jobs:
               return 0
             fi
 
-            echo "PR #$pr is $([ "$mergeable" = "false" ] && echo conflicting || echo red-CI) (CI $ci_conclusion); dispatching Merge Gate (attempt $((attempts + 1)) of 6)."
+            echo "PR #$pr is $([ "$mergeable" = "false" ] && echo conflicting || echo red-CI) (CI $ci_conclusion); dispatching Merge Gate (attempt $((attempts + 1)) of $MAX_GATE_ATTEMPTS)."
             gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" \
               --method POST \
               -f ref="$DEFAULT_BRANCH" \
@@ -1021,20 +1033,36 @@ jobs:
                   latest_verdict="$issue_verdict"
                 fi
               fi
-              if [ -n "$latest_verdict" ] && [ "$latest_verdict" \> "$ci_finished" ]; then
-                echo "Merge gate verdict ($latest_verdict) is newer than CI ($ci_finished) for PR #$pr_number, skipping"
+              # A verdict parks the CODE it was given on, not the CI run that prompted it. This
+              # used to compare against the CI finish time, which made the park worthless: any
+              # later CI run on the same commits -- a re-run, a nightly, a rebuild triggered by
+              # main moving -- was newer than the verdict, so the belt re-dispatched a pull
+              # request a human had already been handed, and the attempt counter below reset to
+              # zero at the same time and handed it a fresh budget of six full gate runs.
+              # Lyceum PR #13 sat parked by a `review` verdict for six days while this happened.
+              #
+              # The newest commit on the branch is the right key. A gate verdict newer than it
+              # applies to the current head, so the park holds however often CI runs. Push a
+              # commit -- which is what apply-review and a `remediated` verdict both do -- and
+              # the head moves past the verdict and the gate decides again, which is correct:
+              # that is new code nobody has ruled on.
+              head_committed=$(gh pr view "$pr_number" --repo "$REPO" \
+                --json commits --jq '[.commits[].committedDate] | max // empty' 2>/dev/null || true)
+              verdict_horizon="${head_committed:-$ci_finished}"
+              if [ -n "$latest_verdict" ] && [ "$latest_verdict" \> "$verdict_horizon" ]; then
+                echo "PR #$pr_number: gate verdict ($latest_verdict) is newer than its head commit ($verdict_horizon); the park holds, skipping"
                 continue
               fi
 
               attempts=$(gh api "repos/$REPO/issues/$pr_number/comments?per_page=100" \
-                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$ci_finished"'") ] | length')
+                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$verdict_horizon"'") ] | length')
               if [ -n "$linked_issue" ]; then
                 issue_attempts=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
-                  --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$ci_finished"'") ] | length')
+                  --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$verdict_horizon"'") ] | length')
                 attempts=$((attempts + issue_attempts))
               fi
-              if [ "$attempts" -ge 6 ]; then
-                echo "PR #$pr_number already consumed $attempts gate attempts on this CI verdict, parking for review"
+              if [ "$attempts" -ge "$MAX_GATE_ATTEMPTS" ]; then
+                echo "PR #$pr_number already consumed $attempts gate attempts on this head, parking for review"
                 continue
               fi
               if gate_is_live "$pr_number"; then
@@ -1042,7 +1070,7 @@ jobs:
                 continue
               fi
 
-              echo "Dispatching Merge Gate for PR #$pr_number ($ci_conclusion, run $ci_run_id, attempt $((attempts + 1)) of 6)"
+              echo "Dispatching Merge Gate for PR #$pr_number ($ci_conclusion, run $ci_run_id, attempt $((attempts + 1)) of $MAX_GATE_ATTEMPTS)"
               gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" \
                 --method POST \
                 -f ref="$DEFAULT_BRANCH" \

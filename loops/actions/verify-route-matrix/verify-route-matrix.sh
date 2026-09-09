@@ -56,6 +56,16 @@ echo "Installed workers: ${INSTALLED_ROUTES[*]:-(none)}"
 PASS=0
 FAIL=0
 
+# `grep -c` exits 1 when it counts zero, and this file runs under `set -e`, so writing
+# `n=$(grep -c ...)` against a pattern that is absent ended the whole suite at whatever section
+# it had reached, with no error printed and no FAIL counted. That made an assertion of the form
+# "this pattern must be GONE" impossible to write here: the moment it held, the suite died. Every
+# count goes through this instead, where zero is an answer rather than a failure. Callers pass
+# their own grep flags.
+count() {
+  grep "$@" 2>/dev/null || true
+}
+
 # Classify one event and read a single field out of the result.
 route_field() {
   local field="$1"
@@ -335,7 +345,7 @@ if worker_installed audit; then
 fi
 # And nothing may go back to naming the CI workflow directly: a second literal is a second
 # thing to keep in step, and the one that gets forgotten is the one inside a jq filter.
-if [ "$(grep -c '"App: CI"' "$ROUTER_YML")" -gt 2 ]; then
+if [ "$(count -c '"App: CI"' "$ROUTER_YML")" -gt 2 ]; then
   MIRROR_OK=0
   echo "FAIL: work-router.yml hardcodes the CI workflow name outside env: and the mirrored trigger" >&2
   grep -n '"App: CI"' "$ROUTER_YML" >&2
@@ -492,7 +502,7 @@ if worker_installed implement && worker_installed merge-gate; then
   grep -Fq 'protected-files: allowed' "$MERGE_GATE_WORKER_MD" || PROTECTED_OK=0
   grep -Fq "holds_review: \${{ steps.files.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure' }}" "$MERGE_GATE_WORKER_MD" || PROTECTED_OK=0
   # The decision must not be re-derived anywhere: one definition, everything else reads it.
-  if [ "$(grep -c "requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'" "$MERGE_GATE_WORKER_MD")" -ne 1 ]; then
+  if [ "$(count -c "requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'" "$MERGE_GATE_WORKER_MD")" -ne 1 ]; then
     PROTECTED_OK=0
     echo "FAIL: the protected-files hold is derived in more than one place; read holds_review instead" >&2
   fi
@@ -548,22 +558,22 @@ BELT_OK=1
 if ! grep -q 'agent-merge-gate-attempt' "$ROUTER_YML"; then
   BELT_OK=0; echo "FAIL: router never counts gate attempts" >&2
 fi
-if [ "$(grep -cF 'contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))' "$ROUTER_YML")" -lt 4 ]; then
+if [ "$(count -cF 'contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))' "$ROUTER_YML")" -lt 4 ]; then
   BELT_OK=0; echo "FAIL: verdict detection must pair the gate marker with a Verdict line in both dispatch paths" >&2
 fi
-if [ "$(grep -c 'attempts_so_far' "$ROUTER_YML")" -lt 2 ]; then
+if [ "$(count -c 'attempts_so_far' "$ROUTER_YML")" -lt 2 ]; then
   BELT_OK=0; echo "FAIL: dispatch sites must forward attempts_so_far" >&2
 fi
 # A second gate for a pull request whose gate is already queued or running reads the same CI
 # verdict and is cancelled by the single-slot merge-belt queue (two cancellations on 2026-09-06).
-if [ "$(grep -c 'a merge-gate run is already live' "$ROUTER_YML")" -lt 2 ]; then
+if [ "$(count -c 'a merge-gate run is already live' "$ROUTER_YML")" -lt 2 ]; then
   BELT_OK=0; echo "FAIL: both dispatch paths must skip a pull request whose gate is already live" >&2
 fi
 # A conflicting pull request has no refs/pull/N/merge for GitHub to build, so a `pull_request`
 # CI workflow can never run on that head. Requiring a fresh verdict before dispatching deadlocks
 # the belt: only the gate resolves the conflict, and the gate never runs. Both paths fall back to
 # the branch's last verdict when, and only when, the pull request is conflicting.
-if [ "$(grep -c 'conflicts, so CI cannot run on' "$ROUTER_YML")" -lt 2 ]; then
+if [ "$(count -c 'conflicts, so CI cannot run on' "$ROUTER_YML")" -lt 2 ]; then
   BELT_OK=0
   echo "FAIL: both dispatch paths must gate a conflicting pull request that can never get fresh CI" >&2
 fi
@@ -575,8 +585,8 @@ fi
 # reports "not conflicting" for exactly the stale pull requests the fallback is for. Observed
 # twice in production: the fallback logged "no completed CI run" for a pull request that
 # `gh pr view` reported as CONFLICTING from a warm cache seconds later.
-if [ "$(grep -c 'mergeable_state()' "$ROUTER_YML")" -lt 2 ] ||
-  [ "$(grep -c 'mergeable_now=$(mergeable_state' "$ROUTER_YML")" -lt 2 ]; then
+if [ "$(count -c 'mergeable_state()' "$ROUTER_YML")" -lt 2 ] ||
+  [ "$(count -c 'mergeable_now=$(mergeable_state' "$ROUTER_YML")" -lt 2 ]; then
   BELT_OK=0
   echo "FAIL: both dispatch paths must poll the mergeable state; a single read answers UNKNOWN" >&2
 fi
@@ -633,7 +643,7 @@ if worker_installed merge-gate; then
   # Three verdict sites: the review hold on the issue, the agent's assessment on the issue,
   # and conclude's short verdict on the pull request itself.
   if grep -q 'ATTEMPT_MARKER: "<!-- agent-merge-gate-attempt -->"' "$MERGE_GATE_WORKER_MD" &&
-    [ "$(grep -c '\${{ env.GATE_MARKER }}' "$MERGE_GATE_WORKER_MD")" -eq 3 ]; then
+    [ "$(count -c '\${{ env.GATE_MARKER }}' "$MERGE_GATE_WORKER_MD")" -eq 3 ]; then
     PASS=$((PASS + 1))
   else
     FAIL=$((FAIL + 1))
@@ -699,7 +709,7 @@ if worker_installed merge-gate; then
   PENDING_OK=1
   grep -q '^  PR_PENDING_LABEL:' "$MERGE_GATE_WORKER_MD" ||
     { PENDING_OK=0; echo "FAIL: merge gate lost its PR_PENDING_LABEL definition" >&2; }
-  if [ "$(grep -c '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD")" -ne 1 ]; then
+  if [ "$(count -c '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD")" -ne 1 ]; then
     PENDING_OK=0
     echo "FAIL: pr-pending must be removed in exactly one place, the merge path" >&2
     grep -n '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD" >&2
@@ -805,7 +815,7 @@ if worker_installed triage; then
   # alternation, which is exactly the regression this is meant to catch.
   validate_program=$(grep -v '^[[:space:]]*#' "$VALIDATE_TRIAGE_SH")
   for verdict in pass needs-info needs-maintainer block; do
-    if [ "$(grep -c -- "$verdict" <<<"$validate_program")" -lt 3 ]; then
+    if [ "$(count -c -- "$verdict" <<<"$validate_program")" -lt 3 ]; then
       TRIAGE_OK=0
       echo "FAIL: validate-triage-output.sh does not accept the '${verdict}' verdict in test(), capture() and the guard" >&2
     fi
@@ -817,7 +827,7 @@ if worker_installed triage; then
 
   # The assertion this whole route turns on: exactly one step closes an issue, and it is
   # reached only by a block verdict.
-  closes=$(grep -c "state: 'closed'" "$TRIAGE_WORKER_MD")
+  closes=$(count -c "state: 'closed'" "$TRIAGE_WORKER_MD")
   if [ "$closes" -ne 1 ]; then
     TRIAGE_OK=0
     echo "FAIL: agent-triage.md closes an issue in ${closes} places; expected exactly one" >&2
@@ -915,7 +925,7 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
   # Every write goes through act(), which is the only place dry-run is honoured. A second
   # write path would make --dry-run a lie exactly once, on the run that deletes something.
   hk 'const act = async' 'has no act\(\) wrapper, so dry-run cannot be enforced in one place'
-  writes=$(grep -cE 'github\.rest\.(issues\.(create|update|createComment|removeLabel|addLabels)|git\.deleteRef|actions\.createWorkflowDispatch)\(' "$HOUSEKEEPING_YML")
+  writes=$(count -cE 'github\.rest\.(issues\.(create|update|createComment|removeLabel|addLabels)|git\.deleteRef|actions\.createWorkflowDispatch)\(' "$HOUSEKEEPING_YML")
   outside=$(awk '
     /await act\(/ { inact = 1 }
     inact && /github\.rest\.(issues\.(create|update|createComment|removeLabel|addLabels)|git\.deleteRef|actions\.createWorkflowDispatch)\(/ { seen++ }
@@ -946,7 +956,7 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
 
   # The janitor closes issues, and the only issues it may close are a split parent whose
   # children are all done and its own digest. Anything else is a person's to close.
-  closes=$(grep -cE "state: 'closed'" "$HOUSEKEEPING_YML")
+  closes=$(count -cE "state: 'closed'" "$HOUSEKEEPING_YML")
   if [ "$closes" -eq 2 ]; then
     PASS=$((PASS + 1))
   else
@@ -1031,6 +1041,57 @@ if [ -f "$AUDIT_CLOSE_YML" ] && worker_installed audit; then
   if [ "$AC_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+echo "── Merge gate park ───────────────────────────────────────────────────────"
+
+# A gate verdict parks the code it was given on. Both dispatch paths -- detect-pr-conflicts and
+# the reconcile belt -- used to compare the standing verdict against the CI finish time, which
+# made the park worthless: any later run on the same commits was newer than the verdict, so the
+# belt re-dispatched a pull request a human already owned and reset its attempt budget at the
+# same time. Lyceum PR #13 sat parked for six days while that happened. Asserted because both
+# comparisons are one line and neither failing produces a red run.
+if worker_installed merge-gate; then
+  GATE_OK=1
+
+  # Neither path may key the park to CI timing again.
+  stale_horizon=$(count -cE 'verdict" \\> "\$ci_finished"|latest_verdict" \\> "\$ci_finished"' "$ROUTER_YML")
+  if [ "$stale_horizon" -eq 0 ]; then
+    PASS=$((PASS + 1))
+  else
+    GATE_OK=0
+    echo "FAIL: the merge-gate park is keyed to the CI finish time in ${stale_horizon} place(s); a CI re-run would reopen a park a person owns" >&2
+  fi
+
+  # Both must fall back to the CI time only when the head commit cannot be read.
+  horizons=$(count -cE '\$\{head_committed:-\$ci_finished\}' "$ROUTER_YML")
+  if [ "$horizons" -eq 2 ]; then
+    PASS=$((PASS + 1))
+  else
+    GATE_OK=0
+    echo "FAIL: ${horizons} of the 2 gate dispatch paths key their park to the head commit" >&2
+  fi
+
+  # One cap, not four literals, and it has to match what the worker tells the reader.
+  router_cap="$(router_env MAX_GATE_ATTEMPTS)"
+  worker_cap="$(sed -n 's/^  MAX_ATTEMPTS: "\([0-9]*\)"$/\1/p' "${WORKFLOWS_DIR}/agent-merge-gate.md" | head -1)"
+  if [ -n "$router_cap" ] && [ "$router_cap" = "$worker_cap" ]; then
+    PASS=$((PASS + 1))
+  else
+    GATE_OK=0
+    echo "FAIL: the belt gives up after '${router_cap:-unset}' attempts but agent-merge-gate.md tells the reader '${worker_cap:-unset}'" >&2
+  fi
+  # And no path may go back to a literal. Counting the word `6` would match a hundred things,
+  # so this looks only at the attempt comparison and the message beside it.
+  if ! grep -qE '"\$attempts" -ge 6|attempts \+ 1\)\) of 6' "$ROUTER_YML"; then
+    PASS=$((PASS + 1))
+  else
+    GATE_OK=0
+    echo "FAIL: the gate attempt cap is hardcoded in work-router.yml instead of read from env.MAX_GATE_ATTEMPTS" >&2
+    grep -nE '"\$attempts" -ge 6|attempts \+ 1\)\) of 6' "$ROUTER_YML" >&2
+  fi
+
+  if [ "$GATE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 echo "── Expression functions ──────────────────────────────────────────────────"
 
 # GitHub's expression language has eleven functions and no more. There is no `split()`, no
@@ -1075,7 +1136,7 @@ if [ -f "$ERROR_REPORT_YML" ]; then
   # grep for `core.setFailed` passed with one of the two calls turned into core.info. Both of
   # those were mutation-tested and both let a broken privacy guard through.
   er 'const leakChecks = \[' 'declares no leak scanner'
-  teeth=$(grep -cE 'core\.setFailed.*withheld by the leak scanner' "$ERROR_REPORT_YML")
+  teeth=$(count -cE 'core\.setFailed.*withheld by the leak scanner' "$ERROR_REPORT_YML")
   if [ "$teeth" -ge 2 ]; then
     PASS=$((PASS + 1))
   else
@@ -1084,8 +1145,8 @@ if [ -f "$ERROR_REPORT_YML" ]; then
   fi
   # Every write upstream has to be behind a scan. Counting is enough here because both are few
   # and named, and a new write added without a guard moves the counts apart.
-  scans=$(grep -cE 'if \(!scan\(' "$ERROR_REPORT_YML")
-  upstream_writes=$(grep -cE 'upstream\.rest\.issues\.(create|update)\(' "$ERROR_REPORT_YML")
+  scans=$(count -cE 'if \(!scan\(' "$ERROR_REPORT_YML")
+  upstream_writes=$(count -cE 'upstream\.rest\.issues\.(create|update)\(' "$ERROR_REPORT_YML")
   if [ "$scans" -ge "$upstream_writes" ] && [ "$upstream_writes" -gt 0 ]; then
     PASS=$((PASS + 1))
   else
