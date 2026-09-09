@@ -424,3 +424,104 @@ flowchart TD
 
 The version bump, the tag and the Release are deterministic on purpose. The agent's only output is
 a file on disk, so a confused model cannot publish a release.
+
+---
+
+## housekeeping
+
+Not a worker: a deterministic job in the router, on its own six-hourly cron, with no model. It is
+the answer to a specific measured problem. Across the four consumers, 58 of 237 issues closed since
+1 August were closed by the bot; autonomy ran between 6% and 50%. The gap was not bad decisions, it
+was silence — work that stopped and told nobody, and state that nothing ever cleaned up.
+
+The one rule that shapes it: **retry a failure, report a decision.** A crash, a timeout or an empty
+output is a machine failure, and the worker marks it `stalled`; those are worth running again. A
+triage `needs-maintainer`, a refine `questions` or a merge-gate `review` is a verdict the agent
+reached on purpose, and running it again just reproduces it.
+
+```mermaid
+flowchart TB
+    hkCron("cron 23 */6 * * *") --> hkScan("List open issues,<br/>pull requests and branches")
+    hkScan --> hkPark{"Issue carries<br/>review?"}
+    hkPark -.->|no| hkStrand
+    hkPark -->|yes| hkWhy{"and stalled?"}
+    hkWhy -.->|"no: a decision"| hkDigest
+    hkWhy -->|"yes: a machine failure"| hkBudget{"waited 6h,<br/>under 3 tries?"}
+    hkBudget -.->|"budget spent"| hkDigest
+    hkBudget -->|yes| hkRetry("Comment the attempt,<br/>drop review and stalled,<br/>dispatch the work route")
+    hkRetry --> hkStrand
+
+    hkStrand("Strands: drop pr-pending<br/>where no open PR closes the issue") --> hkParent("Close a split parent<br/>once every child is closed")
+    hkParent --> hkBranch{"Branch whose PRs<br/>are all finished<br/>and all bot-authored?"}
+    hkBranch -->|yes| hkDelete("Delete the branch")
+    hkBranch -.->|"open PR, human PR,<br/>or the default branch"| hkDigest
+    hkDelete --> hkDigest
+    hkDigest("Rewrite one issue:<br/>Needs a human") --> hkEnd
+    hkEnd(("One place to look<br/>instead of four repos"))
+
+    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
+    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
+    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
+    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
+    class hkCron start
+    class hkScan,hkRetry,hkStrand,hkParent,hkDelete,hkDigest action
+    class hkPark,hkWhy,hkBudget,hkBranch decision
+    class hkEnd success
+```
+
+Three things make it safe to leave running unattended. It uses the App token, because GitHub starts
+no workflow run from an event raised with `GITHUB_TOKEN`, so with the default token every retry
+would be a green no-op. Every write goes through one `act()` wrapper, which is the only place
+`dry-run` is read, so there is no second path that forgets to check it. And it closes exactly two
+kinds of issue — a split parent whose children are all done, and its own digest — which the route
+matrix asserts by counting.
+
+---
+
+## agentics-error-report
+
+An optional template, installed everywhere, and the only job in the fleet that sends anything out of
+the repository it runs in. Every consumer is private, so that is the whole design constraint.
+
+What crosses the boundary is a fixed, enumerable set of facts about workflows **this package ships**:
+their file names, their job and step names, a conclusion, a runner label, a count, and the id of a
+matched entry from a catalogue of sixteen known failure shapes. What never crosses it is free text
+of any kind — no log line, no branch name, no issue title, no path, no URL, no number that could be
+looked up. Hence no model: a model asked to summarise a failure paraphrases whatever the log held.
+
+```mermaid
+flowchart TB
+    erCron("cron 11 7 * * *") --> erRuns("List this repo's runs<br/>from the last 24h")
+    erRuns --> erOwned{"Is the workflow one<br/>this package ships?"}
+    erOwned -.->|"no: the name could describe<br/>a product or a customer"| erCount("Counted, never inspected")
+    erOwned -->|yes| erState{"Failed, or queued<br/>past 45 minutes?"}
+    erState -.->|neither| erCount
+    erState -->|yes| erClassify("Read the log tail,<br/>match the catalogue,<br/>keep only the matched id")
+    erClassify --> erBody("Build the report from<br/>package-owned names,<br/>a conclusion and a count")
+    erBody --> erScan{"Leak scanner:<br/>repo or owner name, a URL,<br/>an email, a path, a token,<br/>an issue number, a ref?"}
+    erScan -.->|"anything matches"| erWithhold(("Withheld<br/>nothing filed, run goes red"))
+    erScan -->|clean| erToken{"Upstream token<br/>available?"}
+    erToken -.->|no| erSummary(("Job summary only<br/>warning, not a red run"))
+    erToken -->|yes| erFile("One upstream issue<br/>per signature, appended<br/>rather than repeated")
+    erFile --> erDone(("Filed upstream"))
+
+    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
+    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
+    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
+    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
+    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
+    classDef idle fill:#f4f4f6,stroke:#5b5b66,stroke-width:2px,color:#2b2b33
+    class erCron start
+    class erRuns,erClassify,erBody,erFile,erCount action
+    class erOwned,erState,erScan,erToken decision
+    class erWithhold failure
+    class erDone success
+    class erSummary idle
+```
+
+The scanner fails closed, and its failure is loud: a report it flags is not filed and the run goes
+red, so the field that carried private text gets fixed rather than leaking again the next morning.
+The route matrix asserts the scanner exists, that both exit paths call `setFailed`, that there are
+at least as many scans as upstream writes, that each individual check is still present, and that no
+model or `OPENAI_API_KEY` has appeared in the action. Every one of those was mutation-tested; three
+earlier versions of them passed against a deliberately broken guard and were rewritten.

@@ -563,7 +563,10 @@ async function writeUpdates(repositoryPath: string, updates: readonly ContentUpd
 function catalogTemplateMeta(template: TemplateName): { directory: string; file: string; target: string } {
   const entry = catalogTemplates.find((item) => item.name === template);
   if (entry === undefined) throw new Error(`Unknown template: ${template}`);
-  const directory = template.startsWith("opencode") ? "opencode" : template.startsWith("app-ci-") ? "ci" : template === "github-release" ? "release" : template === "bug-report" || template === "feature-request" ? "issues" : "agentics";
+  // The directory is a field on the entry now. It used to be inferred from the name by a chain
+  // of ternaries ending in "agentics", so a new template in any other directory installed the
+  // wrong file or none at all, and the default hid it.
+  const directory = entry.directory ?? (template.startsWith("opencode") ? "opencode" : template.startsWith("app-ci-") ? "ci" : template === "github-release" ? "release" : template === "bug-report" || template === "feature-request" ? "issues" : "agentics");
   const isWorkflow = entry.file.endsWith(".yml");
   const inferredTarget = template === "app-ci-dotnet-next"
     ? ".github/workflows/app-ci.yml"

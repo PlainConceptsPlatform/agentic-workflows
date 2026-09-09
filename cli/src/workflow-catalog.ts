@@ -54,6 +54,7 @@ export const generatedConsumerTargets = [
 
 export const templateNames = [
   "agentics-checks",
+  "agentics-error-report",
   "agentics-maintenance",
   "app-ci-dotnet-next",
   "app-ci-node-monorepo",
@@ -70,10 +71,13 @@ export interface CatalogTemplate {
   readonly file: string;
   readonly description: string;
   readonly target?: string;
+  /** Subdirectory of `templates/` holding the file. Defaults to "agentics". */
+  readonly directory?: string;
 }
 
 export const catalogTemplates: readonly CatalogTemplate[] = [
   { name: "agentics-checks", file: "agentics-checks.yml", description: "Agentics checks: verifies generated agent lockfiles, actionlint, and compile on PRs touching workflow files." },
+  { name: "agentics-error-report", file: "agentics-error-report.yml", description: "Daily error report: classifies the last day of failures in the workflows this package ships and files them upstream so the package gets fixed. Deterministic, no model; sends only package-owned names, conclusions and counts, and refuses to file anything a leak scanner flags." },
   { name: "agentics-maintenance", file: "agentics-maintenance.yml", description: "Agentic maintenance: scheduled daily maintenance workflow for keeping workflows and actions up to date." },
   { name: "app-ci-dotnet-next", file: "app-ci-dotnet-next.yml", description: "App CI pipeline for a .NET + Next.js monorepo: build, test, and lint on PRs and schedule." },
   { name: "app-ci-node-monorepo", file: "app-ci-node-monorepo.yml", description: "App CI pipeline for a Node monorepo: build, test, and lint on PRs and schedule." },

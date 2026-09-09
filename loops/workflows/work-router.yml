@@ -99,6 +99,22 @@ env:
   # `name[bot]` on some endpoints and `app/name` on others, so both spellings belong here.
   # Adding a third bot used to mean finding four hand-written comparisons across this file.
   TRUSTED_BOTS: "github-actions[bot] app/github-actions platform-devbox[bot]"
+  # How long an issue may sit parked with `stalled` before the janitor retries it, and how many
+  # times it tries before leaving the issue to a person. Only machine failures are retried; a
+  # verdict the agent reached on purpose is reported and never re-run, because re-running a
+  # decision reproduces it.
+  HOUSEKEEPING_RETRY_AFTER_HOURS: "6"
+  HOUSEKEEPING_MAX_RETRIES: "3"
+  # A bot pull request older than this with no merge-gate verdict at all is reported, never
+  # closed: the janitor deletes branches and labels, never someone's work.
+  HOUSEKEEPING_STALE_PR_DAYS: "3"
+  # The single issue that lists what genuinely needs a person. Set it empty to turn the digest
+  # off and keep the rest of the janitor.
+  HOUSEKEEPING_DIGEST_TITLE: "Needs a human"
+  # How long an audit report may sit open before it is labelled `stale-audit`. The audit's own
+  # backpressure ignores a stale report, so three abandoned reports can no longer disable the
+  # weekly audit for good; the digest lists them instead. Two missed weekly cycles.
+  AUDIT_STALE_AFTER_DAYS: "14"
 
 on:
   issues:
@@ -140,6 +156,7 @@ on:
     - cron: "43 3 * * *"
     - cron: "0 6 * * *"
     - cron: "17 * * * *"
+    - cron: "23 */6 * * *" # housekeeping: retry what stalled, tidy what it stranded
 
   workflow_dispatch:
     inputs:
@@ -157,6 +174,7 @@ on:
           - audit-close
           - cleanup-artifacts
           - reconcile-bot-pr-runs
+          - housekeeping
           - validate
           - release
       issue-number:
@@ -198,6 +216,11 @@ on:
         options:
           - manual
           - scheduled
+      dry-run:
+        description: "Housekeeping only: print every intended change and write nothing"
+        required: false
+        type: boolean
+        default: false
       version-bump:
         description: "Release version bump: patch, minor, major, or auto"
         required: false
@@ -1053,6 +1076,7 @@ jobs:
       - uses: ./.github/actions/audit-close
         with:
           token: ${{ github.token }}
+          stale-after-days: ${{ env.AUDIT_STALE_AFTER_DAYS }}
 
   cleanup-artifacts:
     needs: classify
@@ -1074,6 +1098,48 @@ jobs:
         with:
           token: ${{ github.token }}
           artifact-retention-days: ${{ vars.ARTIFACT_RETENTION_DAYS }}
+
+  # The janitor. Deterministic, no model: it retries work the machine stalled on, clears the state
+  # a dead run stranded, deletes branches whose pull request is finished, and keeps one issue
+  # listing what genuinely needs a person.
+  housekeeping:
+    needs: classify
+    if: needs.classify.outputs.route == 'housekeeping' && !github.event.repository.fork
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: housekeeping
+      cancel-in-progress: false
+    permissions:
+      # contents: write deletes branches whose pull request is closed or merged.
+      contents: write
+      issues: write
+      pull-requests: read
+    env:
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # A retry is a workflow_dispatch, and GitHub refuses to start a workflow run from an event
+      # raised with GITHUB_TOKEN. With the default token every retry would report success and do
+      # nothing, which is the exact failure mode this job exists to remove.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - uses: ./.github/actions/housekeeping
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          retry-after-hours: ${{ env.HOUSEKEEPING_RETRY_AFTER_HOURS }}
+          max-retries: ${{ env.HOUSEKEEPING_MAX_RETRIES }}
+          stale-pr-days: ${{ env.HOUSEKEEPING_STALE_PR_DAYS }}
+          digest-title: ${{ env.HOUSEKEEPING_DIGEST_TITLE }}
+          dry-run: ${{ github.event.inputs.dry-run || 'false' }}
 
   validate:
     needs: classify

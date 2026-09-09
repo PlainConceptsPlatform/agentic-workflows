@@ -46,6 +46,28 @@ Plus the plumbing, which has no agent in it: `work-router.yml` (the router itsel
 `authorize-bot-work.yml` (a human's label is checked, then the bot re-labels so the workers see
 a trusted actor), and the `classify-route` / `verify-route-matrix` composite actions.
 
+### Keeping itself running
+
+Two deterministic jobs exist because the measured problem was never bad decisions, it was
+silence. Across four consumers, 58 of the 237 issues closed since 1 August were closed by the
+bot: autonomy between 6% and 50%. The rest stopped somewhere and told nobody.
+
+| Job | Runs | Does |
+|---|---|---|
+| `housekeeping` | `23 */6 * * *` | retries work that **stalled** (a crash, a timeout, an empty output) after 6h, up to 3 times; drops `pr-pending` from issues no open pull request closes; closes a split parent once every child is closed; deletes branches whose pull requests are all finished and bot-authored; rewrites one issue, **Needs a human**, listing what genuinely needs a person |
+| `audit-close` | `43 3 * * *` | closes an audit report once every issue it references is closed, and labels a report nobody actioned `stale-audit` after 14 days so it stops blocking the next audit |
+
+The rule that shapes the janitor: **retry a failure, report a decision.** `stalled` marks a park
+the machine caused, and those are worth running again. A triage `needs-maintainer`, a refine
+`questions` or a merge-gate `review` is a verdict the agent reached on purpose, and re-running a
+decision only reproduces it, so those are listed in the digest and never retried.
+
+It runs on the App token, because GitHub starts no workflow run from an event raised with
+`GITHUB_TOKEN` -- with the default token every retry would be a green no-op. Every write goes
+through one wrapper, which is the only place `dry-run` is read, so `operation=housekeeping` with
+`dry-run` on prints exactly what it would change and writes nothing. `verify-route-matrix.sh`
+asserts all of that, including that it closes only two kinds of issue.
+
 ### How the routes chain
 
 The normal life of a piece of work is `refine` → `implement` → CI → `merge-gate` → merged, with
@@ -168,9 +190,20 @@ The other value in that block is `CI_WORKFLOW_NAME`, the name of the CI workflow
 reads its verdict from. It works the same way, mirrored into the `workflow_run` trigger, and
 getting it wrong is equally quiet: the belt logs no completed CI run and the pull request waits.
 
-The daily and hourly crons (`audit-close`, `cleanup-artifacts`, `reconcile-bot-pr-runs`) do
-not need staggering: they run on GitHub-hosted runners and never touch the fleet. The
-reconcile cron runs hourly at minute 17.
+The daily and hourly crons (`audit-close`, `cleanup-artifacts`, `reconcile-bot-pr-runs`,
+`housekeeping`, and the optional error report) do not need staggering: they run on
+GitHub-hosted runners and never touch the fleet. The reconcile cron runs hourly at minute 17.
+
+The rest of that `env:` block belongs to the janitor and the audit chain, and each value is a
+repository's to change:
+
+| Value | Default | Means |
+|---|---|---|
+| `HOUSEKEEPING_RETRY_AFTER_HOURS` | `6` | how long a `stalled` issue waits before a retry |
+| `HOUSEKEEPING_MAX_RETRIES` | `3` | retries before the issue is left to a person |
+| `HOUSEKEEPING_STALE_PR_DAYS` | `3` | a bot pull request older than this with no gate verdict is reported, never closed |
+| `HOUSEKEEPING_DIGEST_TITLE` | `Needs a human` | the one issue listing what needs a person; empty turns the digest off |
+| `AUDIT_STALE_AFTER_DAYS` | `14` | when an unactioned audit report stops blocking the next audit |
 
 ## Consumer prerequisite
 
@@ -293,9 +326,49 @@ npx @plainconceptsplatform/workflows@latest add audit
 `add` and `update` install only package-owned loops. They do not install maintenance templates. Install a template explicitly with `add --template <name>`; use `--force` only to replace a changed copy.
 
 - `agentics-checks` verifies generated lockfiles and lints agentic workflow source on pull requests.
+- `agentics-error-report` looks at how *this package's* workflows behaved here in the last day and files what broke upstream, so the package gets fixed instead of every repository working around the same bug. Worth installing everywhere; see the privacy contract below.
 - `github-release` publishes a GitHub Release with generated notes when a `v*` tag is pushed.
 - `agentics-maintenance` is the `gh aw` generated maintenance workflow. It is supplied for repositories that want to commit the generated workflow before their first compilation.
 - `bug-report` installs a bug report issue template to `.github/ISSUE_TEMPLATE/bug_report.yml`. Bugs can be any size.
 - `feature-request` installs a feature request issue template to `.github/ISSUE_TEMPLATE/feature_request.yml`. Scoped to small, well-scoped improvements — a Small/Medium dropdown gate steers large work to a planning issue.
 
 Templates are standalone copies placed in `.github/workflows/`. `app-ci-dotnet-next` provides .NET, SQL Server integration testing, Next.js, and security checks. `app-ci-node-monorepo` provides Node monorepo, web, Electron, Capacitor, E2E, and security checks. `github-release` publishes generated GitHub release notes when a `v*` tag is pushed. `bug-report` and `feature-request` install to `.github/ISSUE_TEMPLATE/` instead of `.github/workflows/`. `opencode.ci.json` is always installed as a mandatory file during catalog install; the `--template opencode.ci.json` command is an advanced option for installing it in isolation. Edit their top-level `env:` defaults or JSON properties after copying.
+
+### The error report's privacy contract
+
+Every consumer of this package is a private repository, and `agentics-error-report` is the only
+job in the fleet that sends anything out of one. That is its whole design constraint, so it is
+worth stating what does and does not cross the boundary.
+
+**What is sent.** A fixed, enumerable set of facts about workflows this package itself ships:
+the workflow's file name, the job and step names, a conclusion, a runner label, an occurrence
+count, and the id of a matched entry from a catalogue of sixteen known failure shapes
+(`jq-error`, `runner-never-assigned`, `gh-api-403`, `model-quota`, and so on).
+
+**What is never sent.** Free text of any kind. No log line, no branch name, no issue or pull
+request title, no file path, no commit, no URL, no issue number. A consumer's own workflows are
+counted and never inspected at all, because a workflow name can describe a product, a customer
+or an environment. And no model runs: a model asked to summarise a failure paraphrases whatever
+the log happened to contain, which is exactly the thing that must not leave.
+
+**How that is enforced**, rather than intended:
+
+- Only the finding object is rendered into a report, and its eight fields are declared in one
+  list. `verify-route-matrix.sh` compares that list against the fields the code actually sets,
+  and the job re-checks the shape at run time, so a ninth field fails the build and, failing
+  that, stops the run.
+- A leak scanner reads the finished text and looks for this repository's name, its owner, a
+  `github.com` URL, an email address, an absolute path, a token-shaped or commit-shaped blob, an
+  issue reference and a branch ref. It fails closed: a report it flags is **not filed**, and the
+  run goes red so the field that carried private text gets fixed rather than leaking again the
+  next morning.
+- The job holds `contents: read` and `actions: read` here and nothing else, and its upstream
+  token is minted for the upstream repository alone.
+
+Every one of those guards is mutation-tested: each was deliberately broken and the matrix
+confirmed red. Four early versions of the assertions passed against a broken guard -- they
+grepped for a symbol name that survived at its other use sites -- and were rewritten to compare
+sets and count call sites instead.
+
+To turn the report off in one repository, delete the workflow or clear `UPSTREAM_NAME` in its
+`env:` block, which computes the report into the job summary and files nothing.

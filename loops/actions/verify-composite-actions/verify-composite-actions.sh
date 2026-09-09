@@ -38,6 +38,59 @@ while IFS= read -r manifest; do
     continue
   fi
 
+  # `actions/github-script` steps carry real JavaScript inside a YAML string, and nothing on
+  # the way to production parses it: not the YAML check above, not actionlint, not gh aw
+  # compile. A typo there is a green push and a red run at whatever hour the schedule fires.
+  # The same shape of bug shipped in a jq filter in the router and broke an hourly job in a
+  # consumer for a day, so every inline script gets syntax-checked here.
+  #
+  # `${{ }}` is substituted before checking: it is a runner expression, not JavaScript, and
+  # standing in a string literal keeps the surrounding syntax intact.
+  scripts="$(python3 - "$manifest" <<'PY' 2>/dev/null || true
+import re, sys, yaml, pathlib, tempfile, os
+
+manifest = pathlib.Path(sys.argv[1])
+doc = yaml.safe_load(manifest.read_text(encoding='utf-8')) or {}
+out = []
+for index, step in enumerate(((doc.get('runs') or {}).get('steps') or [])):
+    if not isinstance(step, dict):
+        continue
+    if 'github-script' not in str(step.get('uses', '')):
+        continue
+    body = ((step.get('with') or {}).get('script'))
+    if not isinstance(body, str):
+        continue
+    body = re.sub(r'\$\{\{[^}]*\}\}', '"__expr__"', body)
+    # github-script runs the body as the content of an async function, so a top-level `return`
+    # and a top-level `await` are both legal there. Wrap it the same way or every early return
+    # reads as a syntax error.
+    handle, path = tempfile.mkstemp(suffix='.mjs')
+    with os.fdopen(handle, 'w', encoding='utf-8') as sink:
+        sink.write('async function __ghScript(github, context, core, exec, io, glob, require, getOctokit) {\n')
+        sink.write(body)
+        sink.write('\n}\n')
+    out.append('%s\t%s' % (step.get('name', 'step %d' % index), path))
+print('\n'.join(out))
+PY
+)"
+
+  script_ok=1
+  while IFS=$'\t' read -r step_name script_file; do
+    [ -n "${script_file:-}" ] || continue
+    if ! node --check "$script_file" 2>/tmp/node-check.err; then
+      script_ok=0
+      echo "FAIL: ${rel} step '${step_name}' has a JavaScript syntax error:" >&2
+      sed -n '1,6p' /tmp/node-check.err >&2
+    fi
+    rm -f "$script_file"
+  done <<<"$scripts"
+  rm -f /tmp/node-check.err
+
+  if [ "$script_ok" -eq 0 ]; then
+    FAIL=$((FAIL + 1))
+    continue
+  fi
+
   PASS=$((PASS + 1))
 done < <(find "$ACTIONS_DIR" -name 'action.yml' | sort)
 

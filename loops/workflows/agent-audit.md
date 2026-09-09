@@ -44,8 +44,15 @@ on:
         default: manual
 
   # Rung 1. Do not pile reports on top of unactioned reports.
+  #
+  # `-label:stale-audit` is what keeps this backpressure from becoming a stop. Three reports
+  # nobody ever actioned used to disable the weekly audit for good: the query counted them
+  # forever, the run skipped with a green tick, and no report was ever filed again. The
+  # janitor labels a report `stale-audit` once it has sat open past its budget, which both
+  # frees the slot and lists the report in the "Needs a human" digest. Backpressure now
+  # means "three live reports", not "three reports, ever".
   skip-if-match:
-    query: "is:issue is:open label:audit"
+    query: "is:issue is:open label:audit -label:stale-audit"
     max: 3
 
 runs-on: agents-arc

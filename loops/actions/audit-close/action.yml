@@ -5,11 +5,19 @@ inputs:
   token:
     description: GitHub token with issues write access.
     required: true
+  stale-after-days:
+    description: >-
+      How long a report may sit open before it is marked stale-audit. A stale report stops
+      counting against the audit's backpressure and is listed for a person instead.
+    required: false
+    default: '14'
 runs:
   using: composite
   steps:
     - name: Close every report whose referenced issues are all closed
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        STALE_AFTER_DAYS: ${{ inputs.stale-after-days }}
       with:
         github-token: ${{ inputs.token }}
         script: |
@@ -25,14 +33,60 @@ runs:
             return;
           }
 
+          const STALE_LABEL = 'stale-audit';
+          const staleAfterMs = Number(process.env.STALE_AFTER_DAYS) * 86400 * 1000;
+
+          // One list for every report. This used to be fetched inside the loop, so a repository
+          // with three open reports paid for three full pull-request listings each night.
+          const openPRs = await github.paginate(github.rest.pulls.list, {
+            ...context.repo,
+            state: 'open',
+            per_page: 100,
+          });
+
           // Skip `owner/repo#12` and `abc#12`: only a bare `#12` references this repository.
           const referencedIssues = (body) => {
             const matches = (body ?? '').matchAll(/(?:^|[^A-Za-z0-9_/])#(\d+)/g);
             return [...new Set([...matches].map((match) => Number(match[1])))];
           };
 
+          // Only a real closing keyword counts. There were two patterns here and both were
+          // wrong in opposite directions: the first required the literal text `#closes #12`,
+          // which nothing has ever written, so it matched nothing; the second matched a bare
+          // `#12` anywhere in any open pull request body, so one passing mention of the report
+          // pinned it open for as long as that pull request stayed open. A report referenced
+          // by a merged-and-closed chain then never closed, and the three of them silently
+          // used up the audit backpressure.
+          const closesReport = (number) => {
+            const pattern = new RegExp(`(?:clos(?:e|es|ed)|fix(?:es|ed)?|resolves?)\\s+#${number}\\b`, 'i');
+            return openPRs.some((pr) => pattern.test(pr.body ?? ''));
+          };
+
           let closed = 0;
           let keptOpen = 0;
+          let stale = 0;
+
+          const markStale = async (report, why) => {
+            if (report.labels.some((l) => (typeof l === 'string' ? l : l.name) === STALE_LABEL)) return;
+            if (Date.now() - new Date(report.created_at).getTime() < staleAfterMs) return;
+            // Creating the label is idempotent; 422 means it already exists.
+            await github.rest.issues.createLabel({
+              ...context.repo,
+              name: STALE_LABEL,
+              color: 'd4c5f9',
+              description: 'Audit report nobody actioned; no longer blocks the next audit',
+            }).catch((error) => { if (error.status !== 422) throw error; });
+            await github.rest.issues.addLabels({
+              ...context.repo, issue_number: report.number, labels: [STALE_LABEL],
+            });
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: report.number,
+              body: `Labelled \`${STALE_LABEL}\` after ${process.env.STALE_AFTER_DAYS} days: ${why} This report no longer counts against the audit backpressure, so the next audit can run, and it is listed in the housekeeping digest for a person to pick up or close.`,
+            });
+            core.info(`#${report.number}: marked ${STALE_LABEL}. ${why}`);
+            stale += 1;
+          };
 
           for (const report of reports.sort((a, b) => a.number - b.number)) {
             const refs = referencedIssues(report.body).filter((n) => n !== report.number);
@@ -65,9 +119,23 @@ runs:
               else stillOpen.push(ref);
             }
 
+            // A report referencing nothing is a report nothing was done about. Refine turns a
+            // report into children and writes their numbers into it; a body with no bare `#N`
+            // means refine never ran, or ran and produced nothing. Closing that as `completed`
+            // used to throw the finding away silently and was the single most common way an
+            // audit ended: every finding closed, nothing implemented. Leave it open, and once
+            // it is past its budget mark it stale so it stops blocking the next audit.
+            if (resolved === 0) {
+              core.info(`#${report.number}: kept open, references no issues, so no work was done on it`);
+              keptOpen += 1;
+              await markStale(report, 'it references no issues, so nothing was ever implemented from it.');
+              continue;
+            }
+
             if (stillOpen.length > 0) {
               core.info(`#${report.number}: kept open, still-open references: ${stillOpen.join(', ')}`);
               keptOpen += 1;
+              await markStale(report, `its children are still open (${stillOpen.map((n) => `#${n}`).join(', ')}).`);
               continue;
             }
 
@@ -77,30 +145,10 @@ runs:
               continue;
             }
 
-            const reason = resolved === 0
-              ? 'This report references no issues.'
-              : `All ${closedRefs} referenced issue(s) are closed.`;
-
-            // Do not close if there are open PRs that close this issue.
-            // The audit report may have spawned implement workers whose PRs
-            // are still under review — closing the report prematurely is misleading.
-            const openPRs = await github.paginate(github.rest.pulls.list, {
-              ...context.repo,
-              state: 'open',
-              per_page: 100,
-            });
-
-            const closesThisReport = openPRs.some((pr) => {
-              const body = pr.body ?? '';
-              const patterns = [
-                new RegExp(`(?:^|[^A-Za-z0-9_/])#(?:closes?|fixes?|resolves?|closed?)\\s+#${report.number}\\b`, 'i'),
-                new RegExp(`(?:^|[^A-Za-z0-9_/])#${report.number}\\b`),
-              ];
-              return patterns.some((p) => p.test(body));
-            });
-
-            if (closesThisReport) {
-              core.info(`#${report.number}: kept open, has open PR(s) that close it.`);
+            // The report may have spawned implement workers whose pull requests are still under
+            // review; closing it while they are open would be misleading.
+            if (closesReport(report.number)) {
+              core.info(`#${report.number}: kept open, an open pull request closes it`);
               keptOpen += 1;
               continue;
             }
@@ -108,7 +156,7 @@ runs:
             await github.rest.issues.createComment({
               ...context.repo,
               issue_number: report.number,
-              body: `Closed automatically by \`Work Router: audit-close\`. ${reason}`,
+              body: `Closed automatically by \`Work Router: audit-close\`. All ${closedRefs} referenced issue(s) are closed.`,
             });
 
             await github.rest.issues.update({
@@ -118,11 +166,15 @@ runs:
               state_reason: 'completed',
             });
 
-            core.info(`#${report.number}: closed. ${reason}`);
+            core.info(`#${report.number}: closed. All ${closedRefs} referenced issue(s) are closed.`);
             closed += 1;
           }
 
           await core.summary
             .addHeading('Audit close', 2)
-            .addList([`Reports closed: ${closed}`, `Reports left open: ${keptOpen}`])
+            .addList([
+              `Reports closed: ${closed}`,
+              `Reports left open: ${keptOpen}`,
+              `Reports marked stale: ${stale}`,
+            ])
             .write();

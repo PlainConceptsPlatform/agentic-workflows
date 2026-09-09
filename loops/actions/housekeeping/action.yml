@@ -1,0 +1,244 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/housekeeping/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Housekeeping
+description: >-
+  Retry work the machine stalled on, tidy the state it strands behind, and report what genuinely
+  still needs a person. Deterministic: no model runs here.
+
+inputs:
+  token:
+    description: Token with issues, pull-requests and contents write access.
+    required: true
+  retry-after-hours:
+    description: How long an issue may sit stalled before it is retried.
+    required: false
+    default: '6'
+  max-retries:
+    description: How many times the janitor retries one issue before leaving it to a person.
+    required: false
+    default: '3'
+  stale-pr-days:
+    description: A bot pull request older than this with no CI verdict is reported, never closed.
+    required: false
+    default: '3'
+  digest-title:
+    description: Title of the single issue that reports what needs a human. Empty disables it.
+    required: false
+    default: 'Needs a human'
+  dry-run:
+    description: Compute everything and write nothing. Every intended change is printed.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Sweep
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        RETRY_AFTER_HOURS: ${{ inputs.retry-after-hours }}
+        MAX_RETRIES: ${{ inputs.max-retries }}
+        STALE_PR_DAYS: ${{ inputs.stale-pr-days }}
+        DIGEST_TITLE: ${{ inputs.digest-title }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          const dryRun = process.env.DRY_RUN === 'true';
+          const retryAfterMs = Number(process.env.RETRY_AFTER_HOURS) * 3600 * 1000;
+          const maxRetries = Number(process.env.MAX_RETRIES);
+          const stalePrMs = Number(process.env.STALE_PR_DAYS) * 86400 * 1000;
+          const digestTitle = process.env.DIGEST_TITLE;
+
+          // Every write goes through this, so --dry-run is honest rather than hopeful: there is
+          // no second path that forgets to check it.
+          const planned = [];
+          const act = async (what, run) => {
+            planned.push(what);
+            if (dryRun) { core.info(`[dry-run] ${what}`); return; }
+            core.info(what);
+            await run();
+          };
+
+          const RETRY_MARKER = '<!-- housekeeping-retry -->';
+          const DIGEST_MARKER = '<!-- housekeeping-digest -->';
+          const WORK_LABELS = ['implement', 'refine', 'triage'];
+          const isBot = (login) => login.endsWith('[bot]') || login.startsWith('app/');
+          const age = (iso) => Date.now() - new Date(iso).getTime();
+          const days = (ms) => Math.floor(ms / 86400000);
+
+          const issues = await github.paginate(github.rest.issues.listForRepo, {
+            ...context.repo, state: 'open', per_page: 100,
+          });
+          const pulls = await github.paginate(github.rest.pulls.list, {
+            ...context.repo, state: 'open', per_page: 100,
+          });
+          const names = (issue) => issue.labels.map((l) => (typeof l === 'string' ? l : l.name));
+
+          const needsHuman = [];
+          let retried = 0;
+
+          // 1. Retry what the machine stalled on. `stalled` marks a park caused by a crash, a
+          // timeout or an empty output; `review` alone is a decision the agent made, and
+          // re-running a decision only reproduces it, so those are reported and never retried.
+          for (const issue of issues) {
+            if (issue.pull_request) continue;
+            const labels = names(issue);
+            if (!labels.includes('review')) continue;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo, issue_number: issue.number, per_page: 100,
+            });
+            const attempts = comments.filter((c) => (c.body ?? '').includes(RETRY_MARKER)).length;
+            const work = WORK_LABELS.find((l) => labels.includes(l));
+            const waited = age(issue.updated_at);
+
+            if (!labels.includes('stalled')) {
+              needsHuman.push({ kind: 'decided', issue, labels, waited });
+              continue;
+            }
+            if (waited < retryAfterMs) continue;
+            if (attempts >= maxRetries || !work) {
+              needsHuman.push({ kind: attempts >= maxRetries ? 'retries-exhausted' : 'no-work-label', issue, labels, waited, attempts });
+              continue;
+            }
+
+            await act(`#${issue.number}: retrying ${work} (attempt ${attempts + 1} of ${maxRetries}, stalled ${Math.floor(waited / 3600000)}h)`, async () => {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: issue.number,
+                body: `${RETRY_MARKER}\nThis issue stalled rather than reaching a decision, so it is being retried automatically: attempt ${attempts + 1} of ${maxRetries}. If it stalls ${maxRetries} times it stays parked for a person.`,
+              });
+              // Removing the labels is what lets it route again; the work label is already there.
+              for (const label of ['review', 'stalled']) {
+                await github.rest.issues.removeLabel({ ...context.repo, issue_number: issue.number, name: label })
+                  .catch((error) => { if (error.status !== 404) throw error; });
+              }
+              await github.rest.actions.createWorkflowDispatch({
+                ...context.repo, workflow_id: 'work-router.yml',
+                ref: context.payload.repository.default_branch,
+                inputs: { operation: work, 'issue-number': String(issue.number) },
+              });
+            });
+            retried += 1;
+          }
+
+          // 2. Strands. pr-pending says a pull request is open and waiting; when that pull request
+          // closed without merging, nothing ever took the label off.
+          for (const issue of issues) {
+            if (issue.pull_request || !names(issue).includes('pr-pending')) continue;
+            const linked = pulls.some((p) => new RegExp(`(clos(e|es|ed)|fix(es|ed)?|resolves?)\\s+#${issue.number}\\b`, 'i').test(p.body ?? ''));
+            if (linked) continue;
+            await act(`#${issue.number}: removing pr-pending, no open pull request closes it`, () =>
+              github.rest.issues.removeLabel({ ...context.repo, issue_number: issue.number, name: 'pr-pending' })
+                .catch((error) => { if (error.status !== 404) throw error; }));
+          }
+
+          // 3. Split parents. Refine leaves the parent open as a tracker and nothing has ever
+          // closed one: once every child is done the parent sits there for ever with an unticked
+          // checklist. Children carry `<!-- split-parent: N -->`, which is the only machine-
+          // readable link between them.
+          const childrenOf = new Map();
+          for (const issue of await github.paginate(github.rest.issues.listForRepo, { ...context.repo, state: 'all', per_page: 100 })) {
+            const match = /<!-- split-parent: (\d+) -->/.exec(issue.body ?? '');
+            if (!match || issue.pull_request) continue;
+            const parent = Number(match[1]);
+            if (!childrenOf.has(parent)) childrenOf.set(parent, []);
+            childrenOf.get(parent).push(issue);
+          }
+          for (const [parent, children] of childrenOf) {
+            const open = children.filter((c) => c.state === 'open');
+            if (open.length > 0 || !issues.some((i) => i.number === parent)) continue;
+            await act(`#${parent}: closing split parent, all ${children.length} children are done`, async () => {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: parent,
+                body: `${DIGEST_MARKER}\nClosed automatically: every child of this split is closed (${children.map((c) => `#${c.number}`).join(', ')}).`,
+              });
+              await github.rest.issues.update({ ...context.repo, issue_number: parent, state: 'closed', state_reason: 'completed' });
+            });
+          }
+
+          // 4. Branches. Nothing in the fleet has ever deleted one, so they accumulate for ever
+          // after a merge and after a close alike. Only ever touch a branch whose pull request is
+          // finished; never the default branch, and never one with a pull request still open.
+          const branches = await github.paginate(github.rest.repos.listBranches, { ...context.repo, per_page: 100 });
+          const defaultBranch = context.payload.repository.default_branch;
+          const allPulls = await github.paginate(github.rest.pulls.list, { ...context.repo, state: 'all', per_page: 100 });
+          const byHead = new Map();
+          for (const pull of allPulls) {
+            if (!byHead.has(pull.head.ref)) byHead.set(pull.head.ref, []);
+            byHead.get(pull.head.ref).push(pull);
+          }
+          for (const branch of branches) {
+            if (branch.name === defaultBranch) continue;
+            const forBranch = byHead.get(branch.name) ?? [];
+            if (forBranch.length === 0) continue;                       // never opened a PR: not ours to judge
+            if (forBranch.some((p) => p.state === 'open')) continue;    // still in use
+            if (!forBranch.every((p) => isBot(p.user?.login ?? ''))) continue;
+            const merged = forBranch.some((p) => p.merged_at);
+            await act(`branch ${branch.name}: deleting (${merged ? 'merged' : 'closed unmerged'})`, () =>
+              github.rest.git.deleteRef({ ...context.repo, ref: `heads/${branch.name}` })
+                .catch((error) => { if (error.status !== 404 && error.status !== 422) throw error; }));
+          }
+
+          // 5. Pull requests that need a person: parked by a gate verdict, or old with no CI.
+          for (const pull of pulls) {
+            if (!isBot(pull.user?.login ?? '')) continue;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo, issue_number: pull.number, per_page: 100,
+            });
+            const verdict = [...comments].reverse().find((c) => (c.body ?? '').includes('<!-- agent-merge-gate -->') && (c.body ?? '').includes('**Verdict:**'));
+            const parsed = verdict ? /\*\*Verdict:\*\*\s*(\w+)/.exec(verdict.body)?.[1] : undefined;
+            if (parsed && parsed !== 'merge') {
+              needsHuman.push({ kind: 'pr-parked', pull, verdict: parsed, waited: age(verdict.created_at) });
+            } else if (!verdict && age(pull.created_at) > stalePrMs) {
+              needsHuman.push({ kind: 'pr-stale', pull, waited: age(pull.created_at) });
+            }
+          }
+
+          // 6. One digest. Everything above either fixed itself or is listed here, so there is a
+          // single place to look instead of four repositories and three label queries.
+          const line = (entry) => {
+            if (entry.kind === 'pr-parked') return `- PR #${entry.pull.number} · parked ${days(entry.waited)}d · gate verdict \`${entry.verdict}\` · ${entry.pull.title}`;
+            if (entry.kind === 'pr-stale') return `- PR #${entry.pull.number} · ${days(entry.waited)}d old · no gate verdict yet · ${entry.pull.title}`;
+            if (entry.kind === 'retries-exhausted') return `- #${entry.issue.number} · stalled ${days(entry.waited)}d · retried ${entry.attempts}× and still stalling · ${entry.issue.title}`;
+            if (entry.kind === 'no-work-label') return `- #${entry.issue.number} · stalled ${days(entry.waited)}d · no work label to retry with · ${entry.issue.title}`;
+            return `- #${entry.issue.number} · waiting ${days(entry.waited)}d · ${entry.labels.filter((l) => l !== 'review').join(', ') || 'no other labels'} · ${entry.issue.title}`;
+          };
+          const section = (heading, kinds) => {
+            const rows = needsHuman.filter((e) => kinds.includes(e.kind));
+            return rows.length === 0 ? '' : `\n### ${heading} (${rows.length})\n\n${rows.map(line).join('\n')}\n`;
+          };
+          const body = [
+            DIGEST_MARKER,
+            `_Updated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC. This issue is rewritten by the housekeeping job; edits to it are lost._`,
+            section('Waiting on a decision', ['decided']),
+            section('Pull requests parked by the gate', ['pr-parked', 'pr-stale']),
+            section('Stalled beyond the retry budget', ['retries-exhausted', 'no-work-label']),
+            needsHuman.length === 0 ? '\nNothing is waiting on a person right now.\n' : '',
+            `\n---\n\nThis run retried ${retried} stalled issue(s) and made ${planned.length} change(s) in total.`,
+          ].filter(Boolean).join('\n');
+
+          if (digestTitle) {
+            const existing = issues.find((i) => !i.pull_request && i.title === digestTitle && (i.body ?? '').includes(DIGEST_MARKER));
+            if (existing) {
+              if (needsHuman.length === 0) {
+                await act(`closing the digest #${existing.number}: nothing is waiting`, () =>
+                  github.rest.issues.update({ ...context.repo, issue_number: existing.number, body, state: 'closed', state_reason: 'completed' }));
+              } else {
+                await act(`updating the digest #${existing.number}: ${needsHuman.length} item(s)`, () =>
+                  github.rest.issues.update({ ...context.repo, issue_number: existing.number, body }));
+              }
+            } else if (needsHuman.length > 0) {
+              await act(`opening the digest: ${needsHuman.length} item(s)`, () =>
+                github.rest.issues.create({ ...context.repo, title: digestTitle, body }));
+            }
+          }
+
+          await core.summary
+            .addHeading('Housekeeping', 2)
+            .addList([
+              `Retried: ${retried}`,
+              `Waiting on a person: ${needsHuman.length}`,
+              `Changes ${dryRun ? 'planned' : 'made'}: ${planned.length}`,
+            ])
+            .addRaw(planned.length ? `\n\n${planned.map((p) => `- ${p}`).join('\n')}` : '')
+            .write();

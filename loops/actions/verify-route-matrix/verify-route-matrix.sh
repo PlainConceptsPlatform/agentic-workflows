@@ -35,7 +35,7 @@ source "${HERE}/../classify-route/classify-route.sh"
 # Every worker route the package knows. The ones with a worker file here are installed; the
 # others must have no job in this router. Plumbing routes are in every router.
 ALL_WORKER_ROUTES=(refine implement triage apply-review merge-gate audit release)
-PLUMBING_ROUTES=(bot-approve audit-close cleanup-artifacts reconcile-bot-pr-runs validate)
+PLUMBING_ROUTES=(bot-approve audit-close cleanup-artifacts reconcile-bot-pr-runs housekeeping validate)
 
 worker_installed() {
   [ -f "${WORKFLOWS_DIR}/agent-$1.md" ]
@@ -883,7 +883,7 @@ done < <(sed -n '/^      operation:/,/^      issue-number:/p' "$ROUTER_YML" |
 # contents and issues and failed nightly on a 403 that named the endpoint and nothing else.
 # Paired job-to-scope rather than parsed out of each action: the jobs that touch pull
 # requests are few and known, and naming them here is what makes the omission visible.
-for pr_job in audit-close reconcile-bot-pr-runs detect-pr-conflicts; do
+for pr_job in audit-close reconcile-bot-pr-runs detect-pr-conflicts housekeeping; do
   if ! grep -q "^  ${pr_job}:$" "$ROUTER_YML"; then
     continue
   fi
@@ -899,6 +899,275 @@ done
 # No written-down passwords in anything this repository ships. A throwaway credential for
 # a test container is still a policy finding, and one sat in every consumer's CI for weeks
 # until a scan found it rather than us. Two shapes: a password-ish name assigned a quoted
+echo "── Housekeeping ──────────────────────────────────────────────────────────"
+
+# The janitor is the only thing in the fleet that deletes a branch and closes an issue nobody
+# asked it to close, and it runs unattended every six hours. Its guardrails are one-line
+# conditions that would be easy to lose in an edit and impossible to notice afterwards, so
+# they are asserted rather than trusted.
+HOUSEKEEPING_YML="${HERE}/../housekeeping/action.yml"
+if [ -f "$HOUSEKEEPING_YML" ]; then
+  HK_OK=1
+  hk() {
+    grep -qE "$1" "$HOUSEKEEPING_YML" || { HK_OK=0; echo "FAIL: housekeeping ${2}" >&2; }
+  }
+
+  # Every write goes through act(), which is the only place dry-run is honoured. A second
+  # write path would make --dry-run a lie exactly once, on the run that deletes something.
+  hk 'const act = async' 'has no act\(\) wrapper, so dry-run cannot be enforced in one place'
+  writes=$(grep -cE 'github\.rest\.(issues\.(create|update|createComment|removeLabel|addLabels)|git\.deleteRef|actions\.createWorkflowDispatch)\(' "$HOUSEKEEPING_YML")
+  outside=$(awk '
+    /await act\(/ { inact = 1 }
+    inact && /github\.rest\.(issues\.(create|update|createComment|removeLabel|addLabels)|git\.deleteRef|actions\.createWorkflowDispatch)\(/ { seen++ }
+    inact && /^          \}\);$/ { inact = 0 }
+    END { print seen + 0 }
+  ' "$HOUSEKEEPING_YML")
+  if [ "$writes" -ne "$outside" ]; then
+    HK_OK=0
+    echo "FAIL: housekeeping performs ${writes} write(s) but only ${outside} are inside act(); dry-run would not cover the rest" >&2
+  fi
+
+  # A branch is someone's work until its pull request is finished. All three guards have to
+  # hold: never the default branch, never one with an open pull request, and never one whose
+  # pull requests were not all opened by a bot.
+  hk "branch\.name === defaultBranch. continue" 'can delete the default branch'
+  hk "p\.state === 'open'\)\) continue" 'can delete a branch whose pull request is still open'
+  hk 'isBot\(p\.user' 'can delete a branch from a human pull request'
+  hk 'forBranch\.length === 0. continue' 'can delete a branch that never had a pull request'
+
+  # Retrying a decision reproduces it. Only a park the machine caused carries `stalled`, and
+  # only those may be re-dispatched; everything else is reported.
+  hk "labels\.includes\('stalled'\)" 'retries parks that were decisions, not machine failures'
+  # Match the guard, not the phrase. `attempts >= maxRetries` also appears in the line that
+  # labels the digest entry, so grepping for the words alone still passed with the guard
+  # deleted from the `if` -- the same weak-assertion shape that let a deleted triage verdict
+  # through because the words survived in a comment.
+  hk 'if \(attempts >= maxRetries \|\| !work\) \{' 'has no retry budget guard on the retry path'
+
+  # The janitor closes issues, and the only issues it may close are a split parent whose
+  # children are all done and its own digest. Anything else is a person's to close.
+  closes=$(grep -cE "state: 'closed'" "$HOUSEKEEPING_YML")
+  if [ "$closes" -eq 2 ]; then
+    PASS=$((PASS + 1))
+  else
+    HK_OK=0
+    echo "FAIL: housekeeping closes issues in ${closes} place(s); only the split parent and its own digest are allowed" >&2
+  fi
+
+  # A retry is a workflow_dispatch, and GitHub starts no workflow run from an event raised
+  # with GITHUB_TOKEN. Wiring the default token here would make every retry a silent no-op:
+  # green run, comment posted, labels removed, and nothing ever picks the issue up again.
+  hk_job=$(sed -n '/^  housekeeping:$/,/^  [a-z0-9_-]*:$/p' "$ROUTER_YML")
+  if printf '%s' "$hk_job" | grep -q 'app-token.outputs.token'; then
+    PASS=$((PASS + 1))
+  else
+    HK_OK=0
+    echo "FAIL: the housekeeping job passes a token that cannot start a workflow run; retries would silently do nothing" >&2
+  fi
+  # Deleting a ref needs contents: write. Without it every delete answers 403 and the sweep
+  # reports success having removed nothing.
+  if printf '%s' "$hk_job" | grep -qE '^      contents: write$'; then
+    PASS=$((PASS + 1))
+  else
+    HK_OK=0
+    echo "FAIL: the housekeeping job deletes branches but grants no contents: write scope" >&2
+  fi
+
+  # Every knob the action takes is a repository's to change, so each has to come from the
+  # router's env: block, which is the one part of the file `workflows update` preserves.
+  for knob in HOUSEKEEPING_RETRY_AFTER_HOURS HOUSEKEEPING_MAX_RETRIES HOUSEKEEPING_STALE_PR_DAYS HOUSEKEEPING_DIGEST_TITLE; do
+    if [ -n "$(router_env "$knob")" ] && printf '%s' "$hk_job" | grep -q "env.${knob}"; then
+      PASS=$((PASS + 1))
+    else
+      HK_OK=0
+      echo "FAIL: ${knob} is not both declared in the router env: block and read by the housekeeping job" >&2
+    fi
+  done
+
+  if [ "$HK_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
+# The audit chain closes its own reports, and every way it can be wrong is silent: a report
+# closed as completed with nothing implemented, or a report pinned open forever so the next
+# audit never runs. Both happened. Assert the three conditions that decide it.
+AUDIT_CLOSE_YML="${HERE}/../audit-close/action.yml"
+if [ -f "$AUDIT_CLOSE_YML" ] && worker_installed audit; then
+  AC_OK=1
+
+  # A report referencing no issues had no work done on it. Closing that as `completed` is how
+  # an audit used to end with every finding closed and nothing implemented.
+  if grep -qE 'resolved === 0\) \{' "$AUDIT_CLOSE_YML" &&
+     ! sed -n '/resolved === 0) {/,/^            }$/p' "$AUDIT_CLOSE_YML" | grep -q "state: 'closed'"; then
+    PASS=$((PASS + 1))
+  else
+    AC_OK=0
+    echo "FAIL: audit-close closes a report that references no issues; nothing was implemented from it" >&2
+  fi
+
+  # Only a real closing keyword may pin a report open. One pattern here required the literal
+  # `#closes #12` and matched nothing; the other matched a bare `#12` anywhere in any open
+  # pull request and pinned the report open for as long as that pull request lived.
+  if grep -q 'clos(?:e|es|ed)' "$AUDIT_CLOSE_YML" && ! grep -qF '#(?:closes?' "$AUDIT_CLOSE_YML"; then
+    PASS=$((PASS + 1))
+  else
+    AC_OK=0
+    echo "FAIL: audit-close still carries the dead '#closes #N' pattern or lost its closing-keyword match" >&2
+  fi
+
+  # The backpressure query has to exclude what the chain marks stale, or three abandoned
+  # reports disable the weekly audit permanently and the run skips green every week.
+  # Read the query line itself, not the file. The prose above it explains what
+  # `-label:stale-audit` is for, so a grep of the whole file passed with the exclusion deleted
+  # from the query -- matching the comment that describes it.
+  AUDIT_WORKER_MD="${WORKFLOWS_DIR}/agent-audit.md"
+  audit_query="$(sed -n 's/^ *query: *"\(.*\)" *$/\1/p' "$AUDIT_WORKER_MD" | head -1)"
+  if [[ "$audit_query" == *-label:stale-audit* ]] && grep -q "STALE_LABEL = 'stale-audit'" "$AUDIT_CLOSE_YML"; then
+    PASS=$((PASS + 1))
+  else
+    AC_OK=0
+    echo "FAIL: the audit backpressure query and audit-close disagree about stale-audit; abandoned reports would block every future audit" >&2
+  fi
+
+  if [ "$AC_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
+echo "── Expression functions ──────────────────────────────────────────────────"
+
+# GitHub's expression language has eleven functions and no more. There is no `split()`, no
+# `length()`, no `replace()`, and calling one is not a warning: the workflow fails to load with
+# "Unrecognized function", which shows up as a run that never starts. `split(env.REPO, '/')[0]`
+# was written into a template here and only caught by hand. actionlint would find it, but it
+# does not read composite manifests and is not installed in every consumer, so the same rule
+# lives here where the rest of the invariants are.
+readonly GH_EXPRESSION_FUNCTIONS='contains|startsWith|endsWith|format|join|toJSON|toJson|fromJSON|fromJson|hashFiles|success|always|cancelled|failure'
+EXPR_OK=1
+while IFS= read -r workflow; do
+  # Only inside an expression. The same word in a `run:` block is shell or JavaScript.
+  offenders="$(grep -oE '\$\{\{[^}]*\}\}' "$workflow" |
+    grep -oE '[a-zA-Z_][a-zA-Z0-9_]*\(' |
+    tr -d '(' |
+    grep -vE "^(${GH_EXPRESSION_FUNCTIONS})$" |
+    sort -u || true)"
+  if [ -n "$offenders" ]; then
+    EXPR_OK=0
+    echo "FAIL: $(basename "$workflow") calls $(echo "$offenders" | tr '\n' ' ')which GitHub expressions do not have; the workflow will not load" >&2
+  fi
+done < <(find "$WORKFLOWS_DIR" "${HERE}/../.." -maxdepth 3 -name '*.yml' -not -name '*.lock.yml' 2>/dev/null | sort -u)
+if [ "$EXPR_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+echo "── Error report privacy ──────────────────────────────────────────────────"
+
+# Every repository that installs this package is private, and the error report is the only job
+# that sends anything out of one. Its whole safety argument is four properties, each of which
+# is one line that an edit could remove without any run going red, so all four are asserted.
+ERROR_REPORT_YML="${HERE}/../report-workflow-errors/action.yml"
+if [ -f "$ERROR_REPORT_YML" ]; then
+  ER_OK=1
+  er() {
+    grep -qE "$1" "$ERROR_REPORT_YML" || { ER_OK=0; echo "FAIL: report-workflow-errors ${2}" >&2; }
+  }
+
+  # 1. The scanner, and its teeth. A body that trips it must not be filed, and the run must go
+  # red so the field that carried private text gets fixed instead of leaking again tomorrow.
+  #
+  # Match the declaration and count the sites, never the bare symbol. A grep for `leakChecks`
+  # passed with the declaration renamed, because the name survives where scan() uses it, and a
+  # grep for `core.setFailed` passed with one of the two calls turned into core.info. Both of
+  # those were mutation-tested and both let a broken privacy guard through.
+  er 'const leakChecks = \[' 'declares no leak scanner'
+  teeth=$(grep -cE 'core\.setFailed.*withheld by the leak scanner' "$ERROR_REPORT_YML")
+  if [ "$teeth" -ge 2 ]; then
+    PASS=$((PASS + 1))
+  else
+    ER_OK=0
+    echo "FAIL: report-workflow-errors fails the run on a leak in only ${teeth} of its 2 exit paths" >&2
+  fi
+  # Every write upstream has to be behind a scan. Counting is enough here because both are few
+  # and named, and a new write added without a guard moves the counts apart.
+  scans=$(grep -cE 'if \(!scan\(' "$ERROR_REPORT_YML")
+  upstream_writes=$(grep -cE 'upstream\.rest\.issues\.(create|update)\(' "$ERROR_REPORT_YML")
+  if [ "$scans" -ge "$upstream_writes" ] && [ "$upstream_writes" -gt 0 ]; then
+    PASS=$((PASS + 1))
+  else
+    ER_OK=0
+    echo "FAIL: report-workflow-errors makes ${upstream_writes} upstream write(s) behind only ${scans} leak scan(s)" >&2
+  fi
+  for guard in 'the repository name' 'the owner name' 'a github.com URL' 'an email address' 'an absolute path'; do
+    er "\{ what: '${guard}', test:" "no longer scans for ${guard}"
+  done
+
+  # 2. The allowlist. A consumer's own workflow name can describe a product, a customer or an
+  # environment; only the names this package gives its own files may be reported.
+  er 'const OWNED = /\^\(work-router' 'has no workflow allowlist, so a repository-specific workflow name could be reported'
+  er 'skippedForeign' 'does not account for the workflows it declined to inspect'
+
+  # 3. No raw log text. The catalogue matches the log tail and only the matched entry's id is
+  # kept; a change that put the matched text in the report would be the leak.
+  #
+  # The finding object is that boundary, because bodyFor() renders a finding, so the check is
+  # on its shape: the fields the object literals actually set must be exactly the declared
+  # reportable list. An earlier version of this tried to spot log text in the body with a
+  # regex over the whole file, and a mutation that added `${finding.logText.slice(0, 400)}`
+  # walked straight past it -- the pattern was case-sensitive and the inserted label said
+  # "Summary". Comparing two sets has no such gap.
+  er 'patternId = CATALOGUE\.find' 'no longer classifies the log through the catalogue'
+  declared=$(sed -n "s/^ *const FINDING_FIELDS = \[\(.*\)\];$/\1/p" "$ERROR_REPORT_YML" |
+    tr -d " '" | tr ',' '\n' | sort -u | tr '\n' ' ')
+  # Every key set in a finding object literal, plus every key assigned onto one afterwards.
+  assigned=$( { sed -n '/const seen = findings\.get/,/^              };$/p' "$ERROR_REPORT_YML" |
+      grep -oE '[a-zA-Z_][a-zA-Z0-9_]*:' | tr -d ':'
+    grep -oE 'seen\.[a-zA-Z_][a-zA-Z0-9_]*' "$ERROR_REPORT_YML" | cut -d. -f2
+  } | sort -u | tr '\n' ' ')
+  if [ -n "${declared// /}" ] && [ "$declared" = "$assigned" ]; then
+    PASS=$((PASS + 1))
+  else
+    ER_OK=0
+    echo "FAIL: report-workflow-errors builds findings with fields that are not the declared reportable set" >&2
+    echo "  declared: ${declared:-(none)}" >&2
+    echo "  assigned: ${assigned:-(none)}" >&2
+  fi
+  # And the run-time half of the same boundary, so a field that arrives by a path the check
+  # above cannot see stops the job instead of being rendered upstream.
+  er 'not in the reportable field list' 'does not check the finding shape at run time'
+
+  # 4. No model. A model asked to summarise a failure paraphrases whatever the log held, which
+  # is the one thing that must not cross the boundary. This job stays deterministic.
+  if grep -qiE '(engine:|opencode|safe-outputs|OPENAI_API_KEY)' "$ERROR_REPORT_YML"; then
+    ER_OK=0
+    echo "FAIL: report-workflow-errors reaches for a model; the report must stay deterministic" >&2
+  else
+    PASS=$((PASS + 1))
+  fi
+
+  # The workflow that drives it is an optional template: installed under .github/workflows in a
+  # consumer, and still in templates/ upstream. Check whichever is present, so the assertions
+  # run in the package's own CI rather than only after somebody installs it.
+  ERROR_REPORT_WORKFLOW="${WORKFLOWS_DIR}/agentics-error-report.yml"
+  [ -f "$ERROR_REPORT_WORKFLOW" ] ||
+    ERROR_REPORT_WORKFLOW="${HERE}/../../templates/agentics/agentics-error-report.yml"
+  if [ -f "$ERROR_REPORT_WORKFLOW" ]; then
+    # It reads this repository and writes nothing to it. A write scope here would mean the job
+    # that talks to another repository can also change this one.
+    if grep -qE '^      (contents|actions): read$' "$ERROR_REPORT_WORKFLOW" &&
+       ! grep -qE '^      [a-z-]+: write$' "$ERROR_REPORT_WORKFLOW"; then
+      PASS=$((PASS + 1))
+    else
+      ER_OK=0
+      echo "FAIL: agentics-error-report.yml grants a write scope; it must be read-only in the repository it reports on" >&2
+    fi
+    # The upstream token is scoped to the upstream repository alone, never the default token.
+    if grep -q 'upstream-token: ${{ steps.upstream-token.outputs.token }}' "$ERROR_REPORT_WORKFLOW" &&
+       grep -qE '^          repositories: \$\{\{ env\.UPSTREAM_NAME \}\}$' "$ERROR_REPORT_WORKFLOW"; then
+      PASS=$((PASS + 1))
+    else
+      ER_OK=0
+      echo "FAIL: agentics-error-report.yml does not scope its upstream token to the upstream repository" >&2
+    fi
+  fi
+
+  if [ "$ER_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 # value, and a command-line flag given one; a line containing a dollar sign is taken to be
 # an expression or a shell variable and allowed. Paths resolve relative to this script, so
 # upstream this reads the templates and in a consumer it reads the real workflows.
