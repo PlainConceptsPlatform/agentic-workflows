@@ -395,6 +395,49 @@ else
 fi
 if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# `review` must not be a one-way door. It used to be: authorize-bot-work refused to fire on an
+# issue carrying it, and the classifier refuses to route while it is set, so a person adding
+# `refine` to a parked issue got nothing at all — no run, no comment, no error. Triage's own
+# needs-maintainer verdict tells the maintainer to do exactly that, so the bot was giving an
+# instruction the machine ignored. authorize-bot-work now clears `review` before handing over,
+# which is what makes the human's decision stick.
+AUTHORIZE_YML="${WORKFLOWS_DIR}/authorize-bot-work.yml"
+if [ -f "$AUTHORIZE_YML" ]; then
+  DOOR_OK=1
+  authorize_if=$(sed -n '/^    if: >/,/^    runs-on:/p' "$AUTHORIZE_YML")
+  if grep -q "labels\.\*\.name, 'review'" <<<"$authorize_if"; then
+    DOOR_OK=0
+    echo "FAIL: authorize-bot-work refuses issues carrying review; a human could not un-park one" >&2
+  fi
+  # It must still refuse the bot, and an issue another run already owns.
+  grep -q "endsWith(github.actor, '\[bot\]')" <<<"$authorize_if" || {
+    DOOR_OK=0
+    echo "FAIL: authorize-bot-work no longer excludes bot actors; it would re-trigger itself" >&2
+  }
+  grep -q "labels\.\*\.name, 'bot-working'" <<<"$authorize_if" || {
+    DOOR_OK=0
+    echo "FAIL: authorize-bot-work no longer excludes an issue a run already owns" >&2
+  }
+  # The hand-off has to clear review BEFORE adding bot-working, because bot-working is the event
+  # the classifier reads: the other order raises an event whose payload still carries review.
+  remove_line=$(grep -n -- '--remove-label "review"' "$AUTHORIZE_YML" | head -1 | cut -d: -f1)
+  add_line=$(grep -n -- '--add-label "bot-working"' "$AUTHORIZE_YML" | head -1 | cut -d: -f1)
+  if [ -z "$remove_line" ] || [ -z "$add_line" ] || [ "$remove_line" -ge "$add_line" ]; then
+    DOOR_OK=0
+    echo "FAIL: authorize-bot-work must remove review before adding bot-working (review=${remove_line:-none} bot-working=${add_line:-none})" >&2
+  fi
+  if [ "$DOOR_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
+# The classifier's own guard stays: it stops the bot re-triggering itself while a human is
+# needed. Both halves matter, so assert the pair rather than either alone.
+assert_route "a bot-working event on a review-labelled issue still routes nowhere" none \
+  EVENT=issues ACTION=labeled LABEL=bot-working ACTOR=platform-devbox[bot] \
+  'ISSUE_LABELS=["implement","review"]' EVENT_ISSUE_NUMBER=42
+assert_route "and routes normally once review has been cleared" implement \
+  EVENT=issues ACTION=labeled LABEL=bot-working ACTOR=platform-devbox[bot] \
+  'ISSUE_LABELS=["implement"]' EVENT_ISSUE_NUMBER=42
+
 # GitHub evaluates every Actions expression in a workflow file, including ones written inside
 # shell comments. An empty pair is not a valid expression and fails the whole file to parse,
 # with an error that points at a line number rather than saying what is wrong. Prose about
@@ -664,6 +707,22 @@ if worker_installed merge-gate; then
   # And that one place has to be the merge outcome, not a hold or a failed attempt.
   grep -B12 '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD" | grep -q "outcome == 'merge'" ||
     { PENDING_OK=0; echo "FAIL: the only pr-pending removal must sit under the merge outcome" >&2; }
+
+  # The invariant only ever looked at the merge gate, so apply-review quietly stripped the label
+  # on its already-satisfied and needs-human paths — both of which leave the pull request open.
+  # The one file the check ignored was the one breaking it. Look at every worker: implement adds
+  # the label, merge-gate removes it on merge, nobody else may touch it.
+  for worker in "${WORKFLOWS_DIR}"/agent-*.md; do
+    [ -f "$worker" ] || continue
+    case "$(basename "$worker")" in
+      agent-merge-gate.md | agent-implement.md) continue ;;
+    esac
+    if grep -q 'remove-issue-labels' "$worker" &&
+      grep -A8 'remove-issue-labels' "$worker" | grep -q 'env.PR_PENDING_LABEL'; then
+      PENDING_OK=0
+      echo "FAIL: $(basename "$worker") removes pr-pending; only the merge gate's merge path may" >&2
+    fi
+  done
   if [ "$PENDING_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
@@ -692,7 +751,7 @@ fi
 if worker_installed merge-gate; then
   # A failed attempt must not strip `implement`: identify-gate-subject refuses an issue
   # without it, so the first crash would starve every retry at the subject check.
-  if grep -A6 'Park the issue' "$MERGE_GATE_WORKER_MD" | grep -q 'REVIEW_LABEL' &&
+  if grep -A9 'Park the issue' "$MERGE_GATE_WORKER_MD" | grep -q 'REVIEW_LABEL' &&
     ! grep -qF 'labels: ${{ env.WORKING_LABEL }},${{ env.IMPLEMENT_LABEL }}' "$MERGE_GATE_WORKER_MD"; then
     PASS=$((PASS + 1))
   else

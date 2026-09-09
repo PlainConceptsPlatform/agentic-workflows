@@ -19,6 +19,10 @@ env:
   WORKING_LABEL: bot-working
   IMPLEMENT_LABEL: implement
   REVIEW_LABEL: review
+  # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
+  # decided on. The janitor retries these after a while and never touches a decision park, because
+  # re-running a decision produces the same decision. Created idempotently where it is applied.
+  STALLED_LABEL: stalled
   REFINE_MARKER: "<!-- agent-refine -->"
   INITIAL_MODE: first
   RESPONSE_MODE: rerefine
@@ -26,7 +30,6 @@ env:
   TRIVIAL_MARKER: "<!-- complexity: trivial -->"
   ESTIMATE_MARKER_PREFIX: "<!-- estimate: "
   SPLIT_PARENT_PREFIX: "<!-- split-parent: "
-  SPLIT_CHILDREN_PREFIX: "<!-- split-into: "
   SPLIT_THRESHOLD: "8"
   MAX_SPLIT_CHILDREN: "6"
   INCOMPLETE_COMMENT: "Automated refinement ended without an outcome. The refine label remains for a retry."
@@ -107,7 +110,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
   validate_output:
     needs: [activation, agent, safe_outputs]
     if: >
@@ -346,7 +351,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
       - name: Report missing refinement outcome
         uses: ./.github/actions/create-issue-comment
         with:

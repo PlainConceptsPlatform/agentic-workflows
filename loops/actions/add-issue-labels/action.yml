@@ -23,6 +23,26 @@ runs:
         github-token: ${{ inputs.token }}
         script: |
           const labels = process.env.LABELS.split(/\r?\n|,/).map((label) => label.trim()).filter(Boolean);
+          if (labels.length === 0) {
+            core.notice('No labels to add.');
+            return;
+          }
+
+          // Create what does not exist yet, so shipping a new label in the package does not
+          // require a person to go and make it in every repository first. Its sibling
+          // remove-issue-labels has swallowed 404 for a long time; this one had no guard at all,
+          // so a label the package introduced would fail the step in every consumer until
+          // somebody created it by hand. 422 is "already exists", which is the happy path on
+          // every run after the first.
+          for (const name of labels) {
+            try {
+              await github.rest.issues.createLabel({ ...context.repo, name, color: 'ededed' });
+              core.notice(`Created the ${name} label.`);
+            } catch (error) {
+              if (error.status !== 422) throw error;
+            }
+          }
+
           await github.rest.issues.addLabels({
             ...context.repo,
             issue_number: Number(process.env.ISSUE_NUMBER),

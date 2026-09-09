@@ -11,6 +11,10 @@ env:
   TRIAGE_LABEL: triage
   WORKING_LABEL: bot-working
   REVIEW_LABEL: review
+  # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
+  # decided on. The janitor retries these after a while and never touches a decision park, because
+  # re-running a decision produces the same decision. Created idempotently where it is applied.
+  STALLED_LABEL: stalled
   REFINE_LABEL: refine
   TRIAGE_MARKER: "<!-- agent-triage -->"
   MAX_TRIAGE_ROUNDS: "3"
@@ -106,7 +110,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
   validate_output:
     needs: [activation, agent, safe_outputs]
     if: >
@@ -277,7 +283,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
       - name: Report missing triage outcome
         uses: ./.github/actions/create-issue-comment
         with:

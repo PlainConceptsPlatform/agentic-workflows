@@ -11,7 +11,12 @@ env:
   IMPLEMENT_LABEL: implement
   WORKING_LABEL: bot-working
   REVIEW_LABEL: review
+  # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
+  # decided on. The janitor retries these after a while and never touches a decision park, because
+  # re-running a decision produces the same decision. Created idempotently where it is applied.
+  STALLED_LABEL: stalled
   PR_PENDING_LABEL: pr-pending
+  NO_PULL_REQUEST_COMMENT: "The implementation run finished without producing a pull request. Nothing was lost, but nothing landed either: the issue keeps `implement` and is flagged for a retry."
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
   GIT_COMMITTER_NAME: "github-actions[bot]"
@@ -135,7 +140,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
   conclude:
     needs: [agent, safe_outputs]
     if: >
@@ -212,6 +219,33 @@ jobs:
           sleep 60
           gh workflow run work-router.yml --repo "$REPO" --ref "$REF" \
             -f operation=reconcile-bot-pr-runs
+
+      # The silent stall. Every step above is gated on a pull request existing, and the agent can
+      # finish successfully without producing one: safeoutputs/noop, or an output the validator
+      # would have rejected if this worker had one. The old behaviour was to remove bot-working
+      # and stop, leaving the issue carrying `implement` with no `review`, no `pr-pending`, no
+      # comment, and no bot-working — which also hid it from the hourly stale-reservation sweep.
+      # Comments do not re-trigger implement, so nothing on any path would ever look at it again.
+      # It was the only failure in the fleet that signalled nobody at all.
+      - name: Flag a run that produced no pull request
+        if: needs.safe_outputs.outputs.created_pr_number == ''
+        uses: ./.github/actions/add-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
+      - name: Say so on the issue
+        if: needs.safe_outputs.outputs.created_pr_number == ''
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            ${{ env.IMPLEMENT_MARKER }}
+            ${{ env.NO_PULL_REQUEST_COMMENT }}
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
   incomplete:
     needs: [agent, safe_outputs, eligibility]
     if: >
@@ -319,7 +353,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
       - name: Report missing implementation outcome
         if: steps.decide.outputs.retry != 'true'
         uses: ./.github/actions/create-issue-comment

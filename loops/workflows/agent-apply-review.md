@@ -6,9 +6,13 @@ env:
   REPO_RULES: "Apply only actionable outstanding reviewer feedback to the selected bot pull request. Make minimal changes that address each comment. Preserve architecture and do not weaken tests. Run full verification after changes."
   WORKING_LABEL: bot-working
   REVIEW_LABEL: review
+  # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
+  # decided on. The janitor retries these after a while and never touches a decision park, because
+  # re-running a decision produces the same decision. Created idempotently where it is applied.
+  STALLED_LABEL: stalled
   PR_PENDING_LABEL: pr-pending
   REVIEW_MARKER: "<!-- agent-apply-review -->"
-  INCOMPLETE_COMMENT: "Automated review feedback ended without an outcome. The issue remains for a retry."
+  INCOMPLETE_COMMENT: "Applying the review feedback ended without an outcome. This worker has no retry of its own: it runs again when somebody reviews or comments on the pull request, and the issue is flagged so it is not lost until then."
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
   GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
   GIT_AUTHOR_NAME: "github-actions[bot]"
@@ -142,7 +146,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
   validate_output:
     needs: [activation, subject, agent, safe_outputs]
     if: always() && needs.agent.result == 'success' && needs.safe_outputs.result == 'success'
@@ -227,15 +233,18 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.REVIEW_LABEL }}
+      # Only the reservation comes off. pr-pending says a pull request for this issue is open and
+      # waiting, which is still true on both outcomes that reach here: already-satisfied and
+      # needs-human both leave the pull request open. Stripping it made the board show issues
+      # with open pull requests as having none — the exact bug the merge gate's own comment warns
+      # about, in the one file the route matrix was not checking.
       - name: Release review outcome
         if: needs.validate_output.outputs.outcome != 'implemented'
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: |
-            ${{ env.WORKING_LABEL }}
-            ${{ env.PR_PENDING_LABEL }}
+          labels: ${{ env.WORKING_LABEL }}
   incomplete:
     needs: [subject, agent, safe_outputs, validate_output]
     if: >
@@ -268,7 +277,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
       - name: Report missing review feedback outcome
         uses: ./.github/actions/create-issue-comment
         with:
