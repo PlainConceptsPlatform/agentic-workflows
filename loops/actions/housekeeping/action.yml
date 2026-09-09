@@ -159,6 +159,13 @@ runs:
           // 4. Branches. Nothing in the fleet has ever deleted one, so they accumulate for ever
           // after a merge and after a close alike. Only ever touch a branch whose pull request is
           // finished; never the default branch, and never one with a pull request still open.
+          //
+          // Deleting the branch of a pull request that closed WITHOUT merging does not throw the
+          // work away: GitHub keeps `refs/pull/<n>/head` for the life of the pull request, which
+          // is what its own "Restore branch" button restores from. Verified on this fleet --
+          // after the first sweep removed six branches, every one of their pull requests still
+          // resolved through that ref. So `git fetch origin pull/<n>/head` brings any of this
+          // back, and the pull request page still shows the diff.
           const branches = await github.paginate(github.rest.repos.listBranches, { ...context.repo, per_page: 100 });
           const defaultBranch = context.payload.repository.default_branch;
           const allPulls = await github.paginate(github.rest.pulls.list, { ...context.repo, state: 'all', per_page: 100 });
