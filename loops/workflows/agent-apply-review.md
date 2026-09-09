@@ -412,29 +412,15 @@ timeout-minutes: 90
      focused, protect secrets, and do not modify generated files unless the feedback requires it.
      Adhere to ${{ env.REPO_RULES }}.
 
-6. Run the repository verification commands below. The issue context at
-   `${{ env.ISSUE_CONTEXT_PATH }}` defines acceptance criteria the fix must satisfy. If a check
-   fails, fix what you broke and run it again. Do not push a branch that does not pass.
-
-   **Scope every command to the files you changed.** This is a constraint, not a preference:
-   the runner has limited memory and a whole-repository lint, build or test run gets killed
-   mid-run, which fails the job with no useful output. Escalate to the full suite only when
-   the scoped run has passed and the change crosses project boundaries.
-   - Lint/format (biome, eslint, prettier, ruff, etc.): pass the changed file paths as
-     arguments so the tool checks only those files (e.g. `pnpm exec biome check <files>`),
-     never the whole repository.
-   - Build: build only the project(s) containing the changed files.
-   - Tests: run the test project covering the changed files.
+6. Run the repository verification commands below, under the verification rules above. The
+   issue context at `${{ env.ISSUE_CONTEXT_PATH }}` defines the acceptance criteria the fix
+   must satisfy. Never push a branch that does not pass.
 
     ```
     ${{ env.VERIFY_COMMANDS }}
     ```
 
-7. Before pushing, run the project's lint fix command (e.g. `pnpm lint:fix` or
-   `pnpm exec biome check --write <changed-files>`) to auto-format. If lint:fix is not
-   available, fix formatting manually. Never push code with lint errors.
-
-8. Select one review outcome.
+7. Select one review outcome.
 
    - **implemented**: You made the requested change, verification passed, and you will propose
      exactly one `push_to_pull_request_branch`.
@@ -442,11 +428,11 @@ timeout-minutes: 90
      reviewer must confirm this assessment.
    - **needs-human**: The feedback is ambiguous, unsafe, or cannot be applied. Do not push.
 
-9. Emit exactly one `add_comment` on PR `${{ needs.subject.outputs.pr }}`. Include every
+8. Emit exactly one `add_comment` on PR `${{ needs.subject.outputs.pr }}`. Include every
    unresolved human review thread ID and an explanation for it, then exactly one line:
    `**Review outcome:** implemented`, `**Review outcome:** already-satisfied`, or
    `**Review outcome:** needs-human`.
 
-10. Do not merge, close, or change labels. The workflow validates your outcome and owns those
+9. Do not merge, close, or change labels. The workflow validates your outcome and owns those
     state transitions.
 

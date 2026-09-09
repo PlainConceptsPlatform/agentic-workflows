@@ -775,10 +775,6 @@ timeout-minutes: 120
     the current PR branch), then select the `remediated` verdict. CI will run again and trigger
     you again with the new result.
 
-    Before pushing, run the project's lint fix command (e.g. `pnpm lint:fix` or
-    `pnpm exec biome check --write <changed-files>`) to auto-format. If lint:fix is not
-    available, fix formatting manually. Never push code with lint errors.
-
    If you cannot fix it after a concrete repair attempt, or the logs show you have already tried on this same head commit,
    stop looping: select the `review` verdict and explain the failure and what you tried. A human
    decides from there.

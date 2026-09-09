@@ -187,9 +187,8 @@ timeout-minutes: 90
    file path, and a one-line description. Order by score descending.
 
    **Section 2 , Top 3 to implement:** Call skill("pc-plan-story") and refine the top 3
-   findings by score into user stories in Mike Cohn's As a / I want to / so that format
-   with Given/When/Then acceptance criteria, edge cases, and likely files to change. Mark
-   this section clearly with a heading like `## Top 3 , To Implement`.
+   findings by score into user stories; that skill owns their shape. Name the likely files to
+   change. Mark this section clearly with a heading like `## Top 3 , To Implement`.
 
    The issue you file goes to Refine, not straight to implementation. Refine sizes it and,
    because a report of several unrelated defects across different files is exactly the shape

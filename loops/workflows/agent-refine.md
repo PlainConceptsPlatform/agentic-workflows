@@ -442,9 +442,7 @@ timeout-minutes: 90
    - On a `${{ env.RESPONSE_MODE }}` pass, incorporate only the supplied answers from the issue author or an
      assignee. Do not use answers from other commenters.
 
-3. Explore before you write. Call skill("pc-plan-explore") and hold its stance for this step:
-   read-only, no plans, no files, no branches. You are only building understanding here, never
-   producing artifacts.
+3. Explore before you write. Call skill("pc-plan-explore"); it owns the stance for this step.
 
    Split the issue into work units first. If the issue body is a bullet list of distinct tasks
    (for example "- check the button component", "- then check the login", "- then suggest a
@@ -456,20 +454,14 @@ timeout-minutes: 90
    complete, then move to unit 2. Do not explore multiple work units in the same pass. Do not
    start unit N+1 until unit N is marked complete.
 
-   For the current work unit only:
-   - Explore the relevant code and repository documentation, and raise the concrete questions you
-     must answer to refine it well.
-   - Keep exploring to answer those questions yourself from the codebase and the docs.
-   - Only when a question is a genuine business or product decision that the code cannot answer,
-     set it aside as a question for the author.
-   - Mark the unit's todo complete only when your findings are concrete enough to write
-     acceptance criteria for this unit. If you explored a file but cannot describe what changes
-     for this unit, you are not done — keep exploring or set aside a question.
+   For the current work unit, answer your own questions from the codebase and the docs, and
+   set one aside for the author only when it is a business or product decision the code cannot
+   settle. A unit's todo is complete when its findings would support acceptance criteria: if you
+   read a file but cannot say what changes for this unit, it is not.
 
-   Explore more deeply than a single pass, but never without end. Ask yourself at most
-   ${{ env.MAX_SELF_QUESTIONS }} questions per work unit, and stop once further exploration no
-   longer changes your understanding. This exploration is internal working: never write your
-   self-asked questions or their answers to the issue.
+   At most ${{ env.MAX_SELF_QUESTIONS }} self-asked questions per work unit, and stop sooner
+   once more exploring stops changing your understanding. Never write a self-asked question or
+   its answer to the issue: this is internal working, and the issue is read by people.
 
 4. **Classify the change complexity.** Based on your exploration, determine whether this is a
    trivial change. A change is **trivial** only if every one of these holds:
@@ -500,10 +492,9 @@ timeout-minutes: 90
    and explore it now. Then call skill("pc-plan-story") and run `/plan-story` for the issue,
    passing everything you learned while exploring as the exploration findings. Ground the story
    in the actual codebase by reading the relevant files. Never read outside this repository root.
-   When the issue held several work units, combine them into a single user story that covers all
-   of them. Write at least one Given/When/Then acceptance scenario per work unit. Write it as a
-   user story in Mike Cohn's As a / I want to / so that form, with Given/When/Then acceptance
-   criteria, the edge cases, and a Mermaid diagram where one genuinely helps.
+   `pc-plan-story` owns the story's shape. This workflow's own requirement is coverage: several
+   work units become one story that covers all of them, with at least one acceptance scenario
+   per unit.
 
      Apply repository documentation and established conventions before finalizing the story.
      Adhere to ${{ env.REPO_RULES }}.
