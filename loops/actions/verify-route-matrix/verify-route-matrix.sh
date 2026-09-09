@@ -1118,6 +1118,56 @@ if [ -f "$AUDIT_CLOSE_YML" ] && worker_installed audit; then
   if [ "$AC_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+echo "── Merge gate validator ──────────────────────────────────────────────────"
+
+# The validator decides whether a gate run merges, remediates, parks, or is thrown away, and
+# until now nothing executed it -- this file only read it. Its `remediated` rule was changed on
+# reasoning alone, and the worker has not run in production since, so these fixtures are the only
+# evidence the change is right. Executing the real script is the same technique that finally
+# caught the belt's jq bug, which every reading assertion had walked past.
+GATE_VALIDATOR="${HERE}/../validate-merge-gate-output/validate-merge-gate-output.sh"
+if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
+  VALIDATOR_OK=1
+  gate_fixture="${TMPDIR:-/tmp}/route-matrix-gate-$$.json"
+
+  gate_case() {
+    local name="$1" want="$2" json="$3" conclusion="$4"
+    printf '%s' "$json" > "$gate_fixture"
+    local got
+    got=$(bash "$GATE_VALIDATOR" "$gate_fixture" 7 "$conclusion" 2>&1)
+    if [ "$got" != "$want" ]; then
+      VALIDATOR_OK=0
+      echo "FAIL: the merge-gate validator called '${name}' ${got}, expected ${want}" >&2
+    fi
+  }
+
+  gate_verdict='{"type":"add_comment","item_number":7,"body":"<!-- agent-merge-gate -->\n**Verdict:** VERB"}'
+  gate_push='{"type":"push_to_pull_request_branch","pr_number":9}'
+  gate_items() { printf '{"items":[%s]}' "$1"; }
+  gate_comment() { printf '%s' "${gate_verdict/VERB/$1}"; }
+
+  gate_case "merge on green with no push"        merge      "$(gate_items "$(gate_comment merge)")" success
+  gate_case "merge on a failed CI run"           invalid    "$(gate_items "$(gate_comment merge)")" failure
+  gate_case "merge carrying a push"              invalid    "$(gate_items "$(gate_comment merge),${gate_push}")" success
+  # The case the rule exists for. A conflicting pull request has no merge ref, so GitHub never
+  # runs CI on that head and the belt falls back to the branch's last verdict, usually success.
+  # Requiring conclusion == failure here discarded the resolved merge commit the agent had just
+  # pushed, and the belt re-dispatched on the same verdict up to six times.
+  gate_case "remediated with one push, CI green" remediated "$(gate_items "$(gate_comment remediated),${gate_push}")" success
+  gate_case "remediated with one push, CI red"   remediated "$(gate_items "$(gate_comment remediated),${gate_push}")" failure
+  gate_case "remediated with no push"            invalid    "$(gate_items "$(gate_comment remediated)")" failure
+  gate_case "remediated with two pushes"         invalid    "$(gate_items "$(gate_comment remediated),${gate_push},${gate_push}")" failure
+  gate_case "review with no push"                review     "$(gate_items "$(gate_comment review)")" failure
+  gate_case "review carrying a push"             invalid    "$(gate_items "$(gate_comment review),${gate_push}")" failure
+  gate_case "a verdict aimed at another issue"   invalid    '{"items":[{"type":"add_comment","item_number":99,"body":"<!-- agent-merge-gate -->\n**Verdict:** merge"}]}' success
+  gate_case "no verdict in the output"           invalid    '{"items":[{"type":"add_comment","item_number":7,"body":"just a note"}]}' success
+  gate_case "an empty item list"                 invalid    '{"items":[]}' success
+  gate_case "output that is not an item list"    invalid    '{"nope":true}' success
+
+  rm -f "$gate_fixture"
+  if [ "$VALIDATOR_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 echo "── Merge gate park ───────────────────────────────────────────────────────"
 
 # A gate verdict parks the code it was given on. Both dispatch paths -- detect-pr-conflicts and
