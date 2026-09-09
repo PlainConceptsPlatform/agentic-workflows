@@ -1169,42 +1169,49 @@ if [ -f "$ERROR_REPORT_YML" ]; then
   # The allowlist has to be a SUBSET of what the package ships, not a shape that happens to cover
   # it. Written as a regex over stems it admitted 22 names of which 11 were never installed --
   # `agent-refine.yml` (the workers ship as .md compiled to .lock.yml), `work-router.lock.yml` --
-  # so a consumer file at one of those names would have been read and reported. Derive the real
-  # set from the tree and compare.
-  admitted=$( { sed -n "/const OWNED = new Set(\[/,/^          \]);$/p" "$ERROR_REPORT_YML" |
-      grep -oE "'[A-Za-z0-9.-]+\.(yml|lock\.yml)'" | tr -d "'"
-    # The worker names are built from a route list by a template literal, so expand that list the
-    # same way rather than looking for filenames the file never spells out.
-    sed -n "/const OWNED = new Set(\[/,/^          \]);$/p" "$ERROR_REPORT_YML" |
-      grep -oE "'(refine|implement|triage|apply-review|merge-gate|audit|release)'" | tr -d "'" |
-      sed 's|^|agent-|; s|$|.lock.yml|'
-  } | sort -u )
-  shipped=$( {
-    # Globs rather than `ls |`, so a filename with a space cannot split into two names.
-    for path in "${WORKFLOWS_DIR}"/*.yml; do
-      [ -e "$path" ] || continue
-      name="${path##*/}"
-      [ "$name" = "agentics-error-report.yml" ] || echo "$name"
-    done
-    # The workers are compiled from .md, and it is the .lock.yml the API reports.
-    for path in "${WORKFLOWS_DIR}"/agent-*.md; do
-      [ -e "$path" ] || continue
-      name="${path##*/}"
-      echo "${name%.md}.lock.yml"
-    done
-    # Templates that are workflows and that the package installs.
-    for candidate in agentics-checks.yml agentics-maintenance.yml; do
-      [ -f "${HERE}/../../templates/agentics/${candidate}" ] && echo "$candidate"
-    done
-  } | sort -u )
-  # Every admitted name must be shipped. The reverse is not required: a repository that installed
-  # only some workers still runs this file, and the report simply never sees the others.
-  unshipped=$(comm -23 <(printf '%s\n' "$admitted") <(printf '%s\n' "$shipped") | tr '\n' ' ')
-  if [ -n "$admitted" ] && [ -z "${unshipped// /}" ]; then
-    PASS=$((PASS + 1))
-  else
-    ER_OK=0
-    echo "FAIL: the error report's allowlist admits name(s) this package does not ship: ${unshipped:-(the allowlist could not be read)}" >&2
+  # so a consumer file at one of those names would have been read and reported.
+  #
+  # Only upstream, where `templates/` sits beside `workflows/` and that directory IS the package.
+  # A consumer's `.github/workflows/` is the package's files plus their own -- `app-ci.yml`,
+  # `app-deploy-env.yml` -- so deriving "what the package ships" from it there would both admit
+  # their filenames and miss the two templates, i.e. fail in both directions at once.
+  if [ -d "${HERE}/../../templates/agentics" ]; then
+    admitted=$( {
+      sed -n "/const OWNED = new Set(\[/,/^          \]);\$/p" "$ERROR_REPORT_YML" |
+        grep -oE "'[A-Za-z0-9.-]+\.(yml|lock\.yml)'" | tr -d "'" || true
+      # The worker names are built from a route list by a template literal, so expand that list
+      # the same way rather than looking for filenames the file never spells out.
+      sed -n "/const OWNED = new Set(\[/,/^          \]);\$/p" "$ERROR_REPORT_YML" |
+        grep -oE "'(refine|implement|triage|apply-review|merge-gate|audit|release)'" | tr -d "'" |
+        sed 's|^|agent-|; s|$|.lock.yml|' || true
+    } | sort -u )
+    shipped=$( {
+      # Globs rather than `ls |`, so a filename with a space cannot split into two names.
+      for path in "${HERE}/../../workflows"/*.yml; do
+        [ -e "$path" ] || continue
+        name="${path##*/}"
+        echo "$name"
+      done
+      # The workers are compiled from .md, and it is the .lock.yml the API reports.
+      for path in "${HERE}/../../workflows"/agent-*.md; do
+        [ -e "$path" ] || continue
+        name="${path##*/}"
+        echo "${name%.md}.lock.yml"
+      done
+      # Templates the package installs that are themselves workflows.
+      for candidate in agentics-checks.yml agentics-maintenance.yml; do
+        [ -f "${HERE}/../../templates/agentics/${candidate}" ] && echo "$candidate"
+      done
+    } | sort -u )
+    # Every admitted name must be shipped. The reverse is not required: a repository that
+    # installed only some workers still runs this file; the report simply never sees the others.
+    unshipped=$(comm -23 <(printf '%s\n' "$admitted") <(printf '%s\n' "$shipped") 2>/dev/null | tr '\n' ' ' || true)
+    if [ -n "$admitted" ] && [ -z "${unshipped// /}" ]; then
+      PASS=$((PASS + 1))
+    else
+      ER_OK=0
+      echo "FAIL: the error report's allowlist admits name(s) this package does not ship: ${unshipped:-(the allowlist could not be read)}" >&2
+    fi
   fi
 
   # 2b. The runner label is the one value on a finding that the CONSUMER writes -- the installer

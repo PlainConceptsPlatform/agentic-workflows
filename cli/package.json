@@ -1,6 +1,6 @@
 {
   "name": "@plainconceptsplatform/workflows",
-  "version": "0.16.1",
+  "version": "0.16.2",
   "description": "Install and update Platform GitHub agentic workflows.",
   "keywords": [
     "github-actions",
