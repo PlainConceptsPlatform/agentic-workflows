@@ -107,6 +107,21 @@ runs:
             { what: 'a branch or ref path', test: /\brefs\/heads\/|\b(?:feature|fix|chore|bot)\/[A-Za-z0-9._-]+/ },
           ];
 
+          // Which version of the package is reporting. Without this a bug fixed weeks ago keeps
+          // arriving upstream with no way to tell it is stale: the first report filed by this
+          // job was 19 occurrences of a jq bug that a release had already fixed, and nothing in
+          // it said so. The version is the package's own name for itself, read from the
+          // ownership header the installer stamps, so it carries nothing of the repository.
+          let packageVersion = 'unknown';
+          try {
+            const header = require('node:fs')
+              .readFileSync('.github/workflows/work-router.yml', 'utf8')
+              .split('\n')[0];
+            packageVersion = /@plainconceptsplatform\/workflows@([0-9][0-9A-Za-z.\-+]*)/.exec(header)?.[1] ?? 'unknown';
+          } catch {
+            core.info('could not read the installed package version from the router header');
+          }
+
           const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
             ...context.repo, created: `>=${since.toISOString()}`, per_page: 100,
           });
@@ -241,12 +256,13 @@ runs:
             `| Runner labels | ${[...finding.runnerLabels].map((l) => `\`${l}\``).join(', ') || 'not reported'} |`,
             `| Occurrences in the last ${hours}h | ${finding.count} |`,
             `| Re-run attempts involved | ${[...finding.attempts].sort().join(', ')} |`,
+            `| Package version reporting | \`${packageVersion}\` |`,
             '',
             `**What this classification means.** ${catalogueNote(finding.patternId)}`,
             '',
             '### Occurrences',
             '',
-            `- ${new Date().toISOString().slice(0, 10)}: ${finding.count} in ${hours}h`,
+            `- ${new Date().toISOString().slice(0, 10)}: ${finding.count} in ${hours}h, on \`${packageVersion}\``,
           ].join('\n');
 
           const titleFor = (finding) =>
@@ -337,7 +353,7 @@ runs:
               if (existing) {
                 // Append one dated line rather than rewriting the body, so the history of how
                 // often this fires stays readable.
-                const line = `- ${new Date().toISOString().slice(0, 10)}: ${finding.count} in ${hours}h`;
+                const line = `- ${new Date().toISOString().slice(0, 10)}: ${finding.count} in ${hours}h, on \`${packageVersion}\``;
                 const updated = (existing.body ?? '').includes(line)
                   ? existing.body
                   : `${existing.body}\n${line}`;
