@@ -75,6 +75,13 @@ runs:
           const names = (issue) => issue.labels.map((l) => (typeof l === 'string' ? l : l.name));
 
           const needsHuman = [];
+          // Stalled work still inside its retry window. Separate from needsHuman because nobody
+          // needs to act on it yet, and reported anyway because the alternative is silence: the
+          // window is 6 hours and the budget is 3 attempts, so an issue that keeps stalling was
+          // invisible for eighteen hours before it surfaced as retries-exhausted. Watched that
+          // happen to an audit report in the dogfood repository -- parked, and the digest said
+          // one item while three issues were sitting there.
+          const retrying = [];
           let retried = 0;
 
           // 1. Retry what the machine stalled on. `stalled` marks a park caused by a crash, a
@@ -96,7 +103,10 @@ runs:
               needsHuman.push({ kind: 'decided', issue, labels, waited });
               continue;
             }
-            if (waited < retryAfterMs) continue;
+            if (waited < retryAfterMs) {
+              retrying.push({ issue, waited, attempts, work, due: retryAfterMs - waited });
+              continue;
+            }
             if (attempts >= maxRetries || !work) {
               needsHuman.push({ kind: attempts >= maxRetries ? 'retries-exhausted' : 'no-work-label', issue, labels, waited, attempts });
               continue;
@@ -203,16 +213,35 @@ runs:
 
           // 6. One digest. Everything above either fixed itself or is listed here, so there is a
           // single place to look instead of four repositories and three label queries.
+          // Audit reports nobody actioned. audit-close labels these `stale-audit` once they are
+          // past their budget, which frees the audit's backpressure slot. Freeing the slot
+          // without listing the report anywhere would only move the silence, so they land here.
+          for (const issue of issues) {
+            if (issue.pull_request) continue;
+            if (!names(issue).includes('stale-audit')) continue;
+            needsHuman.push({ kind: 'stale-audit', issue, waited: age(issue.created_at) });
+          }
+
           const line = (entry) => {
             if (entry.kind === 'pr-parked') return `- PR #${entry.pull.number} · parked ${days(entry.waited)}d · gate verdict \`${entry.verdict}\` · ${entry.pull.title}`;
             if (entry.kind === 'pr-stale') return `- PR #${entry.pull.number} · ${days(entry.waited)}d old · no gate verdict yet · ${entry.pull.title}`;
             if (entry.kind === 'retries-exhausted') return `- #${entry.issue.number} · stalled ${days(entry.waited)}d · retried ${entry.attempts}× and still stalling · ${entry.issue.title}`;
             if (entry.kind === 'no-work-label') return `- #${entry.issue.number} · stalled ${days(entry.waited)}d · no work label to retry with · ${entry.issue.title}`;
+            if (entry.kind === 'stale-audit') return `- #${entry.issue.number} · open ${days(entry.waited)}d · audit report nobody actioned · ${entry.issue.title}`;
             return `- #${entry.issue.number} · waiting ${days(entry.waited)}d · ${entry.labels.filter((l) => l !== 'review').join(', ') || 'no other labels'} · ${entry.issue.title}`;
           };
           const section = (heading, kinds) => {
             const rows = needsHuman.filter((e) => kinds.includes(e.kind));
             return rows.length === 0 ? '' : `\n### ${heading} (${rows.length})\n\n${rows.map(line).join('\n')}\n`;
+          };
+          // Listed, but not as something to act on: the machine is going to try again by itself.
+          // The heading says so, because a reader who acts on these duplicates the retry.
+          const retryingSection = () => {
+            if (retrying.length === 0) return '';
+            const hours = (ms) => Math.max(1, Math.round(ms / 3600000));
+            const rows = retrying.map((entry) =>
+              `- #${entry.issue.number} · stalled ${hours(entry.waited)}h ago · attempt ${entry.attempts + 1} of ${maxRetries} due in ~${hours(entry.due)}h · ${entry.issue.title}`);
+            return `\n### Retrying by itself, no action needed (${retrying.length})\n\n${rows.join('\n')}\n`;
           };
           const body = [
             DIGEST_MARKER,
@@ -220,22 +249,28 @@ runs:
             section('Waiting on a decision', ['decided']),
             section('Pull requests parked by the gate', ['pr-parked', 'pr-stale']),
             section('Stalled beyond the retry budget', ['retries-exhausted', 'no-work-label']),
+            section('Audit reports nobody actioned', ['stale-audit']),
+            retryingSection(),
             needsHuman.length === 0 ? '\nNothing is waiting on a person right now.\n' : '',
             `\n---\n\nThis run retried ${retried} stalled issue(s) and made ${planned.length} change(s) in total.`,
           ].filter(Boolean).join('\n');
 
           if (digestTitle) {
+            // The digest exists whenever there is anything to show, including work the machine is
+            // about to retry. Gating it on needsHuman alone is what left three parked issues
+            // with a digest that named one.
+            const anythingToShow = needsHuman.length + retrying.length;
             const existing = issues.find((i) => !i.pull_request && i.title === digestTitle && (i.body ?? '').includes(DIGEST_MARKER));
             if (existing) {
-              if (needsHuman.length === 0) {
+              if (anythingToShow === 0) {
                 await act(`closing the digest #${existing.number}: nothing is waiting`, () =>
                   github.rest.issues.update({ ...context.repo, issue_number: existing.number, body, state: 'closed', state_reason: 'completed' }));
               } else {
-                await act(`updating the digest #${existing.number}: ${needsHuman.length} item(s)`, () =>
+                await act(`updating the digest #${existing.number}: ${anythingToShow} item(s)`, () =>
                   github.rest.issues.update({ ...context.repo, issue_number: existing.number, body }));
               }
-            } else if (needsHuman.length > 0) {
-              await act(`opening the digest: ${needsHuman.length} item(s)`, () =>
+            } else if (anythingToShow > 0) {
+              await act(`opening the digest: ${anythingToShow} item(s)`, () =>
                 github.rest.issues.create({ ...context.repo, title: digestTitle, body }));
             }
           }
@@ -245,6 +280,7 @@ runs:
             .addList([
               `Retried: ${retried}`,
               `Waiting on a person: ${needsHuman.length}`,
+              `Stalled, retrying by itself: ${retrying.length}`,
               `Changes ${dryRun ? 'planned' : 'made'}: ${planned.length}`,
             ])
             .addRaw(planned.length ? `\n\n${planned.map((p) => `- ${p}`).join('\n')}` : '')
