@@ -33,6 +33,15 @@ describe("workflow catalog", () => {
     }
   });
 
+  // The pre-commit hook the installer writes names this path, and so does the catalog. When they
+  // were two independent literals the hook guarded `.github/actions/actions-lock.json`, which
+  // exists nowhere, so `[ ! -f ... ]` was always true and the real lock was never staged. Nothing
+  // failed; a compile that bumped an action pin just left the lock out of the commit.
+  it("declares the actions lock at the path gh aw actually writes", () => {
+    expect(generatedConsumerTargets).toContain(".github/aw/actions-lock.json");
+    expect(generatedConsumerTargets).not.toContain(".github/actions/actions-lock.json");
+  });
+
   it("lists supported optional templates", () => {
     expect(templateNames).toEqual(["agentics-checks", "agentics-error-report", "agentics-maintenance", "app-ci-dotnet-next", "app-ci-node-monorepo", "bug-report", "feature-request", "github-release", "opencode.ci.json"]);
   });

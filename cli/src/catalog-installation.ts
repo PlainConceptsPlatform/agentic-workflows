@@ -88,6 +88,13 @@ export function catalogSourcePath(modulePath = fileURLToPath(import.meta.url)): 
   return resolve(dirname(modulePath), "..", "loops");
 }
 
+/**
+ * Where `gh aw` writes the pinned-action lock, and the only place it should be named.
+ * `generatedConsumerTargets` in the catalog declares the same path; two literals is how the
+ * pre-commit hook ended up guarding one that exists nowhere.
+ */
+const ACTIONS_LOCK = ".github/aw/actions-lock.json";
+
 const isWorker = (target: string): boolean => target.startsWith(".github/workflows/agent-") && target.endsWith(".md");
 const isRouter = (target: string): boolean => target === ".github/workflows/work-router.yml";
 const carriesHeader = (target: string): boolean => /\.(ya?ml|md|sh|mjs|cjs)$/.test(target);
@@ -395,7 +402,13 @@ async function preCommitHookUpdate(repositoryPath: string): Promise<{ target: st
   const hookPath = join(repositoryPath, target);
   const compileLine = "node scripts/compile-agent-workflows.mjs";
   const stageLine = "git add -- .github/workflows/*.lock.yml";
-  const actionLockLine = "[ ! -f .github/actions/actions-lock.json ] || git add -- .github/actions/actions-lock.json";
+  // gh aw writes this at .github/aw/, which is what every consumer tracks and what
+  // `generatedConsumerTargets` in the catalog declares. The line used to name
+  // `.github/actions/actions-lock.json`, a path that exists nowhere, so `[ ! -f ... ]` was
+  // always true, the `||` short-circuited, and the real lock was never staged: a compile that
+  // bumped an action pin left the lock out of the commit and the tree dirty behind it. Nothing
+  // failed, which is why it survived. Found by the first audit run in the dogfood repository.
+  const actionLockLine = `[ ! -f ${ACTIONS_LOCK} ] || git add -- ${ACTIONS_LOCK}`;
   const managedLines = `if git diff --cached --name-only -- .github | grep -q .; then\n  ${compileLine}\n  ${stageLine}\n  ${actionLockLine}\nfi\n`;
   if (!await exists(hookPath)) {
     return { target, content: managedLines };
@@ -485,9 +498,9 @@ async function generatedFiles(repositoryPath: string): Promise<ContentUpdate[]> 
     }
   }
 
-  const actionsLock = join(repositoryPath, ".github", "actions", "actions-lock.json");
+  const actionsLock = join(repositoryPath, ...ACTIONS_LOCK.split("/"));
   if (await exists(actionsLock)) {
-    updates.push({ target: ".github/actions/actions-lock.json", content: await readFile(actionsLock, "utf8") });
+    updates.push({ target: ACTIONS_LOCK, content: await readFile(actionsLock, "utf8") });
   }
 
   return updates.sort((left, right) => left.target.localeCompare(right.target));

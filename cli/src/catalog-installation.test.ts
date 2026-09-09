@@ -523,7 +523,7 @@ describe("catalog installation", () => {
     await ensurePreCommitHook(repositoryPath);
 
     await expect(readFile(join(repositoryPath, ".husky", "pre-commit"), "utf8"))
-      .resolves.toBe("if git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/actions/actions-lock.json ] || git add -- .github/actions/actions-lock.json\nfi\n");
+      .resolves.toBe("if git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/aw/actions-lock.json ] || git add -- .github/aw/actions-lock.json\nfi\n");
   });
 
   it("keeps existing pre-commit commands and appends the compiler once", async () => {
@@ -533,7 +533,7 @@ describe("catalog installation", () => {
     await ensurePreCommitHook(repositoryPath);
 
     await expect(readFile(join(repositoryPath, ".husky", "pre-commit"), "utf8"))
-      .resolves.toBe("pnpm lint\nif git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/actions/actions-lock.json ] || git add -- .github/actions/actions-lock.json\nfi\n");
+      .resolves.toBe("pnpm lint\nif git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/aw/actions-lock.json ] || git add -- .github/aw/actions-lock.json\nfi\n");
   });
 
   it("upgrades an existing compiler hook to stage generated locks", async () => {
@@ -547,7 +547,7 @@ describe("catalog installation", () => {
 
   it("repairs a malformed compiler hook prefixed with pnpm exec", async () => {
     const repositoryPath = await createDirectory({
-      ".husky/pre-commit": "pnpm exec if git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/actions/actions-lock.json ] || git add -- .github/actions/actions-lock.json\nfi\n",
+      ".husky/pre-commit": "pnpm exec if git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/aw/actions-lock.json ] || git add -- .github/aw/actions-lock.json\nfi\n",
     });
 
     await ensurePreCommitHook(repositoryPath);
