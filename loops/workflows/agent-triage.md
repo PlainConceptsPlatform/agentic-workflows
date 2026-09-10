@@ -72,7 +72,33 @@ on:
         default: first
 
 jobs:
+  # A route dispatched while the issue was open must not execute after it has been closed. The
+  # classifier can only see `github.event.issue.state`, which is the state when the event fired
+  # and is absent on a workflow_dispatch, and this fleet queues for a runner for ten minutes and
+  # more. Numa #659 was closed one second after a comment dispatched refine; the run reached
+  # `reserve` thirteen minutes later and refined a closed issue to completion. Read now, once,
+  # and gate both the reservation and the agent on it.
+  still_open:
+    runs-on: agents-arc
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      open: ${{ steps.state.outputs.open }}
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the issue state
+        id: state
+        uses: ./.github/actions/require-open-issue
+        with:
+          token: ${{ github.token }}
+          issue-number: ${{ inputs.issue-number }}
   reserve:
+    needs: still_open
+    if: needs.still_open.outputs.open == 'true'
     runs-on: agents-arc
     permissions:
       contents: read
@@ -296,7 +322,8 @@ jobs:
             ${{ env.INCOMPLETE_COMMENT }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-if: inputs.issue-number != ''
+if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true'
+needs: [still_open]
 
 runs-on: agents-arc
 runs-on-slim: agents-arc

@@ -1490,6 +1490,56 @@ else
   printf '%s\n' "$password_hits" >&2
 fi
 
+echo "── Stale dispatch and empty runs ─────────────────────────────────────────"
+
+# A route dispatched while an issue was open must not execute after it is closed. The classifier
+# refuses a closed issue, but it can only read `github.event.issue.state`: the state when the
+# event fired, and absent altogether on a workflow_dispatch. This fleet queues for a runner for
+# ten minutes and more. Numa #659 was closed one second after a comment dispatched refine; the run
+# reached `reserve` thirteen minutes later, took the reservation, and refined a closed issue for
+# thirty-eight minutes, ending by labelling it `refined`, `implement` and `sp-5`. Every job
+# reported success. Asserted per worker because the gate is three lines in each and none of them
+# failing produces a red run.
+STALE_DISPATCH_OK=1
+for route in refine implement triage apply-review; do
+  worker_md="${WORKFLOWS_DIR}/agent-${route}.md"
+  [ -f "$worker_md" ] || continue
+  if ! grep -q '^  still_open:' "$worker_md"; then
+    STALE_DISPATCH_OK=0
+    echo "FAIL: agent-${route} has no still_open job; a route dispatched before the issue closed would run on it anyway" >&2
+    continue
+  fi
+  # The reservation must be gated, or bot-working lands on a closed issue, and the agent must be
+  # gated through the worker's own `if:`. Two distinct call sites.
+  if [ "$(count -cF "needs.still_open.outputs.open == 'true'" "$worker_md")" -lt 2 ]; then
+    STALE_DISPATCH_OK=0
+    echo "FAIL: agent-${route} does not gate both the reservation and the agent on still_open" >&2
+  fi
+  # gh-aw folds the top-level `if:` into activation but does not carry the jobs it reads into
+  # activation's needs, so the reference silently evaluates to empty without this line.
+  if ! grep -qF 'needs: [still_open]' "$worker_md"; then
+    STALE_DISPATCH_OK=0
+    echo "FAIL: agent-${route} reads needs.still_open in its top-level if: without declaring needs: [still_open]" >&2
+  fi
+done
+if [ "$STALE_DISPATCH_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# An audit that emitted neither a report nor a noop used to end green: `conclude` requires a
+# processed item, and a skipped job is not a failure. A whole agent run produced nothing and said
+# nothing. Both halves of the condition are asserted: the count alone would fire on a legitimate
+# `noop` if noop does not increment it, and the noop_message alone would miss the empty run.
+if worker_installed audit; then
+  AUDIT_EMPTY_OK=1
+  AUDIT_WORKER_MD="${WORKFLOWS_DIR}/agent-audit.md"
+  grep -q '^  empty_run:' "$AUDIT_WORKER_MD" ||
+    { AUDIT_EMPTY_OK=0; echo "FAIL: the audit has no empty_run job; a run that files nothing reports success" >&2; }
+  grep -qF "process_safe_outputs_processed_count == '0'" "$AUDIT_WORKER_MD" ||
+    { AUDIT_EMPTY_OK=0; echo "FAIL: the audit's empty_run does not test the processed count" >&2; }
+  grep -qF "needs.conclusion.outputs.noop_message == ''" "$AUDIT_WORKER_MD" ||
+    { AUDIT_EMPTY_OK=0; echo "FAIL: the audit's empty_run does not exempt a deliberate noop, so a clean codebase would fail the run" >&2; }
+  if [ "$AUDIT_EMPTY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 echo "── Runner pools ──────────────────────────────────────────────────────────"
 
 # Where every job runs, stated once and asserted, because GitHub gives a wrong pool no error: a

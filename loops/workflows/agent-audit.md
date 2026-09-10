@@ -119,6 +119,41 @@ jobs:
             bug
             refine
 
+  # An audit that produced nothing reported success. The whole run -- a full agent, its tokens,
+  # its half hour -- ended with `conclude` skipped, because that job requires a processed item,
+  # and a skipped job leaves the run green. Numa's audit on 2026-09-10 did exactly that:
+  # `agent_output.json` 24 bytes, `safe-output-items.jsonl` empty, every job success, no report
+  # filed and nothing anywhere saying so. The next scheduled audit would have looked identical.
+  #
+  # Step 6 of the prompt gives a clean codebase its own outcome: call `noop` and stop. So there
+  # are three endings, and only the third is a failure:
+  #
+  #   create_issue emitted  ->  processed_count is not 0, conclude labels the report
+  #   noop emitted          ->  noop_message is set; filing nothing was the right answer
+  #   neither               ->  the agent produced no output at all, which is this job
+  #
+  # Both conditions are checked, not just the count, because whether a `noop` increments
+  # `processed_count` is not something this repository has observed -- and gating on an output
+  # whose value has never been seen is what made the implement worker post "nothing landed" over
+  # a patch that existed. This pair is correct either way.
+  empty_run:
+    needs: [agent, safe_outputs, conclusion]
+    if: >
+      needs.agent.result == 'success' &&
+      needs.safe_outputs.outputs.process_safe_outputs_processed_count == '0' &&
+      needs.conclusion.outputs.noop_message == ''
+    runs-on: agents-arc
+    permissions:
+      contents: read
+    steps:
+      - name: Report an audit that produced no outcome
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          echo "::error::The audit agent finished without emitting a report or a noop. The prompt requires one of the two: create_issue with the findings, or noop when the codebase is clean. Nothing was filed and no reason was given, so this run is a failure rather than a clean audit. The next scheduled audit will try again. ${RUN_URL}"
+          exit 1
+
 safe-outputs:
   # A failed run is already a red run. An issue per failure buries the real backlog
   # under noise nobody closes.
