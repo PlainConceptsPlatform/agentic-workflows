@@ -125,23 +125,24 @@ jobs:
   # `agent_output.json` 24 bytes, `safe-output-items.jsonl` empty, every job success, no report
   # filed and nothing anywhere saying so. The next scheduled audit would have looked identical.
   #
-  # Step 6 of the prompt gives a clean codebase its own outcome: call `noop` and stop. So there
-  # are three endings, and only the third is a failure:
+  # This fires when the agent succeeded and the safe-outputs handler processed nothing at all.
   #
-  #   create_issue emitted  ->  processed_count is not 0, conclude labels the report
-  #   noop emitted          ->  noop_message is set; filing nothing was the right answer
-  #   neither               ->  the agent produced no output at all, which is this job
+  # Step 6 of the prompt gives a clean codebase its own outcome -- call `noop` and stop -- and
+  # that outcome must not be reported as a failure. `noop` is a registered safe output here
+  # (`noop: max 1`), so the handler receives it as a message and the processed count is not zero,
+  # which keeps a deliberately empty audit out of this branch. That is read from the handler
+  # configuration rather than observed in a run: no audit in these repositories has yet emitted a
+  # noop. The direct signal, `noop_message`, belongs to gh-aw's `conclusion` job, and that job
+  # depends on every custom job here, so naming it is a dependency cycle and the worker will not
+  # compile -- the first version of this job was rejected for exactly that.
   #
-  # Both conditions are checked, not just the count, because whether a `noop` increments
-  # `processed_count` is not something this repository has observed -- and gating on an output
-  # whose value has never been seen is what made the implement worker post "nothing landed" over
-  # a patch that existed. This pair is correct either way.
+  # If a genuinely clean audit ever fails here, that is the assumption breaking, and the fix is to
+  # carry the noop through a job this one can depend on rather than to widen the condition.
   empty_run:
-    needs: [agent, safe_outputs, conclusion]
+    needs: [agent, safe_outputs]
     if: >
       needs.agent.result == 'success' &&
-      needs.safe_outputs.outputs.process_safe_outputs_processed_count == '0' &&
-      needs.conclusion.outputs.noop_message == ''
+      needs.safe_outputs.outputs.process_safe_outputs_processed_count == '0'
     runs-on: agents-arc
     permissions:
       contents: read

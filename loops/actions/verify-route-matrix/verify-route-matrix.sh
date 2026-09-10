@@ -1515,11 +1515,28 @@ for route in refine implement triage apply-review; do
     STALE_DISPATCH_OK=0
     echo "FAIL: agent-${route} does not gate both the reservation and the agent on still_open" >&2
   fi
-  # gh-aw folds the top-level `if:` into activation but does not carry the jobs it reads into
-  # activation's needs, so the reference silently evaluates to empty without this line.
-  if ! grep -qF 'needs: [still_open]' "$worker_md"; then
+  # The gate job must carry no `needs:` of its own. gh-aw hoists exactly those custom jobs into
+  # the activation job's dependencies, which is what lets the top-level `if:` read their outputs;
+  # a gate job that gained a dependency would stop being hoisted and the clause would silently
+  # evaluate to empty, which is always true. Asserted on the job block, not on the file, because
+  # `needs: [still_open]` also appears on the reserve job and a file-wide search for it passed
+  # for two workers that never declared anything.
+  # activation must be given the dependency, or the top-level `if:` reads an empty value and the
+  # clause is false: the agent never runs at all. gh-aw does not hoist this job, and the entry
+  # lives at two spaces under `on:`, which is where gh-aw reads activation's dependency list.
+  # Matched inside the `on:` block, because the same text appears on the reserve job and a
+  # file-wide search for it passed for two workers that had declared nothing.
+  on_block=$(awk '/^on:/{f=1; next} f && /^[a-z][a-z-]*:/{exit} f' "$worker_md")
+  if ! printf '%s
+' "$on_block" | grep -qE '^  needs: \[.*still_open'; then
     STALE_DISPATCH_OK=0
-    echo "FAIL: agent-${route} reads needs.still_open in its top-level if: without declaring needs: [still_open]" >&2
+    echo "FAIL: agent-${route} does not list still_open under on.needs, so activation reads an empty value and the agent never runs" >&2
+  fi
+  gate_block=$(awk '/^  still_open:/{f=1; next} f && /^  [a-z_]+:/{exit} f' "$worker_md")
+  if printf '%s
+' "$gate_block" | grep -qE '^    needs:'; then
+    STALE_DISPATCH_OK=0
+    echo "FAIL: agent-${route}'s still_open job declares needs:, so gh-aw will not hoist it and the top-level if: reads an empty value" >&2
   fi
 done
 if [ "$STALE_DISPATCH_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
@@ -1535,8 +1552,14 @@ if worker_installed audit; then
     { AUDIT_EMPTY_OK=0; echo "FAIL: the audit has no empty_run job; a run that files nothing reports success" >&2; }
   grep -qF "process_safe_outputs_processed_count == '0'" "$AUDIT_WORKER_MD" ||
     { AUDIT_EMPTY_OK=0; echo "FAIL: the audit's empty_run does not test the processed count" >&2; }
-  grep -qF "needs.conclusion.outputs.noop_message == ''" "$AUDIT_WORKER_MD" ||
-    { AUDIT_EMPTY_OK=0; echo "FAIL: the audit's empty_run does not exempt a deliberate noop, so a clean codebase would fail the run" >&2; }
+  # empty_run must not depend on gh-aw's `conclusion` job. That job needs every custom job in the
+  # worker, so naming it is a cycle and the whole workflow fails to compile -- which is how the
+  # first attempt at this was caught. It also means `noop_message`, the one output that would say
+  # a clean audit deliberately filed nothing, cannot be read from here.
+  if grep -qE '^    needs: \[.*conclusion' "$AUDIT_WORKER_MD"; then
+    AUDIT_EMPTY_OK=0
+    echo "FAIL: the audit's empty_run depends on the conclusion job, which is a dependency cycle and will not compile" >&2
+  fi
   if [ "$AUDIT_EMPTY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 

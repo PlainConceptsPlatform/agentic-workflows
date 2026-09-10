@@ -77,6 +77,12 @@ on:
         required: false
         type: string
         default: '0'
+  # The gate job that the top-level `if:` reads. gh-aw folds that `if:` into the generated
+  # activation job but gives activation no dependency on the job, so the reference resolves
+  # to '' and the clause is false -- the agent would never run. The package's own validator
+  # catches it after compilation; this is the line it asks for, the same one the merge gate
+  # uses for protected_changes.
+  needs: [still_open]
 jobs:
   # A route dispatched while the issue was open must not execute after it has been closed. The
   # classifier can only see `github.event.issue.state`, which is the state when the event fired
@@ -503,7 +509,6 @@ jobs:
     if: needs.eligibility.outputs.eligible == 'true'
 
 if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true'
-needs: [still_open]
 
 runs-on: agents-arc
 runs-on-slim: agents-arc
