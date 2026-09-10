@@ -416,17 +416,23 @@ async function preCommitHookUpdate(repositoryPath: string): Promise<{ target: st
 
   const content = (await readFile(hookPath, "utf8"))
     .replace("pnpm exec if git diff --cached --name-only -- .github | grep -q .; then", "if git diff --cached --name-only -- .github | grep -q .; then");
-  if (content.includes("compile-agent-workflows")) {
-    const legacyLines = `${compileLine}\n${stageLine}\n${actionLockLine}\n`;
-    if (content.includes(managedLines)) return { target, content };
-    if (content.includes(legacyLines)) return { target, content: content.replace(legacyLines, managedLines) };
-    const suffix = content.endsWith("\n") || content === "" ? "" : "\n";
-    return { target, content: `${content}${suffix}${managedLines}` };
-  }
 
-  return { target, content: content.endsWith("\n") || content === ""
-    ? `${content}${managedLines}`
-    : `${content}\n${managedLines}` };
+  // Replace whatever managed block is there, never append beside it. The previous version
+  // recognised only two exact shapes -- the current block and the pre-`if` legacy lines -- and
+  // appended when it matched neither. A consumer holding an *older* wrapped block therefore
+  // gained a second one, so the compiler ran twice on every commit and one of the two staged a
+  // lock path that exists nowhere. All five consumers were carrying two blocks by the time this
+  // was noticed, and every future edit to `managedLines` would have added another. Nothing
+  // failed: running the compiler twice is only wasteful, so it never surfaced.
+  const managedBlock = /^[ \t]*if git diff --cached --name-only -- \.github \| grep -q \.; then\n(?:.*\n)*?[ \t]*fi\n?/gm;
+  const legacyLines = `${compileLine}\n${stageLine}\n${actionLockLine}\n`;
+
+  let stripped = content.replace(managedBlock, block =>
+    block.includes("compile-agent-workflows") ? "" : block);
+  stripped = stripped.split(legacyLines).join("");
+
+  const body = stripped.replace(/\n{3,}/g, "\n\n").replace(/\s+$/, "");
+  return { target, content: body === "" ? managedLines : `${body}\n${managedLines}` };
 }
 
 export async function runCompileIfAvailable(repositoryPath: string): Promise<void> {

@@ -627,6 +627,32 @@ describe("catalog installation", () => {
     expect(written).toContain('VERIFY_COMMANDS: "consumer verify"');
   });
 
+  // Every consumer had two of these by the time it was noticed: the installer recognised only
+  // the current shape and the pre-`if` legacy lines, and appended when it matched neither, so an
+  // older wrapped block collected a sibling. The compiler then ran twice per commit and one of
+  // the two staged `.github/actions/actions-lock.json`, a path that exists nowhere. Nothing
+  // failed, which is why it survived. The consumer's own half of the hook must be left alone.
+  it("replaces a duplicated managed block instead of adding a third", async () => {
+    const sourcePath = await createDirectory({
+      "actions/check/action.yml": "name: Check\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({ ".husky/pre-commit": "# Format staged frontend files with biome, then re-stage them\nif [ -n \"$STAGED\" ]; then\n  echo \"formatting\"\nfi\n\n# Recompile workflow lock files if .github changed\nif git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/actions/actions-lock.json ] || git add -- .github/actions/actions-lock.json\nfi\nif git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/aw/actions-lock.json ] || git add -- .github/aw/actions-lock.json\nfi\n" });
+
+    await installCatalog(repositoryPath, { force: true, sourcePath });
+    const written = await readFile(join(repositoryPath, ".husky", "pre-commit"), "utf8");
+
+    const blocks = written.match(/if git diff --cached --name-only -- \.github/g) ?? [];
+    expect(blocks).toHaveLength(1);
+    // The surviving block is the current one, naming the lock path that exists.
+    expect(written).toContain("[ ! -f .github/aw/actions-lock.json ]");
+    expect(written).not.toContain(".github/actions/actions-lock.json");
+    // The consumer's own steps are untouched.
+    expect(written).toContain("biome");
+    expect(written).toContain("formatting");
+  });
+
   it("applies staged generated locks with managed sources", async () => {
     const sourcePath = await createDirectory({
       "actions/check/action.yml": "package action\n",
