@@ -1079,6 +1079,20 @@ jobs:
                 -f "inputs[ci-conclusion]=$ci_conclusion" \
                 -f "inputs[ci-run-id]=$ci_run_id" \
                 -f "inputs[attempts_so_far]=$attempts"
+
+              # One gate per tick, because that is all the concurrency group can hold. The gate
+              # runs in `merge-belt`, and GitHub keeps only the most recent *pending* run in a
+              # group -- `cancel-in-progress: false` does not change that, it only protects a run
+              # that has already started. A tick that dispatched three gates therefore ran the
+              # last and silently cancelled the other two: no comment, no attempt recorded, and
+              # nothing on the pull request to say it had been passed over. Seen on Pliny-Bot,
+              # where dispatching a gate for PR #135 cancelled the one queued for PR #136.
+              #
+              # Stopping here loses nothing: every pull request eligible this tick is still
+              # eligible next tick, and a run that never started consumes no attempt. The belt
+              # now does one thing and says so, instead of appearing to start work it discarded.
+              echo "One gate dispatched this tick; any other eligible pull request waits for the next one."
+              break
             done
 
   audit-close:

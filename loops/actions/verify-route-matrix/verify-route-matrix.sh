@@ -1535,6 +1535,32 @@ for worker_md in "${WORKFLOWS_DIR}"/agent-*.md; do
 done
 if [ "$INPUT_WIRING_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# The belt dispatches one gate per tick and stops. The gate's concurrency group holds a single
+# pending run, so GitHub cancels every earlier pending dispatch in it -- `cancel-in-progress:
+# false` only protects a run that has already started. A loop without this `break` dispatched one
+# gate per eligible pull request, ran the last, and discarded the rest with no comment, no
+# recorded attempt, and nothing on the pull request to show it had been skipped. Asserted because
+# removing the break produces no error anywhere: the extra dispatches all return 204.
+BELT_ONE_PER_TICK_OK=1
+belt_dispatch_block=$(awk '
+  /Dispatching Merge Gate for PR/ { found = 1 }
+  found { print }
+  found && /^ *done$/ { exit }
+' "$ROUTER_YML")
+if [ -z "$belt_dispatch_block" ]; then
+  BELT_ONE_PER_TICK_OK=0
+  echo "FAIL: the merge belt's gate dispatch could not be located, so its one-per-tick guard cannot be checked" >&2
+elif ! printf '%s\n' "$belt_dispatch_block" | grep -qE '^ *break$'; then
+  BELT_ONE_PER_TICK_OK=0
+  echo "FAIL: the merge belt dispatches a gate per eligible pull request and never breaks; only the last stays pending and the rest are cancelled in silence" >&2
+fi
+# And the group it relies on must still be the serialising one.
+# Anchored to the whole line: a substring search matched `merge-belt-renamed` and stayed green
+# through a mutation that removed the serialisation the break depends on.
+grep -qE '^ *group: merge-belt *$' "$ROUTER_YML" ||
+  { BELT_ONE_PER_TICK_OK=0; echo "FAIL: the merge gate is no longer serialised on the merge-belt concurrency group" >&2; }
+if [ "$BELT_ONE_PER_TICK_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 # The specific wiring that broke, asserted end to end: the router resolves the run ID, the gate
 # forwards it, and the action seeds from it rather than only from its own lookup.
 if worker_installed merge-gate; then
