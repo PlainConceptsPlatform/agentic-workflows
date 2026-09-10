@@ -817,14 +817,28 @@ if worker_installed implement; then
   # "No pull request" has two causes and they need different words. gh-aw pushes through the
   # GraphQL signed-commits API, which rebases onto the current parent, so a `main` that moved
   # under a long run conflicts; gh-aw then keeps the work by filing the patch as an issue rather
-  # than dropping it, and reports that in `code_push_failure_count`. Numa #657 hit this: a 50 KB
-  # patch that passed every validation gate, filed as issue #658, while the worker told the
-  # reader "nothing landed" and flagged a retry that would conflict the same way. The two paths
-  # must stay distinguishable, and both must be driven by that count rather than by parsing prose.
+  # than dropping it. Numa #657 hit this: a 50 KB patch that passed every validation gate, filed
+  # as issue #658, while the worker told the reader "nothing landed" and flagged a retry that
+  # would conflict the same way. The two paths must stay distinguishable, and both must be driven
+  # by a job output rather than by parsing prose.
+  #
+  # The discriminator is the item counter. `code_push_failure_count` looks like the right signal
+  # and is not: the deliberate reproduction on dogfood #10 filed the patch as #11 and still
+  # reported `Status: success`, `Successful: 1` and a resolved `GH_AW_CODE_PUSH_FAILURE_COUNT: 0`,
+  # so a worker gated on that count posts "nothing landed" over the top of a patch that exists.
+  # `create_pull_request` is the only safe output implement permits, so one succeeded item with
+  # no pull request number means the push fell back; nothing produced leaves the counter at 0.
   PUSH_FALLBACK_OK=1
-  if ! grep -qF 'code_push_failure_count' "$IMPLEMENT_WORKER_MD"; then
+  if ! grep -qF 'process_safe_outputs_items_succeeded' "$IMPLEMENT_WORKER_MD"; then
     PUSH_FALLBACK_OK=0
-    echo "FAIL: implement does not read code_push_failure_count, so a conflicted push reads as 'nothing landed'" >&2
+    echo "FAIL: implement does not read process_safe_outputs_items_succeeded, so a conflicted push reads as 'nothing landed'" >&2
+  fi
+  # Regating on the count that gh-aw leaves at 0 through a fallback is the specific regression.
+  # Matched on the `if:` line only: the comment above the branch names the count to explain why
+  # it is the wrong signal, and a bare symbol grep would fire on that prose instead of the guard.
+  if [ "$(count -cE '^ *if:.*code_push_failure_count' "$IMPLEMENT_WORKER_MD")" -ne 0 ]; then
+    PUSH_FALLBACK_OK=0
+    echo "FAIL: implement gates a no-pull-request path on code_push_failure_count, which is 0 when gh-aw files the patch as an issue" >&2
   fi
   for needed in 'PUSH_CONFLICT_COMMENT' 'NO_PULL_REQUEST_COMMENT'; do
     grep -qF "env.${needed}" "$IMPLEMENT_WORKER_MD" || {
@@ -841,8 +855,8 @@ if worker_installed implement; then
     echo "FAIL: implement should print each no-pull-request message on exactly one path" >&2
   fi
   # And the two paths must be mutually exclusive, or a conflicted push gets both comments.
-  if [ "$(count -cF "code_push_failure_count != '0'" "$IMPLEMENT_WORKER_MD")" -lt 2 ] ||
-     [ "$(count -cF "code_push_failure_count == '0'" "$IMPLEMENT_WORKER_MD")" -lt 2 ]; then
+  if [ "$(count -cF "process_safe_outputs_items_succeeded != '0'" "$IMPLEMENT_WORKER_MD")" -lt 2 ] ||
+     [ "$(count -cF "process_safe_outputs_items_succeeded == '0'" "$IMPLEMENT_WORKER_MD")" -lt 2 ]; then
     PUSH_FALLBACK_OK=0
     echo "FAIL: the conflicted-push and no-patch paths in implement are not mutually exclusive" >&2
   fi

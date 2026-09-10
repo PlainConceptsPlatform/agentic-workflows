@@ -239,12 +239,19 @@ jobs:
       # thing wastes their time. gh-aw pushes through the GraphQL signed-commits API, which
       # rebases the commit range onto the current parent; when `main` has moved under a long run
       # the rebase conflicts, and gh-aw keeps the work by filing the patch as an issue instead of
-      # dropping it. It reports that in `code_push_failure_count` and comments the link on this
-      # issue itself. Saying "nothing landed" over the top of that is false: a 50 KB patch exists
-      # and needs rebasing, not reimplementing. Seen on Numa #657, where the same change had
-      # landed on main by hand while the agent was writing it.
+      # dropping it, commenting the link on this issue itself. Saying "nothing landed" over the
+      # top of that is false: the patch exists and needs rebasing, not reimplementing. Seen on
+      # Numa #657, where the same change had landed on main by hand while the agent was writing
+      # it, and reproduced deliberately on dogfood #10 -> #11.
+      #
+      # The signal is the item counter, not `code_push_failure_count`. gh-aw treats the fallback
+      # as a *successful* outcome for the item -- the dogfood run logged `Status: success`,
+      # `Successful: 1` and a resolved `GH_AW_CODE_PUSH_FAILURE_COUNT: 0` while filing #11 -- so
+      # gating on that count posted the wrong message. `create_pull_request` is the only safe
+      # output this worker permits, so one succeeded item with no pull request number can only
+      # mean the push fell back to an issue. Nothing produced at all leaves the counter at 0.
       - name: Flag a patch that could not be pushed
-        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.code_push_failure_count != '0' && needs.safe_outputs.outputs.code_push_failure_count != ''
+        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != ''
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -253,7 +260,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
       - name: Say where the patch went
-        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.code_push_failure_count != '0' && needs.safe_outputs.outputs.code_push_failure_count != ''
+        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != ''
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -263,7 +270,7 @@ jobs:
             ${{ env.PUSH_CONFLICT_COMMENT }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Flag a run that produced no pull request
-        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.code_push_failure_count == '0' || needs.safe_outputs.outputs.code_push_failure_count == '')
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '')
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -272,7 +279,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
       - name: Say so on the issue
-        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.code_push_failure_count == '0' || needs.safe_outputs.outputs.code_push_failure_count == '')
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '')
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
