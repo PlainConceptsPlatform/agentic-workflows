@@ -114,6 +114,7 @@ jobs:
           token: ${{ github.token }}
           pr-number: ${{ inputs.pr-number }}
           ci-conclusion: ${{ inputs.ci-conclusion }}
+          ci-run-id: ${{ inputs.ci-run-id }}
           linked-issue: ${{ inputs.linked-issue }}
           require-label: ${{ env.IMPLEMENT_LABEL }}
       - name: Block a pull request with requested changes

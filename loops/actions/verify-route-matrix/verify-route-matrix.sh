@@ -1490,6 +1490,76 @@ else
   printf '%s\n' "$password_hits" >&2
 fi
 
+echo "── Worker input wiring ───────────────────────────────────────────────────"
+
+# A worker that declares a workflow_call input and never reads it is the shape of the worst
+# outage this pipeline has had. The router resolved the CI run ID, passed it as `ci-run-id`, and
+# the merge gate declared the input and then called identify-gate-subject without it -- so
+# `RUN_ID` was always empty, the evidence step wrote `failed-jobs.json` as `[]`, and the agent,
+# holding no failing job name and no logs, chose `review` every time CI went red. Pliny-Bot #129,
+# #130 and #131 all ended up waiting on a human with CI legitimately red and remediable, and the
+# housekeeping digest reported it as work needing a person. Nothing went red: every job succeeded
+# at doing nothing. This asserts the class, because reading each worker by hand is how it was
+# missed for as long as it was.
+#
+# `agent-audit:trigger-kind` is exempt and stays listed rather than deleted: it is a
+# workflow_dispatch choice a person picks on the router, threaded through for symmetry, with no
+# behaviour attached at the far end. Removing it would take a dispatch option away from people,
+# so it is recorded as known-inert instead. Any *other* unread input fails.
+DEAD_INPUT_EXEMPT="agent-audit:trigger-kind"
+INPUT_WIRING_OK=1
+for worker_md in "${WORKFLOWS_DIR}"/agent-*.md; do
+  [ -f "$worker_md" ] || continue
+  worker_name="$(basename "$worker_md" .md)"
+  # The declared inputs: the `inputs:` mapping under `on: workflow_call:`, whose keys sit at six
+  # spaces. Stop at the first line indented less than that which is not blank.
+  declared=$(awk '
+    /^on:/           { in_on = 1; next }
+    in_on && /^[a-z#]/ { exit }
+    in_on && /^  workflow_call:/ { in_wc = 1; next }
+    in_wc && /^    inputs:/ { in_inputs = 1; next }
+    in_inputs && /^    [a-z]/ { in_inputs = 0 }
+    in_inputs && /^      [a-z0-9_-]+:[[:space:]]*$/ {
+      gsub(/[ :]/, "", $0); print $0
+    }
+  ' "$worker_md")
+  for input_name in $declared; do
+    case "${worker_name}:${input_name}" in
+      "$DEAD_INPUT_EXEMPT") continue ;;
+    esac
+    if [ "$(count -cE "inputs\.${input_name}([^a-zA-Z0-9_-]|\$)" "$worker_md")" -eq 0 ]; then
+      INPUT_WIRING_OK=0
+      echo "FAIL: ${worker_name} declares the input '${input_name}' and never reads it; the router's value is discarded and the job succeeds at doing nothing" >&2
+    fi
+  done
+done
+if [ "$INPUT_WIRING_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# The specific wiring that broke, asserted end to end: the router resolves the run ID, the gate
+# forwards it, and the action seeds from it rather than only from its own lookup.
+if worker_installed merge-gate; then
+  GATE_RUN_ID_OK=1
+  grep -Fq 'ci-run-id: ${{ needs.classify.outputs.ci-run-id }}' "$ROUTER_YML" ||
+    { GATE_RUN_ID_OK=0; echo "FAIL: the router no longer passes ci-run-id to the merge gate" >&2; }
+  grep -Fq 'ci-run-id: ${{ inputs.ci-run-id }}' "$MERGE_GATE_WORKER_MD" ||
+    { GATE_RUN_ID_OK=0; echo "FAIL: the merge gate does not forward ci-run-id to identify-gate-subject, so it has no CI failure evidence" >&2; }
+  GATE_SUBJECT_ACTION="${HERE}/../identify-gate-subject/action.yml"
+  if [ -f "$GATE_SUBJECT_ACTION" ]; then
+    grep -Fq 'ci_run_id="$CI_RUN_ID"' "$GATE_SUBJECT_ACTION" ||
+      { GATE_RUN_ID_OK=0; echo "FAIL: identify-gate-subject does not seed the run ID from its input, so a caller that knows it is ignored" >&2; }
+    # The regression: resolving the ID only when the conclusion is missing.
+    # Anchored to the start of the line: the repaired code keeps an `elif [ -z "$ci_conclusion" ]`
+    # branch for the caller that genuinely has no verdict, and a fixed-string search matched that
+    # `elif` as a substring -- the same way this file's own explanatory comments have tripped
+    # three earlier assertions.
+    if [ "$(count -cE '^ *if \[ -z "\$ci_conclusion" \]; then' "$GATE_SUBJECT_ACTION")" -ne 0 ]; then
+      GATE_RUN_ID_OK=0
+      echo "FAIL: identify-gate-subject resolves the CI run only when the conclusion is unknown; a router that passes both gets an empty run ID" >&2
+    fi
+  fi
+  if [ "$GATE_RUN_ID_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "Route matrix: ${PASS} passed"
