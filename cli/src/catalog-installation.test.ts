@@ -601,10 +601,12 @@ describe("catalog installation", () => {
     );
   });
 
-  // gh-aw cannot share runs-on through an import, so each worker names its own pool and a
-  // forced update must leave it alone. Rewriting it moves a repository's agents onto another
-  // pool, and one of ours has two machines in it.
-  it("keeps the consumer's runner pool through a forced update", async () => {
+  // The pool used to be preserved from the consumer, and that is how one repository ended up
+  // running five workers on its own pool while merge-gate and release stayed on the package's:
+  // the override reached the workers installed at the time and never the ones added later, and
+  // nothing reported the split. The pool is the package's to set now. Anything a consumer must
+  // genuinely vary belongs in `env:`, which is still preserved -- asserted here alongside.
+  it("overwrites a consumer's runner pool with the package's", async () => {
     const sourcePath = await createDirectory({
       "actions/check/action.yml": "name: Check\n",
       "workflows/agent-check.md": "---\nenv:\n  VERIFY_COMMANDS: \"package verify\"\n---\njobs:\n  agent:\n    runs-on: agents-arc\n  deterministic:\n    runs-on: ubuntu-latest\nruns-on: agents-arc\nruns-on-slim: agents-arc\n",
@@ -618,31 +620,11 @@ describe("catalog installation", () => {
     await installCatalog(repositoryPath, { force: true, sourcePath });
     const written = await readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8");
 
-    expect(written).toContain("runs-on: OwnPool");
-    expect(written).not.toContain("agents-arc");
-    // GitHub's own runner is not a per-repository choice and stays as the package has it.
-    expect(written).toContain("runs-on: ubuntu-latest");
-    // And the env value is still preserved, which this shares a code path with.
-    expect(written).toContain('VERIFY_COMMANDS: "consumer verify"');
-  });
-
-  // A consumer naming two pools has drifted rather than decided. Guessing which it meant
-  // would be worse than leaving the package's, so it is left.
-  it("leaves the package pool when the consumer names more than one", async () => {
-    const sourcePath = await createDirectory({
-      "actions/check/action.yml": "name: Check\n",
-      "workflows/agent-check.md": "---\nenv:\n  VERIFY_COMMANDS: \"package verify\"\n---\njobs:\n  agent:\n    runs-on: agents-arc\n  deterministic:\n    runs-on: ubuntu-latest\nruns-on: agents-arc\nruns-on-slim: agents-arc\n",
-      "scripts/compile-agent-workflows.mjs": "compile\n",
-      "templates/opencode/opencode.ci.json": "{}\n",
-    });
-    const repositoryPath = await createDirectory({
-      ".github/workflows/agent-check.md": "---\nenv:\n  VERIFY_COMMANDS: \"consumer verify\"\n---\njobs:\n  agent:\n    runs-on: OwnPool\n  other:\n    runs-on: SomethingElse\n",
-    });
-
-    await installCatalog(repositoryPath, { force: true, sourcePath });
-    const written = await readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8");
-
     expect(written).toContain("runs-on: agents-arc");
+    expect(written).not.toContain("OwnPool");
+    expect(written).toContain("runs-on: ubuntu-latest");
+    // The env value is still the consumer's: it shares this code path, and only `env:` is theirs.
+    expect(written).toContain('VERIFY_COMMANDS: "consumer verify"');
   });
 
   it("applies staged generated locks with managed sources", async () => {

@@ -162,29 +162,15 @@ function engineEndpoint(content: string): string | undefined {
   return /^    OPENAI_BASE_URL: (.+)$/m.exec(content)?.[1];
 }
 
-// Which self-hosted pool a worker's agent jobs run on. gh-aw cannot share runs-on through an
-// import, so every worker names it. ubuntu-latest is excluded, being GitHub's own runner, used
-// by the deterministic jobs everywhere and chosen by nobody.
-function runnerPools(content: string): string[] {
-  const found = new Set<string>();
-  for (const match of content.matchAll(/^\s*runs-on(?:-slim)?: (\S+)\s*$/gm)) {
-    if (match[1] !== "ubuntu-latest") found.add(match[1]!);
-  }
-  return [...found];
-}
-
-function preserveRunnerPool(packageContent: string, consumerContent: string): string {
-  const mine = runnerPools(consumerContent);
-  const theirs = runnerPools(packageContent);
-  // Only an unambiguous swap. A consumer naming several pools has drifted rather than
-  // decided, and guessing which it meant is worse than leaving the package's.
-  if (mine.length !== 1 || theirs.length !== 1 || mine[0] === theirs[0]) return packageContent;
-  return packageContent.replace(
-    /^(\s*runs-on(?:-slim)?: )(\S+)(\s*)$/gm,
-    (line, prefix: string, pool: string, tail: string) =>
-      pool === "ubuntu-latest" ? line : `${prefix}${mine[0]}${tail}`,
-  );
-}
+// The runner pool used to be preserved from the consumer here: a repository naming a single
+// non-ubuntu pool had every worker rewritten to it. That is how Pliny-Bot ended up running
+// triage, refine, implement, apply-review and audit on RunnerLandingZone while its merge-gate
+// and release stayed on agents-arc -- the pool was applied to the workers installed at the time
+// and never to the ones added later, and nothing reported the split. The pool is package-owned
+// now: the agent jobs belong on the Azure fleet (agents-arc, runner group `agentic`), and the
+// router and release worker name RunnerLandingZone. The route matrix asserts both, so a repo
+// cannot drift back without a red run. Per the standing rule for this package, anything a
+// consumer really must vary belongs in `env:` at the top of the file, not in `runs-on`.
 
 // GitHub evaluates no expression in a `workflow_run.workflows:` list or in a `cron:`, so the two
 // router values that are also needed there cannot be read from `env:` at those two lines. The
@@ -232,5 +218,5 @@ export function mergeWorker(
   if (endpoint !== undefined) {
     result = result.replace(/^    OPENAI_BASE_URL: .+$/m, `    OPENAI_BASE_URL: ${endpoint}`);
   }
-  return { content: preserveRunnerPool(result, consumerContent), report };
+  return { content: result, report };
 }

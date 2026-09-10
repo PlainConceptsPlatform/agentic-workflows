@@ -29,8 +29,8 @@ on:
         type: string
         default: "auto"
 
-runs-on: agents-arc
-runs-on-slim: agents-arc
+runs-on: RunnerLandingZone
+runs-on-slim: RunnerLandingZone
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -98,7 +98,7 @@ jobs:
       always() &&
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success'
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     permissions:
       contents: write
     steps:
@@ -205,7 +205,7 @@ jobs:
     if: >
       always() &&
       (needs.agent.result != 'success' || needs.safe_outputs.result != 'success')
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     permissions:
       contents: read
     steps:

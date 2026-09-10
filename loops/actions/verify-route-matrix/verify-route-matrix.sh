@@ -1490,6 +1490,61 @@ else
   printf '%s\n' "$password_hits" >&2
 fi
 
+echo "── Runner pools ──────────────────────────────────────────────────────────"
+
+# Where every job runs, stated once and asserted, because GitHub gives a wrong pool no error: a
+# job addressed to a label no runner carries simply queues, and a job addressed to the wrong pool
+# runs in the wrong place. The pool was a preserved consumer value until 0.19.0, and that is how
+# one repository came to run triage, refine, implement, apply-review and audit on
+# RunnerLandingZone while merge-gate and release stayed on agents-arc: the override reached the
+# workers installed at the time and never the ones added later. Nothing reported the split.
+#
+#   agent jobs of every worker except release  ->  agents-arc          (the Azure fleet in
+#                                                                       agentrunner-pro-rg-01,
+#                                                                       runner group `agentic`)
+#   agent-release.md and work-router.yml       ->  RunnerLandingZone
+#   ubuntu-latest                              ->  GitHub's own runner, chosen by nobody, left
+#                                                  wherever the package already has it
+AGENT_POOL="agents-arc"
+PLUMBING_POOL="RunnerLandingZone"
+POOL_OK=1
+
+# `|| true` on both greps: a file naming no pool at all, or only ubuntu-latest, makes grep exit 1,
+# and under `set -o pipefail` that aborts the whole matrix instead of failing this one assertion.
+# A router mutated to ubuntu-latest everywhere did exactly that: the suite died without printing,
+# so the mutation looked caught when in fact nothing had been checked.
+pools_named() {
+  { grep -hoE '^[[:space:]]*runs-on(-slim)?: [^[:space:]]+' "$1" 2>/dev/null || true; } \
+    | sed 's/.*: //' | { grep -v '^ubuntu-latest$' || true; } | sort -u
+}
+
+for worker_md in "${WORKFLOWS_DIR}"/agent-*.md; do
+  [ -f "$worker_md" ] || continue
+  worker_name="$(basename "$worker_md" .md)"
+  want="$AGENT_POOL"
+  [ "$worker_name" = "agent-release" ] && want="$PLUMBING_POOL"
+  got="$(pools_named "$worker_md" | tr '\n' ' ' | sed 's/ $//')"
+  if [ "$got" != "$want" ]; then
+    POOL_OK=0
+    echo "FAIL: ${worker_name} names runner pool(s) '${got}' but must name only '${want}'" >&2
+  fi
+done
+
+router_pools="$(pools_named "$ROUTER_YML" | tr '\n' ' ' | sed 's/ $//')"
+if [ "$router_pools" != "$PLUMBING_POOL" ]; then
+  POOL_OK=0
+  echo "FAIL: the router names runner pool(s) '${router_pools}' but must name only '${PLUMBING_POOL}'" >&2
+fi
+
+# And the pool must not be reintroduced as a per-consumer value: that is the mechanism that let
+# the split happen, and it left no trace anywhere.
+if [ -d "${HERE}/../../../cli/src" ] && grep -rqE 'preserveRunnerPool|runnerPools' "${HERE}/../../../cli/src" 2>/dev/null; then
+  POOL_OK=0
+  echo "FAIL: the installer preserves a consumer's runner pool again; the pool is the package's to set" >&2
+fi
+
+if [ "$POOL_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 echo "── Worker input wiring ───────────────────────────────────────────────────"
 
 # A worker that declares a workflow_call input and never reads it is the shape of the worst

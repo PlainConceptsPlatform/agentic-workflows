@@ -193,7 +193,10 @@ describe("mergeRouter", () => {
 });
 
 describe("mergeWorker", () => {
-  it("also keeps the engine gateway URL and an unambiguous runner pool", () => {
+  // The gateway URL is the consumer's; the runner pool is not, and used to be. Preserving it is
+  // how a repository ended up with five workers on its own pool and two on the package's, with
+  // nothing reporting the split.
+  it("keeps the engine gateway URL and overwrites the runner pool", () => {
     const pkg = worker("  REPO_RULES: \"package rules\"\n", "jobs:\n  reserve:\n    runs-on: agents-arc\n  hosted:\n    runs-on: ubuntu-latest\nruns-on: agents-arc\nruns-on-slim: agents-arc\nengine:\n  env:\n    OPENAI_BASE_URL: https://forge.plainconcepts.com/v1\n");
     const consumer = worker("  REPO_RULES: \"mine\"\n", "jobs:\n  reserve:\n    runs-on: OwnPool\n  hosted:\n    runs-on: ubuntu-latest\nruns-on: OwnPool\nruns-on-slim: OwnPool\nengine:\n  env:\n    OPENAI_BASE_URL: https://gateway.example/v1\n");
 
@@ -201,9 +204,9 @@ describe("mergeWorker", () => {
 
     expect(content).toContain("  REPO_RULES: \"mine\"\n");
     expect(content).toContain("    OPENAI_BASE_URL: https://gateway.example/v1\n");
-    expect(content).toContain("runs-on: OwnPool\nruns-on-slim: OwnPool\n");
+    expect(content).toContain("runs-on: agents-arc\nruns-on-slim: agents-arc\n");
+    expect(content).not.toContain("OwnPool");
     expect(content).toContain("    runs-on: ubuntu-latest\n");
-    expect(content).not.toContain("agents-arc");
     expect(report.keptEnv).toEqual(["REPO_RULES"]);
   });
 });
