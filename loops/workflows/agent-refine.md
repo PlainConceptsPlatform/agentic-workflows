@@ -103,7 +103,7 @@ jobs:
           token: ${{ github.token }}
           issue-number: ${{ inputs.issue-number }}
   reserve:
-    needs: still_open
+    needs: [still_open]
     if: needs.still_open.outputs.open == 'true'
     runs-on: agents-arc
     permissions:
