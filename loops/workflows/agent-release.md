@@ -29,8 +29,8 @@ on:
         type: string
         default: "auto"
 
-runs-on: agents-arc
-runs-on-slim: agents-arc
+runs-on: RunnerLandingZone
+runs-on-slim: RunnerLandingZone
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -81,6 +81,14 @@ safe-outputs:
   noop:
     max: 1
 
+# The fleet is two machines, so this clock is also how long a stuck run can hold half of it.
+# 240 went on to every worker at once when the provider was slow, which fixed the deaths and
+# made every worker equally expensive to hang. These numbers are per worker: enough headroom
+# for a slow gateway on the work it actually does, and not four hours for a run that reads one
+# issue. Turns remain the guard against a confused agent looping; for a custom model the credit
+# ceiling is models.dev fallback pricing and guards nothing.
+#
+# Reads a commit log already on disk and writes release notes. Nothing else.
 timeout-minutes: 30
 
 jobs:
@@ -90,7 +98,7 @@ jobs:
       always() &&
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success'
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     permissions:
       contents: write
     steps:
@@ -197,7 +205,7 @@ jobs:
     if: >
       always() &&
       (needs.agent.result != 'success' || needs.safe_outputs.result != 'success')
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     permissions:
       contents: read
     steps:
@@ -234,25 +242,3 @@ jobs:
 
 5. Call `noop` and stop. The deterministic `conclude` job reads the notes you wrote
    and handles version bumping, tagging, and release creation.
-
-## Diagram
-
-```mermaid
-flowchart TD
-    relStart("Work Router<br/>release route<br/>(manual dispatch)") --> relActivation
-    relActivation("Activation<br/>Prepare prompt + env") --> relPreAgent
-    relPreAgent["Pre-agent<br/>Write git log + version to /tmp"] --> relAgent
-    relAgent["Agent<br/>Read commit log<br/>Write release-notes.md"] --> relNoop
-    relNoop("Safe Outputs<br/>Process noop") --> relConclude
-    relConclude["Conclude<br/>Bump version, commit, tag<br/>push, create GitHub Release"]
-    relConclude --> relDone(("Released<br/>Tag + GitHub Release created"))
-    relConclude -.->|failure| relFail(("Failed<br/>No tag created"))
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a2a
-    class relStart start
-    class relActivation,relPreAgent,relAgent action
-    class relDone success
-    class relFail failure
-```

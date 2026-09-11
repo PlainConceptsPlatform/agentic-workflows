@@ -61,6 +61,26 @@ assert_output 'draft update with questions comment is questions' questions \
 assert_output 'draft update alone is invalid' invalid \
   '{"items":[{"type":"update_issue","item_number":42,"body":"<!-- agent-refine-draft -->\n### Proposal\n_pending — see questions below_"}]}'
 
+# From a real run. The agent's first update_issue went out malformed, the bridge counted it
+# as spent, the retry carrying the body was refused, and the "Refinement complete" comment
+# went out regardless. Invalid is the only safe reading: the body was never replaced. Note
+# what it must not be read as — a question. Nobody asked one, so "questions" would leave the
+# issue waiting on an answer that is never coming.
+assert_output 'a completion claim with no body is invalid' invalid \
+  '{"items":[{"type":"add_comment","item_number":42,"body":"<!-- agent-refine -->\nRefinement update\nRefinement complete. The implement label has been added and the implement workflow will start shortly."},{"type":"report_incomplete","reason":"update_issue limit reached"}]}'
+
+# The other side of it: a run that did replace the body and also reported a difficulty has
+# done the work, and its work is not thrown away for having said so.
+assert_output 'a refined body survives a reported difficulty' complete \
+  '{"items":[{"type":"update_issue","item_number":42,"body":"# User story"},{"type":"report_incomplete","reason":"a tool was slow"}]}'
+assert_output 'a split survives a note about a missing tool' split \
+  '{"items":[{"type":"update_issue","item_number":42,"body":"# Epic"},{"type":"create_issue","title":"One","body":"First"},{"type":"create_issue","title":"Two","body":"Second"},{"type":"missing_tool","reason":"no browser"}]}'
+
+# And a run that left nothing but a signal has done nothing.
+assert_output 'only a run signal is invalid' invalid \
+  '{"items":[{"type":"report_incomplete","reason":"gave up"}]}'
+
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "Refine output validation: ${PASS} passed"

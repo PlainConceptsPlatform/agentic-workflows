@@ -6,24 +6,62 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { parse as parseYaml } from "yaml";
 
-import { catalogTemplates, mandatoryFiles, routeNames, templateNames, workflowRoutes, type CatalogTemplate, type RouteName, type TemplateName } from "./workflow-catalog.js";
+import { catalogTemplates, mandatoryFiles, routeNames, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
 import { processRoutes, excludedWorkerFiles } from "./route-processing.js";
-import { generateOpencodeCi, generateOpencodeConfig, generateStackDefaults, injectStackEnv, type StackDefaults } from "./stack-defaults.js";
+import { generateOpencodeCi, generateOpencodeConfig, generateStackDefaults, injectStackEnv } from "./stack-defaults.js";
+import { mergeRouter, mergeWorker, mirrorRouterLiterals } from "./worker-env.js";
+import { fetchBaseline, hasOwnershipHeader, installedVersion, packageVersion, stampVersion, type BaselineFetcher } from "./package-baseline.js";
 import type { RepositoryInspection } from "./repository-inspection.js";
 
 const execFileAsync = promisify(execFile);
 
+export type ChangeStatus = "added" | "updated" | "unchanged" | "skipped" | "removed";
+
+export interface FileChange {
+  readonly target: string;
+  readonly status: ChangeStatus;
+  /** Why a file was skipped. */
+  readonly reason?: string;
+  /** Version the consumer's copy was installed from, when its header records one. */
+  readonly installedVersion?: string;
+  readonly keptEnv?: readonly string[];
+  readonly updatedDefaults?: readonly string[];
+  readonly consumerOnlyEnv?: readonly string[];
+  readonly droppedEnv?: readonly string[];
+}
+
+export interface BaselineStatus {
+  readonly version: string;
+  readonly status: "used" | "unavailable";
+}
+
 export interface CatalogInstallResult {
+  /** Every package-managed target in the installed set, whether it changed or not. */
   readonly installed: readonly string[];
+  /** Consumer-owned files that differ and were not overwritten. Only templates report these. */
   readonly conflicts: readonly string[];
+  readonly changes: readonly FileChange[];
+  readonly packageVersion: string;
+  /** Versions found in the consumer's ownership headers before this run. */
+  readonly installedVersions: readonly string[];
+  readonly baselines: readonly BaselineStatus[];
+  readonly upToDate: boolean;
+  readonly dryRun: boolean;
 }
 
 export interface CatalogInstallOptions {
+  /** Also overwrite files whose ownership header was removed, and changed templates. */
   readonly force?: boolean;
   readonly sourcePath?: string;
   readonly selectedRoutes?: readonly RouteName[];
   readonly inspection?: RepositoryInspection;
   readonly compile?: (repositoryPath: string) => Promise<void>;
+  /** Compute the plan and write nothing. */
+  readonly dryRun?: boolean;
+  /** Where the baseline release comes from. Defaults to npm. */
+  readonly baseline?: BaselineFetcher;
+  /** The version stamped into headers. Defaults to this package's. */
+  readonly packageVersion?: string;
 }
 
 interface CatalogFile {
@@ -50,10 +88,23 @@ export function catalogSourcePath(modulePath = fileURLToPath(import.meta.url)): 
   return resolve(dirname(modulePath), "..", "loops");
 }
 
+/**
+ * Where `gh aw` writes the pinned-action lock, and the only place it should be named.
+ * `generatedConsumerTargets` in the catalog declares the same path; two literals is how the
+ * pre-commit hook ended up guarding one that exists nowhere.
+ */
+const ACTIONS_LOCK = ".github/aw/actions-lock.json";
+
+const isWorker = (target: string): boolean => target.startsWith(".github/workflows/agent-") && target.endsWith(".md");
+const isRouter = (target: string): boolean => target === ".github/workflows/work-router.yml";
+const carriesHeader = (target: string): boolean => /\.(ya?ml|md|sh|mjs|cjs)$/.test(target);
+const normalizeEol = (text: string): string => text.replaceAll("\r\n", "\n");
+
 export async function installCatalog(
   repositoryPath: string,
   options: CatalogInstallOptions = {},
 ): Promise<CatalogInstallResult> {
+  const version = options.packageVersion ?? await packageVersion();
   const sourcePath = options.sourcePath ?? catalogSourcePath();
   const selectedRoutes = options.selectedRoutes ?? routeNames;
   const allFiles = [...await catalogFiles(sourcePath), ...mandatoryFileSpecs(sourcePath)];
@@ -62,97 +113,187 @@ export async function installCatalog(
   ).sort((left, right) => left.target.localeCompare(right.target));
 
   const excluded = excludedWorkerFiles(selectedRoutes);
-  const filtered = deduplicated.filter((file) => {
-    const fileName = file.target.split("/").pop() ?? "";
-    return !excluded.has(fileName);
-  });
+  const filtered = deduplicated.filter((file) => !excluded.has(file.target.split("/").pop() ?? ""));
 
-  const fileContents = new Map<string, string>();
+  const packageContents = new Map<string, string>();
   for (const file of filtered) {
-    fileContents.set(file.target, await readFile(file.source, "utf8"));
+    packageContents.set(file.target, normalizeEol(await readFile(file.source, "utf8")));
   }
+  let processed = processRoutes(packageContents, selectedRoutes);
 
-  let processedContents = processRoutes(fileContents, selectedRoutes);
+  // Read and write LF, always. Every one of these files ends up on a Linux runner, the package
+  // and every consumer declare `* text=auto eol=lf`, and a shell script with CRLF fails on its
+  // shebang. Preserving whatever a file happened to have instead only carried legacy CRLF
+  // forward, which git then reported as needing normalisation on every later commit.
+  const existing = new Map<string, string>();
+  for (const target of processed.keys()) {
+    const path = join(repositoryPath, target);
+    if (!await exists(path)) continue;
+    existing.set(target, normalizeEol(await readFile(path, "utf8")));
+  }
 
   if (options.inspection !== undefined) {
-    const defaults = generateStackDefaults(options.inspection);
-    processedContents = injectStackIntoWorkers(processedContents, defaults);
-    processedContents = transformOpencodeFiles(processedContents, options.inspection);
+    processed = applyStackDefaults(processed, options.inspection, existing);
   }
 
-  processedContents = await preserveConsumerWorkerEnv(repositoryPath, processedContents);
-
-  const updates = [...processedContents.entries()]
-    .filter(([target]) => filtered.find((file) => file.target === target)?.managed ?? true)
-    .map(([target, content]) => ({ target, content }));
-  const conflicts = await conflictingTargets(repositoryPath, updates);
-  if (conflicts.length > 0 && !options.force) return { installed: [], conflicts };
-
-  const stagedLocks = await validateStagedCatalog(repositoryPath, updates, options.compile);
-  await applyTransaction(repositoryPath, [...updates, ...stagedLocks, await preCommitHookUpdate(repositoryPath)]);
-
-  return { installed: [...processedContents.keys()].sort(), conflicts };
-}
-
-function injectStackIntoWorkers(files: Map<string, string>, defaults: StackDefaults): Map<string, string> {
-  const result = new Map(files);
-  for (const [key, content] of result) {
-    if (key.startsWith(".github/workflows/agent-") && key.endsWith(".md")) {
-      result.set(key, injectStackEnv(content, defaults));
+  const fetcher = options.baseline ?? fetchBaseline;
+  const baselineDirectories = new Map<string, Promise<string | undefined>>();
+  const baselineFor = (installed: string): Promise<string | undefined> => {
+    let pending = baselineDirectories.get(installed);
+    if (pending === undefined) {
+      pending = fetcher(installed);
+      baselineDirectories.set(installed, pending);
     }
+    return pending;
+  };
+
+  const changes: FileChange[] = [];
+  const updates: ContentUpdate[] = [];
+  const installedVersions = new Set<string>();
+
+  for (const [target, packageText] of processed) {
+    const current = existing.get(target);
+    let text = packageText;
+    let change: FileChange = { target, status: "added" };
+
+    if (current !== undefined) {
+      const recorded = carriesHeader(target) ? installedVersion(current) : undefined;
+      if (recorded !== undefined) installedVersions.add(recorded);
+
+      if (isWorker(target) || isRouter(target)) {
+        const baselineText = recorded === undefined ? undefined : await baselineSource(await baselineFor(recorded), target);
+        const merge = isRouter(target) ? mergeRouter : mergeWorker;
+        const merged = merge(packageText, current, baselineText);
+        text = merged.content;
+        change = {
+          target,
+          status: "updated",
+          ...(recorded === undefined ? {} : { installedVersion: recorded }),
+          ...(merged.report.keptEnv.length > 0 ? { keptEnv: merged.report.keptEnv } : {}),
+          ...(merged.report.updatedDefaults.length > 0 ? { updatedDefaults: merged.report.updatedDefaults } : {}),
+          ...(merged.report.consumerOnlyEnv.length > 0 ? { consumerOnlyEnv: merged.report.consumerOnlyEnv } : {}),
+          ...(merged.report.droppedEnv.length > 0 ? { droppedEnv: merged.report.droppedEnv } : {}),
+        };
+      } else {
+        change = { target, status: "updated", ...(recorded === undefined ? {} : { installedVersion: recorded }) };
+      }
+    }
+
+    text = stampVersion(text, version);
+
+    if (current !== undefined && text === current) {
+      change = { ...change, status: "unchanged" };
+    } else if (current !== undefined && carriesHeader(target) && !hasOwnershipHeader(current) && !options.force) {
+      // Removing the ownership header is how a consumer takes a file over.
+      change = { target, status: "skipped", reason: "consumer-owned: the ownership header was removed; pass --force to reclaim it" };
+    } else {
+      updates.push({ target, content: text });
+    }
+    changes.push(change);
   }
+
+  const removals = await orphanedManagedFiles(repositoryPath, new Set(processed.keys()));
+  for (const target of removals) changes.push({ target, status: "removed" });
+
+  const baselines: BaselineStatus[] = [];
+  for (const [requested, pending] of baselineDirectories) {
+    baselines.push({ version: requested, status: (await pending) === undefined ? "unavailable" : "used" });
+  }
+
+  const result: CatalogInstallResult = {
+    installed: [...processed.keys()].sort(),
+    conflicts: [],
+    changes,
+    packageVersion: version,
+    installedVersions: [...installedVersions].sort(),
+    baselines,
+    upToDate: updates.length === 0 && removals.length === 0,
+    dryRun: options.dryRun ?? false,
+  };
+
+  if (options.dryRun) return result;
+
+  // Deletions go first: a pruned action must be gone before the compile reads the tree, or a
+  // worker still referencing it would compile against a file that is about to disappear.
+  await removeFiles(repositoryPath, removals);
+
+  if (updates.length > 0) {
+    const stagedLocks = await validateStagedCatalog(repositoryPath, updates, options.compile);
+    await applyTransaction(repositoryPath, [...updates, ...stagedLocks, await preCommitHookUpdate(repositoryPath)]);
+  } else {
+    await applyTransaction(repositoryPath, [await preCommitHookUpdate(repositoryPath)]);
+  }
+
   return result;
 }
 
-async function preserveConsumerWorkerEnv(repositoryPath: string, files: Map<string, string>): Promise<Map<string, string>> {
+// Stack defaults are derived from the repository, not chosen by a person, so the derived files
+// (the shared CI setup and the OpenCode config) get them on every run and stay stable. A worker
+// gets its VERIFY_COMMANDS default once, when it is first installed: after that the value is the
+// consumer's, and the env merge keeps it.
+function applyStackDefaults(
+  files: Map<string, string>,
+  inspection: RepositoryInspection,
+  existing: ReadonlyMap<string, unknown>,
+): Map<string, string> {
+  const defaults = generateStackDefaults(inspection);
   const result = new Map(files);
   for (const [target, content] of result) {
-    if (!target.startsWith(".github/workflows/agent-") || !target.endsWith(".md")) continue;
-    const existingPath = join(repositoryPath, target);
-    if (!await exists(existingPath)) continue;
-    result.set(target, mergeWorkerEnv(content, await readFile(existingPath, "utf8")));
-  }
-  return result;
-}
-
-function mergeWorkerEnv(packageContent: string, consumerContent: string): string {
-  const consumerEnv = workerEnvValues(consumerContent);
-  let result = packageContent.replace(/^  ([A-Z][A-Z0-9_]*): .+$/gm, (line, key: string) =>
-    consumerEnv.has(key) ? `  ${key}: ${consumerEnv.get(key)}` : line);
-  const endpoint = engineEndpoint(consumerContent);
-  if (endpoint !== undefined) {
-    result = result.replace(/^    OPENAI_BASE_URL: .+$/m, `    OPENAI_BASE_URL: ${endpoint}`);
-  }
-  return result;
-}
-
-function workerEnvValues(content: string): Map<string, string> {
-  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/m.exec(content)?.[1];
-  const envBlock = frontmatter === undefined ? undefined : /^env:\r?\n((?:  .*\r?\n?)*)/m.exec(frontmatter)?.[1];
-  const values = new Map<string, string>();
-  if (envBlock === undefined) return values;
-
-  for (const line of envBlock.split(/\r?\n/)) {
-    const match = /^  ([A-Z][A-Z0-9_]*): (.+)$/.exec(line);
-    if (match !== null) values.set(match[1]!, match[2]!);
-  }
-  return values;
-}
-
-function engineEndpoint(content: string): string | undefined {
-  return /^    OPENAI_BASE_URL: (.+)$/m.exec(content)?.[1];
-}
-
-function transformOpencodeFiles(files: Map<string, string>, inspection: RepositoryInspection): Map<string, string> {
-  const result = new Map(files);
-  for (const [key, content] of result) {
-    if (key.endsWith("opencode-ci.md")) {
-      result.set(key, generateOpencodeCi(content, inspection));
-    } else if (key === "opencode.ci.json") {
-      result.set(key, generateOpencodeConfig(content, inspection));
+    if (isWorker(target) && !existing.has(target)) {
+      result.set(target, injectStackEnv(content, defaults));
+    } else if (target.endsWith("opencode-ci.md")) {
+      result.set(target, generateOpencodeCi(content, inspection));
+    } else if (target === "opencode.ci.json") {
+      result.set(target, generateOpencodeConfig(content, inspection));
     }
   }
   return result;
+}
+
+// Directories that belong wholly to the package. A file here that carries our ownership header
+// and is no longer in the package was deleted upstream, and without this it would sit in every
+// consumer forever: that is how `stale-recovery` and `update-changelog` outlived the code that
+// called them. Deliberately not `.github/workflows/`, where a worker's absence means the route
+// is not installed rather than gone, and never anything without a header, which is a fork.
+const pruneRoots = [".github/actions", ".github/workflows/shared"] as const;
+
+async function orphanedManagedFiles(repositoryPath: string, keep: ReadonlySet<string>): Promise<string[]> {
+  const orphans: string[] = [];
+
+  for (const root of pruneRoots) {
+    const directory = join(repositoryPath, root);
+    if (!await exists(directory)) continue;
+
+    for (const file of await filesIn(directory)) {
+      const target = `${root}/${file.replaceAll("\\", "/")}`;
+      if (keep.has(target)) continue;
+      if (!carriesHeader(target) && !target.endsWith(".cjs") && !target.endsWith(".js")) continue;
+      const content = await readFile(join(directory, file), "utf8");
+      if (hasOwnershipHeader(content)) orphans.push(target);
+    }
+  }
+
+  return orphans.sort();
+}
+
+async function removeFiles(repositoryPath: string, targets: readonly string[]): Promise<void> {
+  for (const target of targets) {
+    await rm(join(repositoryPath, target), { force: true });
+    // An action is a directory with one manifest in it; leaving the empty shell behind is litter.
+    const directory = dirname(join(repositoryPath, target));
+    try {
+      if ((await readdir(directory)).length === 0) await rm(directory, { recursive: true, force: true });
+    } catch {
+      // the directory is gone or not empty, either of which is fine
+    }
+  }
+}
+
+async function baselineSource(loops: string | undefined, target: string): Promise<string | undefined> {
+  if (loops === undefined) return undefined;
+  const path = join(loops, "workflows", target.slice(".github/workflows/".length));
+  if (!await exists(path)) return undefined;
+  return normalizeEol(await readFile(path, "utf8"));
 }
 
 // Templates that need a companion config beside the workflow file. actionlint only
@@ -162,11 +303,16 @@ const templateCompanions: Partial<Record<TemplateName, readonly { source: string
   "agentics-checks": [{ source: "templates/agentics/actionlint.yaml", target: ".github/actionlint.yaml" }],
 };
 
+export interface TemplateInstallResult {
+  readonly installed: readonly string[];
+  readonly conflicts: readonly string[];
+}
+
 export async function installTemplate(
   repositoryPath: string,
   template: TemplateName,
-  options: CatalogInstallOptions = {},
-): Promise<CatalogInstallResult> {
+  options: Pick<CatalogInstallOptions, "force" | "sourcePath" | "inspection"> = {},
+): Promise<TemplateInstallResult> {
   const sourcePath = options.sourcePath ?? catalogSourcePath();
   const meta = catalogTemplateMeta(template);
   const source = join(sourcePath, "templates", meta.directory, meta.file);
@@ -210,25 +356,6 @@ export async function installTemplate(
   }
 
   return { installed: (await Promise.all(destinations.map(async (entry) => await exists(entry.source) ? entry.target : undefined))).filter((file): file is string => file !== undefined), conflicts };
-}
-
-export async function installMandatoryFiles(
-  repositoryPath: string,
-  options: CatalogInstallOptions = {},
-): Promise<CatalogInstallResult> {
-  const sourcePath = options.sourcePath ?? catalogSourcePath();
-  const files = mandatoryFileSpecs(sourcePath).sort((left, right) => left.target.localeCompare(right.target));
-  const conflicts = (await Promise.all(files.map(async (file) => {
-    const destination = join(repositoryPath, file.target);
-    return await exists(destination) && !(await filesMatch(file.source, destination)) ? file.target : undefined;
-  }))).filter((file): file is string => file !== undefined);
-
-  if (conflicts.length > 0 && !options.force) return { installed: [], conflicts };
-
-  const updates = await Promise.all(files.map(async (file) => ({ target: file.target, content: await readFile(file.source, "utf8") })));
-  await applyTransaction(repositoryPath, [...updates, await preCommitHookUpdate(repositoryPath)]);
-
-  return { installed: files.map((file) => file.target), conflicts };
 }
 
 export async function installedRoutes(repositoryPath: string): Promise<RouteName[]> {
@@ -275,7 +402,13 @@ async function preCommitHookUpdate(repositoryPath: string): Promise<{ target: st
   const hookPath = join(repositoryPath, target);
   const compileLine = "node scripts/compile-agent-workflows.mjs";
   const stageLine = "git add -- .github/workflows/*.lock.yml";
-  const actionLockLine = "[ ! -f .github/actions/actions-lock.json ] || git add -- .github/actions/actions-lock.json";
+  // gh aw writes this at .github/aw/, which is what every consumer tracks and what
+  // `generatedConsumerTargets` in the catalog declares. The line used to name
+  // `.github/actions/actions-lock.json`, a path that exists nowhere, so `[ ! -f ... ]` was
+  // always true, the `||` short-circuited, and the real lock was never staged: a compile that
+  // bumped an action pin left the lock out of the commit and the tree dirty behind it. Nothing
+  // failed, which is why it survived. Found by the first audit run in the dogfood repository.
+  const actionLockLine = `[ ! -f ${ACTIONS_LOCK} ] || git add -- ${ACTIONS_LOCK}`;
   const managedLines = `if git diff --cached --name-only -- .github | grep -q .; then\n  ${compileLine}\n  ${stageLine}\n  ${actionLockLine}\nfi\n`;
   if (!await exists(hookPath)) {
     return { target, content: managedLines };
@@ -283,17 +416,23 @@ async function preCommitHookUpdate(repositoryPath: string): Promise<{ target: st
 
   const content = (await readFile(hookPath, "utf8"))
     .replace("pnpm exec if git diff --cached --name-only -- .github | grep -q .; then", "if git diff --cached --name-only -- .github | grep -q .; then");
-  if (content.includes("compile-agent-workflows")) {
-    const legacyLines = `${compileLine}\n${stageLine}\n${actionLockLine}\n`;
-    if (content.includes(managedLines)) return { target, content };
-    if (content.includes(legacyLines)) return { target, content: content.replace(legacyLines, managedLines) };
-    const suffix = content.endsWith("\n") || content === "" ? "" : "\n";
-    return { target, content: `${content}${suffix}${managedLines}` };
-  }
 
-  return { target, content: content.endsWith("\n") || content === ""
-    ? `${content}${managedLines}`
-    : `${content}\n${managedLines}` };
+  // Replace whatever managed block is there, never append beside it. The previous version
+  // recognised only two exact shapes -- the current block and the pre-`if` legacy lines -- and
+  // appended when it matched neither. A consumer holding an *older* wrapped block therefore
+  // gained a second one, so the compiler ran twice on every commit and one of the two staged a
+  // lock path that exists nowhere. All five consumers were carrying two blocks by the time this
+  // was noticed, and every future edit to `managedLines` would have added another. Nothing
+  // failed: running the compiler twice is only wasteful, so it never surfaced.
+  const managedBlock = /^[ \t]*if git diff --cached --name-only -- \.github \| grep -q \.; then\n(?:.*\n)*?[ \t]*fi\n?/gm;
+  const legacyLines = `${compileLine}\n${stageLine}\n${actionLockLine}\n`;
+
+  let stripped = content.replace(managedBlock, block =>
+    block.includes("compile-agent-workflows") ? "" : block);
+  stripped = stripped.split(legacyLines).join("");
+
+  const body = stripped.replace(/\n{3,}/g, "\n\n").replace(/\s+$/, "");
+  return { target, content: body === "" ? managedLines : `${body}\n${managedLines}` };
 }
 
 export async function runCompileIfAvailable(repositoryPath: string): Promise<void> {
@@ -306,15 +445,6 @@ export async function runCompileIfAvailable(repositoryPath: string): Promise<voi
 interface ContentUpdate {
   readonly target: string;
   readonly content: string;
-}
-
-async function conflictingTargets(repositoryPath: string, updates: readonly ContentUpdate[]): Promise<string[]> {
-  const conflicts = (await Promise.all(updates.map(async ({ target, content }) => {
-    const destination = join(repositoryPath, target);
-    if (!await exists(destination)) return undefined;
-    return (await readFile(destination, "utf8")) === content ? undefined : target;
-  }))).filter((target): target is string => target !== undefined);
-  return [...new Set(conflicts)].sort();
 }
 
 async function validateStagedCatalog(
@@ -340,9 +470,16 @@ async function validateStagedCatalog(
   }
 }
 
+// The compile needs the workflows and the compile script. An update that changes neither still
+// recompiles against the consumer's current copies, so both come along.
 async function copyCompilationInputs(repositoryPath: string, stagingPath: string): Promise<void> {
   const githubPath = join(repositoryPath, ".github");
   if (await exists(githubPath)) await cp(githubPath, join(stagingPath, ".github"), { recursive: true });
+  const script = join(repositoryPath, "scripts", "compile-agent-workflows.mjs");
+  if (await exists(script)) {
+    await mkdir(join(stagingPath, "scripts"), { recursive: true });
+    await copyFile(script, join(stagingPath, "scripts", "compile-agent-workflows.mjs"));
+  }
 }
 
 async function initializeStagingRepository(stagingPath: string): Promise<void> {
@@ -367,9 +504,9 @@ async function generatedFiles(repositoryPath: string): Promise<ContentUpdate[]> 
     }
   }
 
-  const actionsLock = join(repositoryPath, ".github", "actions", "actions-lock.json");
+  const actionsLock = join(repositoryPath, ...ACTIONS_LOCK.split("/"));
   if (await exists(actionsLock)) {
-    updates.push({ target: ".github/actions/actions-lock.json", content: await readFile(actionsLock, "utf8") });
+    updates.push({ target: ACTIONS_LOCK, content: await readFile(actionsLock, "utf8") });
   }
 
   return updates.sort((left, right) => left.target.localeCompare(right.target));
@@ -445,7 +582,10 @@ async function writeUpdates(repositoryPath: string, updates: readonly ContentUpd
 function catalogTemplateMeta(template: TemplateName): { directory: string; file: string; target: string } {
   const entry = catalogTemplates.find((item) => item.name === template);
   if (entry === undefined) throw new Error(`Unknown template: ${template}`);
-  const directory = template.startsWith("opencode") ? "opencode" : template.startsWith("app-ci-") ? "ci" : template === "github-release" ? "release" : template === "visual-evidence" ? "visual-evidence" : template === "bug-report" || template === "feature-request" ? "issues" : "agentics";
+  // The directory is a field on the entry now. It used to be inferred from the name by a chain
+  // of ternaries ending in "agentics", so a new template in any other directory installed the
+  // wrong file or none at all, and the default hid it.
+  const directory = entry.directory ?? (template.startsWith("opencode") ? "opencode" : template.startsWith("app-ci-") ? "ci" : template === "github-release" ? "release" : template === "bug-report" || template === "feature-request" ? "issues" : "agentics");
   const isWorkflow = entry.file.endsWith(".yml");
   const inferredTarget = template === "app-ci-dotnet-next"
     ? ".github/workflows/app-ci.yml"
@@ -458,6 +598,7 @@ async function catalogFiles(sourcePath: string): Promise<CatalogFile[]> {
   const files: CatalogFile[] = [];
 
   for (const [sourceDirectory, targetDirectory] of sourceMappings) {
+    if (!await exists(join(sourcePath, sourceDirectory))) continue;
     for (const file of await filesIn(join(sourcePath, sourceDirectory))) {
       if (isGeneratedFile(file)) continue;
       files.push({

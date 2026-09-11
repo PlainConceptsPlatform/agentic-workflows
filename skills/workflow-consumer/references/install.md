@@ -39,13 +39,16 @@ pnpm exec workflows update
 |---|---|
 | (default) | Launches the interactive TUI for selecting and installing routes and templates |
 | `init` | Inspects the repository and its visibility. Writes no workflow files. Prints JSON to stdout |
-| `add` | Installs package-managed loop files including mandatory `opencode.ci.json` and `scripts/compile-agent-workflows.mjs`. Stops on any changed managed destination |
-| `update` | Refreshes managed loop files. Same conflict behavior as `add` |
+| `add [routes]` | Installs the named workers on top of the installed ones, plus the mandatory `opencode.ci.json` and `scripts/compile-agent-workflows.mjs`, and refreshes every package-managed file |
+| `update` | `add` with no routes: refreshes exactly the installed set to the package version |
+| `update --dry-run` | Prints the plan as JSON (per file: added, updated, unchanged, skipped) and writes nothing |
+| `remove <routes>` | Drops the routes from the installed set, regenerates the router, deletes the workers and their locks |
 | `status` | Inspects the repository and prints JSON. No writes |
 | `list` | Lists all workflows and templates with install status |
 | `search <query>` | Filters workflows and templates by name or description |
 | `add --template <name>` | Copies one optional template. See `references/templates.md` |
-| `add --force` | Overwrites changed managed files. Back up first |
+| `--force` | Also overwrites files whose ownership header was removed, and changed templates |
+| `--version` | Prints the package version |
 
 The bin name is `workflows`. It is defined in `cli/package.json` under `"bin"`. The installed binary
 is `./dist/index.js`.
@@ -103,27 +106,33 @@ Example (shell script):
 # Managed by @plainconceptsplatform/workflows. Source: loops/actions/classify-route/classify-route.sh. Update with `workflows update --force`; consumer edits may be overwritten.
 ```
 
+Once installed, the header also records the package version the file came from:
+
+```
+# Managed by @plainconceptsplatform/workflows@0.7.0. Source: loops/workflows/agent-refine.md. ...
+```
+
 Read the header before editing any managed file. If the header is present, the file is managed and
-`update --force` may overwrite local changes.
+the next `update` replaces it.
 
-## Update conflicts
+## What an update does
 
-`add` and `update` detect a differing managed destination before writes. When a managed file has been
-modified locally, the command:
+`update` replaces every package-managed file with the package's version and re-stamps the header.
+It reports each file as `added`, `updated`, `unchanged` or `skipped`, and exits 0.
 
-1. Reports the conflict by path
-2. Makes no changes
-3. Exits with code 1
+- A worker's `env:` block is yours and is merged back: your values are kept, keys the package added
+  arrive with their defaults, keys only you defined stay. When the header records the version you
+  installed from, the CLI fetches that release from npm as the merge baseline, so a value you never
+  changed follows the package when its default changes. Offline, every value of yours is kept and the
+  result reports the baseline as `unavailable`.
+- The runner pool (`runs-on`) and the engine gateway URL of a worker are kept as well.
+- Everything else in a managed file is replaced. A change you made to a prompt body, a job or a
+  composite action is gone after the update; if it was worth making, make it in the package.
+- A file whose ownership header was removed is consumer-owned and is `skipped` unless `--force` is
+  passed. That is the one way to keep a local fork of a package file.
+- Templates are consumer-owned from installation and are replaced only with `--force`.
 
-To resolve:
-
-- **Keep the local change**: remove the ownership header, making the file consumer-owned. The
-  package will never update it again.
-- **Transplant the change**: identify whether the local edit belongs in the worker's `env:` block
-  (which is worker-owned policy) or in a shared mechanics file. Move policy into the worker frontmatter
-  and keep shared mechanics in the import.
-- **Discard the local change**: run `workflows update --force` after backing up the existing file.
-  Compile immediately after and review the generated locks.
+Run `update --dry-run` first when the plan matters: it prints the same result without writing.
 
 ## What `init` reports
 

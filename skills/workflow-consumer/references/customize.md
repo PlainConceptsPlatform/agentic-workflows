@@ -3,6 +3,29 @@
 Every installed `agent-*.md` worker is complete at its own top-level `env:`. No `repo-config` file
 exists. Do not add one.
 
+## The prompt body is not yours
+
+Everything after the frontmatter is the package's, byte for byte, in every repository. Only the
+frontmatter values below may differ. A difference in the body is drift rather than customisation, and
+the fix for it belongs upstream so every repository gets it.
+
+This is what the package is for, not a style preference. Measured on 2026-09-07, the four consuming
+repositories' `agent-implement.md` bodies differed from the package by 21, 21, 21 and 46 lines, and
+those differences had survived precisely because each looked deliberate enough to preserve. Three of
+them shared the same 21 lines, which is the tell: they were not drifting apart from each other, they
+had all improved something the package lacked and nobody had sent it back.
+
+If a body change is worth making, make it in `loops/workflows/` and propagate. If it has to differ
+per repository then it has to be an env var, the way the verification commands are. Naming
+`apps/api/` in a shared prompt is how a body stops being shareable.
+
+`workflows update` is the tool for this. It takes the package's worker and puts the consumer's
+`env:` values, `engine.env` `OPENAI_BASE_URL` and runner labels back, so the body comes from the
+package and the repository-specific parts survive. Keys the package added arrive with their defaults
+and keys only the consumer defined stay. When the worker's header records the version it was
+installed from, that release is the merge baseline: a value the consumer never changed follows the
+package when its default changes. No `--force` is needed; the file is the package's by definition.
+
 ## What each worker owns
 
 Each worker's frontmatter owns these values. Edit them directly after installation when the
@@ -19,7 +42,7 @@ repository differs from the defaults:
 | Turn budgets | `max-turns`, `max-turn-cache-misses`, `max-ai-credits` | `300`, `3000`, `5000` |
 | Verification commands | `env:` block | Stack-aware from CLI |
 | Permissions | `permissions:` | `read-all` |
-| Runner | `runs-on`, `runs-on-slim` | `ubuntu-latest` |
+| Runner | `runs-on`, `runs-on-slim` | The package's agent pool; `ubuntu-latest` for framework jobs |
 | Safe Outputs policy | `safe-outputs:` | Worker-specific |
 | Timeout | `timeout-minutes` | Worker-specific |
 
@@ -38,11 +61,24 @@ the consumer is responsible for adding the route-specific focus areas:
 |---|---|
 | **implement** | Architecture constraints (layering, dependency directions), testing rules, coverage floors, naming conventions, and what must be tested before creating a PR |
 | **refine** | Domain model terminology, bounded contexts, acceptance criteria patterns, story structure the repository expects, and what constitutes an implementation-ready user story |
-| **direct** | Instruction boundaries, what the agent may and may not do, verification commands to run after execution, and how to report results |
 | **apply-review** | Minimal changes principle, preserve architecture, do not refactor beyond the review scope, keep diffs small, and respect the original author's design decisions |
 | **merge-gate** | Risk indicators specific to the repository: any calculation engine, audit chain integrity, auth flows, database migrations, and money/financial calculations. What constitutes an auto-merge risk vs a human-review trigger |
 | **audit** | What to look for: layer violations, N+1 queries, missing audit logs, security gaps, performance anti-patterns, documentation drift, and what the repository considers a critical vs minor issue |
-| **propose** | Product scope, constraints from the project radar, what the project explicitly refuses to become, and how proposed features should align with the product vision |
+| **triage** | `PRODUCT_SCOPE` rather than `REPO_RULES`: what a product owner may ask for, and what has to become a maintainer-owned technical proposal. It now decides park-versus-close, not just close — an out-of-scope issue gets the `needs-maintainer` verdict and stays open with `review`, so write this list as "wrong door" rather than "rejected" |
+
+## What the router owns
+
+The router is package-owned like everything else, with one exception: the `env:` block at the top
+of `work-router.yml`, which `update` keeps the same way it keeps a worker's.
+
+| Value | What it is | Getting it wrong |
+|---|---|---|
+| `CI_WORKFLOW_NAME` | The CI workflow the merge belt reads its verdict from. Must equal that workflow's `name:` exactly | No gate at all. The belt logs no completed CI run and the pull request waits, with no red run anywhere |
+| `AUDIT_CRON` | This repository's audit slot. See "Scheduling across repositories" in the package README | The audit fires and classifies to no route, so nothing happens and nothing complains |
+
+Both are also needed where GitHub evaluates no expression, in the `workflow_run.workflows:` list
+and in a `cron:`. The installer copies them into those two literal lines, so change the value in
+`env:` and run `workflows update`. `verify-route-matrix.sh` asserts the copies agree.
 
 ## Keeping Forge aligned
 

@@ -93,8 +93,8 @@ statement, delete the copy or delete the test.
 The matrix should also assert the wiring, which the classifier cannot know about:
 
 ```bash
-for route in refine implement direct apply-review merge-gate audit propose bot-approve \
-             audit-close cleanup-artifacts stale-recovery validate; do
+for route in refine implement triage apply-review merge-gate audit release bot-approve \
+             audit-close cleanup-artifacts reconcile-bot-pr-runs validate; do
   grep -q "route == '${route}'" "$ROUTER_YML" || fail "no job for route ${route}"
 done
 ```
@@ -329,13 +329,18 @@ steps: (gh CLI to /tmp/gh-aw/agent/)  ->  agent reads files  ->  safe outputs ap
 ### MonitorOps
 
 A route triggered by another workflow's completion. `merge-gate` is this. The trap is the `name:`
-match: `workflows: ["App: CI"]` must equal the target's `name:` exactly, and renaming either side
-breaks it silently.
+match: the trigger's `workflows:` entry must equal the target's `name:` exactly, and renaming
+either side breaks it silently. The router keeps that name in `env.CI_WORKFLOW_NAME`, which every
+job reads; the trigger itself carries a copy because GitHub evaluates no expression in a
+`workflow_run.workflows:` list, and the installer mirrors the value into it. Never write the name
+a third time.
 
 A second trap is that `workflow_run` does not fire for `pull_request`-triggered CI completions on
 feature branches. The trigger works for push-to-main, but bot PRs whose CI was triggered by
-`pull_request` never produce the event. The `stale-recovery` action (2h cron) is the fallback: it
-polls for bot PRs with failed CI and dispatches the merge-gate via `workflow_dispatch`.
+`pull_request` never produce the event. Two things cover that: the consumer CI's own
+`dispatch-merge-gate` job, which hands the verdict over from inside CI, and the router's hourly
+`reconcile-bot-pr-runs` job, which sweeps open bot pull requests and dispatches the gate for any
+whose CI has concluded since the last verdict.
 
 ### LifecycleOps
 
@@ -436,7 +441,7 @@ inputs.
 |---|---|
 | `audit-close` | Close audit reports whose referenced issues are all closed |
 | `cleanup-artifacts` | Delete artifacts past the retention window |
-| `stale-recovery` | Reconcile `bot-working` claims older than the threshold |
+| `reconcile-bot-pr-runs` | Approve pending bot CI, dispatch the gate for a concluded run, clear stale `bot-working` claims |
 
 ### Rules
 

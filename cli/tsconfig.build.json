@@ -1,0 +1,7 @@
+{
+  // The published build. `tsconfig.json` covers everything for typechecking, including the
+  // tests; this one emits only what a consumer runs. Without it `dist/` carried eleven compiled
+  // test files, one of them 48 kB, into every published tarball.
+  "extends": "./tsconfig.json",
+  "exclude": ["src/**/*.test.ts"]
+}

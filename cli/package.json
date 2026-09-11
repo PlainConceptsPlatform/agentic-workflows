@@ -1,6 +1,6 @@
 {
   "name": "@plainconceptsplatform/workflows",
-  "version": "0.5.1",
+  "version": "0.19.2",
   "description": "Install and update Platform GitHub agentic workflows.",
   "keywords": [
     "github-actions",
@@ -26,7 +26,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "tsc --project tsconfig.build.json && node ./scripts/copy-loops.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "release": "pnpm build && pnpm test && npm publish --access public",

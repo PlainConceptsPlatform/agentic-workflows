@@ -24,6 +24,13 @@ frontmatter is fed to the model as instructions.
 That sentence is the source of every mistake in this format. A heading you added for humans is an
 instruction. A Mermaid diagram at the bottom is an instruction.
 
+Which is why no worker carries one any more. Diagrams live in `docs/diagrams.md`, and
+`verify-route-matrix.sh` fails a prompt that grows one back, a `gh` command (the CLI is
+unauthenticated in CI, so a prompt ordering one burns turns and fails), or a duplicate step number
+in its instruction list. All three were real: seven diagrams charged on every run and then skipped,
+an unreachable `gh pr list` in implement, and three prompts with a repeated step where one of the
+duplicates contradicted the other.
+
 Anyone can write an agentic workflow. Trigger on everything, grant broad permissions, and write a
 paragraph asking the model to sort it out. It will appear to work, and it will be slow, expensive,
 and non-reproducible, because a model was asked to do arithmetic that a `gh` command answers
@@ -68,14 +75,15 @@ loops/workflows/
     classify                   one event in, exactly one route out
       call-refine              agent-refine.md              workflow_call only
       call-implement           agent-implement.md           workflow_call only
-      call-direct              agent-direct.md              workflow_call only
+      call-triage              agent-triage.md              workflow_call only
       call-apply-review        agent-apply-review.md        workflow_call only
       call-merge-gate          agent-merge-gate.md          workflow_call only
       call-audit               agent-audit.md               workflow_call only
-      call-release             agent-release.md              workflow_call only
-      deterministic jobs       bot-approve, audit-close, cleanup-artifacts,
-                              stale-recovery, validate
-  authorize-bot-work.yml       human adds implement/refine/direct → bot adds bot-working
+      call-release             agent-release.md             workflow_call only
+      deterministic jobs       check-implement-pr, dispatch-triage, bot-approve,
+                              detect-pr-conflicts, reconcile-bot-pr-runs,
+                              audit-close, cleanup-artifacts, validate
+  authorize-bot-work.yml       human adds implement/refine → bot adds bot-working
 ```
 
 ### Bot-working label pattern
@@ -83,7 +91,7 @@ loops/workflows/
 gh-aw's `pre_activation` rejects bot actors because bots have `permission: none`. The
 bot-working pattern ensures the bot is the actor while still involving human authorization:
 
-1. Human adds `implement`/`refine`/`direct` label (actor = human)
+1. Human adds `implement`/`refine` label (actor = human)
 2. `authorize-bot-work.yml` validates the human has write permission
 3. Bot adds `bot-working` label via App token
 4. `bot-working` label triggers the work-router (actor = bot)

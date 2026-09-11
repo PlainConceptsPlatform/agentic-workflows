@@ -75,6 +75,52 @@ run-name: >-
   && format('schedule {0}', github.event.schedule)
   || github.event_name }}
 
+# The two values a repository is expected to change, and the only part of this file that is
+# not the package's. `workflows update` keeps whatever is here and puts the package's router
+# around it, so change them here and nowhere else.
+#
+# Neither can be read where it is also needed: GitHub evaluates no expression in a
+# `workflow_run.workflows:` list or in a `cron:`. The installer therefore mirrors both values
+# into those two literal lines below, and the route matrix asserts the copies still agree.
+# Everything that runs inside a job reads them from here, including the classifier, which
+# takes AUDIT_CRON from this environment.
+env:
+  # The CI workflow the merge belt reads its verdict from. A repository whose CI has another
+  # name gets no gate at all: the belt logs "no completed CI run" and the pull request waits
+  # forever, which is a silent failure rather than a red run.
+  CI_WORKFLOW_NAME: "App: CI"
+  # Slot 0. Every consumer installs this same router, and the agent fleet is one shared,
+  # two-VM scale set, so a second repository left on slot 0 audits at the same minute as the
+  # first and the two of them consume the whole fleet. Pick a free slot per repository: see
+  # "Scheduling across repositories" in the package README.
+  AUDIT_CRON: "17 1 * * 1"
+  # The bot identities whose label changes and pull requests this router trusts. Space
+  # separated, and every login the same account can present: GitHub reports an App as
+  # `name[bot]` on some endpoints and `app/name` on others, so both spellings belong here.
+  # Adding a third bot used to mean finding four hand-written comparisons across this file.
+  TRUSTED_BOTS: "github-actions[bot] app/github-actions platform-devbox[bot]"
+  # How long an issue may sit parked with `stalled` before the janitor retries it, and how many
+  # times it tries before leaving the issue to a person. Only machine failures are retried; a
+  # verdict the agent reached on purpose is reported and never re-run, because re-running a
+  # decision reproduces it.
+  HOUSEKEEPING_RETRY_AFTER_HOURS: "6"
+  HOUSEKEEPING_MAX_RETRIES: "3"
+  # A bot pull request older than this with no merge-gate verdict at all is reported, never
+  # closed: the janitor deletes branches and labels, never someone's work.
+  HOUSEKEEPING_STALE_PR_DAYS: "3"
+  # The single issue that lists what genuinely needs a person. Set it empty to turn the digest
+  # off and keep the rest of the janitor.
+  HOUSEKEEPING_DIGEST_TITLE: "Needs a human"
+  # How long an audit report may sit open before it is labelled `stale-audit`. The audit's own
+  # backpressure ignores a stale report, so three abandoned reports can no longer disable the
+  # weekly audit for good; the digest lists them instead. Two missed weekly cycles.
+  AUDIT_STALE_AFTER_DAYS: "14"
+  # How many failed merge-gate attempts one pull request head may consume before the belt
+  # parks it for a person. It was written as the literal 6 in four places here while the
+  # merge-gate worker carried its own MAX_ATTEMPTS; the route matrix now asserts the two
+  # agree, because a belt that gives up later than the worker says burns whole runs.
+  MAX_GATE_ATTEMPTS: "6"
+
 on:
   issues:
     types: [opened, labeled]
@@ -105,20 +151,17 @@ on:
   # branch with secrets, but the gate's subject job rejects any PR that is not open and
   # bot-authored, so a fork PR's failing CI cannot start privileged work.
   workflow_run:
+    # Mirrored from env.CI_WORKFLOW_NAME by the installer. A trigger evaluates no expression.
     workflows: ["App: CI"]
     types: [completed]
 
   # Cron to route mapping lives in .github/actions/classify-route/classify-route.sh.
   schedule:
-    # Slot 0. Every consumer installs this same file, and the agent fleet is one shared,
-    # two-VM scale set, so a second repository left on slot 0 audits at the same minute as
-    # the first. Pick a free slot per repository: see "Scheduling across repositories" in the
-    # package README, and change AUDIT_CRON in classify-route.sh to match, or the run fires
-    # and classifies to no route.
-    - cron: "17 1 * * 1"
+    - cron: "17 1 * * 1" # audit slot, mirrored from env.AUDIT_CRON by the installer
     - cron: "43 3 * * *"
     - cron: "0 6 * * *"
     - cron: "17 * * * *"
+    - cron: "23 */6 * * *" # housekeeping: retry what stalled, tidy what it stranded
 
   workflow_dispatch:
     inputs:
@@ -136,6 +179,7 @@ on:
           - audit-close
           - cleanup-artifacts
           - reconcile-bot-pr-runs
+          - housekeeping
           - validate
           - release
       issue-number:
@@ -177,6 +221,11 @@ on:
         options:
           - manual
           - scheduled
+      dry-run:
+        description: "Housekeeping only: print every intended change and write nothing"
+        required: false
+        type: boolean
+        default: false
       version-bump:
         description: "Release version bump: patch, minor, major, or auto"
         required: false
@@ -193,7 +242,7 @@ permissions:
 jobs:
   # Public repositories must check repository permission before an event can start a model.
   authorize:
-    runs-on: ubuntu-latest
+    runs-on: RunnerLandingZone
     timeout-minutes: 5
     permissions:
       contents: read
@@ -207,6 +256,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
           EVENT: ${{ github.event_name }}
+          # Who GitHub says this person is relative to the repository, straight from the
+          # payload. OWNER and MEMBER are the organisation's own; COLLABORATOR is repository
+          # access without organisation membership, which is what triage is for. Read from
+          # here because a repository-scoped GITHUB_TOKEN cannot query org membership.
+          AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || github.event.comment.author_association || github.event.pull_request.author_association }}
         run: |
           set -euo pipefail
 
@@ -224,27 +278,51 @@ jobs:
           # Platform bot owns Safe Outputs. Its label changes must be able to
           # start the follow-on worker, even though GitHub does not report it
           # as a repository collaborator.
-          if [ "$ACTOR" = "github-actions[bot]" ] || [ "$ACTOR" = "platform-devbox[bot]" ]; then
-            echo "trusted=true" >> "$GITHUB_OUTPUT"
-            echo "is_outside_collaborator=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          for bot in $TRUSTED_BOTS; do
+            if [ "$ACTOR" = "$bot" ]; then
+              echo "trusted=true" >> "$GITHUB_OUTPUT"
+              echo "is_outside_collaborator=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
 
           permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" \
             --jq '.permission' 2>/dev/null || echo "none")
 
-          # Check if the actor is an organization member. Outside collaborators can have
-          # write/maintain permission on a repo without being org members. Triage is for
-          # outside collaborators only — a non-member with write access is still outside.
+          # Is this person one of the organisation's own, or somebody with repository access
+          # from outside it? Triage exists for the second kind.
+          #
+          # The payload answers it. The org API cannot: `orgs/{org}/members/{user}` needs an
+          # org-scoped token and GITHUB_TOKEN is scoped to this repository, so that call failed
+          # for everybody and every admin who opened an issue was declared an outside
+          # collaborator and triaged. It is kept only as a fallback for events that carry no
+          # association, and it can no longer decide "outside" on its own.
           org=$(echo "$GITHUB_REPOSITORY" | cut -d/ -f1)
-          is_member=false
-          if gh api "orgs/$org/members/$ACTOR" >/dev/null 2>&1; then
-            is_member=true
-          fi
+          case "${AUTHOR_ASSOCIATION:-}" in
+            OWNER | MEMBER)
+              is_member=true
+              ;;
+            COLLABORATOR)
+              is_member=false
+              ;;
+            *)
+              # No association in this payload. Ask the org, and believe a yes rather than a
+              # no: a failed call here is indistinguishable from a real non-member.
+              if gh api "orgs/$org/members/$ACTOR" >/dev/null 2>&1; then
+                is_member=true
+              else
+                is_member=unknown
+              fi
+              ;;
+          esac
 
           case "$permission" in
             admin | maintain | write)
-              if [ "$is_member" = "true" ]; then
+              # "unknown" counts as inside. Somebody with write or better whose membership
+              # cannot be established is far more likely to be a colleague than an outside
+              # collaborator, and treating them as outside starts a triage agent nobody asked
+              # for — which, with a four-hour timeout, holds a runner for the afternoon.
+              if [ "$is_member" != "false" ]; then
                 echo "trusted=true" >> "$GITHUB_OUTPUT"
                 echo "is_outside_collaborator=false" >> "$GITHUB_OUTPUT"
                 echo "::notice::$ACTOR has $permission permission and is an org member."
@@ -267,7 +345,7 @@ jobs:
           esac
 
   classify:
-    runs-on: ubuntu-latest
+    runs-on: RunnerLandingZone
     timeout-minutes: 5
     permissions:
       contents: read
@@ -324,7 +402,7 @@ jobs:
   check-implement-pr:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true'
-    runs-on: ubuntu-latest
+    runs-on: RunnerLandingZone
     timeout-minutes: 3
     permissions:
       contents: read
@@ -415,7 +493,7 @@ jobs:
   dispatch-triage:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.is_outside_collaborator == 'true'
-    runs-on: ubuntu-latest
+    runs-on: RunnerLandingZone
     timeout-minutes: 5
     permissions:
       actions: write
@@ -543,7 +621,7 @@ jobs:
     if: >
       needs.classify.outputs.route == 'bot-approve' &&
         (github.actor == 'app/github-actions' || github.actor == 'platform-devbox[bot]')
-    runs-on: ubuntu-latest
+    runs-on: RunnerLandingZone
     timeout-minutes: 5
     permissions:
       actions: write
@@ -600,7 +678,7 @@ jobs:
           github.event.pull_request.head.repo.full_name == github.repository
         )
       )
-    runs-on: ubuntu-latest
+    runs-on: RunnerLandingZone
     timeout-minutes: 10
     permissions:
       contents: read
@@ -683,7 +761,7 @@ jobs:
             head_sha=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
             ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
               --jq '[.workflow_runs[]
-                | select(.name == "App: CI" and .status == "completed"
+                | select(.name == env.CI_WORKFLOW_NAME and .status == "completed"
                          and (.conclusion == "success" or .conclusion == "failure"))]
                 | sort_by(.created_at) | last // empty')
             if [ -z "$ci" ]; then
@@ -701,7 +779,7 @@ jobs:
               fi
               ci=$(gh api "repos/$REPO/actions/runs?branch=$head_ref&per_page=100" \
                 --jq '[.workflow_runs[]
-                  | select(.name == "App: CI" and .status == "completed"
+                  | select(.name == env.CI_WORKFLOW_NAME and .status == "completed"
                            and (.conclusion == "success" or .conclusion == "failure"))]
                   | sort_by(.created_at) | last // empty')
               if [ -z "$ci" ]; then
@@ -739,20 +817,27 @@ jobs:
                 verdict="$issue_verdict"
               fi
             fi
-            if [ -n "$verdict" ] && [ "$verdict" \> "$ci_finished" ]; then
-              echo "PR #$pr already has a gate verdict newer than CI; skipping."
+            # A verdict parks the CODE it was given on, not the CI run that prompted it.
+            # Comparing against the CI finish time meant any later run on the same commits
+            # reopened a park a human already owned. The newest commit on the branch is the
+            # right key: push, and the gate decides again; re-run CI, and the park holds.
+            head_committed=$(gh pr view "$pr" --repo "$REPO" \
+              --json commits --jq '[.commits[].committedDate] | max // empty' 2>/dev/null || true)
+            horizon="${head_committed:-$ci_finished}"
+            if [ -n "$verdict" ] && [ "$verdict" \> "$horizon" ]; then
+              echo "PR #$pr has a gate verdict newer than its head commit; the park holds, skipping."
               return 0
             fi
 
             attempts=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" \
-              --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$ci_finished"'") ] | length')
+              --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$horizon"'") ] | length')
             if [ -n "$linked_issue" ]; then
               issue_attempts=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
-                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$ci_finished"'") ] | length')
+                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$horizon"'") ] | length')
               attempts=$((attempts + issue_attempts))
             fi
-            if [ "$attempts" -ge 6 ]; then
-              echo "PR #$pr already consumed $attempts gate attempts on this CI verdict, parking for review."
+            if [ "$attempts" -ge "$MAX_GATE_ATTEMPTS" ]; then
+              echo "PR #$pr already consumed $attempts gate attempts on this head, parking for review."
               return 0
             fi
             if gate_is_live "$pr"; then
@@ -760,7 +845,7 @@ jobs:
               return 0
             fi
 
-            echo "PR #$pr is $([ "$mergeable" = "false" ] && echo conflicting || echo red-CI) (CI $ci_conclusion); dispatching Merge Gate (attempt $((attempts + 1)) of 6)."
+            echo "PR #$pr is $([ "$mergeable" = "false" ] && echo conflicting || echo red-CI) (CI $ci_conclusion); dispatching Merge Gate (attempt $((attempts + 1)) of $MAX_GATE_ATTEMPTS)."
             gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" \
               --method POST \
               -f ref="$DEFAULT_BRANCH" \
@@ -786,7 +871,7 @@ jobs:
   reconcile-bot-pr-runs:
     needs: classify
     if: needs.classify.outputs.route == 'reconcile-bot-pr-runs'
-    runs-on: ubuntu-latest
+    runs-on: RunnerLandingZone
     timeout-minutes: 5
     permissions:
       contents: read
@@ -858,11 +943,11 @@ jobs:
               live=$(gh api "repos/$REPO/actions/runs?per_page=100" \
                 --jq "[.workflow_runs[]
                   | select(.status == \"queued\" or .status == \"in_progress\" or .status == \"pending\" or .status == \"waiting\")
-                  | select(.display_title | test(\"#${issue}\\b\"))] | length")
+                  | select((.display_title + \" \") | test(\"#${issue}[^0-9]\"))] | length")
               [ "${live:-0}" -eq 0 ] || continue
 
               has_pr=$(gh pr list --repo "$REPO" --state open --json body \
-                --jq "[.[] | select((.body // \"\") | ascii_downcase | test(\"clos(e|es|ed) #${issue}\\b|fix(es|ed)? #${issue}\\b|resolves? #${issue}\\b\"))] | length")
+                --jq "[.[] | select(((.body // \"\") + \" \") | ascii_downcase | test(\"clos(e|es|ed) #${issue}[^0-9]|fix(es|ed)? #${issue}[^0-9]|resolves? #${issue}[^0-9]\"))] | length")
               [ "${has_pr:-0}" -eq 0 ] || continue
 
               echo "Clearing a stale bot-working reservation on #$issue: no run, no pull request."
@@ -873,7 +958,10 @@ jobs:
             jq -r --arg repo "$REPO" '
               .[]
               | select(
-                    (.user.login == "github-actions[bot]" or .user.login == "app/github-actions" or .user.login == "platform-devbox[bot]")
+                    # Bind the login first. Inside index(...) the input is the array, so a bare
+                    # .user.login there indexes the array and jq dies with "Cannot index array
+                    # with string \"user\"", taking the whole hourly belt with it.
+                    ((.user.login) as $login | (env.TRUSTED_BOTS | split(" ")) | index($login) != null)
                     and .draft == false
                     and .head.repo.full_name == $repo
                  )
@@ -884,7 +972,7 @@ jobs:
                 --jq '.workflow_runs[]
                   | select(
                       .event == "pull_request"
-                      and .name == "App: CI"
+                      and .name == env.CI_WORKFLOW_NAME
                     )
                   | .id' |
                 while IFS= read -r run_id; do
@@ -895,7 +983,7 @@ jobs:
               ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
                 --jq '[.workflow_runs[]
                   | select(
-                      .name == "App: CI"
+                      .name == env.CI_WORKFLOW_NAME
                       and .event == "pull_request"
                       and .status == "completed"
                       and (.conclusion == "success" or .conclusion == "failure")
@@ -913,7 +1001,7 @@ jobs:
                   ci=$(gh api "repos/$REPO/actions/runs?branch=$branch&per_page=100" \
                     --jq '[.workflow_runs[]
                       | select(
-                          .name == "App: CI"
+                          .name == env.CI_WORKFLOW_NAME
                           and .event == "pull_request"
                           and .status == "completed"
                           and (.conclusion == "success" or .conclusion == "failure")
@@ -921,7 +1009,7 @@ jobs:
                       ] | sort_by(.created_at) | last // empty | [.id, .conclusion, .updated_at] | @tsv')
                 fi
                 if [ -z "$ci" ]; then
-                  echo "::warning::PR #$pr_number head $head_sha has no completed App: CI run; the belt cannot gate it until CI runs."
+                  echo "::warning::PR #$pr_number head $head_sha has no completed $CI_WORKFLOW_NAME run; the belt cannot gate it until CI runs."
                   continue
                 fi
                 echo "PR #$pr_number conflicts, so CI cannot run on $head_sha at all; gating on the branch's last verdict."
@@ -945,20 +1033,36 @@ jobs:
                   latest_verdict="$issue_verdict"
                 fi
               fi
-              if [ -n "$latest_verdict" ] && [ "$latest_verdict" \> "$ci_finished" ]; then
-                echo "Merge gate verdict ($latest_verdict) is newer than CI ($ci_finished) for PR #$pr_number, skipping"
+              # A verdict parks the CODE it was given on, not the CI run that prompted it. This
+              # used to compare against the CI finish time, which made the park worthless: any
+              # later CI run on the same commits -- a re-run, a nightly, a rebuild triggered by
+              # main moving -- was newer than the verdict, so the belt re-dispatched a pull
+              # request a human had already been handed, and the attempt counter below reset to
+              # zero at the same time and handed it a fresh budget of six full gate runs.
+              # Lyceum PR #13 sat parked by a `review` verdict for six days while this happened.
+              #
+              # The newest commit on the branch is the right key. A gate verdict newer than it
+              # applies to the current head, so the park holds however often CI runs. Push a
+              # commit -- which is what apply-review and a `remediated` verdict both do -- and
+              # the head moves past the verdict and the gate decides again, which is correct:
+              # that is new code nobody has ruled on.
+              head_committed=$(gh pr view "$pr_number" --repo "$REPO" \
+                --json commits --jq '[.commits[].committedDate] | max // empty' 2>/dev/null || true)
+              verdict_horizon="${head_committed:-$ci_finished}"
+              if [ -n "$latest_verdict" ] && [ "$latest_verdict" \> "$verdict_horizon" ]; then
+                echo "PR #$pr_number: gate verdict ($latest_verdict) is newer than its head commit ($verdict_horizon); the park holds, skipping"
                 continue
               fi
 
               attempts=$(gh api "repos/$REPO/issues/$pr_number/comments?per_page=100" \
-                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$ci_finished"'") ] | length')
+                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$verdict_horizon"'") ] | length')
               if [ -n "$linked_issue" ]; then
                 issue_attempts=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
-                  --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$ci_finished"'") ] | length')
+                  --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$verdict_horizon"'") ] | length')
                 attempts=$((attempts + issue_attempts))
               fi
-              if [ "$attempts" -ge 6 ]; then
-                echo "PR #$pr_number already consumed $attempts gate attempts on this CI verdict, parking for review"
+              if [ "$attempts" -ge "$MAX_GATE_ATTEMPTS" ]; then
+                echo "PR #$pr_number already consumed $attempts gate attempts on this head, parking for review"
                 continue
               fi
               if gate_is_live "$pr_number"; then
@@ -966,7 +1070,7 @@ jobs:
                 continue
               fi
 
-              echo "Dispatching Merge Gate for PR #$pr_number ($ci_conclusion, run $ci_run_id, attempt $((attempts + 1)) of 6)"
+              echo "Dispatching Merge Gate for PR #$pr_number ($ci_conclusion, run $ci_run_id, attempt $((attempts + 1)) of $MAX_GATE_ATTEMPTS)"
               gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" \
                 --method POST \
                 -f ref="$DEFAULT_BRANCH" \
@@ -975,12 +1079,26 @@ jobs:
                 -f "inputs[ci-conclusion]=$ci_conclusion" \
                 -f "inputs[ci-run-id]=$ci_run_id" \
                 -f "inputs[attempts_so_far]=$attempts"
+
+              # One gate per tick, because that is all the concurrency group can hold. The gate
+              # runs in `merge-belt`, and GitHub keeps only the most recent *pending* run in a
+              # group -- `cancel-in-progress: false` does not change that, it only protects a run
+              # that has already started. A tick that dispatched three gates therefore ran the
+              # last and silently cancelled the other two: no comment, no attempt recorded, and
+              # nothing on the pull request to say it had been passed over. Seen on Pliny-Bot,
+              # where dispatching a gate for PR #135 cancelled the one queued for PR #136.
+              #
+              # Stopping here loses nothing: every pull request eligible this tick is still
+              # eligible next tick, and a run that never started consumes no attempt. The belt
+              # now does one thing and says so, instead of appearing to start work it discarded.
+              echo "One gate dispatched this tick; any other eligible pull request waits for the next one."
+              break
             done
 
   audit-close:
     needs: classify
     if: needs.classify.outputs.route == 'audit-close'
-    runs-on: ubuntu-latest
+    runs-on: RunnerLandingZone
     timeout-minutes: 15
     concurrency:
       group: audit-close
@@ -988,6 +1106,10 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # It reads the open pull requests before closing a report, so a report whose
+      # implement workers are still in review is left alone. Without this the list
+      # call answers 403 and the nightly job fails having closed nothing.
+      pull-requests: read
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -996,11 +1118,12 @@ jobs:
       - uses: ./.github/actions/audit-close
         with:
           token: ${{ github.token }}
+          stale-after-days: ${{ env.AUDIT_STALE_AFTER_DAYS }}
 
   cleanup-artifacts:
     needs: classify
     if: needs.classify.outputs.route == 'cleanup-artifacts' && !github.event.repository.fork
-    runs-on: ubuntu-latest
+    runs-on: RunnerLandingZone
     timeout-minutes: 15
     concurrency:
       group: cleanup-artifacts
@@ -1018,10 +1141,52 @@ jobs:
           token: ${{ github.token }}
           artifact-retention-days: ${{ vars.ARTIFACT_RETENTION_DAYS }}
 
+  # The janitor. Deterministic, no model: it retries work the machine stalled on, clears the state
+  # a dead run stranded, deletes branches whose pull request is finished, and keeps one issue
+  # listing what genuinely needs a person.
+  housekeeping:
+    needs: classify
+    if: needs.classify.outputs.route == 'housekeeping' && !github.event.repository.fork
+    runs-on: RunnerLandingZone
+    timeout-minutes: 15
+    concurrency:
+      group: housekeeping
+      cancel-in-progress: false
+    permissions:
+      # contents: write deletes branches whose pull request is closed or merged.
+      contents: write
+      issues: write
+      pull-requests: read
+    env:
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # A retry is a workflow_dispatch, and GitHub refuses to start a workflow run from an event
+      # raised with GITHUB_TOKEN. With the default token every retry would report success and do
+      # nothing, which is the exact failure mode this job exists to remove.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - uses: ./.github/actions/housekeeping
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          retry-after-hours: ${{ env.HOUSEKEEPING_RETRY_AFTER_HOURS }}
+          max-retries: ${{ env.HOUSEKEEPING_MAX_RETRIES }}
+          stale-pr-days: ${{ env.HOUSEKEEPING_STALE_PR_DAYS }}
+          digest-title: ${{ env.HOUSEKEEPING_DIGEST_TITLE }}
+          dry-run: ${{ github.event.inputs.dry-run || 'false' }}
+
   validate:
     needs: classify
     if: needs.classify.outputs.route == 'validate'
-    runs-on: ubuntu-latest
+    runs-on: RunnerLandingZone
     timeout-minutes: 10
     permissions:
       contents: read

@@ -267,10 +267,42 @@ name the trigger but never the route the classifier picks. Allowed contexts are 
 |---|---|
 | `runs-on:` | Platform: `ubuntu-latest`. The agent job |
 | `runs-on-slim:` | Platform: `ubuntu-latest`. The framework jobs. Defaults to `ubuntu-slim` if omitted |
-| `timeout-minutes:` | Platform: always set. Default 20, which is too short |
+| `timeout-minutes:` | Platform: always set. Default 20, which is too short. Compiles to the `Execute OpenCode CLI` step, not the job. See Timeouts below |
 | `env:` | Top-level pairs available to agent `steps:` and interpolated into the prompt. Use for labels, markers, paths, comment templates |
 | `concurrency:` | Platform: never on a worker. The router owns it |
 | `environment:` | Ties the run to an Actions environment, so protection rules apply |
+
+### Timeouts
+
+`timeout-minutes:` compiles to a `timeout-minutes` on the **`Execute OpenCode CLI` step** — the wall
+clock the agent has to read, think and call its safe-output tools. gh-aw separately puts 45 minutes on
+the deterministic jobs it generates around the agent; that is not read from frontmatter and there is
+nothing to tune. A lock file showing 45 beside a number you did not write is that.
+
+A timeout does not look like one from the outside. The issue gets the worker's ordinary incomplete
+comment, "ended without an outcome" with the label left for a retry, which reads as though the agent
+had nothing to say. The cause is one line in the agent job's log:
+
+```
+##[error]The action 'Execute OpenCode CLI' has timed out after 40 minutes.
+```
+
+So read the agent job's **conclusion** before reading its output. `failure` with `validate_output`
+skipped is a killed step. `success` with an `incomplete` job that ran is an agent that finished and
+produced something the validator rejected. Unrelated problems, identical comment on the issue.
+
+The binding constraint is usually the model's pace rather than the size of the work. Refine sat at 40
+minutes and went to 60 on the evidence of a run that died having done the job: 36 model turns, most
+returning under 110 output tokens and still taking over a minute each, with turn 32 producing 6,479
+tokens — the finished story — and the clock running out in the short turns that would have submitted
+it. Forty minutes bought about thirty-six turns whatever it was asked to refine.
+
+The token table at the end of every agent job log is where to look: turns, output tokens, duration
+per turn. Many small turns and no large one is a loop, and more time will not help it. A large one
+near the end is a run that needed a few more minutes.
+
+A run keeps the timeout it was dispatched with, because it reads its lock when it starts. Raising a
+timeout and pushing does nothing for runs already in flight.
 
 ### Concurrency
 

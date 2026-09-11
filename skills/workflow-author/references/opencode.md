@@ -253,12 +253,13 @@ So after a manual approval, or after a bot PR's CI fails on a feature branch, th
 never hears about the CI result. The pull request sits open with no gate action.
 
 Mitigation is twofold:
-1. The repo setting that auto-approves CI runs (so `workflow_run` fires for the main-push case).
-2. The `stale-recovery` action polls every 2h for bot PRs whose CI concluded failure, and dispatches
-   the merge-gate via `workflow_dispatch` with `operation=merge-gate`. This is the same thing the
-   `workflow_run` trigger would have done. It requires `actions: write` permission on the
-   `stale-recovery` job. If a merge-gate run is already in progress for the same PR, the router's
-   concurrency group skips the duplicate.
+1. The consumer CI's own `dispatch-merge-gate` job (`templates/ci`), which hands the verdict over
+   from inside the CI run rather than waiting for an event that will not arrive.
+2. The router's `reconcile-bot-pr-runs` job, hourly at minute 17. It approves bot CI runs stuck at
+   `action_required`, then for each open bot pull request compares the latest CI conclusion against
+   the newest merge-gate verdict and dispatches `operation=merge-gate` when CI is newer. It needs
+   `actions: write`. It skips a pull request whose gate is already queued or running, because the
+   merge-belt concurrency group would cancel the duplicate anyway.
 
 ---
 

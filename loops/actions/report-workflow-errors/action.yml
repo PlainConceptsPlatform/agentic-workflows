@@ -1,0 +1,421 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/report-workflow-errors/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Report workflow errors upstream
+description: >-
+  Summarise the last day of failures in the workflows this package ships and file the summary
+  upstream so the package can be improved. Deterministic: no model runs, and nothing that could
+  identify this repository or its contents leaves it.
+
+inputs:
+  token:
+    description: Token for THIS repository. Read-only; used to list runs and jobs.
+    required: true
+  upstream-token:
+    description: >-
+      Token that can open an issue in the upstream repository. Empty means compute the report,
+      attach it to the run, and file nothing.
+    required: false
+    default: ''
+  upstream-repo:
+    description: The repository the report is filed in, as owner/name.
+    required: false
+    default: PlainConceptsPlatform/Agentic-Workflows
+  lookback-hours:
+    description: How far back to look for failures.
+    required: false
+    default: '24'
+  dry-run:
+    description: Compute and print the report, file nothing.
+    required: false
+    default: 'false'
+
+outputs:
+  filed:
+    description: The upstream issue number, or empty if nothing was filed.
+    value: ${{ steps.report.outputs.filed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Collect and file
+      id: report
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        UPSTREAM_TOKEN: ${{ inputs.upstream-token }}
+        UPSTREAM_REPO: ${{ inputs.upstream-repo }}
+        LOOKBACK_HOURS: ${{ inputs.lookback-hours }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          // Every consumer of this package is a private repository, and this is the one job that
+          // sends anything out of one. The rule it is built around: no free text ever leaves
+          // here. Not a log line, not a branch name, not an issue title, not a file path. What
+          // leaves is a fixed set of enumerable facts about workflows this package itself
+          // ships -- their names, their job and step names, conclusions, timings and counts --
+          // plus the NAME of a matched error pattern from the catalogue below. The final body
+          // is checked against a leak scanner and the job fails rather than files if the
+          // scanner trips.
+
+          const dryRun = process.env.DRY_RUN === 'true';
+          const upstreamToken = process.env.UPSTREAM_TOKEN;
+          const [upstreamOwner, upstreamName] = process.env.UPSTREAM_REPO.split('/');
+          const since = new Date(Date.now() - Number(process.env.LOOKBACK_HOURS) * 3600 * 1000);
+
+          // Only workflows this package ships. A consumer's own workflow name is theirs and can
+          // describe a product, a customer or an environment -- one consumer really does have a
+          // job named "Deploy app to" followed by an interpolated environment input -- so an
+          // allowlist by filename is the boundary, and it is the only thing keeping those names
+          // out. Anything not matching is counted and otherwise ignored.
+          //
+          // That example is described rather than quoted on purpose. An Actions expression is
+          // interpolated into this script by the runner BEFORE the JavaScript is parsed, comments
+          // included, so quoting one here made the comment a live substitution -- flagged by
+          // semgrep as github-script-injection, and invisible to a `node --check` pass because
+          // the checker has to mask the expression to parse the file at all. Everything this
+          // script needs arrives through `env:` above; nothing is interpolated into it.
+          //
+          // Exactly the filenames the package installs, and no pattern that admits a name it does
+          // not. The previous version was written as a shape (`\.(yml|lock\.yml)$` over a group of
+          // stems) and so admitted 22 names of which 11 are never shipped: the seven workers exist
+          // as `.md` sources compiled to `.lock.yml`, never as `agent-refine.yml`, and there is no
+          // `work-router.lock.yml`. A consumer writing their own `agent-release.yml` would have had
+          // its job and step names read and reported.
+          const OWNED = new Set([
+            'work-router.yml',
+            'authorize-bot-work.yml',
+            'agentics-checks.yml',
+            'agentics-maintenance.yml',
+            ...['refine', 'implement', 'triage', 'apply-review', 'merge-gate', 'audit', 'release']
+              .map((route) => `agent-${route}.lock.yml`),
+          ]);
+          const ownedName = (path) => (path ?? '').split('/').pop() ?? '';
+
+          // The catalogue. Each entry is a failure shape worth fixing in the package. Only the
+          // `id` is ever reported -- never the text that matched it, because the surrounding log
+          // line carries repository paths, branch names and issue titles.
+          const CATALOGUE = [
+            { id: 'runner-never-assigned', test: /waiting for a runner|no runner matching|requested labels/i, note: 'A job waited for a self-hosted runner that never arrived.' },
+            { id: 'runner-lost-mid-job', test: /lost communication with the server|runner has received a shutdown signal|The self-hosted runner:.*lost/i, note: 'The runner disappeared while a job was running.' },
+            { id: 'job-cancelled-by-timeout', test: /The job running on runner .* has exceeded the maximum execution time|timeout-minutes/i, note: 'A job hit its timeout instead of finishing.' },
+            { id: 'out-of-disk', test: /no space left on device|You are running out of disk space/i, note: 'The runner ran out of disk.' },
+            { id: 'out-of-memory', test: /JavaScript heap out of memory|Killed\s+process|OOMKilled/i, note: 'A step was killed for memory.' },
+            { id: 'jq-error', test: /^jq: error|jq: error \(at/im, note: 'A jq filter in the router or an action died on its input.' },
+            { id: 'gh-api-403', test: /HTTP 403|Resource not accessible by integration/i, note: 'A step called an endpoint its token has no scope for.' },
+            { id: 'gh-api-404', test: /HTTP 404/i, note: 'A step called an endpoint or resource that does not exist.' },
+            { id: 'gh-api-rate-limit', test: /API rate limit exceeded|secondary rate limit/i, note: 'A step was rate limited.' },
+            { id: 'gh-api-409-conflict', test: /HTTP 409|Update is not a fast forward/i, note: 'A push or merge raced another writer.' },
+            { id: 'model-quota', test: /quota|insufficient_quota|429 Too Many Requests/i, note: 'The model gateway refused the request for quota reasons.' },
+            { id: 'model-gateway-unreachable', test: /ECONNREFUSED|ETIMEDOUT|getaddrinfo|502 Bad Gateway|503 Service Unavailable/i, note: 'The model gateway or another network dependency was unreachable.' },
+            { id: 'agent-produced-no-output', test: /no agent output|output file (is )?(missing|empty)|safe.outputs.*empty/i, note: 'The agent finished without emitting any safe output.' },
+            { id: 'lock-out-of-date', test: /lock file is out of date|recompile|\.lock\.yml.*differs/i, note: 'A compiled lock file did not match its source.' },
+            { id: 'action-not-found', test: /Can't find '.*' in|Unable to resolve action/i, note: 'A workflow referenced an action or path that is not present.' },
+            { id: 'yaml-or-expression-invalid', test: /Invalid workflow file|Unrecognized named-value|Unexpected symbol/i, note: 'A workflow failed to parse or an expression did not evaluate.' },
+          ];
+
+          // The leak scanner. Runs on the finished body, and its failure is fatal: a report that
+          // might carry private information is not filed at all. Deliberately paranoid, because
+          // the cost of a false positive is one missing daily report and the cost of a false
+          // negative is a private repository described in a public-facing issue.
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const leakChecks = [
+            { what: 'the repository name', test: new RegExp(`\\b${repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i') },
+            { what: 'the owner name', test: new RegExp(`\\b${owner.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i') },
+            { what: 'a github.com URL', test: /https?:\/\/[^\s)]*github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/ },
+            { what: 'an email address', test: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/ },
+            { what: 'an absolute path', test: /(?:^|\s)(?:\/(?:home|Users|github|runner|mnt)\/|[A-Za-z]:\\)/m },
+            { what: 'a long hex or base64 blob that could be a token or a commit', test: /\b(?:gh[pousr]_[A-Za-z0-9]{16,}|[A-Za-z0-9+/]{40,}={0,2}|[0-9a-f]{32,})\b/ },
+            { what: 'an issue or pull request reference', test: /(?:^|[^A-Za-z0-9_/])#\d+/ },
+            { what: 'a branch or ref path', test: /\brefs\/heads\/|\b(?:feature|fix|chore|bot)\/[A-Za-z0-9._-]+/ },
+          ];
+
+          // Which version of the package is reporting. Without this a bug fixed weeks ago keeps
+          // arriving upstream with no way to tell it is stale: the first report filed by this
+          // job was 19 occurrences of a jq bug that a release had already fixed, and nothing in
+          // it said so. The version is the package's own name for itself, read from the
+          // ownership header the installer stamps, so it carries nothing of the repository.
+          let packageVersion = 'unknown';
+          try {
+            const header = require('node:fs')
+              .readFileSync('.github/workflows/work-router.yml', 'utf8')
+              .split('\n')[0];
+            packageVersion = /@plainconceptsplatform\/workflows@([0-9][0-9A-Za-z.\-+]*)/.exec(header)?.[1] ?? 'unknown';
+          } catch {
+            core.info('could not read the installed package version from the router header');
+          }
+
+          const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+            ...context.repo, created: `>=${since.toISOString()}`, per_page: 100,
+          });
+
+          // signature -> what we know about it. The signature is the dedup key both here and
+          // upstream, and every part of it is package-owned or an enumerated value.
+          //
+          // THE FINDING SHAPE IS THE PRIVACY BOUNDARY. bodyFor() renders a finding, so a field
+          // added here is a field sent to another repository. These eight are all
+          // package-owned names or enumerated values; nothing derived from a log, a branch, a
+          // path or an issue belongs on this object. The route matrix asserts this exact list,
+          // so adding a ninth field fails the build rather than leaking on the next cron.
+          const FINDING_FIELDS = ['workflow', 'job', 'step', 'conclusion', 'patternId', 'count', 'runnerLabels', 'attempts'];
+          const findings = new Map();
+          let ownedRuns = 0;
+          let ownedFailures = 0;
+          let skippedForeign = 0;
+          let queueWaitTotal = 0;
+          let queueWaitCount = 0;
+          let queueWaitWorst = 0;
+
+          // A run that never gets a runner never fails: it sits queued until GitHub expires it
+          // a day later. On a two-VM fleet that is the most common way work disappears, and it
+          // is invisible in every failure count, so it is detected by state and age instead.
+          const STUCK_AFTER_MS = 45 * 60 * 1000;
+          let stuckInQueue = 0;
+
+          for (const run of runs) {
+            const file = ownedName(run.path);
+            if (!OWNED.has(file)) { skippedForeign += 1; continue; }
+            ownedRuns += 1;
+
+            if (['queued', 'waiting', 'pending'].includes(run.status) &&
+                Date.now() - new Date(run.created_at).getTime() > STUCK_AFTER_MS) {
+              stuckInQueue += 1;
+              const signature = `${file} · (whole run) · (never started) · queued · runner-never-assigned`;
+              const seen = findings.get(signature) ?? {
+                workflow: file, job: '(whole run)', step: '(never started)',
+                conclusion: 'queued', patternId: 'runner-never-assigned', count: 0,
+                runnerLabels: new Set(), attempts: new Set(),
+              };
+              seen.count += 1;
+              seen.attempts.add(run.run_attempt ?? 1);
+              findings.set(signature, seen);
+              continue;
+            }
+
+            if (!['failure', 'cancelled', 'timed_out', 'startup_failure'].includes(run.conclusion)) continue;
+            ownedFailures += 1;
+
+            let jobs = [];
+            try {
+              jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
+                ...context.repo, run_id: run.id, attempt_number: run.run_attempt ?? 1, per_page: 100,
+              });
+            } catch { continue; }
+
+            for (const job of jobs) {
+              if (job.started_at && job.created_at) {
+                const wait = (new Date(job.started_at) - new Date(job.created_at)) / 1000;
+                if (wait >= 0) {
+                  queueWaitTotal += wait; queueWaitCount += 1;
+                  queueWaitWorst = Math.max(queueWaitWorst, Math.round(wait));
+                }
+              }
+              if (!['failure', 'cancelled', 'timed_out'].includes(job.conclusion)) continue;
+
+              const step = (job.steps ?? []).find((s) => ['failure', 'timed_out'].includes(s.conclusion));
+              // Job and step names come from files this package ships, so they are the
+              // package's own words. A `run-name` is not: it interpolates issue titles.
+              const stepName = step?.name ?? '(no failing step recorded)';
+
+              let patternId = 'unrecognised';
+              try {
+                const { data: log } = await github.rest.actions.downloadJobLogsForWorkflowRun({
+                  ...context.repo, job_id: job.id,
+                });
+                const text = typeof log === 'string' ? log : Buffer.from(log).toString('utf8');
+                // The tail is where the failure is, and reading less of the log is less to get
+                // wrong. Only the matched entry's id crosses into the report.
+                const tail = text.slice(-20000);
+                patternId = CATALOGUE.find((entry) => entry.test.test(tail))?.id ?? 'unrecognised';
+              } catch {
+                patternId = 'log-unavailable';
+              }
+
+              const signature = `${file} · ${job.name} · ${stepName} · ${job.conclusion} · ${patternId}`;
+              const seen = findings.get(signature) ?? {
+                workflow: file, job: job.name, step: stepName,
+                conclusion: job.conclusion, patternId, count: 0,
+                runnerLabels: new Set(), attempts: new Set(),
+              };
+              seen.count += 1;
+              seen.attempts.add(run.run_attempt ?? 1);
+              // A pool label is the one value on a finding that the CONSUMER writes, and the
+              // installer deliberately preserves theirs across updates (preserveRunnerPool in
+              // cli/src/worker-env.ts). A pool named for a customer, a tenant or an environment --
+              // `contoso-prod-arc`, `retail-eu-runners` -- would have been filed upstream verbatim,
+              // and no leak check would have caught it: the scanner looks for this repository's
+              // name, its owner, URLs, emails, paths and token shapes, and a pool name is none of
+              // those. Bucket it. The catalogue asks whether the self-hosted fleet was involved,
+              // never what it is called, so the bucket loses no diagnostic value.
+              for (const label of job.labels ?? []) {
+                seen.runnerLabels.add(label === 'ubuntu-latest' ? 'github-hosted' : 'self-hosted');
+              }
+              findings.set(signature, seen);
+            }
+          }
+
+          const catalogueNote = (id) => CATALOGUE.find((entry) => entry.id === id)?.note
+            ?? (id === 'log-unavailable' ? 'The job log could not be read, so the failure could not be classified.'
+              : 'The log matched no known failure shape. Worth adding one to the catalogue.');
+
+          const ranked = [...findings.values()].sort((a, b) => b.count - a.count);
+          const hours = process.env.LOOKBACK_HOURS;
+
+          // Enforce the boundary at run time as well as in the build. A field that reached a
+          // finding by some path the static check did not see stops the job here rather than
+          // being rendered into an issue in another repository.
+          for (const finding of ranked) {
+            const unexpected = Object.keys(finding).filter((key) => !FINDING_FIELDS.includes(key));
+            if (unexpected.length > 0) {
+              core.setFailed(`a finding carries ${unexpected.join(', ')}, which is not in the reportable field list. Nothing was filed.`);
+              return;
+            }
+          }
+
+          const bodyFor = (finding) => [
+            `<!-- pcp-error-report: ${finding.workflow}|${finding.job}|${finding.step}|${finding.patternId} -->`,
+            '',
+            'Filed automatically by the `report-workflow-errors` job in a repository that installs',
+            'this package. It carries no information about that repository: only the names this',
+            'package gives its own workflows, jobs and steps, and a classification of the failure.',
+            '',
+            '| | |',
+            '|---|---|',
+            `| Workflow | \`${finding.workflow}\` |`,
+            `| Job | \`${finding.job}\` |`,
+            `| Failing step | \`${finding.step}\` |`,
+            `| Conclusion | \`${finding.conclusion}\` |`,
+            `| Classification | \`${finding.patternId}\` |`,
+            `| Runner labels | ${[...finding.runnerLabels].map((l) => `\`${l}\``).join(', ') || 'not reported'} |`,
+            `| Occurrences in the last ${hours}h | ${finding.count} |`,
+            `| Re-run attempts involved | ${[...finding.attempts].sort().join(', ')} |`,
+            `| Package version reporting | \`${packageVersion}\` |`,
+            '',
+            `**What this classification means.** ${catalogueNote(finding.patternId)}`,
+            '',
+            '### Occurrences',
+            '',
+            `- ${new Date().toISOString().slice(0, 10)}: ${finding.count} in ${hours}h, on \`${packageVersion}\``,
+          ].join('\n');
+
+          const titleFor = (finding) =>
+            `${finding.workflow}: ${finding.patternId} in "${finding.step}"`;
+
+          // The scanner. A body that trips it is never filed, and the job goes red so the
+          // pattern that produced it gets fixed rather than quietly dropped every night.
+          const scan = (text, label) => {
+            const tripped = leakChecks.filter((check) => check.test.test(text));
+            if (tripped.length === 0) return true;
+            core.error(`${label} was withheld: the leak scanner matched ${tripped.map((t) => t.what).join('; ')}`);
+            return false;
+          };
+
+          const summaryRows = ranked.map((f) => [
+            `\`${f.workflow}\``, `\`${f.job}\``, `\`${f.patternId}\``, String(f.count),
+          ]);
+          await core.summary
+            .addHeading('Workflow error report', 2)
+            .addList([
+              `Runs from workflows this package ships: ${ownedRuns}`,
+              `Of those, failed: ${ownedFailures}`,
+              `Runs from the repository's own workflows, not inspected: ${skippedForeign}`,
+              // This job's own workflow is not on the allowlist, which is right -- it would be
+              // reporting on itself -- but it means a failure here reaches nobody upstream. Say so
+              // where someone reading a run will see it, rather than leaving it to be found out.
+              'This report does not cover itself: a failure in this job shows up in this repository only.',
+              `Runs still queued after 45 minutes, so no runner ever took them: ${stuckInQueue}`,
+              `Distinct failure signatures: ${ranked.length}`,
+              queueWaitCount > 0
+                ? `Runner queue wait: ${Math.round(queueWaitTotal / queueWaitCount)}s mean, ${queueWaitWorst}s worst`
+                : 'Runner queue wait: no jobs started in the window',
+            ])
+            .addTable([
+              [{ data: 'Workflow', header: true }, { data: 'Job', header: true }, { data: 'Classification', header: true }, { data: 'Count', header: true }],
+              ...summaryRows,
+            ])
+            .write();
+
+          if (ranked.length === 0) {
+            core.info('No failures in the window for any workflow this package ships.');
+            core.setOutput('filed', '');
+            return;
+          }
+
+          // Build every report first and scan them all, so a leak is reported once with the
+          // full picture rather than one night at a time.
+          const reports = [];
+          let leaked = 0;
+          for (const finding of ranked) {
+            const title = titleFor(finding);
+            const body = bodyFor(finding);
+            if (!scan(`${title}\n${body}`, `The report for ${finding.patternId}`)) { leaked += 1; continue; }
+            reports.push({ finding, title, body });
+            core.info(`report ready: ${title} (${finding.count})`);
+          }
+
+          if (!upstreamToken) {
+            // Not silent and not red: the report exists in the job summary, and the run says
+            // plainly why it went no further.
+            core.warning(`${reports.length} report(s) computed but not filed: no upstream token is configured. The full report is in this job summary.`);
+            core.setOutput('filed', '');
+            if (leaked > 0) core.setFailed(`${leaked} report(s) were withheld by the leak scanner; fix the field that carried private text.`);
+            return;
+          }
+
+          const upstream = getOctokit(upstreamToken);
+          const filed = [];
+
+          for (const { finding, title, body } of reports) {
+            const marker = body.split('\n')[0];
+            // One issue per signature, updated rather than repeated. Searching by the marker
+            // keeps that true across every consumer: two repositories hitting the same package
+            // bug land on the same issue and its count is the number that matters.
+            let existing;
+            try {
+              const { data } = await upstream.rest.search.issuesAndPullRequests({
+                q: `repo:${upstreamOwner}/${upstreamName} is:issue is:open in:body "${marker}"`,
+                per_page: 5,
+              });
+              existing = data.items.find((item) => (item.body ?? '').includes(marker));
+            } catch (error) {
+              core.warning(`could not search upstream for an existing report: HTTP ${error.status ?? '?'}`);
+            }
+
+            if (dryRun) {
+              core.info(`[dry-run] would ${existing ? `append to #${existing.number}` : 'open an issue'}: ${title}`);
+              continue;
+            }
+
+            try {
+              if (existing) {
+                // Append one dated line rather than rewriting the body, so the history of how
+                // often this fires stays readable.
+                const line = `- ${new Date().toISOString().slice(0, 10)}: ${finding.count} in ${hours}h, on \`${packageVersion}\``;
+                const updated = (existing.body ?? '').includes(line)
+                  ? existing.body
+                  : `${existing.body}\n${line}`;
+                if (!scan(updated, `The appended report for ${finding.patternId}`)) { leaked += 1; continue; }
+                await upstream.rest.issues.update({
+                  owner: upstreamOwner, repo: upstreamName,
+                  issue_number: existing.number, body: updated,
+                });
+                filed.push(existing.number);
+                core.info(`appended to ${upstreamOwner}/${upstreamName}#${existing.number}`);
+              } else {
+                const { data: created } = await upstream.rest.issues.create({
+                  owner: upstreamOwner, repo: upstreamName, title, body,
+                  labels: ['fleet-error-report'],
+                });
+                filed.push(created.number);
+                core.info(`opened ${upstreamOwner}/${upstreamName}#${created.number}`);
+              }
+            } catch (error) {
+              // A missing label, a token without issues:write, a repository that moved. Say so;
+              // do not fail the whole report for one signature.
+              core.warning(`could not file the report for ${finding.patternId}: HTTP ${error.status ?? '?'} ${error.message ?? ''}`);
+            }
+          }
+
+          core.setOutput('filed', filed.join(','));
+          if (leaked > 0) {
+            core.setFailed(`${leaked} report(s) were withheld by the leak scanner. Nothing was filed for them; fix the field that carried private text.`);
+          }

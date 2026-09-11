@@ -5,13 +5,21 @@ import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { catalogSourcePath, ensurePreCommitHook, installCatalog, installedRoutes, installMandatoryFiles, installTemplate, removeRouteFiles } from "./catalog-installation.js";
+import { catalogSourcePath, ensurePreCommitHook, installCatalog, installedRoutes, installTemplate, removeRouteFiles } from "./catalog-installation.js";
+import { inspectRepository } from "./repository-inspection.js";
 
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })));
 });
+
+const header = (source: string, version?: string): string =>
+  `# Managed by @plainconceptsplatform/workflows${version === undefined ? "" : `@${version}`}. Source: ${source}. Update with \`workflows update --force\`; consumer edits may be overwritten.\n`;
+const worker = (env: string, version?: string, body = "1. Do the work.\n"): string =>
+  `---\n${header("loops/workflows/agent-check.md", version)}env:\n${env}description: check\n---\n\n${body}`;
+// No baseline release is fetched in these tests unless a test says so.
+const offline = async (): Promise<undefined> => undefined;
 
 describe("catalog installation", () => {
   it("resolves loops beside built package files", async () => {
@@ -28,11 +36,10 @@ describe("catalog installation", () => {
       "actions/check/action.yml": "name: Check\n",
       "workflows/agent-refine.md": "# Refine\n",
       "workflows/agent-implement.md": "# Implement\n",
-      "workflows/agent-direct.md": "# Direct\n",
       "workflows/agent-audit.md": "# Audit\n",
-      "workflows/agent-propose.md": "# Propose\n",
       "workflows/agent-apply-review.md": "# Apply Review\n",
       "workflows/agent-merge-gate.md": "# Merge Gate\n",
+      "workflows/agent-release.md": "# Release\n",
       "workflows/shared/defaults.md": "defaults\n",
       "workflows/work-router.yml": "name: Router\n",
       "scripts/compile-agent-workflows.mjs": "compile\n",
@@ -51,6 +58,8 @@ describe("catalog installation", () => {
     expect(result.installed).not.toContain(".github/workflows/agent-refine.md");
     expect(result.installed).not.toContain(".github/workflows/agent-implement.md");
     expect(result.installed).not.toContain(".github/workflows/agent-audit.md");
+    expect(result.installed).not.toContain(".github/workflows/agent-release.md");
+    expect(result.changes.every((change) => change.status === "added")).toBe(true);
   });
 
   it("installs package-owned loops files including mandatory opencode.ci.json and compile script", async () => {
@@ -66,7 +75,7 @@ describe("catalog installation", () => {
     });
     const repositoryPath = await createDirectory({});
 
-    await expect(installCatalog(repositoryPath, { sourcePath })).resolves.toEqual({
+    await expect(installCatalog(repositoryPath, { sourcePath })).resolves.toMatchObject({
       installed: [
         ".github/actions/check/action.yml",
         ".github/workflows/agent-check.md",
@@ -76,38 +85,68 @@ describe("catalog installation", () => {
         "scripts/compile.mjs",
       ],
       conflicts: [],
+      upToDate: false,
+      dryRun: false,
     });
   });
 
-  it("copies ownership headers for base workflows and selected templates", async () => {
-    const header = "# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-check.md. Update with `workflows update --force`; consumer edits may be overwritten.\n";
-    const templateHeader = "# Managed by @plainconceptsplatform/workflows. Source: loops/templates/agentics/agentics-checks.yml. Update with `workflows update --force`; consumer edits may be overwritten.\n";
+  it("stamps the package version into every ownership header it installs", async () => {
     const sourcePath = await createDirectory({
-      "actions/check/action.yml": "# Managed by @plainconceptsplatform/workflows. Source: loops/actions/check/action.yml. Update with `workflows update --force`; consumer edits may be overwritten.\nname: Check\n",
-      "workflows/agent-check.md": `---\n${header}# Check\n`,
-      "scripts/compile-agent-workflows.mjs": "// Managed by @plainconceptsplatform/workflows. Source: loops/scripts/compile-agent-workflows.mjs. Update with `workflows update --force`; consumer edits may be overwritten.\n",
+      "actions/check/action.yml": header("loops/actions/check/action.yml") + "name: Check\n",
+      "workflows/agent-check.md": worker("  REPO_RULES: \"rules\"\n"),
+      "scripts/compile-agent-workflows.mjs": "// " + header("loops/scripts/compile-agent-workflows.mjs").slice(2),
       "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
+    });
+    const repositoryPath = await createDirectory({});
+
+    const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "1.2.3" });
+
+    expect(result.packageVersion).toBe("1.2.3");
+    expect(result.installedVersions).toEqual([]);
+    await expect(readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8"))
+      .resolves.toMatch(/^---\n# Managed by @plainconceptsplatform\/workflows@1\.2\.3\. Source: loops\/workflows\/agent-check\.md\./);
+    await expect(readFile(join(repositoryPath, ".github/actions/check/action.yml"), "utf8"))
+      .resolves.toMatch(/^# Managed by @plainconceptsplatform\/workflows@1\.2\.3\. Source: loops\/actions\/check\/action\.yml\./);
+    await expect(readFile(join(repositoryPath, "scripts/compile-agent-workflows.mjs"), "utf8"))
+      .resolves.toMatch(/^\/\/ Managed by @plainconceptsplatform\/workflows@1\.2\.3\./);
+  });
+
+  it("copies template ownership headers verbatim", async () => {
+    const templateHeader = header("loops/templates/agentics/agentics-checks.yml");
+    const sourcePath = await createDirectory({
       "templates/agentics/agentics-checks.yml": `${templateHeader}name: Agentics checks\n`,
     });
     const repositoryPath = await createDirectory({});
 
-    await installCatalog(repositoryPath, { sourcePath });
     await installTemplate(repositoryPath, "agentics-checks", { sourcePath });
 
-    await expect(readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8")).resolves.toMatch(new RegExp(`^---\\n${escapeRegularExpression(header)}`));
     await expect(readFile(join(repositoryPath, ".github/workflows/agentics-checks.yml"), "utf8")).resolves.toMatch(new RegExp(`^${escapeRegularExpression(templateHeader)}`));
   });
 
-  it("does not report identical managed files as conflicts", async () => {
+  it("reports a file already at this version as unchanged and writes nothing to it", async () => {
     const sourcePath = await createDirectory({
-      "actions/check/action.yml": "name: Check\n",
-      "workflows/agent-check.md": "# Check\n",
+      "actions/check/action.yml": header("loops/actions/check/action.yml") + "name: Check\n",
+      "workflows/agent-check.md": worker("  REPO_RULES: \"rules\"\n"),
       "scripts/compile-agent-workflows.mjs": "compile\n",
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
     });
-    const repositoryPath = await createDirectory({ ".github/workflows/agent-check.md": "# Check\n" });
+    const repositoryPath = await createDirectory({
+      ".github/actions/check/action.yml": header("loops/actions/check/action.yml", "1.2.3") + "name: Check\n",
+      ".github/workflows/agent-check.md": worker("  REPO_RULES: \"rules\"\n", "1.2.3"),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "opencode.ci.json": "{}\n",
+    });
 
-    await expect(installCatalog(repositoryPath, { sourcePath })).resolves.toMatchObject({ conflicts: [] });
+    const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "1.2.3", baseline: offline });
+
+    expect(result.upToDate).toBe(true);
+    expect(result.installedVersions).toEqual(["1.2.3"]);
+    expect(result.changes.map((change) => [change.target, change.status])).toEqual([
+      [".github/actions/check/action.yml", "unchanged"],
+      [".github/workflows/agent-check.md", "unchanged"],
+      ["opencode.ci.json", "unchanged"],
+      ["scripts/compile-agent-workflows.mjs", "unchanged"],
+    ]);
   });
 
   it("does not manage legacy repository configuration files", async () => {
@@ -133,39 +172,291 @@ describe("catalog installation", () => {
     await expect(readFile(join(repositoryPath, ".github/workflows/shared/repo-config.md"), "utf8")).resolves.toBe("legacy consumer config\n");
   });
 
-  it("requires force for different managed files", async () => {
+  // The update policy: a package-owned file is the package's. Whatever a consumer changed in it
+  // beyond a worker's env block is replaced, without --force, and reported.
+  it("overwrites changed package-owned files and reports them as updated", async () => {
     const sourcePath = await createDirectory({
-      "actions/check/action.yml": "package action\n",
-      "workflows/agent-check.md": "package workflow\n",
-      "scripts/compile-agent-workflows.mjs": "package script\n",
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
+      "actions/check/action.yml": header("loops/actions/check/action.yml") + "name: Check\nruns:\n  using: composite\n  steps:\n    - run: echo package\n      shell: bash\n",
+      "workflows/agent-check.md": worker("  REPO_RULES: \"package rules\"\n", undefined, "1. Package body.\n"),
+      "scripts/compile-agent-workflows.mjs": "// " + header("loops/scripts/compile-agent-workflows.mjs").slice(2) + "package script\n",
+      "templates/opencode/opencode.ci.json": "{ \"model\": \"package\" }\n",
     });
     const repositoryPath = await createDirectory({
-      ".github/actions/check/action.yml": "consumer action\n",
-      ".github/workflows/agent-check.md": "consumer workflow\n",
-      "scripts/compile-agent-workflows.mjs": "consumer script\n",
-      "opencode.ci.json": "{ \"model\": \"consumer-model\" }\n",
+      ".github/actions/check/action.yml": header("loops/actions/check/action.yml", "0.6.1") + "name: Check\nruns:\n  using: composite\n  steps:\n    - run: echo consumer\n      shell: bash\n",
+      ".github/workflows/agent-check.md": worker("  REPO_RULES: \"my rules\"\n", "0.6.1", "1. Consumer body.\n"),
+      "scripts/compile-agent-workflows.mjs": "// " + header("loops/scripts/compile-agent-workflows.mjs", "0.6.1").slice(2) + "consumer script\n",
+      "opencode.ci.json": "{ \"model\": \"consumer\" }\n",
     });
 
-    await expect(installCatalog(repositoryPath, { sourcePath })).resolves.toEqual({
-      installed: [],
-      conflicts: [
-        ".github/actions/check/action.yml",
-        ".github/workflows/agent-check.md",
-        "opencode.ci.json",
-        "scripts/compile-agent-workflows.mjs",
-      ],
+    const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", baseline: offline });
+
+    expect(result.conflicts).toEqual([]);
+    expect(result.installedVersions).toEqual(["0.6.1"]);
+    expect(result.changes).toEqual([
+      { target: ".github/actions/check/action.yml", status: "updated", installedVersion: "0.6.1" },
+      { target: ".github/workflows/agent-check.md", status: "updated", installedVersion: "0.6.1", keptEnv: ["REPO_RULES"] },
+      { target: "opencode.ci.json", status: "updated" },
+      { target: "scripts/compile-agent-workflows.mjs", status: "updated", installedVersion: "0.6.1" },
+    ]);
+    await expect(readFile(join(repositoryPath, ".github/actions/check/action.yml"), "utf8")).resolves.toContain("echo package");
+    const written = await readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8");
+    expect(written).toContain("workflows@0.7.0.");
+    expect(written).toContain("  REPO_RULES: \"my rules\"\n");
+    expect(written).toContain("1. Package body.\n");
+    expect(written).not.toContain("Consumer body");
+    await expect(readFile(join(repositoryPath, "opencode.ci.json"), "utf8")).resolves.toBe("{ \"model\": \"package\" }\n");
+  });
+
+  // Removing the ownership header is how a consumer takes a file over; the docs have said so
+  // since the first release. --force reclaims it.
+  it("leaves a file whose ownership header was removed alone unless forced", async () => {
+    const sourcePath = await createDirectory({
+      "actions/check/action.yml": header("loops/actions/check/action.yml") + "name: Check\n",
+      "workflows/agent-check.md": worker("  REPO_RULES: \"package rules\"\n"),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      ".github/actions/check/action.yml": "name: Mine\n",
+      ".github/workflows/agent-check.md": "---\nenv:\n  REPO_RULES: \"my rules\"\ndescription: forked\n---\n\n1. My own body.\n",
     });
 
-    await expect(installCatalog(repositoryPath, { force: true, sourcePath })).resolves.toMatchObject({
-      conflicts: [
-        ".github/actions/check/action.yml",
-        ".github/workflows/agent-check.md",
-        "opencode.ci.json",
-        "scripts/compile-agent-workflows.mjs",
-      ],
+    const first = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0" });
+    expect(first.changes.filter((change) => change.status === "skipped").map((change) => change.target))
+      .toEqual([".github/actions/check/action.yml", ".github/workflows/agent-check.md"]);
+    expect(first.changes.find((change) => change.status === "skipped")?.reason).toContain("consumer-owned");
+    await expect(readFile(join(repositoryPath, ".github/actions/check/action.yml"), "utf8")).resolves.toBe("name: Mine\n");
+    await expect(readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8")).resolves.toContain("My own body");
+
+    const forced = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", force: true });
+    expect(forced.changes.find((change) => change.target === ".github/workflows/agent-check.md")).toMatchObject({ status: "updated", keptEnv: ["REPO_RULES"] });
+    const written = await readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8");
+    expect(written).toContain("workflows@0.7.0.");
+    expect(written).toContain("  REPO_RULES: \"my rules\"\n");
+    expect(written).toContain("1. Do the work.\n");
+  });
+
+  it("adds new package env keys with their defaults and keeps keys only the consumer defines", async () => {
+    const sourcePath = await createDirectory({
+      "workflows/agent-check.md": worker("  REPO_RULES: \"package rules\"\n  # arrived in this version\n  NEW_KEY: \"default\"\n"),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
     });
-    await expect(readFile(join(repositoryPath, ".github/actions/check/action.yml"), "utf8")).resolves.toBe("package action\n");
+    const repositoryPath = await createDirectory({
+      ".github/workflows/agent-check.md": worker("  REPO_RULES: \"my rules\"\n  MY_KEY: \"x\"\n", "0.6.1"),
+    });
+
+    const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", baseline: offline });
+
+    expect(result.changes.find((change) => change.target === ".github/workflows/agent-check.md")).toMatchObject({
+      status: "updated",
+      keptEnv: ["REPO_RULES"],
+      consumerOnlyEnv: ["MY_KEY"],
+    });
+    await expect(readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8")).resolves.toContain(
+      "env:\n  REPO_RULES: \"my rules\"\n  # arrived in this version\n  NEW_KEY: \"default\"\n  MY_KEY: \"x\"\ndescription: check\n",
+    );
+  });
+
+  it("uses the installed release as the merge baseline so untouched defaults follow the package", async () => {
+    const baselinePath = await createDirectory({
+      "workflows/agent-check.md": worker("  REPO_RULES: \"package rules\"\n  INCOMPLETE_COMMENT: \"old wording\"\n"),
+    });
+    const sourcePath = await createDirectory({
+      "workflows/agent-check.md": worker("  REPO_RULES: \"package rules\"\n  INCOMPLETE_COMMENT: \"new wording\"\n"),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      ".github/workflows/agent-check.md": worker("  REPO_RULES: \"my rules\"\n  INCOMPLETE_COMMENT: \"old wording\"\n", "0.6.1"),
+    });
+    const requested: string[] = [];
+
+    const result = await installCatalog(repositoryPath, {
+      sourcePath,
+      packageVersion: "0.7.0",
+      baseline: async (version) => { requested.push(version); return version === "0.6.1" ? baselinePath : undefined; },
+    });
+
+    expect(requested).toEqual(["0.6.1"]);
+    expect(result.baselines).toEqual([{ version: "0.6.1", status: "used" }]);
+    expect(result.changes.find((change) => change.target === ".github/workflows/agent-check.md")).toMatchObject({
+      status: "updated",
+      installedVersion: "0.6.1",
+      keptEnv: ["REPO_RULES"],
+      updatedDefaults: ["INCOMPLETE_COMMENT"],
+    });
+    const written = await readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8");
+    expect(written).toContain("  REPO_RULES: \"my rules\"\n");
+    expect(written).toContain("  INCOMPLETE_COMMENT: \"new wording\"\n");
+  });
+
+  it("falls back to keeping every consumer value when the baseline release cannot be fetched", async () => {
+    const sourcePath = await createDirectory({
+      "workflows/agent-check.md": worker("  INCOMPLETE_COMMENT: \"new wording\"\n"),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      ".github/workflows/agent-check.md": worker("  INCOMPLETE_COMMENT: \"old wording\"\n", "0.6.1"),
+    });
+
+    const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", baseline: offline });
+
+    expect(result.baselines).toEqual([{ version: "0.6.1", status: "unavailable" }]);
+    await expect(readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8")).resolves.toContain("  INCOMPLETE_COMMENT: \"old wording\"\n");
+  });
+
+  // The router is package-owned like everything else, but its own env: block carries the two
+  // values GitHub will not let a job read where they are also needed.
+  it("keeps the router's env values and mirrors them into the trigger and the audit cron", async () => {
+    const routerFile = (ci: string, cron: string, job: string) =>
+      `# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/work-router.yml. Update with \`workflows update --force\`; consumer edits may be overwritten.\nname: "All Work Router"\n\nenv:\n  CI_WORKFLOW_NAME: "${ci}"\n  AUDIT_CRON: "${cron}"\n\non:\n  workflow_run:\n    workflows: ["${ci}"]\n    types: [completed]\n\n  schedule:\n    - cron: "${cron}" # audit slot, mirrored from env.AUDIT_CRON by the installer\n\njobs:\n  classify:\n    runs-on: ${job}\n`;
+    const sourcePath = await createDirectory({
+      "workflows/work-router.yml": routerFile("App: CI", "17 1 * * 1", "ubuntu-latest"),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      ".github/workflows/work-router.yml": routerFile("Build", "17 1 * * 5", "hand-edited"),
+    });
+
+    const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", baseline: offline });
+
+    expect(result.changes.find((change) => change.target === ".github/workflows/work-router.yml"))
+      .toMatchObject({ status: "updated", keptEnv: ["CI_WORKFLOW_NAME", "AUDIT_CRON"] });
+    const written = await readFile(join(repositoryPath, ".github/workflows/work-router.yml"), "utf8");
+    expect(written).toContain('  CI_WORKFLOW_NAME: "Build"\n');
+    expect(written).toContain('    workflows: ["Build"]\n');
+    expect(written).toContain('    - cron: "17 1 * * 5" # audit slot');
+    // Everything outside env: comes back from the package.
+    expect(written).toContain("    runs-on: ubuntu-latest\n");
+    expect(written).not.toContain("hand-edited");
+  });
+
+  it("dry-run computes the plan and writes nothing", async () => {
+    const sourcePath = await createDirectory({
+      "actions/check/action.yml": header("loops/actions/check/action.yml") + "name: Check\n",
+      "workflows/agent-check.md": worker("  REPO_RULES: \"package rules\"\n"),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      ".github/workflows/agent-check.md": worker("  REPO_RULES: \"my rules\"\n", "0.6.1"),
+    });
+
+    const result = await installCatalog(repositoryPath, {
+      sourcePath,
+      dryRun: true,
+      packageVersion: "0.7.0",
+      baseline: offline,
+      compile: async () => { throw new Error("must not compile in a dry run"); },
+    });
+
+    expect(result.dryRun).toBe(true);
+    expect(result.upToDate).toBe(false);
+    expect(result.changes.map((change) => [change.target, change.status])).toEqual([
+      [".github/actions/check/action.yml", "added"],
+      [".github/workflows/agent-check.md", "updated"],
+      ["opencode.ci.json", "added"],
+      ["scripts/compile-agent-workflows.mjs", "added"],
+    ]);
+    await expect(access(join(repositoryPath, ".github/actions/check/action.yml"), constants.F_OK)).rejects.toThrow();
+    await expect(readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8")).resolves.toContain("workflows@0.6.1.");
+    await expect(access(join(repositoryPath, ".husky", "pre-commit"), constants.F_OK)).rejects.toThrow();
+  });
+
+  // Everything here ends up on a Linux runner, and a shell script with CRLF fails on its shebang.
+  // Preserving a legacy CRLF file's endings only carried the problem forward.
+  it("writes LF even when the consumer's copy was CRLF, and keeps its env values", async () => {
+    const sourcePath = await createDirectory({
+      "workflows/agent-check.md": worker("  REPO_RULES: \"package rules\"\n"),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      ".github/workflows/agent-check.md": worker("  REPO_RULES: \"my rules\"\n", "0.6.1").replaceAll("\n", "\r\n"),
+    });
+
+    await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", baseline: offline });
+
+    const written = await readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8");
+    expect(written).toContain("workflows@0.7.0. Source:");
+    expect(written).toContain("  REPO_RULES: \"my rules\"\n");
+    expect(written).not.toContain("\r");
+  });
+
+  // A file deleted upstream used to sit in every consumer forever; that is how two actions
+  // outlived the code that called them.
+  it("prunes a managed action the package no longer ships, and leaves everything else", async () => {
+    const sourcePath = await createDirectory({
+      "actions/keep/action.yml": header("loops/actions/keep/action.yml") + "name: Keep\n",
+      "workflows/shared/defaults.md": "---\n" + header("loops/workflows/shared/defaults.md") + "---\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      ".github/actions/keep/action.yml": header("loops/actions/keep/action.yml", "0.7.0") + "name: Keep\n",
+      ".github/actions/gone/action.yml": header("loops/actions/gone/action.yml", "0.7.0") + "name: Gone\n",
+      ".github/actions/gone/gone.sh": "#!/usr/bin/env bash\n# " + header("loops/actions/gone/gone.sh", "0.7.0").slice(2),
+      ".github/actions/mine/action.yml": "name: My own action\n",
+      ".github/workflows/shared/defaults.md": "---\n" + header("loops/workflows/shared/defaults.md", "0.7.0") + "---\n",
+      ".github/workflows/shared/orphan.md": "---\n" + header("loops/workflows/shared/orphan.md", "0.7.0") + "---\n",
+      // A worker outside the selected route set is not an orphan; `remove` owns those.
+      ".github/workflows/agent-audit.md": worker("  REPO_RULES: \"x\"\n", "0.7.0"),
+    });
+
+    const result = await installCatalog(repositoryPath, { sourcePath, selectedRoutes: [], packageVersion: "0.8.0", baseline: offline });
+
+    expect(result.changes.filter((change) => change.status === "removed").map((change) => change.target)).toEqual([
+      ".github/actions/gone/action.yml",
+      ".github/actions/gone/gone.sh",
+      ".github/workflows/shared/orphan.md",
+    ]);
+    await expect(access(join(repositoryPath, ".github/actions/gone"), constants.F_OK)).rejects.toThrow();
+    // Kept: a package file still shipped, a consumer's own action, and a worker.
+    await expect(readFile(join(repositoryPath, ".github/actions/keep/action.yml"), "utf8")).resolves.toContain("Keep");
+    await expect(readFile(join(repositoryPath, ".github/actions/mine/action.yml"), "utf8")).resolves.toBe("name: My own action\n");
+    await expect(readFile(join(repositoryPath, ".github/workflows/agent-audit.md"), "utf8")).resolves.toContain("REPO_RULES");
+  });
+
+  it("reports nothing to do when there is no orphan and no change", async () => {
+    const sourcePath = await createDirectory({
+      "actions/keep/action.yml": header("loops/actions/keep/action.yml") + "name: Keep\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      ".github/actions/keep/action.yml": header("loops/actions/keep/action.yml", "0.8.0") + "name: Keep\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "opencode.ci.json": "{}\n",
+    });
+
+    const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.8.0", baseline: offline });
+
+    expect(result.upToDate).toBe(true);
+    expect(result.changes.every((change) => change.status === "unchanged")).toBe(true);
+  });
+
+  // The stack default is a first-install convenience. Afterwards the value is the consumer's.
+  it("applies the stack VERIFY_COMMANDS default only when a worker is first installed", async () => {
+    const sourcePath = await createDirectory({
+      "workflows/agent-check.md": worker("  VERIFY_COMMANDS: \"package verify\"\n"),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({ "pnpm-lock.yaml": "lockfileVersion: 9\n" });
+    const inspection = await inspectRepository(repositoryPath);
+
+    await installCatalog(repositoryPath, { sourcePath, inspection, packageVersion: "0.7.0" });
+    const workerPath = join(repositoryPath, ".github/workflows/agent-check.md");
+    await expect(readFile(workerPath, "utf8")).resolves.toContain("  VERIFY_COMMANDS: \"pnpm verify\"\n");
+
+    await writeFile(workerPath, (await readFile(workerPath, "utf8")).replace("\"pnpm verify\"", "\"pnpm test --filter web\""), "utf8");
+    const second = await installCatalog(repositoryPath, { sourcePath, inspection, packageVersion: "0.7.1", baseline: offline });
+
+    expect(second.changes.find((change) => change.target === ".github/workflows/agent-check.md")).toMatchObject({ status: "updated", keptEnv: ["VERIFY_COMMANDS"] });
+    await expect(readFile(workerPath, "utf8")).resolves.toContain("  VERIFY_COMMANDS: \"pnpm test --filter web\"\n");
   });
 
   it("installs templates only when explicitly selected", async () => {
@@ -212,64 +503,6 @@ describe("catalog installation", () => {
     await expect(readFile(join(repositoryPath, "scripts/compile-agent-workflows.mjs"), "utf8")).resolves.toBe("compile\n");
   });
 
-  it("installMandatoryFiles installs opencode.ci.json and compile script without catalog files", async () => {
-    const sourcePath = await createDirectory({
-      "scripts/compile-agent-workflows.mjs": "compile\n",
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
-    });
-    const repositoryPath = await createDirectory({});
-
-    const result = await installMandatoryFiles(repositoryPath, { sourcePath });
-    expect(result.installed).toEqual(["opencode.ci.json", "scripts/compile-agent-workflows.mjs"]);
-    await expect(readFile(join(repositoryPath, "opencode.ci.json"), "utf8")).resolves.toBe("{ \"model\": \"plainconcepts/glm-5-3\" }\n");
-    await expect(readFile(join(repositoryPath, "scripts/compile-agent-workflows.mjs"), "utf8")).resolves.toBe("compile\n");
-  });
-
-  it("installMandatoryFiles reports conflicts on differing files", async () => {
-    const sourcePath = await createDirectory({
-      "scripts/compile-agent-workflows.mjs": "package script\n",
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
-    });
-    const repositoryPath = await createDirectory({
-      "opencode.ci.json": "{ \"model\": \"consumer\" }\n",
-      "scripts/compile-agent-workflows.mjs": "consumer script\n",
-    });
-
-    await expect(installMandatoryFiles(repositoryPath, { sourcePath })).resolves.toEqual({
-      installed: [],
-      conflicts: ["opencode.ci.json", "scripts/compile-agent-workflows.mjs"],
-    });
-  });
-
-  it("installMandatoryFiles overwrites with force", async () => {
-    const sourcePath = await createDirectory({
-      "scripts/compile-agent-workflows.mjs": "package script\n",
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
-    });
-    const repositoryPath = await createDirectory({
-      "opencode.ci.json": "{ \"model\": \"consumer\" }\n",
-      "scripts/compile-agent-workflows.mjs": "consumer script\n",
-    });
-
-    await expect(installMandatoryFiles(repositoryPath, { force: true, sourcePath })).resolves.toMatchObject({
-      installed: ["opencode.ci.json", "scripts/compile-agent-workflows.mjs"],
-    });
-    await expect(readFile(join(repositoryPath, "opencode.ci.json"), "utf8")).resolves.toBe("{ \"model\": \"plainconcepts/glm-5-3\" }\n");
-  });
-
-  it("installMandatoryFiles does not install catalog workflow files", async () => {
-    const sourcePath = await createDirectory({
-      "actions/check/action.yml": "name: Check\n",
-      "workflows/agent-check.md": "# Check\n",
-      "scripts/compile-agent-workflows.mjs": "compile\n",
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
-    });
-    const repositoryPath = await createDirectory({});
-
-    await installMandatoryFiles(repositoryPath, { sourcePath });
-    await expect(readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8")).rejects.toThrow();
-  });
-
   it("installCatalog deduplicates compile script in both scripts/ and mandatory files", async () => {
     const sourcePath = await createDirectory({
       "actions/check/action.yml": "name: Check\n",
@@ -290,7 +523,7 @@ describe("catalog installation", () => {
     await ensurePreCommitHook(repositoryPath);
 
     await expect(readFile(join(repositoryPath, ".husky", "pre-commit"), "utf8"))
-      .resolves.toBe("if git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/actions/actions-lock.json ] || git add -- .github/actions/actions-lock.json\nfi\n");
+      .resolves.toBe("if git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/aw/actions-lock.json ] || git add -- .github/aw/actions-lock.json\nfi\n");
   });
 
   it("keeps existing pre-commit commands and appends the compiler once", async () => {
@@ -300,7 +533,7 @@ describe("catalog installation", () => {
     await ensurePreCommitHook(repositoryPath);
 
     await expect(readFile(join(repositoryPath, ".husky", "pre-commit"), "utf8"))
-      .resolves.toBe("pnpm lint\nif git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/actions/actions-lock.json ] || git add -- .github/actions/actions-lock.json\nfi\n");
+      .resolves.toBe("pnpm lint\nif git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/aw/actions-lock.json ] || git add -- .github/aw/actions-lock.json\nfi\n");
   });
 
   it("upgrades an existing compiler hook to stage generated locks", async () => {
@@ -314,7 +547,7 @@ describe("catalog installation", () => {
 
   it("repairs a malformed compiler hook prefixed with pnpm exec", async () => {
     const repositoryPath = await createDirectory({
-      ".husky/pre-commit": "pnpm exec if git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/actions/actions-lock.json ] || git add -- .github/actions/actions-lock.json\nfi\n",
+      ".husky/pre-commit": "pnpm exec if git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/aw/actions-lock.json ] || git add -- .github/aw/actions-lock.json\nfi\n",
     });
 
     await ensurePreCommitHook(repositoryPath);
@@ -368,6 +601,58 @@ describe("catalog installation", () => {
     );
   });
 
+  // The pool used to be preserved from the consumer, and that is how one repository ended up
+  // running five workers on its own pool while merge-gate and release stayed on the package's:
+  // the override reached the workers installed at the time and never the ones added later, and
+  // nothing reported the split. The pool is the package's to set now. Anything a consumer must
+  // genuinely vary belongs in `env:`, which is still preserved -- asserted here alongside.
+  it("overwrites a consumer's runner pool with the package's", async () => {
+    const sourcePath = await createDirectory({
+      "actions/check/action.yml": "name: Check\n",
+      "workflows/agent-check.md": "---\nenv:\n  VERIFY_COMMANDS: \"package verify\"\n---\njobs:\n  agent:\n    runs-on: agents-arc\n  deterministic:\n    runs-on: ubuntu-latest\nruns-on: agents-arc\nruns-on-slim: agents-arc\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      ".github/workflows/agent-check.md": "---\nenv:\n  VERIFY_COMMANDS: \"consumer verify\"\n---\njobs:\n  agent:\n    runs-on: OwnPool\n  deterministic:\n    runs-on: ubuntu-latest\nruns-on: OwnPool\nruns-on-slim: OwnPool\n",
+    });
+
+    await installCatalog(repositoryPath, { force: true, sourcePath });
+    const written = await readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8");
+
+    expect(written).toContain("runs-on: agents-arc");
+    expect(written).not.toContain("OwnPool");
+    expect(written).toContain("runs-on: ubuntu-latest");
+    // The env value is still the consumer's: it shares this code path, and only `env:` is theirs.
+    expect(written).toContain('VERIFY_COMMANDS: "consumer verify"');
+  });
+
+  // Every consumer had two of these by the time it was noticed: the installer recognised only
+  // the current shape and the pre-`if` legacy lines, and appended when it matched neither, so an
+  // older wrapped block collected a sibling. The compiler then ran twice per commit and one of
+  // the two staged `.github/actions/actions-lock.json`, a path that exists nowhere. Nothing
+  // failed, which is why it survived. The consumer's own half of the hook must be left alone.
+  it("replaces a duplicated managed block instead of adding a third", async () => {
+    const sourcePath = await createDirectory({
+      "actions/check/action.yml": "name: Check\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({ ".husky/pre-commit": "# Format staged frontend files with biome, then re-stage them\nif [ -n \"$STAGED\" ]; then\n  echo \"formatting\"\nfi\n\n# Recompile workflow lock files if .github changed\nif git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/actions/actions-lock.json ] || git add -- .github/actions/actions-lock.json\nfi\nif git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/aw/actions-lock.json ] || git add -- .github/aw/actions-lock.json\nfi\n" });
+
+    await installCatalog(repositoryPath, { force: true, sourcePath });
+    const written = await readFile(join(repositoryPath, ".husky", "pre-commit"), "utf8");
+
+    const blocks = written.match(/if git diff --cached --name-only -- \.github/g) ?? [];
+    expect(blocks).toHaveLength(1);
+    // The surviving block is the current one, naming the lock path that exists.
+    expect(written).toContain("[ ! -f .github/aw/actions-lock.json ]");
+    expect(written).not.toContain(".github/actions/actions-lock.json");
+    // The consumer's own steps are untouched.
+    expect(written).toContain("biome");
+    expect(written).toContain("formatting");
+  });
+
   it("applies staged generated locks with managed sources", async () => {
     const sourcePath = await createDirectory({
       "actions/check/action.yml": "package action\n",
@@ -387,6 +672,40 @@ describe("catalog installation", () => {
 
     await expect(readFile(join(repositoryPath, ".github", "workflows", "agent-check.lock.yml"), "utf8"))
       .resolves.toBe("opencode run --log-level ERROR\n");
+  });
+
+  // Only changed files are staged, so the compile has to see the consumer's current copies of
+  // everything else, the compile script included, or a no-op update would compile nothing.
+  it("stages the consumer's compile script and workflows for the compile even when they did not change", async () => {
+    const sourcePath = await createDirectory({
+      "workflows/agent-check.md": worker("  REPO_RULES: \"package rules\"\n"),
+      "scripts/compile-agent-workflows.mjs": "gh aw compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      ".github/workflows/agent-check.md": worker("  REPO_RULES: \"my rules\"\n", "0.6.1"),
+      ".github/workflows/agent-other.md": "consumer only\n",
+      "scripts/compile-agent-workflows.mjs": "gh aw compile\n",
+      "opencode.ci.json": "{}\n",
+    });
+    let seen: string[] = [];
+
+    await installCatalog(repositoryPath, {
+      sourcePath,
+      packageVersion: "0.7.0",
+      baseline: offline,
+      compile: async (stagingPath) => {
+        seen = await Promise.all([
+          readFile(join(stagingPath, "scripts", "compile-agent-workflows.mjs"), "utf8"),
+          readFile(join(stagingPath, ".github", "workflows", "agent-other.md"), "utf8"),
+          readFile(join(stagingPath, ".github", "workflows", "agent-check.md"), "utf8"),
+        ]);
+      },
+    });
+
+    expect(seen[0]).toBe("gh aw compile\n");
+    expect(seen[1]).toBe("consumer only\n");
+    expect(seen[2]).toContain("workflows@0.7.0.");
   });
 
   it("installs the opencode.ci.json template to the repository root", async () => {
@@ -474,10 +793,11 @@ describe("route lifecycle", () => {
   it("detects installed route workers in workflowRoutes order", async () => {
     const repositoryPath = await createDirectory({
       ".github/workflows/agent-implement.md": "# Implement\n",
+      ".github/workflows/agent-release.md": "# Release\n",
       ".github/workflows/agent-refine.md": "# Refine\n",
     });
 
-    await expect(installedRoutes(repositoryPath)).resolves.toEqual(["refine", "implement"]);
+    await expect(installedRoutes(repositoryPath)).resolves.toEqual(["refine", "implement", "release"]);
   });
 
   it("returns an empty list when no route workers are installed", async () => {

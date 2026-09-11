@@ -6,9 +6,13 @@ env:
   REPO_RULES: "Apply only actionable outstanding reviewer feedback to the selected bot pull request. Make minimal changes that address each comment. Preserve architecture and do not weaken tests. Run full verification after changes."
   WORKING_LABEL: bot-working
   REVIEW_LABEL: review
+  # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
+  # decided on. The janitor retries these after a while and never touches a decision park, because
+  # re-running a decision produces the same decision. Created idempotently where it is applied.
+  STALLED_LABEL: stalled
   PR_PENDING_LABEL: pr-pending
   REVIEW_MARKER: "<!-- agent-apply-review -->"
-  INCOMPLETE_COMMENT: "Automated review feedback ended without an outcome. The issue remains for a retry."
+  INCOMPLETE_COMMENT: "Applying the review feedback ended without an outcome. This worker has no retry of its own: it runs again when somebody reviews or comments on the pull request, and the issue is flagged so it is not lost until then."
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
   GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
   GIT_AUTHOR_NAME: "github-actions[bot]"
@@ -45,7 +49,37 @@ on:
 
 # Rung 4. Router has classified the event; this job validates PR ownership and checks for
 # substantive feedback. A custom job, not `on.steps`, because the prompt needs these values.
+  # The gate job that the top-level `if:` reads. gh-aw folds that `if:` into the generated
+  # activation job but gives activation no dependency on the job, so the reference resolves
+  # to '' and the clause is false -- the agent would never run. The package's own validator
+  # catches it after compilation; this is the line it asks for, the same one the merge gate
+  # uses for protected_changes.
+  needs: [still_open]
 jobs:
+  # A route dispatched while the issue was open must not execute after it has been closed. The
+  # classifier can only see `github.event.issue.state`, which is the state when the event fired
+  # and is absent on a workflow_dispatch, and this fleet queues for a runner for ten minutes and
+  # more. Numa #659 was closed one second after a comment dispatched refine; the run reached
+  # `reserve` thirteen minutes later and refined a closed issue to completion. Read now, once,
+  # and gate both the reservation and the agent on it.
+  still_open:
+    runs-on: agents-arc
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      open: ${{ steps.state.outputs.open }}
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the issue state
+        id: state
+        uses: ./.github/actions/require-open-issue
+        with:
+          token: ${{ github.token }}
+          issue-number: ${{ inputs.issue-number }}
   subject:
     runs-on: agents-arc
     permissions:
@@ -114,8 +148,8 @@ jobs:
            echo "PR #$PR has $unresolved unresolved thread(s)"
 
   reserve:
-    needs: subject
-    if: needs.subject.outputs.found == 'true' && needs.subject.outputs.issue != ''
+    needs: [subject, still_open]
+    if: needs.subject.outputs.found == 'true' && needs.subject.outputs.issue != '' && needs.still_open.outputs.open == 'true'
     runs-on: agents-arc
     permissions:
       contents: read
@@ -142,7 +176,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
   validate_output:
     needs: [activation, subject, agent, safe_outputs]
     if: always() && needs.agent.result == 'success' && needs.safe_outputs.result == 'success'
@@ -227,15 +263,18 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.REVIEW_LABEL }}
+      # Only the reservation comes off. pr-pending says a pull request for this issue is open and
+      # waiting, which is still true on both outcomes that reach here: already-satisfied and
+      # needs-human both leave the pull request open. Stripping it made the board show issues
+      # with open pull requests as having none — the exact bug the merge gate's own comment warns
+      # about, in the one file the route matrix was not checking.
       - name: Release review outcome
         if: needs.validate_output.outputs.outcome != 'implemented'
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: |
-            ${{ env.WORKING_LABEL }}
-            ${{ env.PR_PENDING_LABEL }}
+          labels: ${{ env.WORKING_LABEL }}
   incomplete:
     needs: [subject, agent, safe_outputs, validate_output]
     if: >
@@ -268,7 +307,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
       - name: Report missing review feedback outcome
         uses: ./.github/actions/create-issue-comment
         with:
@@ -279,7 +320,7 @@ jobs:
             ${{ env.INCOMPLETE_COMMENT }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-if: needs.subject.outputs.found == 'true'
+if: needs.subject.outputs.found == 'true' && needs.still_open.outputs.open == 'true'
 
 runs-on: agents-arc
 runs-on-slim: agents-arc
@@ -357,7 +398,15 @@ safe-outputs:
     target: "*"
 
 
-timeout-minutes: 45
+# The fleet is two machines, so this clock is also how long a stuck run can hold half of it.
+# 240 went on to every worker at once when the provider was slow, which fixed the deaths and
+# made every worker equally expensive to hang. These numbers are per worker: enough headroom
+# for a slow gateway on the work it actually does, and not four hours for a run that reads one
+# issue. Turns remain the guard against a confused agent looping; for a custom model the credit
+# ceiling is models.dev fallback pricing and guards nothing.
+#
+# Applies review comments to an existing branch and verifies the result.
+timeout-minutes: 90
 ---
 
 1. You are applying review feedback to pull request
@@ -393,30 +442,15 @@ timeout-minutes: 45
      focused, protect secrets, and do not modify generated files unless the feedback requires it.
      Adhere to ${{ env.REPO_RULES }}.
 
-6. Run the repository verification commands below. The issue context at
-   `${{ env.ISSUE_CONTEXT_PATH }}` defines acceptance criteria the fix must satisfy. If a check
-   fails, fix what you broke and run it again. Do not push a branch that does not pass.
-
-   **Scoped verification.** This runner has limited memory, and a whole-repo lint or build
-   can be killed mid-run. Scope verification to the files you actually changed first, and
-   only escalate to the full suite when the scoped run passes and you are still unsure:
-   - Lint/format (biome, eslint, prettier, ruff, etc.): pass the changed file paths as
-     arguments so the tool checks only those files (e.g. `pnpm exec biome check <files>`),
-     never the whole repository.
-   - Build: prefer building only the project(s) containing the changed files; use the full
-     solution build only when the change crosses project boundaries.
-   - Tests: run the test project covering the changed files; run the full suite only when
-     the change is cross-cutting.
+6. Run the repository verification commands below, under the verification rules above. The
+   issue context at `${{ env.ISSUE_CONTEXT_PATH }}` defines the acceptance criteria the fix
+   must satisfy. Never push a branch that does not pass.
 
     ```
     ${{ env.VERIFY_COMMANDS }}
     ```
 
-7. Before pushing, run the project's lint fix command (e.g. `pnpm lint:fix` or
-   `pnpm exec biome check --write <changed-files>`) to auto-format. If lint:fix is not
-   available, fix formatting manually. Never push code with lint errors.
-
-8. Select one review outcome.
+7. Select one review outcome.
 
    - **implemented**: You made the requested change, verification passed, and you will propose
      exactly one `push_to_pull_request_branch`.
@@ -424,46 +458,11 @@ timeout-minutes: 45
      reviewer must confirm this assessment.
    - **needs-human**: The feedback is ambiguous, unsafe, or cannot be applied. Do not push.
 
-9. Emit exactly one `add_comment` on PR `${{ needs.subject.outputs.pr }}`. Include every
+8. Emit exactly one `add_comment` on PR `${{ needs.subject.outputs.pr }}`. Include every
    unresolved human review thread ID and an explanation for it, then exactly one line:
    `**Review outcome:** implemented`, `**Review outcome:** already-satisfied`, or
    `**Review outcome:** needs-human`.
 
 9. Do not merge, close, or change labels. The workflow validates your outcome and owns those
-   state transitions.
+    state transitions.
 
-10. Ignore the `## Diagram` section below. It is documentation for humans and contains no
-    instructions for you.
-
-## Diagram
-
-```mermaid
-flowchart TD
-    fbStart("Work Router<br/>apply-review route<br/>(review on bot PR)") --> fbSubject
-    fbSubject["Subject (rung 4)<br/>Our open PR? Substantive review?"] -->|✓| fbFacts
-    fbSubject -.->|✗| fbIdle
-    fbFacts("Facts (rung 3)<br/>Threads, comments, diff to disk") --> fbTriage
-    fbTriage["Triage<br/>Anything actionable and outstanding?"] -->|✓| fbReserve
-    fbTriage -.->|nothing| fbIdle
-    fbReserve("Reserve<br/>Propose bot-working on the issue") -->|✓| fbApply
-    fbApply("Apply<br/>Only what the feedback justifies") -->|✓| fbVerify
-    fbApply -.->|✗| fbFail
-    fbVerify["Verify<br/>/repo-verify passes?<br/>↻"] -->|✓| fbPush
-    fbVerify -.->|✗| fbApply
-    fbPush(("Pushed<br/>Same branch, bot-working removed"))
-    fbIdle(("Idle<br/>Not ours, or nothing to do"))
-    fbFail(("Fail<br/>review added, bot-working removed"))
-
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
-    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-    class fbStart start
-    class fbFacts,fbReserve,fbApply action
-    class fbSubject,fbTriage,fbVerify decision
-    class fbIdle idle
-    class fbFail failure
-    class fbPush success
-```

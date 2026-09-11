@@ -1,7 +1,12 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-audit.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
-  REPO_RULES: "Read-only repository audit. Report only reproducible, actionable defects with evidence. Look for: architectural layer violations, missing tests, security gaps, performance issues, and documentation drift. Do not modify files, commit, push, or run write operations."
+  REPO_RULES: "Read-only repository audit. Report only reproducible, actionable defects with evidence. Do not modify files, commit, push, or run write operations."
+  # Split out of REPO_RULES, which carried both the read-only discipline above and the list
+  # below. All four consuming repositories had customised the list and none could touch it
+  # without restating the discipline; they are different kinds of rule with different owners.
+  # One line: gh-aw joins a multi-line env value onto a single line when it compiles the lock.
+  AUDIT_FOCUS: "Architectural layer violations and dependencies pointing the wrong way. Missing or misleading tests around behaviour that already shipped. Security gaps: unvalidated input, missing authorization, secrets in code. Performance anti-patterns, N+1 queries in particular. Documentation that no longer matches the code it describes."
   AUDIT_MARKER: "<!-- agent-audit -->"
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
@@ -39,8 +44,15 @@ on:
         default: manual
 
   # Rung 1. Do not pile reports on top of unactioned reports.
+  #
+  # `-label:stale-audit` is what keeps this backpressure from becoming a stop. Three reports
+  # nobody ever actioned used to disable the weekly audit for good: the query counted them
+  # forever, the run skipped with a green tick, and no report was ever filed again. The
+  # janitor labels a report `stale-audit` once it has sat open past its budget, which both
+  # frees the slot and lists the report in the "Needs a human" digest. Backpressure now
+  # means "three live reports", not "three reports, ever".
   skip-if-match:
-    query: "is:issue is:open label:audit"
+    query: "is:issue is:open label:audit -label:stale-audit"
     max: 3
 
 runs-on: agents-arc
@@ -107,6 +119,42 @@ jobs:
             bug
             refine
 
+  # An audit that produced nothing reported success. The whole run -- a full agent, its tokens,
+  # its half hour -- ended with `conclude` skipped, because that job requires a processed item,
+  # and a skipped job leaves the run green. Numa's audit on 2026-09-10 did exactly that:
+  # `agent_output.json` 24 bytes, `safe-output-items.jsonl` empty, every job success, no report
+  # filed and nothing anywhere saying so. The next scheduled audit would have looked identical.
+  #
+  # This fires when the agent succeeded and the safe-outputs handler processed nothing at all.
+  #
+  # Step 6 of the prompt gives a clean codebase its own outcome -- call `noop` and stop -- and
+  # that outcome must not be reported as a failure. `noop` is a registered safe output here
+  # (`noop: max 1`), so the handler receives it as a message and the processed count is not zero,
+  # which keeps a deliberately empty audit out of this branch. That is read from the handler
+  # configuration rather than observed in a run: no audit in these repositories has yet emitted a
+  # noop. The direct signal, `noop_message`, belongs to gh-aw's `conclusion` job, and that job
+  # depends on every custom job here, so naming it is a dependency cycle and the worker will not
+  # compile -- the first version of this job was rejected for exactly that.
+  #
+  # If a genuinely clean audit ever fails here, that is the assumption breaking, and the fix is to
+  # carry the noop through a job this one can depend on rather than to widen the condition.
+  empty_run:
+    needs: [agent, safe_outputs]
+    if: >
+      needs.agent.result == 'success' &&
+      needs.safe_outputs.outputs.process_safe_outputs_processed_count == '0'
+    runs-on: agents-arc
+    permissions:
+      contents: read
+    steps:
+      - name: Report an audit that produced no outcome
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          echo "::error::The audit agent finished without emitting a report or a noop. The prompt requires one of the two: create_issue with the findings, or noop when the codebase is clean. Nothing was filed and no reason was given, so this run is a failure rather than a clean audit. The next scheduled audit will try again. ${RUN_URL}"
+          exit 1
+
 safe-outputs:
   # A failed run is already a red run. An issue per failure buries the real backlog
   # under noise nobody closes.
@@ -115,17 +163,25 @@ safe-outputs:
   create-issue:
     max: 1
 
-timeout-minutes: 45
+# The fleet is two machines, so this clock is also how long a stuck run can hold half of it.
+# 240 went on to every worker at once when the provider was slow, which fixed the deaths and
+# made every worker equally expensive to hang. These numbers are per worker: enough headroom
+# for a slow gateway on the work it actually does, and not four hours for a run that reads one
+# issue. Turns remain the guard against a confused agent looping; for a custom model the credit
+# ceiling is models.dev fallback pricing and guards nothing.
+#
+# Sweeps the repository read-only and writes one findings issue. Observed around 45 minutes.
+timeout-minutes: 90
 ---
 
 1. Call skill("pc-repo-audit"), then run `/repo-audit` as a read-only audit of this
    repository. Do not modify any file, do not commit, and do not push.
 
-  2. Apply repository documentation and established conventions while auditing. Focus on
-     concrete defects and avoid recommendations that weaken security, tests, or checks.
-     Adhere to ${{ env.REPO_RULES }}.
+2. Apply repository documentation and established conventions while auditing. Focus on
+   concrete defects and avoid recommendations that weaken security, tests, or checks.
+   Adhere to ${{ env.REPO_RULES }}. Look for: ${{ env.AUDIT_FOCUS }}
 
-    From the audit report, find **5 to 7 problems**. For each finding, verify it meets ALL
+   From the audit report, find **5 to 7 problems**. For each finding, verify it meets ALL
    of these criteria before keeping it:
    - A specific, reproducible problem in a specific file or component.
    - Has real impact: security risk, data loss, crash, or broken functionality.
@@ -167,9 +223,8 @@ timeout-minutes: 45
    file path, and a one-line description. Order by score descending.
 
    **Section 2 , Top 3 to implement:** Call skill("pc-plan-story") and refine the top 3
-   findings by score into user stories in Mike Cohn's As a / I want to / so that format
-   with Given/When/Then acceptance criteria, edge cases, and likely files to change. Mark
-   this section clearly with a heading like `## Top 3 , To Implement`.
+   findings by score into user stories; that skill owns their shape. Name the likely files to
+   change. Mark this section clearly with a heading like `## Top 3 , To Implement`.
 
    The issue you file goes to Refine, not straight to implementation. Refine sizes it and,
    because a report of several unrelated defects across different files is exactly the shape
@@ -179,35 +234,3 @@ timeout-minutes: 45
 
 6. If nothing met the bar, call `noop` and stop. Filing nothing is the right outcome when
    the codebase is clean.
-
-## Diagram
-
-```mermaid
-flowchart TD
-    auditStart("Work Router<br/>audit route<br/>(Mondays or dispatch)") --> auditBackpressure
-    auditBackpressure["Backpressure (rung 1)<br/>Fewer than 3 open reports?"] -->|✓| auditTracked
-    auditBackpressure -.->|✗| auditIdle
-    auditTracked("Tracked (rung 3)<br/>Open issue titles to disk") --> auditRun
-    auditRun("Audit<br/>/repo-audit, read-only") -->|✓| auditTriage
-    auditRun -.->|✗| auditFail
-    auditTriage["Triage<br/>Find 5-7 problems, score 1-10, dedupe"] -->|✓| auditPropose
-    auditTriage -.->|nothing found| auditQuiet
-    auditPropose("Propose<br/>Single issue: all findings + top 3 refined") -->|✓| auditReport
-    auditPropose -.->|✗| auditFail
-    auditReport(("Conclude<br/>audit+bug+refine on single issue<br/>Refine sizes and splits it"))
-    auditQuiet(("Quiet<br/>Nothing actionable, nothing proposed"))
-    auditIdle(("Idle<br/>Reports still awaiting action"))
-    auditFail(("Fail<br/>Audit or proposal failed"))
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
-    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a2a
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-    class auditStart start
-    class auditTracked,auditRun,auditPropose action
-    class auditBackpressure,auditTriage decision
-    class auditQuiet,auditIdle idle
-    class auditFail failure
-    class auditReport success
-```

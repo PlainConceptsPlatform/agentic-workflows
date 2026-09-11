@@ -300,6 +300,27 @@ instead of a rung-5 instruction.
 `max` defaults to 1, and the agent silently fails to create anything beyond it. Set it to match what
 the prompt asks for.
 
+**A call that fails still spends the allowance.** This gets its own paragraph because it cost a
+morning. Refine allowed one `update_issue`. The agent sent a malformed first call, twenty bytes with
+no `body`; the safe-outputs bridge answered it a success and counted it; the retry carrying the real
+5,538-byte refined story came back `E002, update_issue limit reached`. The story was written to a file
+in the sandbox and thrown away with it, while the "Refinement complete" comment the prompt asked for
+next went out as though it had worked. Every retry of the run repeated it, so it read as nothing
+happening rather than as something failing.
+
+Two rules come out of that:
+
+- **Give an idempotent operation headroom.** Replacing an issue body twice is harmless, so refine's
+  `update-issue` is `max: 3`. One bad call should not end a run that has done the work.
+- **Do not give a creating operation headroom.** `create-pull-request` stays at 1: a second
+  allowance lets a confused run open a duplicate pull request, which is worse than the run failing.
+  Those workers get the prompt half instead — send it complete, first time, and never probe the tool
+  with a partial payload to see what it accepts.
+
+And whatever the allowance, order the prompt so the announcement depends on the work: ask for the
+`update_issue` first and the "done" comment only once it has returned. A prompt that says "call
+`update_issue` **and** `add_comment`" will get the comment even when the update failed.
+
 Labels on created issues are applied by the `conclude` job, not by the agent's `create_issue` call.
 The agent creates the issue without labels; `apply-agent-output` exposes `first-issue-number` and the
 worker labels it deterministically.

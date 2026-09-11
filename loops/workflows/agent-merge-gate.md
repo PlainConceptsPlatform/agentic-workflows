@@ -2,16 +2,32 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-merge-gate.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
   VERIFY_COMMANDS: ""
-  REPO_RULES: "Make a risk-based merge decision for the selected bot pull request. Merge only when CI is green and no risk indicators are present. Review risk indicators defined in the repository's guardrails or project documentation. Any of these require human review. Do not merge protected file changes."
+  REPO_RULES: "Make a risk-based merge decision for the selected bot pull request. Merge only when CI is green and no risk indicator is present. Do not merge protected file changes."
+  # The list that decides whether a machine merges without a human looking. It used to be a
+  # sentence inside REPO_RULES telling the agent to consult "the repository's guardrails or
+  # project documentation", which named no list at all and left the most consequential check in
+  # the pipeline resolving against nothing. Name the areas this repository will not auto-merge.
+  # One line: gh-aw joins a multi-line env value onto a single line when it compiles the lock.
+  RISK_INDICATORS: "Any diff touching authentication, authorization or session handling. Any change to a calculation or pricing engine, or to code handling money. Any database migration, or a change to an entity or schema. Any change to an audit or event log, or anything that could break its continuity. Any change to a public API contract or a shared library other repositories consume."
+  # Paths a bot may change but never merge on its own: an extended regular expression matched
+  # against every changed path in the pull request. The default names this stack's dependency
+  # and toolchain manifests plus everything under a dotted directory, and is wrong for a
+  # repository built on anything else, which is the failure worth knowing about: an unmatched
+  # list protects nothing and reports nothing. A match holds the merge for a human; it does not
+  # stop the agent repairing failed CI on the same files.
+  PROTECTED_PATHS: '^(\.|AGENTS\.md$|ARCHITECTURE\.md$|opencode\.jsonc$|package\.json$|pnpm-lock\.yaml$|Directory\.Packages\.props$|global\.json$)'
   WORKING_LABEL: bot-working
   IMPLEMENT_LABEL: implement
   REVIEW_LABEL: review
+  # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
+  # decided on. The janitor retries these after a while and never touches a decision park, because
+  # re-running a decision produces the same decision. Created idempotently where it is applied.
+  STALLED_LABEL: stalled
   PR_PENDING_LABEL: pr-pending
   GATE_MARKER: "<!-- agent-merge-gate -->"
   ATTEMPT_MARKER: "<!-- agent-merge-gate-attempt -->"
   MAX_ATTEMPTS: "6"
   PARK_AT_ATTEMPT: "5"
-  INCOMPLETE_COMMENT: "Automated CI failure remediation ended without an outcome. The issue remains for a retry."
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
   GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
   GIT_AUTHOR_NAME: "github-actions[bot]"
@@ -98,6 +114,7 @@ jobs:
           token: ${{ github.token }}
           pr-number: ${{ inputs.pr-number }}
           ci-conclusion: ${{ inputs.ci-conclusion }}
+          ci-run-id: ${{ inputs.ci-run-id }}
           linked-issue: ${{ inputs.linked-issue }}
           require-label: ${{ env.IMPLEMENT_LABEL }}
       - name: Block a pull request with requested changes
@@ -129,6 +146,12 @@ jobs:
     outputs:
       requires_review: ${{ steps.files.outputs.requires_review }}
       files: ${{ steps.files.outputs.files }}
+      # The decision, computed once. A protected path holds the merge for a human, but it must
+      # not stop the agent repairing failed CI on those same files: blocking there strands the
+      # pull request with nobody able to fix it. That pair of conditions used to be restated at
+      # eight call sites, five of them steps of one job, and the trap table documents it because
+      # it has already been got wrong. `holds_review` is the only place it is decided now.
+      holds_review: ${{ steps.files.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure' }}
     steps:
       - name: Require review for protected pull request files
         id: files
@@ -136,10 +159,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ needs.subject.outputs.pr }}
+          PROTECTED_PATHS: ${{ env.PROTECTED_PATHS }}
         run: |
           set -euo pipefail
           files=$(gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" --jq '.[].filename')
-          protected=$(printf '%s\n' "$files" | grep -E '^(\.|AGENTS\.md$|ARCHITECTURE\.md$|opencode\.jsonc$|package\.json$|pnpm-lock\.yaml$|Directory\.Packages\.props$|global\.json$)' || true)
+          protected=$(printf '%s\n' "$files" | grep -E "$PROTECTED_PATHS" || true)
 
           if [ -n "$protected" ]; then
             echo "requires_review=true" >> "$GITHUB_OUTPUT"
@@ -164,12 +188,12 @@ jobs:
       issues: write
     steps:
       - name: Checkout workflow actions
-        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
+        if: needs.protected_changes.outputs.holds_review == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Create bot token
-        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
+        if: needs.protected_changes.outputs.holds_review == 'true'
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -180,21 +204,21 @@ jobs:
       # here left a board where three issues with three open pull requests looked like they
       # had none. The merge path is the one place the label stops being true.
       - name: Release the issue
-        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
+        if: needs.protected_changes.outputs.holds_review == 'true'
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.WORKING_LABEL }}
       - name: Flag human review
-        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
+        if: needs.protected_changes.outputs.holds_review == 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.REVIEW_LABEL }}
       - name: Explain the merge hold
-        if: needs.protected_changes.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'
+        if: needs.protected_changes.outputs.holds_review == 'true'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -385,7 +409,7 @@ jobs:
     if: >
        always() &&
        needs.subject.outputs.found == 'true' &&
-       (needs.protected_changes.outputs.requires_review != 'true' || needs.subject.outputs.conclusion == 'failure') &&
+       needs.protected_changes.outputs.holds_review != 'true' &&
        (
          needs.agent.result != 'success' ||
          needs.safe_outputs.result != 'success' ||
@@ -443,7 +467,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
       # The reservation only. A failed attempt does not close the pull request, so pr-pending
       # is still true and the board should keep saying so.
       - name: Release the issue
@@ -457,9 +483,9 @@ jobs:
     # The top-level guard reads both outputs. GitHub Actions does not make a
     # dependency's dependencies available through `needs` transitively.
     needs: [subject, protected_changes]
-    if: always() && (needs.protected_changes.outputs.requires_review != 'true' || needs.subject.outputs.conclusion == 'failure') && needs.subject.outputs.review_blocked != 'true'
+    if: always() && needs.protected_changes.outputs.holds_review != 'true' && needs.subject.outputs.review_blocked != 'true'
 
-if: always() && needs.subject.outputs.found == 'true' && (needs.protected_changes.outputs.requires_review != 'true' || needs.subject.outputs.conclusion == 'failure') && needs.subject.outputs.review_blocked != 'true'
+if: always() && needs.subject.outputs.found == 'true' && needs.protected_changes.outputs.holds_review != 'true' && needs.subject.outputs.review_blocked != 'true'
 
 runs-on: agents-arc
 runs-on-slim: agents-arc
@@ -571,7 +597,15 @@ safe-outputs:
   add-comment:
     target: "*"
 
-timeout-minutes: 60
+# The fleet is two machines, so this clock is also how long a stuck run can hold half of it.
+# 240 went on to every worker at once when the provider was slow, which fixed the deaths and
+# made every worker equally expensive to hang. These numbers are per worker: enough headroom
+# for a slow gateway on the work it actually does, and not four hours for a run that reads one
+# issue. Turns remain the guard against a confused agent looping; for a custom model the credit
+# ceiling is models.dev fallback pricing and guards nothing.
+#
+# Reads CI failure evidence and may fix, verify and re-push, so it can do implement's work on a smaller diff.
+timeout-minutes: 120
 ---
 
 1. You are gating pull request **#${{ needs.subject.outputs.pr }}**, which closes issue
@@ -681,11 +715,11 @@ timeout-minutes: 60
    number of files changed and lines added/removed against the complexity the issue described.
    Flag if the diff is materially larger or smaller than expected.
 
-   **Check 8 — Repository risk indicators.** Does the diff touch any risk indicator defined in
-   ${{ env.REPO_RULES }}? Review the repository guardrails for domain-specific risk areas such
-   as calculation engines, audit chains, authentication, database migrations, or money handling.
-   Flag any
-   match and name the specific indicator.
+   **Check 8 — Repository risk indicators.** Does the diff touch any of these?
+   ${{ env.RISK_INDICATORS }}
+
+   Name the specific indicator you matched. A match is not a defect, it is a reason this
+   pull request needs a person, so do not argue it away because the change looks correct.
 
    **Check 9 — Mergeability.** Can the PR be merged cleanly? The value is
    `${{ needs.reserve.outputs.has_conflicts }}`. If conflicts exist, this is ❌ but not a
@@ -742,10 +776,6 @@ timeout-minutes: 60
     the current PR branch), then select the `remediated` verdict. CI will run again and trigger
     you again with the new result.
 
-    Before pushing, run the project's lint fix command (e.g. `pnpm lint:fix` or
-    `pnpm exec biome check --write <changed-files>`) to auto-format. If lint:fix is not
-    available, fix formatting manually. Never push code with lint errors.
-
    If you cannot fix it after a concrete repair attempt, or the logs show you have already tried on this same head commit,
    stop looping: select the `review` verdict and explain the failure and what you tried. A human
    decides from there.
@@ -795,50 +825,3 @@ timeout-minutes: 60
 
    Then a line `**Verdict:** merge` / `**Verdict:** review` / `**Verdict:** remediated`
 
-9. Ignore the `## Diagram` section below. It is documentation for humans and contains no
-   instructions for you.
-
-## Diagram
-
-```mermaid
-flowchart TD
-    gateStart("Work Router<br/>merge-gate route<br/>(CI completed)") --> gateSubject
-    gateSubject["Subject (rung 4)<br/>Our PR? Closes an implement issue?"] -->|✓| gateFacts
-    gateSubject -.->|✗| gateIdle
-    gateFacts("Facts (rung 3)<br/>Diff, PR shape, failing logs") --> gateCi
-    gateCi["CI<br/>What did it conclude?"] -->|success| gateProtected
-    gateProtected{"Protected files?"}
-    gateProtected -.->|yes| gateHuman
-    gateProtected -->|no| gateConflict
-    gateConflict{"Merge conflicts?"}
-    gateConflict -->|yes| gateRebase
-    gateConflict -->|no| gateTrivial
-    gateRebase("Merge main in<br/>Resolve conflicts, /repo-verify") -->|pushed| gateWait
-    gateRebase -.->|cannot resolve| gateHuman
-    gateTrivial{"Trivial marker?"}
-    gateTrivial -->|yes| gateMerge
-    gateTrivial -->|no| gateAssess
-    gateCi -.->|failure| gateFix
-    gateCi -.->|no verdict| gateHuman
-    gateAssess["Assessment (10 checks)<br/>CI, Auth, API, Tests, CI/CD<br/>Protected, Scope, Risk, Merge, Confidence"] -->|all ✅| gateMerge
-    gateAssess -.->|any ⚠️/❌| gateHuman
-    gateFix("Fix<br/>Read logs, fix the cause, /repo-verify") -->|pushed| gateWait
-    gateFix -.->|cannot fix| gateHuman
-    gateMerge(("Merged<br/>Issue closed, review+labels removed"))
-    gateWait(("Pushed<br/>CI will re-run and re-trigger via Router"))
-    gateHuman(("Review<br/>review label, reason explained"))
-    gateIdle(("Idle<br/>Not our pull request"))
-
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
-    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a2a
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-    class gateStart start
-    class gateFacts,gateFix,gateRebase action
-    class gateSubject,gateCi,gateAssess,gateTrivial,gateConflict,gateProtected decision
-    class gateIdle,gateWait idle
-    class gateHuman failure
-    class gateMerge success
-```

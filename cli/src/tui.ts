@@ -1,7 +1,7 @@
 import * as readline from "node:readline";
 
 import { formatCatalog, listCatalog, type CatalogEntry } from "./catalog-listing.js";
-import { installCatalog, installMandatoryFiles, installTemplate, isTemplateName, removeRouteFiles } from "./catalog-installation.js";
+import { installCatalog, installTemplate, isTemplateName, removeRouteFiles } from "./catalog-installation.js";
 import { inspectRepository } from "./repository-inspection.js";
 import { routeNames, type RouteName } from "./workflow-catalog.js";
 
@@ -284,7 +284,6 @@ async function installSelected(
   force: boolean,
 ): Promise<number> {
   const items = getItemsToInstall(state, force);
-  const newRoutes = items.filter((entry) => entry.kind === "route");
   const templates = items.filter((entry) => entry.kind === "template");
 
   const routeEntries = state.allItems.filter((entry) => entry.kind === "route");
@@ -300,57 +299,45 @@ async function installSelected(
 
   const allConflicts: string[] = [];
   const allInstalled: string[] = [];
-  const allRemoved: string[] = [];
 
   const inspection = await inspectRepository(repositoryPath);
 
-  if (checkedRoutes.length > 0 && (newRoutes.length > 0 || removedRoutes.length > 0 || force)) {
-    const result = await installCatalog(repositoryPath, { force, selectedRoutes: checkedRoutes, inspection });
-    allConflicts.push(...result.conflicts);
-    allInstalled.push(...result.installed);
-    if (result.conflicts.length === 0 || force) {
-      allRemoved.push(...await removeRouteFiles(repositoryPath, removedRoutes));
-    }
-  } else if (checkedRoutes.length === 0 && removedRoutes.length > 0) {
-    const result = await installCatalog(repositoryPath, { force, selectedRoutes: [], inspection });
-    allConflicts.push(...result.conflicts);
-    allInstalled.push(...result.installed);
-    if (result.conflicts.length === 0 || force) {
-      allRemoved.push(...await removeRouteFiles(repositoryPath, removedRoutes));
-    }
-  } else {
-    const result = await installMandatoryFiles(repositoryPath, { force });
-    allConflicts.push(...result.conflicts);
-    allInstalled.push(...result.installed);
-  }
+  // Desired state: the checked routes are the target set. Installing it also refreshes every
+  // package-managed file that is already there, so Enter on an unchanged selection is an update.
+  const result = await installCatalog(repositoryPath, { force, selectedRoutes: checkedRoutes, inspection });
+  allInstalled.push(...result.installed);
+  const allRemoved = await removeRouteFiles(repositoryPath, removedRoutes);
 
   for (const template of templates) {
     if (!isTemplateName(template.name)) continue;
-    const result = await installTemplate(repositoryPath, template.name, { force, inspection });
-    allConflicts.push(...result.conflicts);
-    allInstalled.push(...result.installed);
+    const templateResult = await installTemplate(repositoryPath, template.name, { force, inspection });
+    allConflicts.push(...templateResult.conflicts);
+    allInstalled.push(...templateResult.installed);
   }
 
   if (allConflicts.length > 0 && !force) {
-    console.error(`Conflicts found. Re-run with --force to overwrite:\n${allConflicts.join("\n")}`);
+    console.error(`Template conflicts found. Re-run with --force to overwrite:\n${allConflicts.join("\n")}`);
     return 1;
   }
 
-  if (allInstalled.length > 0 || allRemoved.length > 0) {
-    if (allInstalled.length > 0) {
-      console.log(`Installed ${allInstalled.length} item(s):`);
-      for (const file of allInstalled) {
-        console.log(`  ${file}`);
-      }
-    }
-    if (allRemoved.length > 0) {
-      console.log(`Removed ${allRemoved.length} item(s):`);
-      for (const file of allRemoved) {
-        console.log(`  ${file}`);
-      }
-    }
-  } else {
-    console.log("All selected items are already installed.");
+  const changed = result.changes.filter((change) => change.status === "added" || change.status === "updated" || change.status === "removed");
+  const skipped = result.changes.filter((change) => change.status === "skipped");
+  console.log(`Package ${result.packageVersion}${result.installedVersions.length > 0 ? ` (was ${result.installedVersions.join(", ")})` : ""}`);
+  if (changed.length === 0 && allRemoved.length === 0 && templates.length === 0) {
+    console.log("Everything is up to date.");
+  }
+  for (const change of changed) {
+    const kept = change.keptEnv?.length ? ` (kept env: ${change.keptEnv.join(", ")})` : "";
+    console.log(`  ${change.status.padEnd(8)} ${change.target}${kept}`);
+  }
+  for (const change of skipped) {
+    console.log(`  skipped  ${change.target} (${change.reason ?? "consumer-owned"})`);
+  }
+  for (const file of allRemoved) {
+    console.log(`  removed  ${file}`);
+  }
+  for (const template of templates) {
+    console.log(`  template ${template.name}`);
   }
 
   return 0;

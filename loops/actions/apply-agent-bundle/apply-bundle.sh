@@ -40,7 +40,20 @@ git fetch --no-tags "$BUNDLE_FILE" "$BUNDLE_REF"
 [ "$(git cat-file -t "$BUNDLE_TIP")" = commit ] || fail "Git bundle ref must point directly to a commit"
 [ "$(git rev-parse FETCH_HEAD)" = "$BUNDLE_TIP" ] || fail "Fetched bundle commit did not match listed bundle ref"
 
-git merge-base --is-ancestor "$TARGET_TIP" "$BUNDLE_TIP" || fail "Git bundle cannot fast-forward $TARGET_BRANCH"
+# Fast-forward only, deliberately: a push that is not one would discard somebody's commits.
+#
+# "Cannot fast-forward" said nothing about why, and there are two reasons: the agent
+# rewrote history (a rebase, an amend, a reset), or somebody pushed to the branch while it
+# was working. Both mean the same thing to git, that the branch carries commits the bundle
+# does not, so the applier cannot tell them apart and does not try. It prints the commits
+# that are missing instead: their authors and dates answer the question immediately.
+if ! git merge-base --is-ancestor "$TARGET_TIP" "$BUNDLE_TIP"; then
+  echo "::error::Nothing was applied. $TARGET_BRANCH is at $TARGET_TIP and the bundle is at $BUNDLE_TIP, which does not contain it, so pushing would drop the commits below. Either the agent rewrote history, which this push refuses, or the branch moved while it was working, in which case nothing is lost and the gate only needs running again on the current head."
+  echo "On $TARGET_BRANCH but missing from the bundle:"
+  git --no-pager log --format="  %h %ad %an  %s" --date=short "$BUNDLE_TIP..$TARGET_TIP" |
+    head -20 || true
+  exit 1
+fi
 git switch --detach "$TARGET_TIP"
 git merge --ff-only "$BUNDLE_TIP"
 git push origin "HEAD:refs/heads/$TARGET_BRANCH"

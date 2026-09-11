@@ -2,11 +2,27 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-refine.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
   REPO_RULES: "Refine only the selected issue into a grounded, implementation-ready user story. Read repository documentation for domain context. Write acceptance criteria that match existing patterns. Do not implement code."
+  # The estimate decides whether a story gets split, and the prompt tells the agent these bands
+  # come from this repository's own merged pull requests. They have to actually come from it, or
+  # the claim is false and every repository sizes work on another one's diffs.
+  #
+  # One line, and every value in this block must stay one line: gh-aw joins a multi-line env
+  # value onto a single line when it compiles the lock, so a table written across five lines
+  # here arrives at the agent as one unreadable row. verify-route-matrix.sh asserts it.
+  ESTIMATE_BANDS: "1 point (~1 day) = one or two files, under about 50 changed lines, no new concepts: a wording, style or single-value fix. 2 points = up to about four files and 150 lines, all inside one layer, no schema or contract change. 3 points = a vertical slice through one boundary (API and database, or UI and API), up to about eight files and 400 lines, with new tests. 5 points = several layers together, or a schema migration, or a new contract: up to about sixteen files and 1000 lines. 8 or more = beyond those bounds, or it needs a pattern or subsystem that does not exist yet, or it still holds real unknowns."
+  # What counts as a change small enough to skip the story format. The default names this stack's
+  # tools, so a repository built on anything else can never match it and always takes the long,
+  # expensive path. Every condition must hold for a change to be trivial.
+  TRIVIAL_CRITERIA: "It touches 1-3 files: stylesheets, style utility classes, text labels or markup only. No business logic: no services, controllers, domain models, calculations, validations. No data model: no entities, migrations, DTOs, API contracts. No security surface: no auth, authorization, secrets, tokens, permissions. No infrastructure: no deployment templates, containers, CI or deploy configuration. It does not touch shared libraries or multi-team contracts."
   REFINE_LABEL: refine
   REFINED_LABEL: refined
   WORKING_LABEL: bot-working
   IMPLEMENT_LABEL: implement
   REVIEW_LABEL: review
+  # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
+  # decided on. The janitor retries these after a while and never touches a decision park, because
+  # re-running a decision produces the same decision. Created idempotently where it is applied.
+  STALLED_LABEL: stalled
   REFINE_MARKER: "<!-- agent-refine -->"
   DRAFT_MARKER: "<!-- agent-refine-draft -->"
   INITIAL_MODE: first
@@ -15,7 +31,6 @@ env:
   TRIVIAL_MARKER: "<!-- complexity: trivial -->"
   ESTIMATE_MARKER_PREFIX: "<!-- estimate: "
   SPLIT_PARENT_PREFIX: "<!-- split-parent: "
-  SPLIT_CHILDREN_PREFIX: "<!-- split-into: "
   SPLIT_THRESHOLD: "8"
   MAX_SPLIT_CHILDREN: "6"
   INCOMPLETE_COMMENT: "Automated refinement ended without an outcome. The refine label remains for a retry."
@@ -66,9 +81,41 @@ on:
         required: false
         type: string
         default: first
+  # The gate job that the top-level `if:` reads. gh-aw folds that `if:` into the generated
+  # activation job but gives activation no dependency on the job, so the reference resolves
+  # to '' and the clause is false -- the agent would never run. The package's own validator
+  # catches it after compilation; this is the line it asks for, the same one the merge gate
+  # uses for protected_changes.
+  needs: [still_open]
 
 jobs:
+  # A route dispatched while the issue was open must not execute after it has been closed. The
+  # classifier can only see `github.event.issue.state`, which is the state when the event fired
+  # and is absent on a workflow_dispatch, and this fleet queues for a runner for ten minutes and
+  # more. Numa #659 was closed one second after a comment dispatched refine; the run reached
+  # `reserve` thirteen minutes later and refined a closed issue to completion. Read now, once,
+  # and gate both the reservation and the agent on it.
+  still_open:
+    runs-on: agents-arc
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      open: ${{ steps.state.outputs.open }}
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the issue state
+        id: state
+        uses: ./.github/actions/require-open-issue
+        with:
+          token: ${{ github.token }}
+          issue-number: ${{ inputs.issue-number }}
   reserve:
+    needs: [still_open]
+    if: needs.still_open.outputs.open == 'true'
     runs-on: agents-arc
     permissions:
       contents: read
@@ -100,7 +147,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
   validate_output:
     needs: [activation, agent, safe_outputs]
     if: >
@@ -340,7 +389,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
       - name: Report missing refinement outcome
         uses: ./.github/actions/create-issue-comment
         with:
@@ -351,7 +402,7 @@ jobs:
             ${{ env.INCOMPLETE_COMMENT }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-if: inputs.issue-number != ''
+if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true'
 
 runs-on: agents-arc
 runs-on-slim: agents-arc
@@ -369,7 +420,9 @@ engine:
     - "plainconcepts/glm-5-3"
 
 model: openai/glm-5-3
-max-turns: 500
+# 150 rather than 500. With a four-hour clock this is the loop guard, and the worst
+# observed run used 44 turns, so this leaves better than three times the worst case.
+max-turns: 150
 max-turn-cache-misses: 4000
 max-ai-credits: 8000
 
@@ -388,8 +441,16 @@ safe-outputs:
   # under noise nobody closes.
   report-failure-as-issue: false
   threat-detection: false
+  # The refined story replaces the issue body, which is one call carrying the whole
+  # thing. The allowance is three rather than one because a single malformed call the
+  # bridge accepts as spent would otherwise end the run with the body unwritten and a
+  # comment already claiming success: seen on a real run, "the first update_issue call
+  # was sent with an incorrect parameter shape (20 bytes, missing body) and was accepted
+  # with success by the bridge, consuming the 1-per-run quota". The prompt still says to
+  # send the body once.
   update-issue:
     target: "*"
+    max: 3
   add-comment:
   # Split children. An oversized story becomes several implementable ones rather than
   # one issue nobody can land; the cap stops a runaway decomposition.
@@ -397,7 +458,15 @@ safe-outputs:
     max: 6
 
 
-timeout-minutes: 40
+# The fleet is two machines, so this clock is also how long a stuck run can hold half of it.
+# 240 went on to every worker at once when the provider was slow, which fixed the deaths and
+# made every worker equally expensive to hang. These numbers are per worker: enough headroom
+# for a slow gateway on the work it actually does, and not four hours for a run that reads one
+# issue. Turns remain the guard against a confused agent looping; for a custom model the credit
+# ceiling is models.dev fallback pricing and guards nothing.
+#
+# Explores the repository per work unit, then rewrites one issue body. Measured: a run needing 36 turns died at 40 minutes with the story finished.
+timeout-minutes: 90
 ---
 
 1. You are refining the triggering issue **#${{ inputs.issue-number }}**. Do not choose
@@ -413,9 +482,7 @@ timeout-minutes: 40
      temporal draft from the earlier pass: reuse what still holds, and resolve its pending
      marks with the author's answers.
 
-3. Explore before you write. Call skill("pc-plan-explore") and hold its stance for this step:
-   read-only, no plans, no files, no branches. You are only building understanding here, never
-   producing artifacts.
+3. Explore before you write. Call skill("pc-plan-explore"); it owns the stance for this step.
 
    Split the issue into work units first. If the issue body is a bullet list of distinct tasks
    (for example "- check the button component", "- then check the login", "- then suggest a
@@ -427,32 +494,20 @@ timeout-minutes: 40
    complete, then move to unit 2. Do not explore multiple work units in the same pass. Do not
    start unit N+1 until unit N is marked complete.
 
-   For the current work unit only:
-   - Explore the relevant code and repository documentation, and raise the concrete questions you
-     must answer to refine it well.
-   - Keep exploring to answer those questions yourself from the codebase and the docs.
-   - Only when a question is a genuine business or product decision that the code cannot answer,
-     set it aside as a question for the author.
-   - Mark the unit's todo complete only when your findings are concrete enough to write
-     acceptance criteria for this unit. If you explored a file but cannot describe what changes
-     for this unit, you are not done — keep exploring or set aside a question.
+   For the current work unit, answer your own questions from the codebase and the docs, and
+   set one aside for the author only when it is a business or product decision the code cannot
+   settle. A unit's todo is complete when its findings would support acceptance criteria: if you
+   read a file but cannot say what changes for this unit, it is not.
 
-   Explore more deeply than a single pass, but never without end. Ask yourself at most
-   ${{ env.MAX_SELF_QUESTIONS }} questions per work unit, and stop once further exploration no
-   longer changes your understanding. This exploration is internal working: never write your
-   self-asked questions or their answers to the issue.
+   At most ${{ env.MAX_SELF_QUESTIONS }} self-asked questions per work unit, and stop sooner
+   once more exploring stops changing your understanding. Never write a self-asked question or
+   its answer to the issue: this is internal working, and the issue is read by people.
 
 4. **Classify the change complexity.** Based on your exploration, determine whether this is a
-   trivial change. A change is **trivial** if ALL of these are true:
+   trivial change. A change is **trivial** only if every one of these holds:
+   ${{ env.TRIVIAL_CRITERIA }}
 
-   - It touches 1-3 files: CSS, Tailwind classes, text labels, markup, or styling only
-   - No business logic: no services, controllers, domain models, calculations, validations
-   - No data model: no entities, migrations, DTOs, API contracts
-   - No security surface: no auth, authorization, secrets, tokens, permissions
-   - No infrastructure: no Bicep, Docker, CI, deploy configuration
-   - No cross-cutting: doesn't touch shared libraries or multi-team contracts
-
-   If ALL pass → **trivial path** (step 4a). If ANY fail → **standard path** (step 5).
+   If all hold → **trivial path** (step 4a). If any fails → **standard path** (step 5).
 
    **4a. Trivial path.** Skip `/plan-story`. Do not write Gherkin acceptance criteria or
    Mermaid diagrams. Instead, prepare the replacement issue body as valid Markdown:
@@ -469,17 +524,17 @@ timeout-minutes: 40
    No "As a / I want / so that" form. No Given/When/Then. No Mermaid. Just the marker,
    the summary, and the checklist.
 
-   Load `@humanizer` and prepare the replacement issue body, then go directly to step 8.
+   Load `@humanizer` and prepare the replacement issue body, then go directly to step 8
+   (estimate). Skip steps 5-7.
 
 5. Before writing the story, verify coverage: list every work unit and confirm each one has
    exploration findings concrete enough for acceptance criteria. If any unit is missing, go back
    and explore it now. Then call skill("pc-plan-story") and run `/plan-story` for the issue,
    passing everything you learned while exploring as the exploration findings. Ground the story
    in the actual codebase by reading the relevant files. Never read outside this repository root.
-   When the issue held several work units, combine them into a single user story that covers all
-   of them. Write at least one Given/When/Then acceptance scenario per work unit. Write it as a
-   user story in Mike Cohn's As a / I want to / so that form, with Given/When/Then acceptance
-   criteria, the edge cases, and a Mermaid diagram where one genuinely helps.
+   `pc-plan-story` owns the story's shape. This workflow's own requirement is coverage: several
+   work units become one story that covers all of them, with at least one acceptance scenario
+   per unit.
 
      Apply repository documentation and established conventions before finalizing the story.
      Adhere to ${{ env.REPO_RULES }}.
@@ -517,17 +572,11 @@ timeout-minutes: 40
    human day of work for a developer who knows this codebase. Estimate the whole story: code,
    tests, and the edge cases the acceptance criteria imply.
 
-   Judge by the shape of the diff the story will produce, not by how long it feels. The bands
-   below are calibrated from this repository's own merged pull requests, so compare the story
-   against them rather than against an abstract scale:
+   Judge by the shape of the diff the story will produce, not by how long it feels. These bands
+   come from this repository's own merged pull requests, so compare the story against them
+   rather than against an abstract scale:
 
-   | Points | Human days | Shape of the change |
-   |---|---|---|
-   | 1 | ~1 | one or two files, under about 50 changed lines, no new concepts: a wording, style or single-value fix |
-   | 2 | ~2 | up to about four files and 150 lines, all inside one layer, no schema or contract change |
-   | 3 | ~3 | a vertical slice through one boundary (API and database, or UI and API), up to about eight files and 400 lines, with new tests |
-   | 5 | ~5 | several layers together, or a schema migration, or a new contract: up to about sixteen files and 1000 lines |
-   | 8 or more | more than a week | beyond those bounds, or it needs a pattern or subsystem that does not exist yet, or it still holds real unknowns |
+   ${{ env.ESTIMATE_BANDS }}
 
    Elapsed clock time is not evidence. A large change can land in minutes and a small one can
    wait days for a human, so never reason from how long anything took.
@@ -572,11 +621,6 @@ timeout-minutes: 40
 
     Labels are workflow-owned state. Do not call `add_labels` or `remove_labels`.
 
-    **Do not probe safe-output tools.** Never call `update_issue` or `add_comment` with
-    empty or test arguments — each safe-output type has a per-run limit of 1 call, and a
-    probe call consumes that quota. Call a safe-output tool exactly once, with the full
-    final payload, when you are ready to commit to the outcome.
-
     **Questions remain.** You set aside one or more questions for the author that the codebase
     could not answer. Leave the partial work visible: first call `update_issue` with a
     temporal draft, then call `add_comment` once with the questions.
@@ -598,7 +642,11 @@ timeout-minutes: 40
    them is a domain expert, not an engineer.
 
     **The story is complete.** You answered every exploration question yourself and none remain
-    for the author. Call `update_issue` with the wrapped replacement body and `add_comment`
+    for the author. Call `update_issue` first, with the wrapped replacement body, and wait
+    for it to come back. Send the whole body in that one call: it is the only thing this
+    step has to get right.
+
+    Only once that call has succeeded, call `add_comment`
     with `${{ env.REFINE_MARKER }}`, then `${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}`,
     then exactly one of these messages, based only on the `labels` array in the supplied issue
     context:
@@ -606,49 +654,13 @@ timeout-minutes: 40
     - If the array includes the exact label `future`: `Refinement complete. The implement label has been added. Implementation is paused until the future label is removed.`
     - Otherwise: `Refinement complete. The implement label has been added and the implement workflow will start shortly.`
 
+    If `update_issue` did not succeed, do not post either message: an issue that reads as
+    refined with its body untouched is worse than one that says the run failed. Call
+    `report_incomplete` with what the tool told you, and let the run be retried.
+
     **The story was split.** You estimated ${{ env.SPLIT_THRESHOLD }} or more and found real
     seams. Call `create_issue` once per child, then `update_issue` on the parent with the
     summary and the checklist, then `add_comment` with `${{ env.REFINE_MARKER }}`, then
     `${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}`, then one sentence naming the estimate you gave the
-    whole and how many children you wrote. The children carry the work forward; the parent stays
-    open as their tracker and is never implemented directly.
-
-## Diagram
-
-```mermaid
-flowchart TD
-    refStart{"Work Router<br/>refine route"} --> refPick
-    refPick{"Issue eligible?"} -->|yes| refReserve
-    refPick -.->|no| refIdle
-    refReserve("Reserve<br/>bot-working") --> refFacts
-    refFacts("Facts<br/>Issue and comments to disk") --> refExplore
-    refExplore("Explore<br/>pc-plan-explore per work unit,<br/>self-answer, bounded") --> refClassify
-    refClassify{"Trivial change?"}
-    refClassify -->|yes: trivial path| refTrivial
-    refClassify -->|no: standard path| refStory
-    refTrivial("Trivial plan<br/>marker + summary + checklist") -->|✓| refProse
-    refStory("Story<br/>/plan-story, grounded in the code") -->|✓| refProse
-    refStory -.->|✗| refFail
-    refProse("Prose<br/>@humanizer over the final text") -->|✓| refOutcome
-    refOutcome["Outcome<br/>Any questions left?"] -->|no| refDone
-    refOutcome -.->|yes| refAsk
-    refDone(("Refined<br/>refine+review removed<br/>refined+implement added"))
-    refAsk(("Questions<br/>draft left on the issue<br/>review added, bot-working removed"))
-    refAsk -->|author or assignee replies<br/>via Work Router| refStart
-    refIdle(("Idle<br/>No eligible issue"))
-    refFail(("Fail<br/>review added, refine kept"))
-
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
-    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-
-    class refStart start
-    class refReserve,refFacts,refExplore,refStory,refTrivial,refProse action
-    class refPick,refOutcome,refClassify decision
-    class refIdle idle
-    class refFail failure
-    class refDone,refAsk success
-```
+   whole and how many children you wrote. The children carry the work forward; the parent stays
+   open as their tracker and is never implemented directly.

@@ -12,6 +12,10 @@ inputs:
     description: Conclusion reported by the CI run that triggered this gate. If empty, fetches from the PR's latest CI run.
     required: false
     default: ''
+  ci-run-id:
+    description: CI run ID reported by the run that triggered this gate. If empty, resolved from the PR's latest CI run.
+    required: false
+    default: ''
   linked-issue:
     description: Issue the pull request closes, when the router already resolved it.
     required: false
@@ -47,6 +51,7 @@ runs:
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ inputs.pr-number }}
         CONCLUSION: ${{ inputs.ci-conclusion }}
+        CI_RUN_ID: ${{ inputs.ci-run-id }}
         LINKED_ISSUE: ${{ inputs.linked-issue }}
         REQUIRE_LABEL: ${{ inputs.require-label }}
       run: |
@@ -91,23 +96,30 @@ runs:
           fi
         fi
 
-        # Fetch CI conclusion if not provided (label-triggered runs)
+        # The run ID is what lets the gate read the failing job and its logs, so it has to be
+        # resolved on every path -- not only the label-triggered one. It used to be set inside
+        # `if [ -z "$ci_conclusion" ]`, which meant the caller that *knew* the ID got an empty
+        # one: the router passes ci-conclusion and ci-run-id together, so the branch was skipped
+        # and the value discarded. The gate then wrote `failed-jobs.json` as `[]`, and the agent,
+        # with no failing job name and no logs, escalated to `review`. Pliny-Bot #129 and #131
+        # both stalled on a human that way while CI was legitimately red and remediable.
         ci_conclusion="$CONCLUSION"
-        ci_run_id=""
-        if [ -z "$ci_conclusion" ]; then
+        ci_run_id="$CI_RUN_ID"
+        if [ -z "$ci_conclusion" ] || [ -z "$ci_run_id" ]; then
           head_sha="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')"
           # A run keeps the name it had when it ran, so a repository whose CI was renamed still
           # carries runs under the old casing. Fold the name before comparing.
-          ci_run="$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
-            --jq '[.workflow_runs[] | select((.name | ascii_downcase) == "app: ci" or (.name | ascii_downcase) == "ci")] | sort_by(.created_at) | last')"
-          
+          ci_run="$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100"             --jq '[.workflow_runs[] | select((.name | ascii_downcase) == "app: ci" or (.name | ascii_downcase) == "ci")] | sort_by(.created_at) | last')"
+
           if [ -n "$ci_run" ] && [ "$ci_run" != "null" ]; then
-            ci_conclusion="$(jq -r '.conclusion // "pending"' <<<"$ci_run")"
-            ci_run_id="$(jq -r '.id' <<<"$ci_run")"
-            echo "::notice::Fetched CI status: $ci_conclusion (run $ci_run_id)"
-          else
+            [ -n "$ci_conclusion" ] || ci_conclusion="$(jq -r '.conclusion // "pending"' <<<"$ci_run")"
+            [ -n "$ci_run_id" ] || ci_run_id="$(jq -r '.id' <<<"$ci_run")"
+            echo "::notice::Resolved CI status: $ci_conclusion (run $ci_run_id)"
+          elif [ -z "$ci_conclusion" ]; then
             ci_conclusion="unknown"
             echo "::warning::No CI run found for PR #$PR_NUMBER"
+          else
+            echo "::warning::CI concluded $ci_conclusion but no run was found for PR #$PR_NUMBER; the gate has no failure evidence"
           fi
         fi
 

@@ -1,0 +1,59 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/require-open-issue/action.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: Require an open issue
+description: Report whether the issue is still open, read now rather than from the event that started the run.
+inputs:
+  token:
+    description: GitHub token with issues read access.
+    required: true
+  issue-number:
+    description: Issue to check.
+    required: true
+outputs:
+  open:
+    description: '"true" when the issue is still open, "false" when it is closed or unreadable.'
+    value: ${{ steps.check.outputs.open }}
+runs:
+  using: composite
+  steps:
+    # The classifier already refuses a closed issue, but it can only read
+    # `github.event.issue.state`, which is the state at the moment the event fired and is absent
+    # altogether on a workflow_dispatch. This fleet queues for a runner for ten minutes and more,
+    # so an issue can be closed between the event and the pickup. Numa #659: a comment at
+    # 09:02:22 dispatched refine, the issue was closed a second later, the run reached this point
+    # at 09:15:53 and refined a closed issue for thirty-eight minutes, ending by labelling it
+    # `refined`, `implement` and `sp-5`. Every job reported success.
+    - name: Read the issue state now
+      id: check
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        ISSUE: ${{ inputs.issue-number }}
+      run: |
+        set -uo pipefail
+        if [ -z "${ISSUE:-}" ]; then
+          echo "open=true" >> "$GITHUB_OUTPUT"
+          echo "No issue number given; nothing to check."
+          exit 0
+        fi
+        # Three tries: a transient API failure must not park work a person then has to restart.
+        # Defaulting to open on an unreadable issue keeps the worker's existing behaviour, which
+        # is the safer side of this check -- it costs a wasted run, never a lost one.
+        state=""
+        for _ in 1 2 3; do
+          if state=$(gh issue view "$ISSUE" --repo "$REPO" --json state --jq '.state'); then break; fi
+          sleep 5
+        done
+        case "${state:-}" in
+          CLOSED|closed)
+            echo "open=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Issue #${ISSUE} was closed after this run was dispatched; stopping before any work is done."
+            ;;
+          "")
+            echo "open=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Could not read the state of issue #${ISSUE} after three tries; continuing."
+            ;;
+          *)
+            echo "open=true" >> "$GITHUB_OUTPUT"
+            ;;
+        esac

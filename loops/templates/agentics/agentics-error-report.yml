@@ -1,0 +1,98 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/templates/agentics/agentics-error-report.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: "Agentics: Error Report"
+
+# Once a day, look at how the workflows this package ships behaved in this repository and file
+# what broke upstream, so the package gets fixed instead of every repository working around the
+# same bug on its own.
+#
+# THIS REPOSITORY IS PRIVATE AND THE REPORT LEAVES IT. That is the whole design constraint. The
+# job is deterministic — no model runs, because a model summarising a log would paraphrase
+# whatever the log happened to contain — and it sends only:
+#
+#   * the names this package gives its own workflows, jobs and steps
+#   * a conclusion, a runner label and a count
+#   * the id of a matched entry from a fixed catalogue of failure shapes
+#
+# It never sends a log line, a branch name, an issue title, a file path, a commit, a URL or a
+# number that could be looked up. Before anything is filed, the finished text is run through a
+# leak scanner; if the scanner matches, the report is withheld and the run goes red rather than
+# filing it. See loops/actions/report-workflow-errors/action.yml.
+#
+# To turn it off: delete this file, or clear UPSTREAM_NAME below to compute the report into the
+# job summary and file nothing.
+
+run-name: "Error report: last ${{ github.event.inputs.lookback-hours || '24' }}h"
+
+on:
+  schedule:
+    # One slot for every repository, unlike the audit cron. This job runs on a GitHub-hosted
+    # runner and never touches the shared agent fleet, and separate repositories do not queue
+    # against one another on hosted runners, so there is nothing to stagger.
+    - cron: "11 7 * * *"
+  workflow_dispatch:
+    inputs:
+      lookback-hours:
+        description: "How far back to look"
+        required: false
+        type: string
+        default: '24'
+      dry-run:
+        description: "Compute the report and file nothing"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # Where the report goes. Owner and name are separate because the App token has to be scoped
+  # to the one repository, and GitHub expressions have no split(): there is no way to take the
+  # halves of "owner/name" apart inside a workflow. Clear UPSTREAM_NAME to keep the report
+  # local to the job summary.
+  UPSTREAM_OWNER: "PlainConceptsPlatform"
+  UPSTREAM_NAME: "Agentic-Workflows"
+  # How far back a scheduled run looks. Matches the cron so nothing is counted twice.
+  LOOKBACK_HOURS: "24"
+
+jobs:
+  report:
+    # Fork of a consumer: the fleet is not theirs and neither is the report.
+    if: "!github.event.repository.fork"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: agentics-error-report
+      cancel-in-progress: false
+    permissions:
+      # Reading this repository's own runs, jobs and logs. Read-only throughout: the job files
+      # upstream with a separate token and writes nothing here.
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A token for the upstream repository only. The App has to be installed there; where it is
+      # not, this step fails, the next one is skipped, and the report still lands in the job
+      # summary with a warning rather than a red run.
+      - name: Generate an upstream token
+        id: upstream-token
+        if: env.UPSTREAM_NAME != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ env.UPSTREAM_OWNER }}
+          repositories: ${{ env.UPSTREAM_NAME }}
+
+      - uses: ./.github/actions/report-workflow-errors
+        with:
+          token: ${{ github.token }}
+          upstream-token: ${{ steps.upstream-token.outputs.token }}
+          upstream-repo: ${{ env.UPSTREAM_OWNER }}/${{ env.UPSTREAM_NAME }}
+          lookback-hours: ${{ github.event.inputs.lookback-hours || env.LOOKBACK_HOURS }}
+          dry-run: ${{ github.event.inputs.dry-run || 'false' }}

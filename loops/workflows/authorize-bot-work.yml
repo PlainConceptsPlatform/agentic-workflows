@@ -17,13 +17,22 @@ permissions:
 
 jobs:
   authorize:
-    # Only trigger for work labels from HUMANS (not bots),
-    # and only if neither another bot run nor human review currently owns the issue.
+    # Only trigger for work labels from HUMANS (not bots), and only if another bot run does not
+    # already own the issue.
+    #
+    # `review` is deliberately NOT excluded. It used to be, and that made the label a one-way
+    # door: the classifier refuses to route while `review` is set, so a person adding `refine`
+    # to a parked issue got no run, no comment and no error anywhere. Triage's own
+    # needs-maintainer verdict tells the maintainer to add `refine`, which could not work.
+    #
+    # A person adding a work label IS the human review the label was waiting for, so this
+    # workflow clears it below before handing the issue to the bot. The classifier's own guard
+    # stays as it is: it exists to stop the *bot* re-triggering itself, and by the time
+    # bot-working is added `review` is already gone.
     if: >
       (github.event.label.name == 'implement' ||
        github.event.label.name == 'refine') &&
       !contains(github.event.issue.labels.*.name, 'bot-working') &&
-      !contains(github.event.issue.labels.*.name, 'review') &&
       !endsWith(github.actor, '[bot]')
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -70,7 +79,7 @@ jobs:
           app-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
 
-      - name: Bot adds bot-working label
+      - name: Bot takes the issue over
         if: steps.check.outputs.authorized == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -78,8 +87,19 @@ jobs:
           LABEL: ${{ github.event.label.name }}
         run: |
           set -euo pipefail
-          
+
+          # Clear review FIRST. A person adding a work label is the human review the label was
+          # waiting for, and the classifier refuses to route an issue that still carries it, so
+          # removing it here is what makes the hand-off work at all. It also has to happen
+          # before bot-working, because that is the event the classifier reads: adding
+          # bot-working first would raise an event whose payload still shows review.
+          # --remove-label on an absent label is a no-op, so this is safe on a fresh issue.
+          # `stalled` goes with it: a person taking the issue on restarts the work, so the
+          # marker the janitor retries on must not survive into the new run.
+          gh issue edit "$ISSUE_NUMBER" --remove-label "review" --remove-label "stalled" 2>/dev/null ||
+            echo "::notice::no review or stalled label to clear on #$ISSUE_NUMBER"
+
           echo "Adding bot-working label to issue #$ISSUE_NUMBER (triggered by $LABEL)"
           gh issue edit "$ISSUE_NUMBER" --add-label "bot-working"
-          
+
           echo "::notice::bot-working label added - bot will now own the $LABEL workflow"

@@ -45,9 +45,11 @@ pnpm exec workflows add
 pnpm exec workflows update
 ```
 
-`add` installs managed loop files and the mandatory `opencode.ci.json` and
-`scripts/compile-agent-workflows.mjs`. The TUI also installs these mandatory files when any route or
-template is selected. `update` refreshes them.
+`add <routes>` installs those workers on top of the ones already installed, together with the
+mandatory `opencode.ci.json` and `scripts/compile-agent-workflows.mjs`. `update` (and `add` with no
+routes) refreshes exactly the installed set to the package version: every package-managed file is
+replaced and its header records the version, and each worker's `env:` values are kept. Run
+`update --dry-run` first to see the plan as JSON without writing.
 
 Full install, layout, ownership header, and update conflict handling are in
 `references/install.md`.
@@ -75,9 +77,12 @@ Full template selection guidance is in `references/templates.md`.
 
 ## Customise standalone workers
 
-Managed files include ownership headers and source paths. Read the header before editing. `add` and
-`update` stop on changed managed files; inspect the diff first. Use `--force` only when intentionally
-replacing a managed file. Back up or move consumer changes before force update.
+Managed files include ownership headers, source paths and the installed package version. Read the
+header before editing. The `env:` block at the top of a worker is the only part of a managed file
+that is yours: `update` replaces everything else with the package's and keeps your env values (plus
+the runner pool and the gateway URL). If something else must differ per repository, it has to become
+an env variable in the package. To take a file over completely, remove its ownership header; the
+package then leaves it alone unless `--force` is passed.
 
 There is no shared `repo-config` file. Every `agent-*.md` worker is standalone. After installation,
 edit that worker's top-level `env:` values directly for labels, paths, prompt rules, endpoint,

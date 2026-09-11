@@ -8,10 +8,15 @@
 
 set -euo pipefail
 
-readonly AUDIT_CRON="17 1 * * 1"
+# The audit slot is per repository, so it comes from the router's own env: block rather than
+# from here. The fallback is the package default and matches the cron the router ships; a run
+# fired on a cron this file does not know classifies to no route and dies silently, so the
+# route matrix asserts the two still agree.
+readonly AUDIT_CRON="${AUDIT_CRON:-17 1 * * 1}"
 readonly AUDIT_CLOSE_CRON="43 3 * * *"
 readonly CLEANUP_ARTIFACTS_CRON="0 6 * * *"
 readonly RECONCILE_BOT_PR_RUNS_CRON="17 * * * *"
+readonly HOUSEKEEPING_CRON="23 */6 * * *"
 
 has_label() {
   jq -e --arg name "$1" 'index($name)' >/dev/null 2>&1 <<<"${ISSUE_LABELS:-[]}"
@@ -173,6 +178,7 @@ classify_route() {
         "$AUDIT_CLOSE_CRON") route="audit-close" ;;
         "$CLEANUP_ARTIFACTS_CRON") route="cleanup-artifacts" ;;
         "$RECONCILE_BOT_PR_RUNS_CRON") route="reconcile-bot-pr-runs" ;;
+        "$HOUSEKEEPING_CRON") route="housekeeping" ;;
         *) error="no route for cron '${SCHEDULE:-}'" ;;
       esac
       ;;
@@ -227,7 +233,7 @@ classify_route() {
           route="${OPERATION}"
           trigger_kind="${INPUT_TRIGGER_KIND:-manual}"
           ;;
-        audit-close | cleanup-artifacts | reconcile-bot-pr-runs | validate)
+        audit-close | cleanup-artifacts | reconcile-bot-pr-runs | housekeeping | validate)
           route="${OPERATION}"
           ;;
         release)
