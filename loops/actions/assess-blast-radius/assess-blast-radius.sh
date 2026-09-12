@@ -78,9 +78,18 @@ fi
 
 [ -n "$signals" ] || signals="no blast-radius signal fired: $files_changed files, $lines_changed lines, no configured path matched"
 
+# A fixed heredoc delimiter is a fail-open here. Every multi-line value below is built from
+# paths the pull request chose, so a path that is exactly the delimiter closes its block early
+# and every line after it is read as a new output -- including `level=low`, which is emitted
+# above and would be overridden by the later value. The shipped regexes cannot match a bare
+# delimiter, but a consumer who writes a loose one can, and the failure is silent and merges.
+# A per-run delimiter removes the class rather than the instance, which is what GitHub
+# documents for exactly this reason.
+DELIM="BLASTEOF_$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+
 emit_block() {
   local name="$1" value="$2"
-  printf '%s<<BLASTEOF\n%s\nBLASTEOF\n' "$name" "$value"
+  printf '%s<<%s\n%s\n%s\n' "$name" "$DELIM" "$value" "$DELIM"
 }
 
 echo "level=$level"

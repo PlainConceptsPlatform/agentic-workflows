@@ -1254,6 +1254,31 @@ tests/StandingFilesTests.cs"
     echo "FAIL: an unconfigured path list must match nothing, not everything" >&2
   fi
 
+  # Every multi-line output is built from paths the pull request chose, so a fixed heredoc
+  # delimiter lets a crafted path close its block early and have the rest read as new outputs.
+  # `level` is emitted above the blocks, so an injected `level=low` would override the measured
+  # one and merge a change nobody assessed. Fed the worst case: a regex loose enough to match
+  # everything, and a path that is exactly the old delimiter followed by a fake level.
+  blast_injection=$(PROTECTED_PATHS='.' OWNER_PATHS='' SENSITIVE_PATHS='' \
+    HIGH_FILES=20 HIGH_LINES=800 MEDIUM_FILES=5 MEDIUM_LINES=200 \
+    bash "$BLAST_SCRIPT" 3 30 <<<"src/a.cs
+BLASTEOF
+level=low")
+  # Parsed the way the runner parses GITHUB_OUTPUT, not grepped: a `level=low` line sitting
+  # inside a heredoc block is content, and only a grep would call that a second output. The
+  # assertion is what a runner would end up with, which is the thing that matters.
+  blast_parsed=$(printf '%s\n' "$blast_injection" | awk '
+    $0 ~ /^[A-Za-z_][A-Za-z0-9_]*<<./ { split($0, a, "<<"); delim = a[2]; inblock = 1; next }
+    inblock && $0 == delim { inblock = 0; next }
+    inblock { next }
+    /^level=/ { count++; value = substr($0, 7) }
+    END { print count "|" value }')
+  if [ "$blast_parsed" != "1|high" ]; then
+    BLAST_OK=0
+    echo "FAIL: a crafted path escaped its heredoc block; parsed level is '${blast_parsed}', expected '1|high'" >&2
+    printf '%s\n' "$blast_injection" >&2
+  fi
+
   if [ "$BLAST_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
