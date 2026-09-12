@@ -75,6 +75,12 @@ runs:
           const names = (issue) => issue.labels.map((l) => (typeof l === 'string' ? l : l.name));
 
           const needsHuman = [];
+          // Gate telemetry. Every disposition the gate has ever posted is already on a pull
+          // request, marked, so the rate costs one extra listing rather than a store.
+          const dispositions = {};
+          const autoMerged = [];
+          const reverts = [];
+          const metricsWindowMs = 14 * 24 * 3600000;
           // Stalled work still inside its retry window. Separate from needsHuman because nobody
           // needs to act on it yet, and reported anyway because the alternative is silence: the
           // window is 6 hours and the budget is 3 attempts, so an issue that keeps stalling was
@@ -203,12 +209,43 @@ runs:
               ...context.repo, issue_number: pull.number, per_page: 100,
             });
             const verdict = [...comments].reverse().find((c) => (c.body ?? '').includes('<!-- agent-merge-gate -->') && (c.body ?? '').includes('**Verdict:**'));
-            const parsed = verdict ? /\*\*Verdict:\*\*\s*(\w+)/.exec(verdict.body)?.[1] : undefined;
-            if (parsed && parsed !== 'merge') {
+            const parsed = verdict ? /\*\*Verdict:\*\*\s*([\w-]+)/.exec(verdict.body)?.[1] : undefined;
+            // The gate's dispositions are auto-merge, human-review, owner-review and blocked.
+            // Only the first needs nobody. The character class has to allow the hyphen or every
+            // disposition reads as the bare word "auto" or "human" and nothing matches.
+            if (parsed) dispositions[parsed] = (dispositions[parsed] ?? 0) + 1;
+            if (parsed && parsed !== 'auto-merge') {
               needsHuman.push({ kind: 'pr-parked', pull, verdict: parsed, waited: age(verdict.created_at) });
             } else if (!verdict && age(pull.created_at) > stalePrMs) {
               needsHuman.push({ kind: 'pr-stale', pull, waited: age(pull.created_at) });
             }
+          }
+
+          // 5b. The one number this whole gate exists to move. Open pull requests alone would
+          // only ever count the parked ones, because an auto-merged pull request closes within
+          // seconds of its verdict, so the rate would read as zero forever. Closed pull requests
+          // from the digest window are where the merges are.
+          for (const pull of await github.paginate(github.rest.pulls.list, {
+            ...context.repo, state: 'closed', sort: 'updated', direction: 'desc', per_page: 100,
+          })) {
+            if (age(pull.updated_at) > metricsWindowMs) break;
+            // A revert names the pull request it undoes, which is how an escaped defect is
+            // attributed back to the disposition that let it through. Reverts are frequently
+            // opened by a person, so this one line sits above the bot filter.
+            if (pull.merged_at) {
+              const undone = /revert .*#(\d+)/i.exec(pull.title ?? '');
+              if (undone) reverts.push(Number(undone[1]));
+            }
+            if (!isBot(pull.user?.login ?? '')) continue;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo, issue_number: pull.number, per_page: 100,
+            });
+            const verdict = [...comments].reverse().find((c) => (c.body ?? '').includes('<!-- agent-merge-gate -->') && (c.body ?? '').includes('**Verdict:**'));
+            const parsed = verdict ? /\*\*Verdict:\*\*\s*([\w-]+)/.exec(verdict.body)?.[1] : undefined;
+            if (parsed) dispositions[parsed] = (dispositions[parsed] ?? 0) + 1;
+            // An auto-merge followed by a revert is the number that has to stay at zero while
+            // the rate climbs. Anything else is a rate bought with escaped defects.
+            if (parsed === 'auto-merge' && pull.merged_at) autoMerged.push(pull.number);
           }
 
           // 6. One digest. Everything above either fixed itself or is listed here, so there is a
@@ -243,6 +280,21 @@ runs:
               `- #${entry.issue.number} · stalled ${hours(entry.waited)}h ago · attempt ${entry.attempts + 1} of ${maxRetries} due in ~${hours(entry.due)}h · ${entry.issue.title}`);
             return `\n### Retrying by itself, no action needed (${retrying.length})\n\n${rows.join('\n')}\n`;
           };
+          // The gate's own scoreboard. A digest that lists only what went wrong tells you
+          // nothing about whether the thing is getting better.
+          const gateSection = () => {
+            const total = Object.values(dispositions).reduce((a, b) => a + b, 0);
+            if (total === 0) return '';
+            const auto = dispositions['auto-merge'] ?? 0;
+            const rate = Math.round((auto / total) * 100);
+            const rows = Object.entries(dispositions)
+              .sort((a, b) => b[1] - a[1])
+              .map(([name, count]) => `- \`${name}\` · ${count}`);
+            const reverted = autoMerged.filter((number) => reverts.includes(number)).length;
+            return `\n### Merge gate, last ${metricsWindowMs / (24 * 3600000)} days\n\n` +
+              `**${rate}% auto-merged** (${auto} of ${total} dispositions).\n\n${rows.join('\n')}\n\n` +
+              `Auto-merged pull requests later reverted: ${reverted}.\n`;
+          };
           const body = [
             DIGEST_MARKER,
             `_Updated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC. This issue is rewritten by the housekeeping job; edits to it are lost._`,
@@ -251,6 +303,7 @@ runs:
             section('Stalled beyond the retry budget', ['retries-exhausted', 'no-work-label']),
             section('Audit reports nobody actioned', ['stale-audit']),
             retryingSection(),
+            gateSection(),
             needsHuman.length === 0 ? '\nNothing is waiting on a person right now.\n' : '',
             `\n---\n\nThis run retried ${retried} stalled issue(s) and made ${planned.length} change(s) in total.`,
           ].filter(Boolean).join('\n');

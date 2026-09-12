@@ -85,6 +85,40 @@ describe("mergeWorkerEnv without a baseline", () => {
     const pkg = worker("  A: \"1\"\n");
     expect(mergeWorkerEnv(pkg, "---\nname: x\n---\n").content).toBe(pkg);
   });
+
+  // The bug this covers: every consuming repository carried VERIFY_COMMANDS: "" with no
+  // baseline to compare against, so the merge read the empty string as a deliberate choice and
+  // kept it, and the merge gate verified its repairs with an empty command block.
+  it("takes the package value when the consumer has an empty one", () => {
+    const pkg = worker("  VERIFY_COMMANDS: \"pnpm verify\"\n");
+    const consumer = worker("  VERIFY_COMMANDS: \"\"\n");
+
+    const { content, report } = mergeWorkerEnv(pkg, consumer);
+
+    expect(content).toContain("  VERIFY_COMMANDS: \"pnpm verify\"\n");
+    expect(report.updatedDefaults).toEqual(["VERIFY_COMMANDS"]);
+    expect(report.keptEnv).toEqual([]);
+  });
+
+  it("keeps an empty consumer value when the package has nothing to offer either", () => {
+    const pkg = worker("  VERIFY_COMMANDS: \"\"\n");
+    const consumer = worker("  VERIFY_COMMANDS: \"\"\n");
+
+    const { content, report } = mergeWorkerEnv(pkg, consumer);
+
+    expect(content).toContain("  VERIFY_COMMANDS: \"\"\n");
+    expect(report.updatedDefaults).toEqual([]);
+  });
+
+  it("never overwrites a value the consumer actually wrote", () => {
+    const pkg = worker("  VERIFY_COMMANDS: \"pnpm verify\"\n");
+    const consumer = worker("  VERIFY_COMMANDS: \"dotnet test\"\n");
+
+    const { content, report } = mergeWorkerEnv(pkg, consumer);
+
+    expect(content).toContain("  VERIFY_COMMANDS: \"dotnet test\"\n");
+    expect(report.keptEnv).toEqual(["VERIFY_COMMANDS"]);
+  });
 });
 
 describe("mergeWorkerEnv with a baseline", () => {

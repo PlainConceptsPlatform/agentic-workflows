@@ -2,11 +2,14 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-merge-gate.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
   VERIFY_COMMANDS: ""
-  REPO_RULES: "Make a risk-based merge decision for the selected bot pull request. Merge only when CI is green and no risk indicator is present. Do not merge protected file changes."
-  # The list that decides whether a machine merges without a human looking. It used to be a
-  # sentence inside REPO_RULES telling the agent to consult "the repository's guardrails or
-  # project documentation", which named no list at all and left the most consequential check in
-  # the pipeline resolving against nothing. Name the areas this repository will not auto-merge.
+  REPO_RULES: "Review the selected bot pull request for defects and report what you verified. Do not decide the outcome: the workflow computes it from your report and from facts it measured before you ran."
+  # Where to look first, not what to escalate on. This list used to be the check that decided
+  # whether a machine merged without a human, and it decided by category: the prompt told the
+  # agent that a match "is not a defect, it is a reason this pull request needs a person". In a
+  # layered application every feature PR touches an entity or a contract, so the gate escalated
+  # almost everything and, measured on a consumer, auto-merged 31% of terminal verdicts while
+  # finding zero defects. The areas are still worth naming; they are now the review pass's
+  # attention list. What decides is evidence, in the decision table the validator owns.
   # One line: gh-aw joins a multi-line env value onto a single line when it compiles the lock.
   RISK_INDICATORS: "Any diff touching authentication, authorization or session handling. Any change to a calculation or pricing engine, or to code handling money. Any database migration, or a change to an entity or schema. Any change to an audit or event log, or anything that could break its continuity. Any change to a public API contract or a shared library other repositories consume."
   # Paths a bot may change but never merge on its own: an extended regular expression matched
@@ -16,9 +19,42 @@ env:
   # list protects nothing and reports nothing. A match holds the merge for a human; it does not
   # stop the agent repairing failed CI on the same files.
   PROTECTED_PATHS: '^(\.|AGENTS\.md$|ARCHITECTURE\.md$|opencode\.jsonc$|package\.json$|pnpm-lock\.yaml$|Directory\.Packages\.props$|global\.json$)'
+  # Paths whose change needs the person who owns them. A match forces OWNER REVIEW REQUIRED and
+  # sets blast radius high on its own, whatever the diff's size. CODEOWNERS names who is asked
+  # when the repository has that file; it is never a prerequisite, because a repository without
+  # one must still be able to protect its auth and its infrastructure.
+  #
+  # Matches a path segment or a file stem, in both spellings, because the same default has to
+  # work for `src/auth/`, `src/Api/Identity/` and `AuthEndpoints.cs`. The lowercase-only,
+  # directory-only version this replaced matched nothing at all in a .NET consumer: replayed
+  # against that repository's last eighteen gated pull requests it caught none of them, while
+  # this one catches exactly three and they are the three that deserved an owner (a database
+  # migration, a change to the platform role definitions, and a downstream token service).
+  OWNER_PATHS: '(^|/)([Aa]uth|[Aa]uthn|[Aa]uthz|[Aa]uthentication|[Aa]uthorization|[Ii]dentity|[Ss]ecurity|[Ss]ecrets?|[Mm]igrations|[Ii]nfra|terraform|helm|k8s|deploy)(/|[A-Z][A-Za-z]*\.[a-z]+$)'
+  # Paths worth a second look that do not, alone, need a person. A match raises the floor to
+  # medium, and medium with acceptable recoverability still auto-merges. This is the line that
+  # separates "look here" from "stop here", which the old RISK_INDICATORS list could not.
+  SENSITIVE_PATHS: '(^|/)([Dd]omain|entities|[Cc]ontracts)/'
+  # Diff shape. Size and spread are the honest deterministic signal for a change that touches no
+  # path a regex would name: the one pull request in the measured sample that genuinely wanted an
+  # owner matched no sensitive path and was identified by 29 files and ~1600 lines across five
+  # architectural layers.
+  BLAST_HIGH_FILES: "20"
+  BLAST_HIGH_LINES: "800"
+  BLAST_MEDIUM_FILES: "5"
+  BLAST_MEDIUM_LINES: "200"
+  # Agent confidence below which the pull request goes to a human. The agent reports the number;
+  # this decides what it means.
+  CONFIDENCE_THRESHOLD: "0.8"
   WORKING_LABEL: bot-working
   IMPLEMENT_LABEL: implement
   REVIEW_LABEL: review
+  # Sits alongside `review`, never instead of it, so every board query that already asks for
+  # `review` keeps working. What it adds is the distinction the single label could not carry:
+  # `owner-review` says a named area changed, `blocked` says the machine could not proceed rather
+  # than chose not to. The belt does not retry a blocked pull request.
+  OWNER_REVIEW_LABEL: owner-review
+  BLOCKED_LABEL: blocked
   # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
   # decided on. The janitor retries these after a while and never touches a decision park, because
   # re-running a decision produces the same decision. Created idempotently where it is applied.
@@ -28,6 +64,13 @@ env:
   ATTEMPT_MARKER: "<!-- agent-merge-gate-attempt -->"
   MAX_ATTEMPTS: "6"
   PARK_AT_ATTEMPT: "5"
+  # A smaller budget for the one failure that repeating does not fix. A crashed or timed-out run
+  # is a machine failure and worth repeating; a run that finished and handed back a report the
+  # validator could not read is a formatting problem, and the third attempt looks like the first.
+  # The cost is not hypothetical: every retry is a fresh agent run with this worker timeout, and
+  # `call-merge-gate` holds the repo-wide `merge-belt` slot while it runs, so five attempts on
+  # one unusable report can keep every other bot pull request in the repository waiting.
+  PARK_AT_UNUSABLE_OUTPUT: "2"
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
   GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
   GIT_AUTHOR_NAME: "github-actions[bot]"
@@ -137,45 +180,53 @@ jobs:
           done
           echo "review_blocked=$([ "$decision" = 'CHANGES_REQUESTED' ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
+  # Rung 4b. Everything the merge decision needs that a shell can establish, measured once,
+  # before any model reads the diff. The job kept its name and its `requires_review` and
+  # `holds_review` outputs because eight guards across this file and the route matrix read them;
+  # what it gained is the blast radius those guards never had.
   protected_changes:
     needs: subject
     if: needs.subject.outputs.found == 'true'
     runs-on: agents-arc
     permissions:
+      contents: read
       pull-requests: read
     outputs:
-      requires_review: ${{ steps.files.outputs.requires_review }}
-      files: ${{ steps.files.outputs.files }}
+      requires_review: ${{ steps.blast.outputs.requires_review }}
+      files: ${{ steps.blast.outputs.files }}
+      level: ${{ steps.blast.outputs.level }}
+      signals: ${{ steps.blast.outputs.signals }}
+      owner_hits: ${{ steps.blast.outputs.owner_hits }}
+      sensitive_hits: ${{ steps.blast.outputs.sensitive_hits }}
+      required_owners: ${{ steps.blast.outputs.required_owners }}
+      files_changed: ${{ steps.blast.outputs.files_changed }}
+      lines_changed: ${{ steps.blast.outputs.lines_changed }}
+      owner_hit: ${{ steps.blast.outputs.owner_hit }}
+      sensitive_hit: ${{ steps.blast.outputs.sensitive_hit }}
       # The decision, computed once. A protected path holds the merge for a human, but it must
       # not stop the agent repairing failed CI on those same files: blocking there strands the
       # pull request with nobody able to fix it. That pair of conditions used to be restated at
       # eight call sites, five of them steps of one job, and the trap table documents it because
       # it has already been got wrong. `holds_review` is the only place it is decided now.
-      holds_review: ${{ steps.files.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure' }}
+      holds_review: ${{ steps.blast.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure' }}
     steps:
-      - name: Require review for protected pull request files
-        id: files
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ needs.subject.outputs.pr }}
-          PROTECTED_PATHS: ${{ env.PROTECTED_PATHS }}
-        run: |
-          set -euo pipefail
-          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" --jq '.[].filename')
-          protected=$(printf '%s\n' "$files" | grep -E "$PROTECTED_PATHS" || true)
-
-          if [ -n "$protected" ]; then
-            echo "requires_review=true" >> "$GITHUB_OUTPUT"
-            {
-              echo 'files<<EOF'
-              printf '%s\n' "$protected"
-              echo EOF
-            } >> "$GITHUB_OUTPUT"
-          else
-            echo "requires_review=false" >> "$GITHUB_OUTPUT"
-            echo "files=" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Assess blast radius
+        id: blast
+        uses: ./.github/actions/assess-blast-radius
+        with:
+          token: ${{ github.token }}
+          pr-number: ${{ needs.subject.outputs.pr }}
+          protected-paths: ${{ env.PROTECTED_PATHS }}
+          owner-paths: ${{ env.OWNER_PATHS }}
+          sensitive-paths: ${{ env.SENSITIVE_PATHS }}
+          high-files: ${{ env.BLAST_HIGH_FILES }}
+          high-lines: ${{ env.BLAST_HIGH_LINES }}
+          medium-files: ${{ env.BLAST_MEDIUM_FILES }}
+          medium-lines: ${{ env.BLAST_MEDIUM_LINES }}
 
   review_required:
     needs: [subject, protected_changes]
@@ -210,13 +261,15 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.WORKING_LABEL }}
-      - name: Flag human review
+      - name: Flag owner review
         if: needs.protected_changes.outputs.holds_review == 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.OWNER_REVIEW_LABEL }}
       - name: Explain the merge hold
         if: needs.protected_changes.outputs.holds_review == 'true'
         uses: ./.github/actions/create-issue-comment
@@ -226,12 +279,15 @@ jobs:
           body: |
             ${{ env.GATE_MARKER }}
             PR #${{ needs.subject.outputs.pr }} changes protected files and cannot be auto-merged.
-            The `review` label is set: a human must merge this PR manually.
+            The `review` and `owner-review` labels are set: the person who owns these files
+            decides, and merges.
 
             Protected files:
             ${{ needs.protected_changes.outputs.files }}
 
-            **Verdict:** review
+            Required owners: ${{ needs.protected_changes.outputs.required_owners || 'none configured' }}
+
+            **Verdict:** owner-review
 
   reserve:
     needs: subject
@@ -280,7 +336,7 @@ jobs:
             Problems found in PR #${{ needs.subject.outputs.pr }}. ${{ steps.conflicts.outputs.has_conflicts == 'true' && 'Merge conflicts detected.' || 'CI failed.' }}
             Bot is working on fixing it.
   validate_output:
-    needs: [activation, subject, agent, safe_outputs]
+    needs: [activation, subject, protected_changes, agent, safe_outputs]
     if: >
       always() &&
       needs.agent.result == 'success' &&
@@ -301,20 +357,32 @@ jobs:
         uses: ./.github/actions/download-agent-output
         with:
           artifact-name: ${{ needs.activation.outputs.artifact_prefix }}agent
-      - name: Validate merge-gate outcome
+      # Where the decision is made. The agent contributed evidence; these inputs are the facts
+      # protected_changes measured before it ran. Neither half can produce a disposition alone.
+      - name: Compute the merge-gate disposition
         id: validate
         uses: ./.github/actions/validate-merge-gate-output
         with:
           output-file: ${{ steps.output.outputs.output-file }}
           issue-number: ${{ needs.subject.outputs.issue }}
           ci-conclusion: ${{ needs.subject.outputs.conclusion }}
+          blast-level: ${{ needs.protected_changes.outputs.level }}
+          protected-hit: ${{ needs.protected_changes.outputs.requires_review }}
+          owner-hit: ${{ needs.protected_changes.outputs.owner_hit }}
+          confidence-threshold: ${{ env.CONFIDENCE_THRESHOLD }}
   conclude:
     needs: [activation, subject, protected_changes, agent, safe_outputs, validate_output]
+    # `protected_changes.result == 'success'` is stated rather than relied on. GitHub skips a job
+    # whose needs failed, so this condition was never reached on that path, but every clause in
+    # it read as safe on a job that never ran: `requires_review` is '' when protected_changes
+    # fails, and '' != 'true'. A guard whose safety comes from somewhere else is a guard that
+    # stops working the moment someone adds always() to this job.
     if: >
        needs.agent.result == 'success' &&
         needs.safe_outputs.result == 'success' &&
+        needs.protected_changes.result == 'success' &&
         needs.validate_output.outputs.valid == 'true' &&
-       (needs.protected_changes.outputs.requires_review != 'true' || needs.validate_output.outputs.outcome != 'merge')
+       (needs.protected_changes.outputs.requires_review != 'true' || needs.validate_output.outputs.outcome != 'auto-merge')
     runs-on: agents-arc
     permissions:
       contents: write
@@ -351,17 +419,36 @@ jobs:
       # lifecycle is; this is what a reviewer opening the pull request sees. Carrying the
       # marker and the Verdict line makes the router's verdict detection independent of
       # whether the model remembered the marker.
-      - name: Show the verdict on the pull request
+      # One block so the reader sees the whole disposition at once instead of reconstructing it
+      # from a word. Everything on it was either measured before the agent ran or computed from
+      # what the agent proved; nothing here is the model's own summary of its mood.
+      - name: Show the disposition on the pull request
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ github.token }}
           issue-number: ${{ needs.subject.outputs.pr }}
           body: |
             ${{ env.GATE_MARKER }}
-            **Verdict:** ${{ needs.validate_output.outputs.outcome }} (CI concluded ${{ needs.subject.outputs.conclusion }}).
-            Full assessment on the linked issue: #${{ needs.subject.outputs.issue }}. [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Verdict:** ${{ needs.validate_output.outputs.outcome }}
+
+            | | |
+            |---|---|
+            | Disposition | `${{ needs.validate_output.outputs.outcome }}` |
+            | CI | ${{ needs.subject.outputs.conclusion }} |
+            | Blast radius | ${{ needs.protected_changes.outputs.level }} |
+            | Files / lines | ${{ needs.protected_changes.outputs.files_changed }} / ${{ needs.protected_changes.outputs.lines_changed }} |
+            | Protected paths | ${{ needs.protected_changes.outputs.requires_review == 'true' && 'yes' || 'no' }} |
+            | Owner paths | ${{ needs.protected_changes.outputs.owner_hit == 'true' && 'yes' || 'no' }} |
+            | Required owners | ${{ needs.protected_changes.outputs.required_owners || 'none configured' }} |
+
+            Why this blast radius:
+            ```
+            ${{ needs.protected_changes.outputs.signals }}
+            ```
+
+            Findings and verification on the linked issue: #${{ needs.subject.outputs.issue }}. [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Merge approved pull request
-        if: needs.validate_output.outputs.outcome == 'merge'
+        if: needs.validate_output.outputs.outcome == 'auto-merge'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -377,24 +464,50 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.WORKING_LABEL }}
-      - name: Flag review outcome
-        if: needs.validate_output.outputs.outcome == 'review'
+      # `review` goes on for all three parked dispositions, so every board query and every
+      # authorize-bot-work handoff that already reads it keeps working. The second label is what
+      # tells a person which kind of parking this is.
+      - name: Flag a parked outcome
+        if: contains(fromJson('["human-review","owner-review","blocked"]'), needs.validate_output.outputs.outcome)
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ needs.validate_output.outputs.outcome == 'owner-review' && env.OWNER_REVIEW_LABEL || '' }}
+            ${{ needs.validate_output.outputs.outcome == 'blocked' && env.BLOCKED_LABEL || '' }}
+      # Asking the owner is best effort on purpose. A CODEOWNERS entry can name a team this App
+      # cannot request, and a failed request must not strand a pull request whose label and
+      # comment already say who is wanted.
+      - name: Request the owners named by CODEOWNERS
+        if: needs.validate_output.outputs.outcome == 'owner-review' && needs.protected_changes.outputs.required_owners != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.subject.outputs.pr }}
+          OWNERS: ${{ needs.protected_changes.outputs.required_owners }}
+        run: |
+          set -euo pipefail
+          for owner in $OWNERS; do
+            case "$owner" in
+              *@*) continue ;;                                  # an email address is not a reviewer
+              @*/*) gh pr edit "$PR" --repo "$REPO" --add-reviewer "${owner#@}" || true ;;
+              @*)   gh pr edit "$PR" --repo "$REPO" --add-reviewer "${owner#@}" || true ;;
+            esac
+          done
       # The reservation only. The pull request is still open and still waiting, so pr-pending
       # stays until the merge path below retires it.
-      - name: Release review outcome
-        if: needs.validate_output.outputs.outcome == 'review'
+      - name: Release a parked outcome
+        if: contains(fromJson('["human-review","owner-review","blocked"]'), needs.validate_output.outputs.outcome)
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.WORKING_LABEL }}
       - name: Clear merged issue labels
-        if: needs.validate_output.outputs.outcome == 'merge'
+        if: needs.validate_output.outputs.outcome == 'auto-merge'
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -403,6 +516,8 @@ jobs:
             ${{ env.IMPLEMENT_LABEL }}
             ${{ env.WORKING_LABEL }}
             ${{ env.REVIEW_LABEL }}
+            ${{ env.OWNER_REVIEW_LABEL }}
+            ${{ env.BLOCKED_LABEL }}
             ${{ env.PR_PENDING_LABEL }}
   incomplete:
     needs: [subject, protected_changes, agent, safe_outputs, validate_output]
@@ -439,8 +554,37 @@ jobs:
       # attempts_so_far is a workflow_call input and arrives as '' when the caller passes an
       # empty expression, declared default or not; fromJson('') is a hard failure, so the empty
       # case reads as 0.
+      #
+      # Which budget applies is decided once, here, rather than restated in each step condition:
+      # the same pair of conditions spread across four `if:` expressions is what the trap table
+      # already records going wrong for the protected-files hold.
+      - name: Choose the budget this failure gets
+        id: budget
+        env:
+          ATTEMPTS: ${{ inputs.attempts_so_far || '0' }}
+          AGENT_RESULT: ${{ needs.agent.result }}
+          SAFE_RESULT: ${{ needs.safe_outputs.result }}
+          OUTPUT_VALID: ${{ needs.validate_output.outputs.valid }}
+          PARK_AT_ATTEMPT: ${{ env.PARK_AT_ATTEMPT }}
+          PARK_AT_UNUSABLE_OUTPUT: ${{ env.PARK_AT_UNUSABLE_OUTPUT }}
+        run: |
+          set -euo pipefail
+          attempts=${ATTEMPTS:-0}
+          # The agent ran, published, and produced something the validator refused. Repeating
+          # that reproduces it; a person reading the comment costs less than three more runs
+          # holding the merge belt.
+          if [ "$AGENT_RESULT" = success ] && [ "$SAFE_RESULT" = success ] && [ "$OUTPUT_VALID" != true ]; then
+            threshold="$PARK_AT_UNUSABLE_OUTPUT"
+            kind=unusable
+          else
+            threshold="$PARK_AT_ATTEMPT"
+            kind=machine
+          fi
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "threshold=$threshold" >> "$GITHUB_OUTPUT"
+          echo "park=$([ "$attempts" -ge "$threshold" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - name: Report the failed attempt
-        if: fromJson(inputs.attempts_so_far || '0') < fromJson(env.PARK_AT_ATTEMPT)
+        if: steps.budget.outputs.park == 'false' 
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -448,28 +592,53 @@ jobs:
           body: |
             ${{ env.ATTEMPT_MARKER }}
             Attempt ${{ inputs.attempts_so_far || '0' }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
-            The issue keeps `implement`; the merge belt will retry.
+            This failure parks at ${{ steps.budget.outputs.threshold }}. The issue keeps `implement`; the merge belt will retry.
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Report the exhausted attempt budget
-        if: fromJson(inputs.attempts_so_far || '0') >= fromJson(env.PARK_AT_ATTEMPT)
+        if: steps.budget.outputs.park == 'true' && steps.budget.outputs.kind == 'machine'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           body: |
             ${{ env.ATTEMPT_MARKER }}
-            Attempt ${{ inputs.attempts_so_far || '0' }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
+            Attempt ${{ inputs.attempts_so_far || '0' }} of ${{ steps.budget.outputs.threshold }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
             The attempt budget for this CI verdict is exhausted. The review label is set: a human must take over.
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      # A verdict, not an attempt record, and this is the point of the whole split. The belt
+      # bounds its own retries by counting attempt comments to MAX_GATE_ATTEMPTS, so a worker
+      # that merely stopped parking would still be dispatched to the cap: the budget above would
+      # have saved nothing. A comment carrying the gate marker and a Verdict line is the contract
+      # the belt already respects -- it parks the pull request until a new commit moves the head
+      # past it -- and an unusable report is a decision, not a failure to repeat. It carries no
+      # attempt marker, so it is counted once, as what it is.
+      - name: Record an unusable report as a decision
+        if: steps.budget.outputs.park == 'true' && steps.budget.outputs.kind == 'unusable'
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ needs.subject.outputs.issue }}
+          body: |
+            ${{ env.GATE_MARKER }}
+            The agent finished on PR #${{ needs.subject.outputs.pr }} but its report could not be
+            read, ${{ steps.budget.outputs.threshold }} times on this head. Repeating it reproduces
+            it, so the belt stops here rather than spending the rest of the budget holding the
+            merge slot. The run log holds the output the gate refused.
+
+            **Verdict:** human-review
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      # `stalled` means a park the machine caused, and the janitor retries those. An unusable
+      # report is a park the machine caused and retrying reproduces it, so it gets `review`
+      # alone: the janitor's own rule is retry a failure, report a decision.
       - name: Park the issue for a human
-        if: fromJson(inputs.attempts_so_far || '0') >= fromJson(env.PARK_AT_ATTEMPT)
+        if: steps.budget.outputs.park == 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: |-
             ${{ env.REVIEW_LABEL }}
-            ${{ env.STALLED_LABEL }}
+            ${{ steps.budget.outputs.kind == 'machine' && env.STALLED_LABEL || '' }}
       # The reservation only. A failed attempt does not close the pull request, so pr-pending
       # is still true and the board should keep saying so.
       - name: Release the issue
@@ -622,30 +791,31 @@ timeout-minutes: 120
    `push_to_pull_request_branch` tool's own description recommends rebasing; in this
    repository that advice is wrong. Merge, commit, and let the workflow push.
 
-2. Read `${{ env.ISSUE_CONTEXT_PATH }}`. It contains the issue body and its discussion. When
-   running `/repo-verify`, the acceptance criteria there define what the implementation must
-   satisfy.
+2. Read `${{ env.ISSUE_CONTEXT_PATH }}`. It contains the issue body and its discussion. The
+   acceptance criteria there define what this implementation had to satisfy, and step 5c asks
+   you to check the diff against them.
 
 3. Branch on the conclusion.
 
-   First check the issue context for `<!-- complexity: trivial -->`.
+   You do not choose the outcome. The workflow computes it from your report and from facts it
+   measured before you started. Two of those facts are already decided and you cannot argue with
+   either: CI concluded what it concluded, and the blast radius below was measured from the
+   changed paths and the diff shape.
 
-   **If the trivial marker is present AND CI conclusion is success:**
-   Skip the full assessment (step 5). Emit a minimal assessment table with all checks marked
-   ✅ and the note "Trivial change, CI green — deep risk review skipped." Then proceed directly
-   to step 8 (merge verdict).
+   **Measured blast radius: `${{ needs.protected_changes.outputs.level }}`**
+   (${{ needs.protected_changes.outputs.files_changed }} files,
+   ${{ needs.protected_changes.outputs.lines_changed }} lines changed)
 
-   **If the trivial marker is absent OR CI is not success:**
-   Follow the normal branching below.
+   ```
+   ${{ needs.protected_changes.outputs.signals }}
+   ```
 
-   - **success** → step 4, then step 5 (full assessment).
-    - **action_required** → CI did not run because the workflow needs approval.
-      Emit the assessment table with ❌ on CI Status and note that a maintainer must approve
-      the pending run. Select the `review` verdict.
-    - **failure** → step 4, then step 6 (CI remediation).
-     - **cancelled, timed_out, or anything else** → Emit the assessment table with ❌ on CI
-      Status and select the `review` verdict. A cancelled or unknown run is not evidence of
-      anything.
+   - **success** → step 4, then step 5 (review the change).
+   - **failure** → step 4, then step 6 (CI remediation).
+   - **action_required, cancelled, timed_out, or anything else** → CI did not produce a usable
+     verdict, so there is nothing to merge on. Do step 5 anyway so the report is on the record,
+     and say in `reason` which conclusion you saw. The workflow blocks on a non-success
+     conclusion without needing you to.
 
      Follow repository documentation and established conventions when assessing or remediating
      the pull request. Protect secrets, do not bypass checks, and keep remediation focused.
@@ -655,7 +825,7 @@ timeout-minutes: 120
    `/tmp/gh-aw/agent/pr.json` for the shape of the change. If CI failed, also read
    `/tmp/gh-aw/agent/failed-jobs.json` and `/tmp/gh-aw/agent/failed-logs.txt`.
 
-    These files are the factual basis for every check below. Do not guess — cite what you read.
+    These files are the factual basis for everything below. Do not guess — cite what you read.
 
 4b. **Merge conflict when CI is green.** If the conclusion is `success` and
     `has_conflicts` is `true` (current value: `${{ needs.reserve.outputs.has_conflicts }}`),
@@ -678,56 +848,92 @@ timeout-minutes: 120
     branch: the current PR branch), then emit the `add_comment` with
     **Verdict:** remediated. CI will re-run on the updated branch and the merge gate
     will be triggered again — the next cycle will see a clean, conflict-free PR and can
-    make a proper merge or review decision.
+    reach a real disposition.
 
-    If the merge cannot be completed or the conflicts are genuinely ambiguous, select the `review`
-    verdict instead and explain which conflicts could not be resolved safely.
+    If the merge cannot be completed or the conflicts are genuinely ambiguous, do not push.
+    Report `assessed`, and say in `reason` which conflicts could not be resolved safely. An
+    unresolved conflict is not a mergeable state, so the workflow will not merge it.
 
     If the conclusion is `success` and `has_conflicts` is `false`, skip this step and
     proceed to step 5.
 
-5. Run each of these 10 checks. For each, determine a status and a short detail line.
+5. Review the change. This is the part no deterministic check can do, so spend the run here.
 
-   **Check 1 — CI Status.** What did CI conclude? Success means all required checks passed.
-   Failure means at least one job failed. Action required means a workflow needs approval.
-   Flag any non-success conclusion.
+   **5a. Find defects.** Read the diff and the code it touches. You are looking for problems
+   that would matter after this merges: correctness, missing edge cases, broken contracts,
+   regressions, security, tests that do not actually test the behaviour they name.
 
-   **Check 2 — Auth & Security.** Does the diff touch authentication, authorization, secrets,
-   credentials, or security boundaries? Flag any change to auth middleware, permission checks,
-   token issuance, or security-related config.
+   Keep a candidate only if it passes all three:
 
-   **Check 3 — API & Contracts.** Does the diff change a public API or a published package's
-   contract? Flag changes to endpoint signatures, DTO shapes, exported interfaces, or
-   serialization formats that could break consumers.
+   - A specific, reproducible problem in a specific file or component.
+   - Real impact: security risk, data loss, crash, or broken functionality.
+   - Something a developer could pick up and fix without further investigation.
 
-   **Check 4 — Tests.** Does the diff delete, weaken, or lower a threshold in a test? Flag
-   removed assertions, skipped tests, lowered coverage bars, or deleted test files.
+   Discard anything vague, stylistic, theoretical, or nice-to-have. **Finding nothing is a good
+   result.** An empty `findings` array on a clean change is the correct output and costs you
+   nothing. Do not pad the list.
 
-   **Check 5 — CI/CD & Workflow files.** Does the diff change CI, CD, or workflow files?
-   Flag changes to `.github/workflows/`, Dockerfiles, deployment scripts, or infrastructure
-   configuration.
+   Read `${{ env.RISK_INDICATORS }}` as a list of places worth looking first in this repository.
+   It is an attention list, not a verdict. Touching one of those areas is not a finding. A
+   defect you can demonstrate in one of them is.
 
-   **Check 6 — Protected files.** Does the diff change a protected file? This is normally
-   handled before you run, but never merge one if it reaches this gate. Flag any match against
-   the repository's protected file list.
+   **5b. Have each candidate verified independently.** Do not be the one who checks your own
+   work. Hand each candidate off for verification as a claim on its own: the file, the line,
+   what you think is wrong, and what would settle it. Do not pass on the reasoning that produced
+   it, and do not say what you hope comes back. A verifier that has read the code fresh and
+   tried to disprove the claim is the check you cannot perform on yourself.
 
-   **Check 7 — Scope.** Is the diff size consistent with what the issue implied? Compare the
-   number of files changed and lines added/removed against the complexity the issue described.
-   Flag if the diff is materially larger or smaller than expected.
+   Take the answer. Not verified means the finding is a warning at most, whatever you believed
+   when you wrote it. Verified means the verification string comes back with it, and that string
+   is the evidence the merge decision will rest on: a command with its observed output, or a
+   code path quoted end to end. Never "this looks wrong" or "this could fail if".
 
-   **Check 8 — Repository risk indicators.** Does the diff touch any of these?
-   ${{ env.RISK_INDICATORS }}
+   Two things make this cheap to do honestly. An unverified finding is capped at a warning by the
+   workflow whatever severity you claim, so overstating one gains you nothing. A verified high or
+   critical finding blocks the merge, so inventing one costs somebody a morning.
 
-   Name the specific indicator you matched. A match is not a defect, it is a reason this
-   pull request needs a person, so do not argue it away because the change looks correct.
+   With no candidates, verify nothing and move on. This step exists for claims, not for
+   reassurance about their absence.
 
-   **Check 9 — Mergeability.** Can the PR be merged cleanly? The value is
-   `${{ needs.reserve.outputs.has_conflicts }}`. If conflicts exist, this is ❌ but not a
-   blocking verdict — proceed to remediation (step 6). If no conflicts, ✅.
+   **5c. Check the acceptance criteria.** The issue context at `${{ env.ISSUE_CONTEXT_PATH }}`
+   says what this change was supposed to do. Confirm the diff does it. Set
+   `acceptanceCriteriaMet` to false only when you can name a criterion the diff does not
+   satisfy.
 
-   **Check 10 — Confidence.** Are you confident in the merge decision? Low confidence is
-   itself a flag. If you are unsure about the impact of the change, mark ⚠️ and explain what
-   is uncertain. A human should review when confidence is low.
+   **5d. Answer the recoverability checklist.** How easy would this be to undo if it were
+   wrong? Cite the diff for each answer, and record the ones that fired in
+   `recoverabilitySignals`:
+
+   - behind a feature flag
+   - revertible by reverting the commit, with no manual step
+   - no persistent data mutated
+   - no irreversible migration
+   - backward compatible with existing callers and stored data
+   - observable after deploy
+   - small affected surface
+
+   `high` when the change can be reverted cleanly and touches no persistent state. `medium` when
+   a revert works but something (a cache, a config, a client) needs attention. `low` when a
+   revert would not restore the previous behaviour: a migration that drops or rewrites data, a
+   contract other repositories already consume, anything that leaves state behind.
+
+   **A `low` rating must name what cannot be undone**, in `recoverabilitySignals`. `low` parks
+   the pull request for a person, so it is the one judgement of yours that can hold up a merge on
+   its own, and the same rule applies to it as to a finding: unevidenced, it does not count. A
+   `low` with an empty `recoverabilitySignals` is read as `medium`. This is not an invitation to
+   pad the list — it is the difference between "this rewrites the plan rows in place" and a
+   reflex.
+
+   **5e. Raise the blast radius if the paths missed something.** The measured level came from
+   file paths and diff shape. If the change introduces something those rules cannot see — a new
+   authorization decision point, a new trust boundary, a write to shared state from a path that
+   never wrote before — set `blastRadiusRaise` with the level and the reason. You can only raise
+   it. A lower value is ignored.
+
+   **5f. State your confidence.** A number between 0 and 1, for the whole assessment, not for
+   any one finding. Below ${{ env.CONFIDENCE_THRESHOLD }} sends the pull request to a person, so
+   it is the honest way to say you could not get comfortable. Use it when the change is in an
+   area you could not fully trace, not as a reflex.
 
 6. **CI failed** → read `/tmp/gh-aw/agent/failed-jobs.json` and
    `/tmp/gh-aw/agent/failed-logs.txt`, which are already on disk. Load only skills required to
@@ -776,52 +982,65 @@ timeout-minutes: 120
     the current PR branch), then select the `remediated` verdict. CI will run again and trigger
     you again with the new result.
 
-   If you cannot fix it after a concrete repair attempt, or the logs show you have already tried on this same head commit,
-   stop looping: select the `review` verdict and explain the failure and what you tried. A human
-   decides from there.
+   If you cannot fix it after a concrete repair attempt, or the logs show you have already tried
+   on this same head commit, stop looping: report `assessed` with no push, and say in `reason`
+   what failed and what you tried. CI is not green, so the workflow blocks the pull request and
+   a person decides from there.
 
-7. Decide the verdict based on the assessment table:
+7. Say which of two things you did, and nothing more.
 
-   - **All checks ✅ → `merge`.** The PR is safe to merge. CI is green, no risk indicators
-     triggered, tests are intact, scope matches, mergeability is clean.
-   - **Any check ⚠️ or ❌ (except CI failure) → `review`.** Do not merge. Explain exactly which
-     check tripped, why, and what a reviewer should look at. Leave `implement` in place: the
-     work is not finished until a human merges it.
-   - **CI failed and you fixed it → `remediated`.** You pushed a verified fix and CI will
-     re-run.
-   - **CI failed and you cannot fix it → `review`.** Explain the failure and what you tried.
+   - **`remediated`** — CI failed or the branch conflicted, you fixed it, you verified the fix,
+     and you are pushing it. Exactly one `push_to_pull_request_branch` goes with this word.
+   - **`assessed`** — you reviewed the change and are reporting what you found. No push.
 
-   Never merge with administrator privileges and never bypass a required check. If the merge
-   is refused, that refusal is the answer: select `review` and leave it for a human.
+   These are the only two words the workflow accepts. You do not write `merge`, `review`,
+   `auto-merge`, `blocked`, or any other outcome: the workflow computes the disposition from
+   your report and from the facts it measured, and a word it does not recognise parks the pull
+   request. Never merge with administrator privileges and never bypass a required check.
 
-8. Emit exactly one `add_comment` targeting issue `${{ needs.subject.outputs.issue }}` with:
+8. Emit exactly one `add_comment` targeting issue `${{ needs.subject.outputs.issue }}`,
+   containing, in this order:
+
    1. `${{ env.GATE_MARKER }}`
-   2. A heading: `## Merge gate decision for PR #${{ needs.subject.outputs.pr }}`
-   3. A structured assessment table with all 10 check results
-   4. A one-line detail per check (what was found and why it passed or flagged)
-   5. A line `**Verdict:** merge`, `**Verdict:** review`, or `**Verdict:** remediated`
+   2. A heading: `## Merge gate review of PR #${{ needs.subject.outputs.pr }}`
+   3. A line `**Verdict:** assessed` or `**Verdict:** remediated`
+   4. Prose a person can read: what this change does, what you looked at, what you found or did
+     not find, and what you ran to check. If you remediated, say what failed and what you
+     changed. Short. Nobody reads a wall.
+   5. A fenced `json` block, exactly one, as the last thing in the comment.
 
-   The workflow applies comments, labels, merges, and closures with the App token. Do not call
-   any tools except the one optional `push_to_pull_request_branch` for a verified CI repair
-   and this one `add_comment`.
+   The JSON block is what the workflow reads. Every field is required except
+   `blastRadiusRaise`, which is omitted when the measured level stands:
 
-   Format the checks as a table with status indicators:
-
+   ```json
+   {
+     "findings": [
+       {
+         "severity": "critical|high|medium|low",
+         "confidence": 0.0,
+         "verified": true,
+         "verification": "the command you ran and what it printed, or the code path quoted end to end",
+         "category": "correctness|security|contract|tests|regression",
+         "file": "src/...",
+         "line": 0,
+         "finding": "one sentence: what is wrong",
+         "evidence": "what in the diff or the code shows it",
+         "suggestedFix": "what would fix it"
+       }
+     ],
+     "recoverability": "high|medium|low",
+     "recoverabilitySignals": ["revertible with no manual step", "no persistent state written"],
+     "blastRadiusRaise": { "to": "high", "reason": "adds a new authorization decision point" },
+     "acceptanceCriteriaMet": true,
+     "confidence": 0.0,
+     "reason": "one sentence a person would accept as the summary"
+   }
    ```
-   ### Assessment
 
-   #	Check	Result
-   1	CI Status	✅ Success / ❌ Failure: [job name] / ⚠️ Action required
-   2	Auth & Security	✅ No changes / ⚠️ Touched: [area]
-   3	API & Contracts	✅ No changes / ⚠️ Changed: [area]
-   4	Tests	✅ Not weakened / ⚠️ Weakened: [file]
-   5	CI/CD & Workflow	✅ No changes / ⚠️ Changed: [file]
-   6	Protected files	✅ None touched / ❌ Touched: [file]
-   7	Scope	✅ Appropriately scoped / ⚠️ [too large/small: reason]
-   8	Risk indicators	✅ None triggered / ⚠️ Triggered: [indicator]
-   9	Mergeability	✅ Clean / ⚠️ Conflicts
-   10	Confidence	✅ High / ⚠️ Low: [reason]
-   ```
+   `"findings": []` on a clean change is the expected output, not a failure to do the job.
 
-   Then a line `**Verdict:** merge` / `**Verdict:** review` / `**Verdict:** remediated`
-
+   The workflow applies comments, labels, merges, and closures with the App token. Reading the
+   repository, running verification commands and delegating a finding to be checked are all part
+   of the job. What is restricted is what leaves this run: the only safe outputs you may call are
+   the one optional `push_to_pull_request_branch` for a verified repair and this one
+   `add_comment`.

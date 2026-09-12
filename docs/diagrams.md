@@ -279,17 +279,21 @@ flowchart TD
     gateFix("Repair<br/>read the failure, fix, verify.<br/>Empty evidence on a conflicting<br/>PR means the conflict is the fault") --> gatePush
     gatePush(("Pushed<br/>CI runs again, gate re-enters"))
     gateFix -.->|"cannot fix"| gateHuman
-    gateProtected{"protected_changes<br/>PROTECTED_PATHS matched?"}
-    gateProtected -.->|yes| gateHuman
-    gateProtected -->|no| gateAssess
-    gateAssess("Agent (rung 5)<br/>10 checks, including<br/>RISK_INDICATORS") --> gateVerdict
-    gateVerdict{"Verdict"}
-    gateVerdict -->|"all clear"| gateMerge
-    gateVerdict -.->|"any concern"| gateHuman
-    gateMerge(("Merged<br/>squash, issue closed,<br/>pr-pending removed"))
-    gateHuman(("Review<br/>verdict posted on the PR,<br/>implement label kept"))
+    gateProtected{"protected_changes (rung 4b)<br/>blast radius from paths,<br/>CODEOWNERS and diff shape"}
+    gateProtected -.->|"protected path"| gateOwner
+    gateProtected -->|"measured low, medium or high"| gateAssess
+    gateAssess("Agent (rung 5)<br/>find defects, verify them,<br/>rate recoverability") --> gateDisposition
+    gateDisposition{"Disposition<br/>computed in shell from<br/>the facts and the report"}
+    gateDisposition -->|"no verified blocker,<br/>radius low or recoverable medium"| gateMerge
+    gateDisposition -.->|"radius high, protected<br/>or owner path"| gateOwner
+    gateDisposition -.->|"fragile, unmet criteria<br/>or low confidence"| gateHuman
+    gateDisposition -.->|"CI red or a verified<br/>high finding"| gateBlocked
+    gateMerge(("AUTO-MERGE<br/>squash, issue closed,<br/>pr-pending removed"))
+    gateHuman(("HUMAN REVIEW<br/>review label,<br/>implement label kept"))
+    gateOwner(("OWNER REVIEW<br/>review + owner-review,<br/>CODEOWNERS asked when named"))
+    gateBlocked(("BLOCKED<br/>review + blocked,<br/>the belt does not retry"))
     gateIdle(("Idle<br/>not ours, or not open"))
-    gateFix -.->|"attempt 6 of 6"| gateHuman
+    gateFix -.->|"attempt 6 of 6"| gateBlocked
 
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
     classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
@@ -299,14 +303,20 @@ flowchart TD
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class gateStart start
     class gateBranch,gateFacts,gateFix,gateAssess action
-    class gateSubject,gateCi,gateProtected,gateVerdict decision
+    class gateSubject,gateCi,gateProtected,gateDisposition decision
     class gateIdle idle
-    class gateHuman failure
+    class gateHuman,gateOwner,gateBlocked failure
     class gateMerge,gatePush success
 ```
 
 A protected-path match holds the merge but does not stop the repair path: the agent may still fix
 failed CI on those files, and `conclude` is what refuses to merge them.
+
+The agent does not pick the disposition. It reports what it found and what it verified; the
+validator computes the outcome from that report and from the blast radius measured before the
+agent ran. A category the diff touches is no longer, on its own, a reason to park a pull request:
+only a verified high or critical finding, a sensitive path, or a change that would be hard to undo
+sends it to a person.
 
 ---
 
