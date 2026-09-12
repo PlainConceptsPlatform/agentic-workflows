@@ -364,9 +364,15 @@ jobs:
           confidence-threshold: ${{ env.CONFIDENCE_THRESHOLD }}
   conclude:
     needs: [activation, subject, protected_changes, agent, safe_outputs, validate_output]
+    # `protected_changes.result == 'success'` is stated rather than relied on. GitHub skips a job
+    # whose needs failed, so this condition was never reached on that path, but every clause in
+    # it read as safe on a job that never ran: `requires_review` is '' when protected_changes
+    # fails, and '' != 'true'. A guard whose safety comes from somewhere else is a guard that
+    # stops working the moment someone adds always() to this job.
     if: >
        needs.agent.result == 'success' &&
         needs.safe_outputs.result == 'success' &&
+        needs.protected_changes.result == 'success' &&
         needs.validate_output.outputs.valid == 'true' &&
        (needs.protected_changes.outputs.requires_review != 'true' || needs.validate_output.outputs.outcome != 'auto-merge')
     runs-on: agents-arc

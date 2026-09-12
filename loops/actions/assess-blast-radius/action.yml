@@ -100,13 +100,40 @@ runs:
         # CODEOWNERS refines who is asked; it never decides whether anyone is. A repository
         # without the file still gets an owner disposition from OWNER_PATHS, and the comment
         # names the paths instead of a team.
+        #
+        # The pattern is a gitignore-style glob, not a regex. Stripping a leading slash and a
+        # trailing `/**` and feeding the rest to grep -E was wrong in both directions: `apps/web/`
+        # matched `apps/webhooks/x.ts` because nothing anchored the segment end, `docs/*` matched
+        # `docsecret.md` because `*` applied to the slash, and `*.ts` became `^*.ts`, which GNU
+        # grep parses as a literal with the anchor dropped, so it matched `src/payments/Fee.cs`.
+        # The result was over-broad `required_owners`: teams asked to review changes they do not
+        # own. Translate the glob properly instead.
         owners=""
+        glob_to_regex() {
+          printf '%s' "$1" | sed -e 's/[.[\$()|+^{}]/\\&/g' \
+                                 -e 's#\*\*/#\x01#g' -e 's#/\*\*#\x02#g' \
+                                 -e 's#\*#[^/]*#g' -e 's#?#[^/]#g' \
+                                 -e 's#\x01#(.*/)?#g' -e 's#\x02#(/.*)?#g'
+        }
         for candidate in CODEOWNERS .github/CODEOWNERS docs/CODEOWNERS; do
           [ -f "$candidate" ] || continue
-          while read -r pattern rest; do
+          # `|| [ -n "$pattern" ]` so a last line with no trailing newline is still read: plain
+          # `while read` returns 1 on EOF and drops it, which silently loses the final rule.
+          while read -r pattern rest || [ -n "$pattern" ]; do
             case "$pattern" in ''|'#'*) continue ;; esac
+            [ -n "$rest" ] || continue
+            anchored=0
+            case "$pattern" in /*) anchored=1 ;; esac
             glob="${pattern#/}"; glob="${glob%/}"
-            if printf '%s\n' "$files" | grep -qE "^${glob%/\*\*}"; then
+            regex="$(glob_to_regex "$glob")"
+            # A directory rule owns everything beneath it; a file rule matches the path exactly.
+            case "$pattern" in
+              */|*/\*\*) regex="${regex}(/.*)?$" ;;
+              *) regex="${regex}(/.*)?$" ;;
+            esac
+            # An unanchored CODEOWNERS pattern matches at any depth, an anchored one only at the root.
+            if [ "$anchored" -eq 1 ]; then regex="^${regex}"; else regex="(^|/)${regex}"; fi
+            if printf '%s\n' "$files" | grep -qE "$regex"; then
               owners="$owners $rest"
             fi
           done < "$candidate"

@@ -26,15 +26,45 @@ files="$(cat)"
 
 # An empty regex matches every line in grep -E, which would mark every pull request protected.
 # A list nobody configured must match nothing, not everything.
+#
+# The `|| true` that used to end this function swallowed grep exit 2 (a regex that does not
+# compile) exactly as it swallowed exit 1 (no match), so a consumer typo in PROTECTED_PATHS
+# reported "no protected paths touched" and merged. Consumers are told to edit all three of
+# these, so the typo is the likely case. Each pattern is compiled once below, in this shell,
+# before any of them is used: a `match` failure cannot report itself, because `match` runs
+# inside a command substitution and anything it sets dies with the subshell.
 match() {
   local pattern="$1"
   [ -n "$pattern" ] || return 0
   printf '%s\n' "$files" | grep -E "$pattern" || true
 }
 
+# Compile each configured pattern against nothing. grep exits 2 when the regex is bad, which is
+# distinct from 1 for no match, and that is the whole signal.
+for name in PROTECTED_PATHS OWNER_PATHS SENSITIVE_PATHS; do
+  pattern="${!name}"
+  [ -n "$pattern" ] || continue
+  if printf '' | grep -E "$pattern" >/dev/null 2>&1; then :; elif [ "$?" -gt 1 ]; then
+    echo "assess-blast-radius: ${name} is not a valid extended regular expression: ${pattern}" >&2
+    exit 2
+  fi
+done
+
 protected_hits="$(match "$PROTECTED_PATHS")"
 owner_hits="$(match "$OWNER_PATHS")"
 sensitive_hits="$(match "$SENSITIVE_PATHS")"
+
+# A threshold that is not a number turns its comparison into a shell error that `set -e` does
+# not catch, because the test is an `if` condition: `HIGH_FILES=twenty` printed a diagnostic to
+# stderr and quietly produced `level=low` for a diff of any size.
+for threshold in HIGH_FILES HIGH_LINES MEDIUM_FILES MEDIUM_LINES files_changed lines_changed; do
+  case "${!threshold}" in
+    ""|*[!0-9]*)
+      echo "assess-blast-radius: ${threshold} must be a whole number, got '${!threshold}'" >&2
+      exit 2
+      ;;
+  esac
+done
 
 signals=""
 add_signal() { signals="${signals}${signals:+$'\n'}$1"; }

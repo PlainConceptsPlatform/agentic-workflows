@@ -1381,6 +1381,60 @@ if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
   gate_case "a verdict with no json block"       invalid    '{"items":[{"type":"add_comment","item_number":7,"body":"<!-- agent-merge-gate -->\\n**Verdict:** assessed"}]}' success low
   gate_case "a json block that does not parse"   invalid    '{"items":[{"type":"add_comment","item_number":7,"body":"<!-- agent-merge-gate -->\\n**Verdict:** assessed\\n```json\\n{nope}\\n```"}]}' success low
   gate_case "no verdict in the output"           invalid    '{"items":[{"type":"add_comment","item_number":7,"body":"just a note"}]}' success low
+  # Adversarial shapes. Every one of these read as the permissive value at some point, and each
+  # is a near miss rather than nonsense: the report the agent meant to send, with one field
+  # typed the way a model types it when it is being loose. A merge gate that reads `"true"` as
+  # true merges on a string.
+  gate_near_miss() {
+    local name="$1" want="$2" report="$3"
+    gate_case "$name" "$want" "$(gate_items "$(gate_comment assessed "$report")")" success low
+  }
+  gate_near_miss "verified as the string true"      invalid '{\"findings\":[{\"verified\":\"true\",\"severity\":\"critical\"}],\"confidence\":0.95}'
+  gate_near_miss "verified as the number one"       invalid '{\"findings\":[{\"verified\":1,\"severity\":\"critical\"}],\"confidence\":0.95}'
+  gate_near_miss "a severity outside the scale"     invalid '{\"findings\":[{\"verified\":true,\"severity\":\"blocker\"}],\"confidence\":0.95}'
+  gate_near_miss "a finding with no severity"       invalid '{\"findings\":[{\"verified\":true}],\"confidence\":0.95}'
+  gate_near_miss "a severity in capitals"           blocked '{\"findings\":[{\"verified\":true,\"severity\":\"CRITICAL\"}],\"confidence\":0.95}'
+  gate_near_miss "acceptanceCriteriaMet as a string" invalid '{\"findings\":[],\"acceptanceCriteriaMet\":\"false\",\"confidence\":0.95}'
+  gate_near_miss "confidence as a word"             invalid '{\"findings\":[],\"confidence\":\"high\"}'
+  gate_near_miss "findings as a string"             invalid '{\"findings\":\"none\",\"confidence\":0.95}'
+  gate_near_miss "a recoverability outside the scale" invalid '{\"findings\":[],\"recoverability\":\"none\",\"confidence\":0.95}'
+  gate_near_miss "a raise to an unknown level"      invalid '{\"findings\":[],\"confidence\":0.95,\"blastRadiusRaise\":{\"to\":\"critical\"}}'
+  gate_near_miss "a raise in capitals is honoured"  owner-review '{\"findings\":[],\"confidence\":0.95,\"blastRadiusRaise\":{\"to\":\"HIGH\"}}'
+  gate_near_miss "a report that is not an object"   invalid '\"just a string\"'
+
+  # The prompt puts the report last and the prose above it routinely quotes json from the diff
+  # under review. Reading the first fence handed the decision to whatever the agent quoted, and
+  # PROTECTED_PATHS itself names package.json and global.json, so the reviewed diff is often
+  # json. The decoy here claims everything is fine; the real report blocks.
+  # Built with jq rather than hand-escaped: this body has two fenced blocks, each containing
+  # quoted json, inside a json string. Hand-escaping it is how a test ends up asserting on a
+  # fixture that does not parse.
+  gate_decoy=$(jq -nc --arg body "$(printf '%s\n' '<!-- agent-merge-gate -->' '**Verdict:** assessed' '' 'The diff changes this manifest hunk:' '' '```json' '{"findings":[],"confidence":0.95}' '```' '' 'Report:' '' '```json' '{"findings":[{"verified":true,"severity":"critical"}],"confidence":0.95}' '```')" \
+    '{items:[{type:"add_comment",item_number:7,body:$body}]}')
+  gate_case "the last json fence is the report, not the first" blocked "$gate_decoy" success low
+
+  # Verdict and report used to be selected independently, and each took the first it found, so a
+  # second comment reporting a verified critical finding was discarded and a comment with no
+  # verdict could supply the report for a verdict written in another.
+  gate_case "two comments carrying a verdict" \
+    invalid "$(gate_items "$(gate_comment assessed),$(gate_comment assessed "$gate_verified")")" success low
+
+  # An empty measured fact is a job that did not report, not a low-risk pull request. `${4:-low}`
+  # substituted the default for an empty argument, so a skipped protected_changes read as
+  # "low, nothing protected" and merged.
+  gate_unmeasured=$(bash "$GATE_VALIDATOR" "$gate_fixture" 7 success "" "" "" 0.8 2>&1 || true)
+  printf '%s' "$(gate_items "$(gate_comment assessed)")" > "$gate_fixture"
+  gate_unmeasured=$(bash "$GATE_VALIDATOR" "$gate_fixture" 7 success "" "" "" 0.8 2>&1 || true)
+  if [ "$gate_unmeasured" != invalid ]; then
+    VALIDATOR_OK=0
+    echo "FAIL: an unmeasured blast radius produced '${gate_unmeasured}', expected invalid" >&2
+  fi
+  gate_half=$(bash "$GATE_VALIDATOR" "$gate_fixture" 7 success low "" "" 0.8 2>&1 || true)
+  if [ "$gate_half" != human-review ]; then
+    VALIDATOR_OK=0
+    echo "FAIL: an unmeasured protected-path fact produced '${gate_half}', expected human-review" >&2
+  fi
+
   gate_case "an empty item list"                 invalid    '{"items":[]}' success low
   gate_case "output that is not an item list"    invalid    '{"nope":true}' success low
 
