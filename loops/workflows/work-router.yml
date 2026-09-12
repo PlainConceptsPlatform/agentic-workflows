@@ -566,6 +566,13 @@ jobs:
   # gate is about to invalidate. Serialising the belt means each gate sees a main that
   # only changes between gates, every merge re-arms the siblings through
   # detect-pr-conflicts's rescan, and the queue drains one pull request at a time.
+  #
+  # `cancel-in-progress: false` protects the RUNNING gate, not the waiting ones: GitHub keeps
+  # exactly one pending run per group and cancels the previously pending one when a new run
+  # arrives. That is fine for the path this belt is built for, where detect-pr-conflicts re-arms
+  # one sibling per merge. It is a trap for a person dispatching by hand: labelling four pull
+  # requests `merge-gate` in one go leaves one running, one pending and two silently cancelled,
+  # with nothing on the pull requests to say so. Dispatch one, let it finish, then the next.
   call-merge-gate:
     needs: classify
     if: needs.classify.outputs.route == 'merge-gate'
