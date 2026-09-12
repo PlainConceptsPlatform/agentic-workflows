@@ -1202,6 +1202,31 @@ echo "── Merge gate validator ───────────────�
 # reasoning alone, and the worker has not run in production since, so these fixtures are the only
 # evidence the change is right. Executing the real script is the same technique that finally
 # caught the belt's jq bug, which every reading assertion had walked past.
+# The gate comments on every bot pull request, so anything it writes there is written dozens of
+# times a week. A CODEOWNERS of `* @someone` matches every pull request, so the owners row was
+# naming four people on routine auto-merges and @-mentioning each of them, which notifies them.
+# The row belongs to the disposition that actually wants an owner, and the names go in a code
+# span so the comment reports who owns the area without pinging them: on owner-review the gate
+# requests the review properly, and that is the notification.
+if worker_installed merge-gate; then
+  OWNERS_OK=1
+  if ! grep -q "outcome == 'owner-review'" "$MERGE_GATE_WORKER_MD"; then
+    OWNERS_OK=0
+    echo "FAIL: the gate comment names required owners unconditionally; gate the row on owner-review" >&2
+  fi
+  # Every rendering of required_owners has to sit inside a code span.
+  while IFS= read -r line; do
+    case "$line" in
+      *'`{0}`'*|*'`${{ needs.protected_changes.outputs.required_owners'*) continue ;;
+      *)
+        OWNERS_OK=0
+        echo "FAIL: required_owners is rendered without a code span, so the gate @-mentions people: ${line# }" >&2
+        ;;
+    esac
+  done < <(grep -F 'required_owners' "$MERGE_GATE_WORKER_MD" | grep -vE '^\s*(#|[a-z_]+:)' | grep -F 'Required owners')
+  if [ "$OWNERS_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 # Blast radius is the input the merge decision leans on hardest, and it is the one a reader
 # cannot check by eye. These cases are the six real pull requests the redesign was measured
 # against, reduced to their shape: the three that used to be parked for a person purely because

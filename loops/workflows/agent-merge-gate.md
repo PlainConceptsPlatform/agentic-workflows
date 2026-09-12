@@ -285,7 +285,7 @@ jobs:
             Protected files:
             ${{ needs.protected_changes.outputs.files }}
 
-            Required owners: ${{ needs.protected_changes.outputs.required_owners || 'none configured' }}
+            Required owners: `${{ needs.protected_changes.outputs.required_owners || 'none configured' }}`
 
             **Verdict:** owner-review
 
@@ -439,7 +439,9 @@ jobs:
             | Files / lines | ${{ needs.protected_changes.outputs.files_changed }} / ${{ needs.protected_changes.outputs.lines_changed }} |
             | Protected paths | ${{ needs.protected_changes.outputs.requires_review == 'true' && 'yes' || 'no' }} |
             | Owner paths | ${{ needs.protected_changes.outputs.owner_hit == 'true' && 'yes' || 'no' }} |
-            | Required owners | ${{ needs.protected_changes.outputs.required_owners || 'none configured' }} |
+            ${{ needs.validate_output.outputs.outcome == 'owner-review'
+              && format('| Required owners | `{0}` |', needs.protected_changes.outputs.required_owners != '' && needs.protected_changes.outputs.required_owners || 'none configured, see the matched paths above')
+              || '' }}
 
             Why this blast radius:
             ```
