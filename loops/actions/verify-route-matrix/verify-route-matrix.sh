@@ -1305,13 +1305,18 @@ if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
   gate_case "a verified medium finding does not block" \
                                                  auto-merge   "$(gate_items "$(gate_comment assessed "$gate_verified_low")")" success low
 
-  gate_fragile='{\"findings\":[],\"recoverability\":\"low\",\"acceptanceCriteriaMet\":true,\"confidence\":0.95}'
+  gate_fragile='{\"findings\":[],\"recoverability\":\"low\",\"recoverabilitySignals\":[\"rewrites the stored rows in place\"],\"acceptanceCriteriaMet\":true,\"confidence\":0.95}'
+  gate_bare_low='{\"findings\":[],\"recoverability\":\"low\",\"acceptanceCriteriaMet\":true,\"confidence\":0.95}'
   gate_unmet='{\"findings\":[],\"recoverability\":\"high\",\"acceptanceCriteriaMet\":false,\"confidence\":0.95}'
   gate_unsure='{\"findings\":[],\"recoverability\":\"high\",\"acceptanceCriteriaMet\":true,\"confidence\":0.4}'
   gate_case "medium risk that cannot be undone needs a person" \
                                                  human-review "$(gate_items "$(gate_comment assessed "$gate_fragile")")" success medium
   gate_case "low risk that cannot be undone still auto-merges" \
                                                  auto-merge   "$(gate_items "$(gate_comment assessed "$gate_fragile")")" success low
+  # An unevidenced "low" is the old category escalation wearing a new name, so it is held to the
+  # same standard as a finding: name what cannot be undone, or it does not change the outcome.
+  gate_case "a low rating that names nothing is read as medium" \
+                                                 auto-merge   "$(gate_items "$(gate_comment assessed "$gate_bare_low")")" success medium
   gate_case "an unmet acceptance criterion needs a person" \
                                                  human-review "$(gate_items "$(gate_comment assessed "$gate_unmet")")" success low
   gate_case "confidence below the threshold needs a person" \

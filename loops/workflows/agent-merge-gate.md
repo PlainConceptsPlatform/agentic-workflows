@@ -23,7 +23,14 @@ env:
   # sets blast radius high on its own, whatever the diff's size. CODEOWNERS names who is asked
   # when the repository has that file; it is never a prerequisite, because a repository without
   # one must still be able to protect its auth and its infrastructure.
-  OWNER_PATHS: '(^|/)(auth|security|migrations|infra|terraform)/'
+  #
+  # Matches a path segment or a file stem, in both spellings, because the same default has to
+  # work for `src/auth/`, `src/Api/Identity/` and `AuthEndpoints.cs`. The lowercase-only,
+  # directory-only version this replaced matched nothing at all in a .NET consumer: replayed
+  # against that repository's last eighteen gated pull requests it caught none of them, while
+  # this one catches exactly three and they are the three that deserved an owner (a database
+  # migration, a change to the platform role definitions, and a downstream token service).
+  OWNER_PATHS: '(^|/)([Aa]uth|[Aa]uthn|[Aa]uthz|[Aa]uthentication|[Aa]uthorization|[Ii]dentity|[Ss]ecurity|[Ss]ecrets?|[Mm]igrations|[Ii]nfra|terraform|helm|k8s|deploy)(/|[A-Z][A-Za-z]*\.[a-z]+$)'
   # Paths worth a second look that do not, alone, need a person. A match raises the floor to
   # medium, and medium with acceptable recoverability still auto-merges. This is the line that
   # separates "look here" from "stop here", which the old RISK_INDICATORS list could not.
@@ -836,6 +843,13 @@ timeout-minutes: 120
    a revert works but something (a cache, a config, a client) needs attention. `low` when a
    revert would not restore the previous behaviour: a migration that drops or rewrites data, a
    contract other repositories already consume, anything that leaves state behind.
+
+   **A `low` rating must name what cannot be undone**, in `recoverabilitySignals`. `low` parks
+   the pull request for a person, so it is the one judgement of yours that can hold up a merge on
+   its own, and the same rule applies to it as to a finding: unevidenced, it does not count. A
+   `low` with an empty `recoverabilitySignals` is read as `medium`. This is not an invitation to
+   pad the list — it is the difference between "this rewrites the plan rows in place" and a
+   reflex.
 
    **5e. Raise the blast radius if the paths missed something.** The measured level came from
    file paths and diff shape. If the change introduces something those rules cannot see — a new

@@ -96,7 +96,14 @@ jq -r \
       # could not see. It may never lower it.
       | ([($blast | rank), (($report.blastRadiusRaise.to // $blast) | rank)] | max) as $level
 
-      | (($report.recoverability // "medium") | ascii_downcase) as $recoverability
+      # The same rule the findings live by, applied to the one judgement field that can park a
+      # pull request on its own. An unevidenced "low" is the old category escalation wearing a
+      # new name: replayed against a consumer, a model that rated everything low dropped the
+      # auto-merge rate straight back to 27%, which is where it started. Saying a change cannot
+      # be undone means naming what cannot be undone.
+      | (($report.recoverability // "medium") | ascii_downcase) as $claimed
+      | (($report.recoverabilitySignals // []) | length > 0) as $evidenced
+      | (if $claimed == "low" and ($evidenced | not) then "medium" else $claimed end) as $recoverability
       | (($report.confidence // 0) | tonumber) as $confidence
 
       | if $conclusion != "success" then "blocked"
