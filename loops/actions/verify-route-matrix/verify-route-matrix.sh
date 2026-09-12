@@ -1319,6 +1319,52 @@ level=low")
   if [ "$BLAST_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+# apply-review's validator compares the unresolved review threads on a pull request against the
+# thread ids the agent reported handling. Two jq shapes broke it for every input: `add` on an
+# empty array is null, so a pull-request-level review with no inline thread crashed on `unique`,
+# and `scan` without a capture group emits strings, so `add` concatenated them and `unique`
+# crashed on a string. The agent had already pushed the fix; the run was marked failed and the
+# issue labelled stalled while the commit sat on the branch.
+REVIEW_VALIDATOR="${HERE}/../validate-review-output/validate-review-output.sh"
+if [ -f "$REVIEW_VALIDATOR" ] && worker_installed apply-review; then
+  REVIEW_OK=1
+  rv_fixture="${TMPDIR:-/tmp}/route-matrix-review-$$"
+
+  rv_case() {
+    local name="$1" want="$2" threads="$3" items="$4" got
+    printf '%s' "$threads" > "${rv_fixture}-threads.json"
+    printf '%s' "$items" > "${rv_fixture}-out.json"
+    # `|| true`: a validator that crashes must show up as a failed case, not kill this script.
+    got=$(bash "$REVIEW_VALIDATOR" "${rv_fixture}-out.json" 181 "${rv_fixture}-threads.json" 2>&1 || true)
+    if [ "$got" != "$want" ]; then
+      REVIEW_OK=0
+      echo "FAIL: the apply-review validator called '${name}' ${got}, expected ${want}" >&2
+    fi
+  }
+
+  rv_impl() { printf '{"items":[{"type":"add_comment","item_number":181,"body":"**Review outcome:** implemented %s"},{"type":"push_to_pull_request_branch","pr_number":181}]}' "$1"; }
+  rv_open() { printf '{"id":"%s","isResolved":false,"isOutdated":false}' "$1"; }
+
+  # The case that was failing in production: requesting changes from the Files tab creates a
+  # review and no thread, so both sides are empty and must agree rather than crash.
+  rv_case "a review with no threads at all"        implemented "[]" "$(rv_impl '')"
+  rv_case "no threads and no push needed"          needs-human "[]" '{"items":[{"type":"add_comment","item_number":181,"body":"**Review outcome:** needs-human"}]}'
+  rv_case "one thread, reported"                   implemented "[$(rv_open PRRT_aaa)]" "$(rv_impl 'PRRT_aaa')"
+  rv_case "one thread, silently skipped"           invalid     "[$(rv_open PRRT_aaa)]" "$(rv_impl '')"
+  rv_case "a thread id that was never opened"      invalid     "[$(rv_open PRRT_aaa)]" "$(rv_impl 'PRRT_bbb')"
+  rv_case "two threads, both reported"             implemented "[$(rv_open PRRT_a),$(rv_open PRRT_b)]" "$(rv_impl 'PRRT_a and PRRT_b')"
+  rv_case "two threads, only one reported"         invalid     "[$(rv_open PRRT_a),$(rv_open PRRT_b)]" "$(rv_impl 'PRRT_a')"
+  rv_case "a resolved thread is not expected"      implemented '[{"id":"PRRT_aaa","isResolved":true,"isOutdated":false}]' "$(rv_impl '')"
+  rv_case "implemented without the push"           invalid     "[]" '{"items":[{"type":"add_comment","item_number":181,"body":"**Review outcome:** implemented"}]}'
+  # Nothing addressed to this pull request at all. `map` over no comments is [], `add` on that is
+  # null, and `unique` dies: the run fails instead of reporting the output as unusable. This is
+  # the case the `// []` guards; the bracketed scan alone does not reach it.
+  rv_case "a comment aimed at another pull request" invalid    "[]" '{"items":[{"type":"add_comment","item_number":999,"body":"**Review outcome:** implemented"},{"type":"push_to_pull_request_branch","pr_number":181}]}'
+
+  rm -f "${rv_fixture}-threads.json" "${rv_fixture}-out.json"
+  if [ "$REVIEW_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 GATE_VALIDATOR="${HERE}/../validate-merge-gate-output/validate-merge-gate-output.sh"
 if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
   VALIDATOR_OK=1
