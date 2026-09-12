@@ -96,7 +96,13 @@ runs:
           for (const issue of issues) {
             if (issue.pull_request) continue;
             const labels = names(issue);
-            if (!labels.includes('review')) continue;
+            // `stalled` alone is enough to be looked at. This used to require `review`, on the
+            // assumption that a park always sets both, and an issue that ended up carrying
+            // `stalled` without it fell through every branch below: never retried, never
+            // reported, invisible. One sat that way for thirty hours in a consumer with
+            // `implement` still on it and a janitor running every six hours past it. `stalled`
+            // is the marker the retry keys on, so it is what decides whether to look.
+            if (!labels.includes('review') && !labels.includes('stalled')) continue;
 
             const comments = await github.paginate(github.rest.issues.listComments, {
               ...context.repo, issue_number: issue.number, per_page: 100,
