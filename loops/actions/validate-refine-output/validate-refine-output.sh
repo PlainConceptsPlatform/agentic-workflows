@@ -8,13 +8,14 @@ output_file="$1"
 marker="$2"
 comment_prefix="$3"
 issue_number="$4"
+draft_marker="$5"
 
 if [ ! -f "$output_file" ] || ! jq -e '.items | arrays' "$output_file" >/dev/null 2>&1; then
   echo invalid
   exit 0
 fi
 
-jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_number" '
+jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_number" --arg draft_marker "$draft_marker" '
   def has_replacement_body:
     any(.items[]; .type == "update_issue" and
       (.item_number == null or (.item_number | tostring) == $issue) and
@@ -22,6 +23,14 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
 
   def has_update:
     any(.items[]; .type == "update_issue");
+
+  # A temporal draft is a replacement body the worker still expects to grow: the draft
+  # marker distinguishes it from a finished body.
+  def has_draft_body:
+    any(.items[]; .type == "update_issue" and
+      (.item_number == null or (.item_number | tostring) == $issue) and
+      (.body | type == "string") and
+      (.body | contains($draft_marker)));
 
   # A split writes children, which are the only items allowed to target something other than
   # the source issue: they do not exist yet, so they carry no number at all.
@@ -65,11 +74,13 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
 
   # Order matters: a run that wrote children is a split even though it also replaced the
   # parent body, and a lone child with no parent update is an incomplete split, not a
-  # complete refinement.
+  # complete refinement. A body carrying the draft marker is a temporal draft, not a
+  # finished refinement: it only counts as the questions outcome when the matching
+  # batched-questions comment is also there.
   if child_count >= 2 and has_replacement_body and has_only_source_items then "split"
   elif child_count > 0 then "invalid"
-  elif has_replacement_body and has_only_source_items then "complete"
-  elif has_clarification and (has_update | not) and has_only_source_items
+  elif has_replacement_body and (has_draft_body | not) and has_only_source_items then "complete"
+  elif has_clarification and ((has_update | not) or has_draft_body) and has_only_source_items
     and (reported_incomplete | not) then "questions"
   else "invalid"
   end

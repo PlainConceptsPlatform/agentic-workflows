@@ -35,7 +35,7 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | Route | Worker | Starts when | Produces |
 |---|---|---|---|
 | `triage` | `agent-triage.md` | someone outside the organisation opens an issue | a comment, and either the `refine` label when it passes, the `review` label when it needs a person, or a close when it is genuinely rejected |
-| `refine` | `agent-refine.md` | the `refine` label is added | a refined story with a Fibonacci estimate, or questions for the author, or a split into several right-sized issues |
+| `refine` | `agent-refine.md` | the `refine` label is added | a refined story wrapped in the repository's own issue template with a Fibonacci estimate, or a temporal draft plus questions for the author, or a split into several right-sized issues |
 | `implement` | `agent-implement.md` | the `implement` label is added | one branch, one pull request, one issue closed |
 | `merge-gate` | `agent-merge-gate.md` | CI reports on a bot pull request | a squash merge, a fix pushed to the same branch, or a hand-off to a human |
 | `apply-review` | `agent-apply-review.md` | someone reviews or comments on a bot pull request | the requested changes pushed to that pull request |

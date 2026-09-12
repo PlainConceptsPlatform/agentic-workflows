@@ -7,6 +7,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VALIDATOR="${HERE}/../validate-refine-output/validate-refine-output.sh"
 MARKER='<!-- agent-refine -->'
+DRAFT_MARK='<!-- agent-refine-draft -->'
 PREFIX='Refinement update'
 TEMP_DIR="$(mktemp -d)"
 
@@ -23,7 +24,7 @@ assert_output() {
   local actual
 
   printf '%s' "$payload" > "$output_file"
-  actual="$(bash "$VALIDATOR" "$output_file" "$MARKER" "$PREFIX" 42)"
+  actual="$(bash "$VALIDATOR" "$output_file" "$MARKER" "$PREFIX" 42 "$DRAFT_MARK")"
 
   if [ "$actual" = "$expected" ]; then
     PASS=$((PASS + 1))
@@ -55,6 +56,10 @@ assert_output 'wrong issue output is invalid' invalid \
   '{"items":[{"type":"add_comment","item_number":7,"body":"Which users need this feature?"}]}'
 assert_output 'complete output cannot update another issue' invalid \
   '{"items":[{"type":"update_issue","item_number":42,"body":"# User story"},{"type":"update_issue","item_number":7,"body":"# Other story"}]}'
+assert_output 'draft update with questions comment is questions' questions \
+  '{"items":[{"type":"update_issue","item_number":42,"body":"<!-- agent-refine-draft -->\n### Proposal\n_pending — see questions below_"},{"type":"add_comment","item_number":42,"body":"<!-- agent-refine -->\nRefinement update\nI have some questions about this issue. Please reply in one comment and I''ll process your answers.\nWhich area owns this behavior?"}]}'
+assert_output 'draft update alone is invalid' invalid \
+  '{"items":[{"type":"update_issue","item_number":42,"body":"<!-- agent-refine-draft -->\n### Proposal\n_pending — see questions below_"}]}'
 
 # From a real run. The agent's first update_issue went out malformed, the bridge counted it
 # as spent, the retry carrying the body was refused, and the "Refinement complete" comment

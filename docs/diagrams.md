@@ -163,6 +163,8 @@ flowchart TD
 
 Decides the size of the work, which is the decision that determines whether it ever lands. An
 estimate of 8 or more is split into children of 5 or less, and each child walks the pipeline alone.
+The refined story is wrapped in the repository's own issue form, and when questions remain the
+worker leaves a temporal draft on the issue and asks everything in one batched comment.
 
 ```mermaid
 flowchart TD
@@ -174,8 +176,9 @@ flowchart TD
     refClassify -->|yes| refTrivial
     refClassify -->|no| refStory
     refTrivial("Trivial plan<br/>marker, summary, checklist<br/>no Gherkin, no diagram") --> refEstimate
-    refStory("Story<br/>Given/When/Then per work unit,<br/>grounded in the code") --> refProse
+    refStory("Story<br/>Given/When/Then per work unit,<br/>grounded in the code") --> refWrap
     refStory -.->|"cannot ground it"| refFail
+    refWrap("Wrap<br/>story into the repository's<br/>own issue form") --> refProse
     refProse("Prose<br/>@humanizer over the final text") --> refEstimate
     refEstimate["Estimate<br/>Fibonacci, against ESTIMATE_BANDS"] --> refSplit
     refSplit{"8 or more?"}
@@ -187,7 +190,7 @@ flowchart TD
     refOutcome -->|no| refDone
     refOutcome -->|yes| refAsk
     refDone(("Refined<br/>estimate recorded, implement added"))
-    refAsk(("Questions<br/>asked in business language,<br/>review added"))
+    refAsk(("Questions<br/>temporal draft on the issue,<br/>one batched comment,<br/>review added"))
     refAsk -->|"author replies<br/>re-enters via the router"| refStart
     refFail(("Incomplete<br/>refine label kept for a retry"))
 
@@ -197,7 +200,7 @@ flowchart TD
     classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class refStart start
-    class refReserve,refFacts,refExplore,refTrivial,refStory,refProse action
+    class refReserve,refFacts,refExplore,refTrivial,refStory,refWrap,refProse action
     class refClassify,refEstimate,refSplit,refOutcome decision
     class refFail failure
     class refDone,refAsk,refChildren success
