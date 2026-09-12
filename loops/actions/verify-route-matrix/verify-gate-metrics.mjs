@@ -48,4 +48,19 @@ check("lists every disposition it saw",
   run({ "auto-merge": 1, blocked: 2 }, [], []),
   (s) => s.includes("`blocked` · 2") && s.includes("`auto-merge` · 1"));
 
+
+// The triage loop's entry guard. An issue carrying `stalled` is the janitor's to retry; one
+// carrying `stalled` without `review` used to be skipped before any branch could see it, so it
+// was neither retried nor reported. Extracted and run rather than grepped, because "which
+// issues does this loop even look at" is exactly the kind of condition a grep reads past.
+const guardSrc = yml.match(/if \(!labels\.includes\('review'\)[^\n]*\n/);
+if (!guardSrc) { console.error("FAIL: housekeeping has no triage entry guard"); process.exit(1); }
+const looksAt = (labels) => !new Function("labels", `return ${guardSrc[0].trim().replace(/^if \(/, "").replace(/\)\s*continue;$/, "")};`)(labels);
+
+check("looks at a parked issue (review + stalled)", looksAt(["review", "stalled", "implement"]), true);
+check("looks at a decided issue (review only)", looksAt(["review", "implement"]), true);
+check("looks at an orphaned stall (stalled, no review)", looksAt(["stalled", "implement"]), true);
+check("ignores an issue with neither", looksAt(["implement", "sp-2"]), false);
+check("ignores a plain refined issue", looksAt(["refined"]), false);
+
 process.exit(failed);
