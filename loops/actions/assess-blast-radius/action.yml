@@ -51,6 +51,12 @@ outputs:
   owner_hits:
     description: The owner paths that matched, one per line.
     value: ${{ steps.assess.outputs.owner_hits }}
+  owner_hit:
+    description: Whether an owner path was touched. A scalar, so no caller has to compare a multi-line value to an empty string.
+    value: ${{ steps.assess.outputs.owner_hit }}
+  sensitive_hit:
+    description: Whether a sensitive path was touched.
+    value: ${{ steps.assess.outputs.sensitive_hit }}
   sensitive_hits:
     description: The sensitive paths that matched, one per line.
     value: ${{ steps.assess.outputs.sensitive_hits }}

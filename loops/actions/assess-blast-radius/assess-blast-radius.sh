@@ -125,7 +125,13 @@ emit_block() {
 echo "level=$level"
 echo "files_changed=$files_changed"
 echo "lines_changed=$lines_changed"
+# Emitted as plain scalars, not left for the caller to derive by comparing a heredoc block to
+# an empty string. Whether the runner renders an empty block as "" or as a newline is not
+# something this repository can test off-runner, and a caller that guessed wrong would have sent
+# every pull request to owner review. A shell that already knows the answer should just say it.
 echo "requires_review=$([ -n "$protected_hits" ] && echo true || echo false)"
+echo "owner_hit=$([ -n "$owner_hits" ] && echo true || echo false)"
+echo "sensitive_hit=$([ -n "$sensitive_hits" ] && echo true || echo false)"
 emit_block signals "$signals"
 emit_block files "$protected_hits"
 emit_block owner_hits "$owner_hits"

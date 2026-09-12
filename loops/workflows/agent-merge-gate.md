@@ -201,7 +201,8 @@ jobs:
       required_owners: ${{ steps.blast.outputs.required_owners }}
       files_changed: ${{ steps.blast.outputs.files_changed }}
       lines_changed: ${{ steps.blast.outputs.lines_changed }}
-      owner_hit: ${{ steps.blast.outputs.owner_hits != '' }}
+      owner_hit: ${{ steps.blast.outputs.owner_hit }}
+      sensitive_hit: ${{ steps.blast.outputs.sensitive_hit }}
       # The decision, computed once. A protected path holds the merge for a human, but it must
       # not stop the agent repairing failed CI on those same files: blocking there strands the
       # pull request with nobody able to fix it. That pair of conditions used to be restated at
@@ -590,8 +591,8 @@ jobs:
           issue-number: ${{ needs.subject.outputs.issue }}
           body: |
             ${{ env.ATTEMPT_MARKER }}
-            Attempt ${{ inputs.attempts_so_far || '0' }} of ${{ steps.budget.outputs.threshold }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
-            The issue keeps `implement`; the merge belt will retry.
+            Attempt ${{ inputs.attempts_so_far || '0' }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
+            This failure parks at ${{ steps.budget.outputs.threshold }}. The issue keeps `implement`; the merge belt will retry.
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Report the exhausted attempt budget
         if: steps.budget.outputs.park == 'true' && steps.budget.outputs.kind == 'machine'

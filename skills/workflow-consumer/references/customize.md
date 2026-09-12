@@ -80,6 +80,7 @@ three path lists and four thresholds, and the difference between them is the dif
 | `BLAST_HIGH_FILES` / `BLAST_HIGH_LINES` | Diff shape at or above which the radius is high | Set too high and a sprawling change merges itself. This is what catches a change that touches no named path |
 | `BLAST_MEDIUM_FILES` / `BLAST_MEDIUM_LINES` | Diff shape at or above which the radius is medium | Medium alone does not park anything, so a low value costs attention rather than safety |
 | `CONFIDENCE_THRESHOLD` | Agent confidence below which the pull request goes to a person | Near 1 and every pull request is parked; near 0 and the agent's own uncertainty stops meaning anything |
+| `PARK_AT_UNUSABLE_OUTPUT` | Reports the validator could not read before the gate stops retrying and hands the pull request to a person | Too high and one badly formatted report holds the repo-wide merge belt for hours; repeating it does not fix it |
 | `RISK_INDICATORS` | Areas the review pass should look at first | Advisory since the dispositions landed. It used to decide the outcome by category, which is why the gate parked nearly everything |
 
 `CODEOWNERS` refines who is asked when a repository has one. It is never required: `OWNER_PATHS`

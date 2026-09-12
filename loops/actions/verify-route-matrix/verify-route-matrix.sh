@@ -1273,6 +1273,24 @@ tests/StandingFilesTests.cs"
     echo "FAIL: an unconfigured path list must match nothing, not everything" >&2
   fi
 
+  # The facts the disposition reads must arrive as scalars the shell computed, not as a caller
+  # comparing a multi-line output to an empty string. Whether a runner renders an empty heredoc
+  # block as "" or as a newline is not testable off-runner, and a caller that guessed wrong would
+  # have sent every pull request to owner review.
+  blast_scalars=$(PROTECTED_PATHS='^\.' OWNER_PATHS='(^|/)auth/' SENSITIVE_PATHS='(^|/)domain/' \
+    HIGH_FILES=20 HIGH_LINES=800 MEDIUM_FILES=5 MEDIUM_LINES=200 \
+    bash "$BLAST_SCRIPT" 1 10 <<<"src/auth/token.cs")
+  for expected in "requires_review=false" "owner_hit=true" "sensitive_hit=false"; do
+    if ! printf '%s\n' "$blast_scalars" | grep -qx "$expected"; then
+      BLAST_OK=0
+      echo "FAIL: blast radius did not emit '${expected}' as a scalar" >&2
+    fi
+  done
+  if grep -q "owner_hits != ''" "$MERGE_GATE_WORKER_MD"; then
+    BLAST_OK=0
+    echo "FAIL: the worker derives owner_hit by comparing a multi-line output to an empty string" >&2
+  fi
+
   # Every multi-line output is built from paths the pull request chose, so a fixed heredoc
   # delimiter lets a crafted path close its block early and have the rest read as new outputs.
   # `level` is emitted above the blocks, so an injected `level=low` would override the measured
