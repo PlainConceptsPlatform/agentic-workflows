@@ -37,7 +37,7 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | `triage` | `agent-triage.md` | someone outside the organisation opens an issue | a comment, and either the `refine` label when it passes, the `review` label when it needs a person, or a close when it is genuinely rejected |
 | `refine` | `agent-refine.md` | the `refine` label is added | a refined story wrapped in the repository's own issue template with a Fibonacci estimate, or a temporal draft plus questions for the author, or a split into several right-sized issues |
 | `implement` | `agent-implement.md` | the `implement` label is added | one branch, one pull request, one issue closed |
-| `merge-gate` | `agent-merge-gate.md` | CI reports on a bot pull request | a squash merge, a fix pushed to the same branch, or a hand-off to a human |
+| `merge-gate` | `agent-merge-gate.md` | CI reports on a bot pull request | one of `auto-merge`, `human-review`, `owner-review` or `blocked`, or a fix pushed to the same branch |
 | `apply-review` | `agent-apply-review.md` | someone reviews or comments on a bot pull request | the requested changes pushed to that pull request |
 | `audit` | `agent-audit.md` | Mondays, or on demand | one issue of findings, labelled `refine` so it gets sized and split |
 | `release` | `agent-release.md` | on demand (`operation=release`) | a tagged GitHub Release with AI-generated release notes |
@@ -59,8 +59,14 @@ bot: autonomy between 6% and 50%. The rest stopped somewhere and told nobody.
 
 The rule that shapes the janitor: **retry a failure, report a decision.** `stalled` marks a park
 the machine caused, and those are worth running again. A triage `needs-maintainer`, a refine
-`questions` or a merge-gate `review` is a verdict the agent reached on purpose, and re-running a
-decision only reproduces it, so those are listed in the digest and never retried.
+`questions` or any merge-gate disposition other than `auto-merge` is a decision reached on
+purpose, and re-running a decision only reproduces it, so those are listed in the digest and
+never retried.
+
+The digest also carries the gate's own scoreboard: the share of dispositions that were
+`auto-merge` over the last fortnight, the split across the rest, and how many auto-merged pull
+requests were later reverted. That last number is the one that has to stay flat while the first
+one climbs.
 
 It runs on the App token, because GitHub starts no workflow run from an event raised with
 `GITHUB_TOKEN` -- with the default token every retry would be a green no-op. Every write goes
@@ -107,7 +113,7 @@ number you did not write, that is what it is.
 | Worker | Agent step | Why |
 |---|---|---|
 | `agent-implement.md` | 90 | Writes code, runs a build and a test suite, and pushes a branch. |
-| `agent-merge-gate.md` | 60 | Reads CI failure evidence and may fix and re-push. |
+| `agent-merge-gate.md` | 120 | Reviews the diff for defects, and may fix failed CI and re-push. |
 | `agent-refine.md` | 60 | Reads the repository to ground a story, then rewrites one issue body. |
 | `agent-apply-review.md` | 45 | Applies review comments to an existing branch. |
 | `agent-audit.md` | 45 | Sweeps the repository and writes one findings issue. |

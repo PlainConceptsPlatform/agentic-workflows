@@ -106,6 +106,11 @@ export function entryValue(entry: EnvEntry): string {
   return [first, ...entry.lines.slice(1).map((line) => line.trim())].join("\n").trim();
 }
 
+// A value that is present but says nothing: empty, or empty quotes.
+function isBlank(value: string): boolean {
+  return value === "" || value === '""' || value === "''";
+}
+
 export function mergeWorkerEnv(
   packageContent: string,
   consumerContent: string,
@@ -127,6 +132,16 @@ export function mergeWorkerEnv(
     const mine = consumerByKey.get(entry.key);
     if (mine === undefined || entryValue(mine) === entryValue(entry)) {
       merged.push(entry);
+      continue;
+    }
+    // An empty value is the absence of a choice, not a choice of nothing. Treating it as the
+    // consumer's is how `VERIFY_COMMANDS: ""` survived in all four consuming repositories with
+    // no baseline to compare against, leaving the merge gate pushing repairs it had verified
+    // with an empty command block. If the package has something and the consumer has nothing,
+    // the package wins.
+    if (isBlank(entryValue(mine)) && !isBlank(entryValue(entry))) {
+      merged.push(entry);
+      report.updatedDefaults.push(entry.key);
       continue;
     }
     const base = baselineByKey.get(entry.key);

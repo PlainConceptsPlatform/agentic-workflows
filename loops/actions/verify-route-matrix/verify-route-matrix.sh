@@ -577,14 +577,14 @@ if worker_installed implement && worker_installed merge-gate; then
   PROTECTED_OK=1
   grep -Fq 'protected-files: allowed' "$IMPLEMENT_WORKER_MD" || PROTECTED_OK=0
   grep -Fq 'protected-files: allowed' "$MERGE_GATE_WORKER_MD" || PROTECTED_OK=0
-  grep -Fq "holds_review: \${{ steps.files.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure' }}" "$MERGE_GATE_WORKER_MD" || PROTECTED_OK=0
+  grep -Fq "holds_review: \${{ steps.blast.outputs.requires_review == 'true' && needs.subject.outputs.conclusion != 'failure' }}" "$MERGE_GATE_WORKER_MD" || PROTECTED_OK=0
   # The decision must not be re-derived anywhere: one definition, everything else reads it.
   if [ "$(count -c "requires_review == 'true' && needs.subject.outputs.conclusion != 'failure'" "$MERGE_GATE_WORKER_MD")" -ne 1 ]; then
     PROTECTED_OK=0
     echo "FAIL: the protected-files hold is derived in more than one place; read holds_review instead" >&2
   fi
   # And conclude must still refuse to merge a protected pull request whatever CI said.
-  grep -Fq "needs.protected_changes.outputs.requires_review != 'true' || needs.validate_output.outputs.outcome != 'merge'" "$MERGE_GATE_WORKER_MD" || PROTECTED_OK=0
+  grep -Fq "needs.protected_changes.outputs.requires_review != 'true' || needs.validate_output.outputs.outcome != 'auto-merge'" "$MERGE_GATE_WORKER_MD" || PROTECTED_OK=0
   if [ "$PROTECTED_OK" -eq 1 ]; then
     PASS=$((PASS + 1))
   else
@@ -717,8 +717,8 @@ if worker_installed merge-gate; then
 
   # The worker's own comments must keep the distinction: progress notes carry no marker,
   # failed attempts carry the attempt marker, verdicts carry the marker AND the Verdict line.
-  # Three verdict sites: the review hold on the issue, the agent's assessment on the issue,
-  # and conclude's short verdict on the pull request itself.
+  # Three verdict sites: the owner-review hold on the issue, the agent's report on the issue,
+  # and conclude's disposition block on the pull request itself.
   if grep -q 'ATTEMPT_MARKER: "<!-- agent-merge-gate-attempt -->"' "$MERGE_GATE_WORKER_MD" &&
     [ "$(count -c '\${{ env.GATE_MARKER }}' "$MERGE_GATE_WORKER_MD")" -eq 3 ]; then
     PASS=$((PASS + 1))
@@ -792,8 +792,8 @@ if worker_installed merge-gate; then
     grep -n '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD" >&2
   fi
   # And that one place has to be the merge outcome, not a hold or a failed attempt.
-  grep -B12 '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD" | grep -q "outcome == 'merge'" ||
-    { PENDING_OK=0; echo "FAIL: the only pr-pending removal must sit under the merge outcome" >&2; }
+  grep -B16 '\${{ env.PR_PENDING_LABEL }}' "$MERGE_GATE_WORKER_MD" | grep -q "outcome == 'auto-merge'" ||
+    { PENDING_OK=0; echo "FAIL: the only pr-pending removal must sit under the auto-merge disposition" >&2; }
 
   # The invariant only ever looked at the merge gate, so apply-review quietly stripped the label
   # on its already-satisfied and needs-human paths — both of which leave the pull request open.
@@ -1081,7 +1081,17 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
 
   # The janitor closes issues, and the only issues it may close are a split parent whose
   # children are all done and its own digest. Anything else is a person's to close.
-  closes=$(count -cE "state: 'closed'" "$HOUSEKEEPING_YML")
+  #
+  # Counted on the close shape, not on the words. A bare `state: 'closed'` is also how you ask
+  # the API for closed things, and the gate metrics list closed pull requests to find the merges:
+  # counting the string alone reported that listing as a third close. Both real closes state a
+  # reason, so that is what is counted, and the assertion below keeps the two from drifting apart
+  # by refusing any close that does not.
+  closes=$(count -cE "state: 'closed', state_reason:" "$HOUSEKEEPING_YML")
+  if grep -nE "issues\.update\(.*state: 'closed'" "$HOUSEKEEPING_YML" | grep -qv "state_reason:"; then
+    HK_OK=0
+    echo "FAIL: housekeeping closes an issue without a state_reason; the close audit counts on it" >&2
+  fi
   if [ "$closes" -eq 2 ]; then
     PASS=$((PASS + 1))
   else
@@ -1173,6 +1183,80 @@ echo "── Merge gate validator ───────────────�
 # reasoning alone, and the worker has not run in production since, so these fixtures are the only
 # evidence the change is right. Executing the real script is the same technique that finally
 # caught the belt's jq bug, which every reading assertion had walked past.
+# Blast radius is the input the merge decision leans on hardest, and it is the one a reader
+# cannot check by eye. These cases are the six real pull requests the redesign was measured
+# against, reduced to their shape: the three that used to be parked for a person purely because
+# they touched a domain entity or added an endpoint, and the one that genuinely wanted an owner
+# and matched no sensitive path at all.
+BLAST_SCRIPT="${HERE}/../assess-blast-radius/assess-blast-radius.sh"
+if [ -f "$BLAST_SCRIPT" ] && worker_installed merge-gate; then
+  BLAST_OK=1
+
+  blast_case() {
+    local name="$1" want="$2" files_changed="$3" lines_changed="$4" paths="$5"
+    local got
+    got=$(PROTECTED_PATHS='^(\.|package\.json$)' \
+          OWNER_PATHS='(^|/)(auth|security|migrations|infra)/' \
+          SENSITIVE_PATHS='(^|/)([Dd]omain|[Cc]ontracts)/' \
+          BLAST_HIGH_FILES=20 BLAST_HIGH_LINES=800 \
+          BLAST_MEDIUM_FILES=5 BLAST_MEDIUM_LINES=200 \
+          HIGH_FILES=20 HIGH_LINES=800 MEDIUM_FILES=5 MEDIUM_LINES=200 \
+          bash "$BLAST_SCRIPT" "$files_changed" "$lines_changed" <<<"$paths" |
+          sed -n 's/^level=//p')
+    if [ "$got" != "$want" ]; then
+      BLAST_OK=0
+      echo "FAIL: blast radius called '${name}' ${got}, expected ${want}" >&2
+    fi
+  }
+
+  blast_case "a two-file presentation change"    low    2  119  "src/ui/list.tsx
+src/ui/list.test.tsx"
+  blast_case "a four-file change under the bar"  low    4  174  "src/ui/pane.tsx
+src/ui/pane.test.tsx
+src/lib/size.ts
+src/i18n/en.json"
+  blast_case "a domain entity change"            medium 7  283  "src/Domain/Agents/Conversation.cs
+src/Application/Handlers.cs
+src/ui/panel.tsx
+src/ui/panel.test.tsx
+src/i18n/en.json
+src/i18n/es.json
+tests/ConversationTests.cs"
+  blast_case "two new endpoints"                 medium 8  627  "src/Api/Endpoints.cs
+src/Application/Handlers.cs
+src/Infrastructure/Workspace.cs
+src/ui/files-pane.tsx
+src/i18n/en.json
+src/i18n/es.json
+tests/FilesTests.cs
+tests/WorkspaceTests.cs"
+  blast_case "twenty-nine files across five layers" \
+                                                 high   29 1612 "src/Api/BotsEndpoints.cs
+src/Application/BotHandlers.cs
+src/Domain/Agents/Bot.cs
+src/Infrastructure/Agents/BotWorkspace.cs
+tests/StandingFilesTests.cs"
+  # An owner path on its own, with a diff too small to reach any threshold.
+  blast_case "one file under an owner path"      high   1  12   "src/auth/session.ts"
+  # A protected path on its own, likewise.
+  blast_case "one protected manifest"            high   1  3    "package.json"
+  # An empty regex must match nothing. Matching everything would mark every pull request
+  # protected and hand the whole belt to a person.
+  # Captured, not piped into grep -q: this file runs under pipefail, and grep exiting on its
+  # first match sends SIGPIPE back up a pipeline that then reports failure.
+  blast_unconfigured=$(PROTECTED_PATHS='' OWNER_PATHS='' SENSITIVE_PATHS='' \
+     HIGH_FILES=20 HIGH_LINES=800 MEDIUM_FILES=5 MEDIUM_LINES=200 \
+     bash "$BLAST_SCRIPT" 1 5 <<<"src/ui/list.tsx")
+  if printf '%s\n' "$blast_unconfigured" | grep -q '^requires_review=false$'; then
+    :
+  else
+    BLAST_OK=0
+    echo "FAIL: an unconfigured path list must match nothing, not everything" >&2
+  fi
+
+  if [ "$BLAST_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 GATE_VALIDATOR="${HERE}/../validate-merge-gate-output/validate-merge-gate-output.sh"
 if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
   VALIDATOR_OK=1
@@ -1180,37 +1264,95 @@ if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
 
   gate_case() {
     local name="$1" want="$2" json="$3" conclusion="$4"
+    local blast="${5:-low}" protected="${6:-false}" owner="${7:-false}"
     printf '%s' "$json" > "$gate_fixture"
     local got
-    got=$(bash "$GATE_VALIDATOR" "$gate_fixture" 7 "$conclusion" 2>&1)
+    got=$(bash "$GATE_VALIDATOR" "$gate_fixture" 7 "$conclusion" "$blast" "$protected" "$owner" 0.8 2>&1)
     if [ "$got" != "$want" ]; then
       VALIDATOR_OK=0
       echo "FAIL: the merge-gate validator called '${name}' ${got}, expected ${want}" >&2
     fi
   }
 
-  gate_verdict='{"type":"add_comment","item_number":7,"body":"<!-- agent-merge-gate -->\n**Verdict:** VERB"}'
+  # A report the agent would produce on a change it reviewed and found nothing wrong with.
+  gate_clean='{\"findings\":[],\"recoverability\":\"high\",\"acceptanceCriteriaMet\":true,\"confidence\":0.95}'
   gate_push='{"type":"push_to_pull_request_branch","pr_number":9}'
   gate_items() { printf '{"items":[%s]}' "$1"; }
-  gate_comment() { printf '%s' "${gate_verdict/VERB/$1}"; }
+  # The agent writes one of two words and a fenced JSON block. Everything else about the
+  # outcome is computed from that block and from the measured facts passed as arguments.
+  gate_comment() {
+    printf '{"type":"add_comment","item_number":7,"body":"<!-- agent-merge-gate -->\\n**Verdict:** %s\\n\\n```json\\n%s\\n```"}' "$1" "${2:-$gate_clean}"
+  }
 
-  gate_case "merge on green with no push"        merge      "$(gate_items "$(gate_comment merge)")" success
-  gate_case "merge on a failed CI run"           invalid    "$(gate_items "$(gate_comment merge)")" failure
-  gate_case "merge carrying a push"              invalid    "$(gate_items "$(gate_comment merge),${gate_push}")" success
-  # The case the rule exists for. A conflicting pull request has no merge ref, so GitHub never
-  # runs CI on that head and the belt falls back to the branch's last verdict, usually success.
-  # Requiring conclusion == failure here discarded the resolved merge commit the agent had just
-  # pushed, and the belt re-dispatched on the same verdict up to six times.
-  gate_case "remediated with one push, CI green" remediated "$(gate_items "$(gate_comment remediated),${gate_push}")" success
-  gate_case "remediated with one push, CI red"   remediated "$(gate_items "$(gate_comment remediated),${gate_push}")" failure
-  gate_case "remediated with no push"            invalid    "$(gate_items "$(gate_comment remediated)")" failure
-  gate_case "remediated with two pushes"         invalid    "$(gate_items "$(gate_comment remediated),${gate_push},${gate_push}")" failure
-  gate_case "review with no push"                review     "$(gate_items "$(gate_comment review)")" failure
-  gate_case "review carrying a push"             invalid    "$(gate_items "$(gate_comment review),${gate_push}")" failure
-  gate_case "a verdict aimed at another issue"   invalid    '{"items":[{"type":"add_comment","item_number":99,"body":"<!-- agent-merge-gate -->\n**Verdict:** merge"}]}' success
-  gate_case "no verdict in the output"           invalid    '{"items":[{"type":"add_comment","item_number":7,"body":"just a note"}]}' success
-  gate_case "an empty item list"                 invalid    '{"items":[]}' success
-  gate_case "output that is not an item list"    invalid    '{"nope":true}' success
+  # The measured facts decide, and a clean report cannot argue with them.
+  gate_case "clean and low risk auto-merges"     auto-merge   "$(gate_items "$(gate_comment assessed)")" success low
+  gate_case "medium risk still auto-merges when recoverable" \
+                                                 auto-merge   "$(gate_items "$(gate_comment assessed)")" success medium
+  gate_case "high blast radius needs the owner"  owner-review "$(gate_items "$(gate_comment assessed)")" success high
+  gate_case "a protected path needs the owner"   owner-review "$(gate_items "$(gate_comment assessed)")" success low  true
+  gate_case "an owner path needs the owner"      owner-review "$(gate_items "$(gate_comment assessed)")" success low  false true
+  gate_case "a non-success CI conclusion blocks" blocked      "$(gate_items "$(gate_comment assessed)")" failure low
+
+  # The agent's report decides the rest. This is the rule the whole redesign rests on: an
+  # unverified finding is a warning whatever severity it claims, so a model cannot fail the gate
+  # by asserting something it did not demonstrate, and cannot pass it by understating one it did.
+  gate_unverified='{\"findings\":[{\"verified\":false,\"severity\":\"critical\"}],\"recoverability\":\"high\",\"acceptanceCriteriaMet\":true,\"confidence\":0.95}'
+  gate_verified='{\"findings\":[{\"verified\":true,\"severity\":\"critical\"}],\"recoverability\":\"high\",\"acceptanceCriteriaMet\":true,\"confidence\":0.95}'
+  gate_verified_low='{\"findings\":[{\"verified\":true,\"severity\":\"medium\"}],\"recoverability\":\"high\",\"acceptanceCriteriaMet\":true,\"confidence\":0.95}'
+  gate_case "an unverified critical finding does not block" \
+                                                 auto-merge   "$(gate_items "$(gate_comment assessed "$gate_unverified")")" success low
+  gate_case "a verified critical finding blocks" blocked      "$(gate_items "$(gate_comment assessed "$gate_verified")")" success low
+  gate_case "a verified medium finding does not block" \
+                                                 auto-merge   "$(gate_items "$(gate_comment assessed "$gate_verified_low")")" success low
+
+  gate_fragile='{\"findings\":[],\"recoverability\":\"low\",\"acceptanceCriteriaMet\":true,\"confidence\":0.95}'
+  gate_unmet='{\"findings\":[],\"recoverability\":\"high\",\"acceptanceCriteriaMet\":false,\"confidence\":0.95}'
+  gate_unsure='{\"findings\":[],\"recoverability\":\"high\",\"acceptanceCriteriaMet\":true,\"confidence\":0.4}'
+  gate_case "medium risk that cannot be undone needs a person" \
+                                                 human-review "$(gate_items "$(gate_comment assessed "$gate_fragile")")" success medium
+  gate_case "low risk that cannot be undone still auto-merges" \
+                                                 auto-merge   "$(gate_items "$(gate_comment assessed "$gate_fragile")")" success low
+  gate_case "an unmet acceptance criterion needs a person" \
+                                                 human-review "$(gate_items "$(gate_comment assessed "$gate_unmet")")" success low
+  gate_case "confidence below the threshold needs a person" \
+                                                 human-review "$(gate_items "$(gate_comment assessed "$gate_unsure")")" success low
+
+  # The agent may raise the measured blast radius when it sees something the path rules could
+  # not. It may never lower it, which is the only direction that can turn a person's review into
+  # a machine merge.
+  gate_raise='{\"findings\":[],\"recoverability\":\"high\",\"acceptanceCriteriaMet\":true,\"confidence\":0.95,\"blastRadiusRaise\":{\"to\":\"high\",\"reason\":\"new authorization decision point\"}}'
+  gate_lower='{\"findings\":[],\"recoverability\":\"high\",\"acceptanceCriteriaMet\":true,\"confidence\":0.95,\"blastRadiusRaise\":{\"to\":\"low\"}}'
+  gate_case "the agent can raise the blast radius" \
+                                                 owner-review "$(gate_items "$(gate_comment assessed "$gate_raise")")" success low
+  gate_case "the agent cannot lower the blast radius" \
+                                                 owner-review "$(gate_items "$(gate_comment assessed "$gate_lower")")" success high
+
+  # remediated used to require conclusion == "failure", which threw correct work away. The prompt
+  # tells the agent to merge main in, verify and push when CI is green but the pull request
+  # conflicts. That is a real and common state: a conflicting pull request has no merge ref, so
+  # GitHub can never run CI on that head, and the belt falls back to the last verdict on the
+  # branch, which is usually success. The agent did the job, the validator called it invalid,
+  # conclude was skipped, and because this worker stages its outputs the resolved merge commit
+  # was discarded. The belt then dispatched again on the same verdict, up to six times, each a
+  # full run on the single-slot merge belt.
+  gate_case "remediated with one push, CI green" remediated "$(gate_items "$(gate_comment remediated),${gate_push}")" success low
+  gate_case "remediated with one push, CI red"   remediated "$(gate_items "$(gate_comment remediated),${gate_push}")" failure low
+  gate_case "remediated with no push"            invalid    "$(gate_items "$(gate_comment remediated)")" failure low
+  gate_case "remediated with two pushes"         invalid    "$(gate_items "$(gate_comment remediated),${gate_push},${gate_push}")" failure low
+  gate_case "an assessment carrying a push"      invalid    "$(gate_items "$(gate_comment assessed),${gate_push}")" success low
+
+  # Output from a worker version that predates the disposition table. Applying its vocabulary
+  # would merge on a word this validator no longer means the same thing by.
+  gate_case "the old merge vocabulary is refused"  invalid  '{"items":[{"type":"add_comment","item_number":7,"body":"<!-- agent-merge-gate -->\\n**Verdict:** merge"}]}' success low
+  gate_case "the old review vocabulary is refused" invalid  '{"items":[{"type":"add_comment","item_number":7,"body":"<!-- agent-merge-gate -->\\n**Verdict:** review"}]}' success low
+
+  # Nothing malformed may fall through to a merge. Each of these parks the pull request instead.
+  gate_case "a report aimed at another issue"    invalid    '{"items":[{"type":"add_comment","item_number":99,"body":"<!-- agent-merge-gate -->\\n**Verdict:** assessed\\n```json\\n{}\\n```"}]}' success low
+  gate_case "a verdict with no json block"       invalid    '{"items":[{"type":"add_comment","item_number":7,"body":"<!-- agent-merge-gate -->\\n**Verdict:** assessed"}]}' success low
+  gate_case "a json block that does not parse"   invalid    '{"items":[{"type":"add_comment","item_number":7,"body":"<!-- agent-merge-gate -->\\n**Verdict:** assessed\\n```json\\n{nope}\\n```"}]}' success low
+  gate_case "no verdict in the output"           invalid    '{"items":[{"type":"add_comment","item_number":7,"body":"just a note"}]}' success low
+  gate_case "an empty item list"                 invalid    '{"items":[]}' success low
+  gate_case "output that is not an item list"    invalid    '{"nope":true}' success low
 
   rm -f "$gate_fixture"
   if [ "$VALIDATOR_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi

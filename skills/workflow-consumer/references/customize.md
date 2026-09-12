@@ -62,9 +62,28 @@ the consumer is responsible for adding the route-specific focus areas:
 | **implement** | Architecture constraints (layering, dependency directions), testing rules, coverage floors, naming conventions, and what must be tested before creating a PR |
 | **refine** | Domain model terminology, bounded contexts, acceptance criteria patterns, story structure the repository expects, and what constitutes an implementation-ready user story |
 | **apply-review** | Minimal changes principle, preserve architecture, do not refactor beyond the review scope, keep diffs small, and respect the original author's design decisions |
-| **merge-gate** | Risk indicators specific to the repository: any calculation engine, audit chain integrity, auth flows, database migrations, and money/financial calculations. What constitutes an auto-merge risk vs a human-review trigger |
+| **merge-gate** | What the review pass should look at hardest in this repository, and the conventions a defect would violate. The outcome is not set here: see the path and threshold values below |
 | **audit** | What to look for: layer violations, N+1 queries, missing audit logs, security gaps, performance anti-patterns, documentation drift, and what the repository considers a critical vs minor issue |
 | **triage** | `PRODUCT_SCOPE` rather than `REPO_RULES`: what a product owner may ask for, and what has to become a maintainer-owned technical proposal. It now decides park-versus-close, not just close — an out-of-scope issue gets the `needs-maintainer` verdict and stays open with `review`, so write this list as "wrong door" rather than "rejected" |
+
+## What the merge gate owns
+
+The merge gate is the one worker whose `env:` block decides outcomes rather than tone. It has
+three path lists and four thresholds, and the difference between them is the difference between
+"look here" and "stop here".
+
+| Value | What it is | Getting it wrong |
+|---|---|---|
+| `PROTECTED_PATHS` | Extended regex. A match may never be auto-merged, and sets blast radius high on its own | The default names this stack's manifests and every dotted directory. An unmatched list protects nothing and reports nothing |
+| `OWNER_PATHS` | Extended regex. A match requires the owner of that area and sets blast radius high | Too broad and every pull request waits on one person; too narrow and an auth change merges itself |
+| `SENSITIVE_PATHS` | Extended regex. A match raises the floor to medium, which still auto-merges when the change is recoverable | Purely advisory. Putting an area here that genuinely needs a person is the mistake, and `OWNER_PATHS` is where it belongs |
+| `BLAST_HIGH_FILES` / `BLAST_HIGH_LINES` | Diff shape at or above which the radius is high | Set too high and a sprawling change merges itself. This is what catches a change that touches no named path |
+| `BLAST_MEDIUM_FILES` / `BLAST_MEDIUM_LINES` | Diff shape at or above which the radius is medium | Medium alone does not park anything, so a low value costs attention rather than safety |
+| `CONFIDENCE_THRESHOLD` | Agent confidence below which the pull request goes to a person | Near 1 and every pull request is parked; near 0 and the agent's own uncertainty stops meaning anything |
+| `RISK_INDICATORS` | Areas the review pass should look at first | Advisory since the dispositions landed. It used to decide the outcome by category, which is why the gate parked nearly everything |
+
+`CODEOWNERS` refines who is asked when a repository has one. It is never required: `OWNER_PATHS`
+fires with or without it, and the gate names the matched paths when no owner is configured.
 
 ## What the router owns
 

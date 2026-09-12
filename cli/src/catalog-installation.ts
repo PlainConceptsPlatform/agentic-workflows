@@ -231,6 +231,12 @@ export async function installCatalog(
 // (the shared CI setup and the OpenCode config) get them on every run and stay stable. A worker
 // gets its VERIFY_COMMANDS default once, when it is first installed: after that the value is the
 // consumer's, and the env merge keeps it.
+//
+// Except when the consumer has no value. "First install only" meant a worker installed before
+// this injection existed kept `VERIFY_COMMANDS: ""` for good, and mergeWorkerEnv then preserved
+// the empty string as the consumer's deliberate choice. All four consuming repositories were in
+// that state, so every merge-gate repair pushed a fix with the verification block interpolating
+// to nothing. An empty value is the absence of a choice, so an update fills it.
 function applyStackDefaults(
   files: Map<string, string>,
   inspection: RepositoryInspection,
@@ -239,7 +245,7 @@ function applyStackDefaults(
   const defaults = generateStackDefaults(inspection);
   const result = new Map(files);
   for (const [target, content] of result) {
-    if (isWorker(target) && !existing.has(target)) {
+    if (isWorker(target) && (!existing.has(target) || hasEmptyVerifyCommands(existing.get(target)))) {
       result.set(target, injectStackEnv(content, defaults));
     } else if (target.endsWith("opencode-ci.md")) {
       result.set(target, generateOpencodeCi(content, inspection));
@@ -248,6 +254,12 @@ function applyStackDefaults(
     }
   }
   return result;
+}
+
+// A worker whose VERIFY_COMMANDS is present but empty. Anything else, including a value the
+// consumer wrote, is left alone.
+function hasEmptyVerifyCommands(current: unknown): boolean {
+  return typeof current === "string" && /^ {2}VERIFY_COMMANDS: *(""|'')? *$/m.test(current);
 }
 
 // Directories that belong wholly to the package. A file here that carries our ownership header

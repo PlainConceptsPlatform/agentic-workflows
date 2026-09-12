@@ -1,0 +1,115 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/assess-blast-radius/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Assess blast radius
+description: Classify a pull request's potential impact from its changed paths and diff shape, before any model reads it.
+inputs:
+  token:
+    description: GitHub token with pull-requests read access.
+    required: true
+  pr-number:
+    description: Pull request number to assess.
+    required: true
+  protected-paths:
+    description: Extended regular expression. A match may never auto-merge and forces HIGH.
+    required: true
+  owner-paths:
+    description: Extended regular expression. A match forces HIGH and requires an owner.
+    required: false
+    default: ''
+  sensitive-paths:
+    description: Extended regular expression. A match raises the floor to MEDIUM.
+    required: false
+    default: ''
+  high-files:
+    description: Files changed at or above which the radius is HIGH.
+    required: false
+    default: '20'
+  high-lines:
+    description: Lines changed at or above which the radius is HIGH.
+    required: false
+    default: '800'
+  medium-files:
+    description: Files changed at or above which the radius is MEDIUM.
+    required: false
+    default: '5'
+  medium-lines:
+    description: Lines changed at or above which the radius is MEDIUM.
+    required: false
+    default: '200'
+outputs:
+  level:
+    description: "low, medium or high."
+    value: ${{ steps.assess.outputs.level }}
+  signals:
+    description: One line per signal that fired, in the order the rules ran.
+    value: ${{ steps.assess.outputs.signals }}
+  requires_review:
+    description: Whether a protected path was touched. Kept for the jobs that already read it.
+    value: ${{ steps.assess.outputs.requires_review }}
+  files:
+    description: The protected paths that matched, one per line. Empty when none did.
+    value: ${{ steps.assess.outputs.files }}
+  owner_hits:
+    description: The owner paths that matched, one per line.
+    value: ${{ steps.assess.outputs.owner_hits }}
+  sensitive_hits:
+    description: The sensitive paths that matched, one per line.
+    value: ${{ steps.assess.outputs.sensitive_hits }}
+  required_owners:
+    description: CODEOWNERS entries covering the changed paths, space separated. Empty when the repository has no CODEOWNERS.
+    value: ${{ steps.assess.outputs.required_owners }}
+  files_changed:
+    description: Number of files in the diff.
+    value: ${{ steps.assess.outputs.files_changed }}
+  lines_changed:
+    description: Additions plus deletions.
+    value: ${{ steps.assess.outputs.lines_changed }}
+runs:
+  using: composite
+  steps:
+    - name: Assess blast radius
+      id: assess
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        PROTECTED_PATHS: ${{ inputs.protected-paths }}
+        OWNER_PATHS: ${{ inputs.owner-paths }}
+        SENSITIVE_PATHS: ${{ inputs.sensitive-paths }}
+        HIGH_FILES: ${{ inputs.high-files }}
+        HIGH_LINES: ${{ inputs.high-lines }}
+        MEDIUM_FILES: ${{ inputs.medium-files }}
+        MEDIUM_LINES: ${{ inputs.medium-lines }}
+      run: |
+        set -euo pipefail
+        # One API call. The job this replaced already paid for it to grep PROTECTED_PATHS, and
+        # the additions and deletions come back in the same payload, so the diff shape costs
+        # nothing extra.
+        gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files?per_page=100" \
+          --jq '[.[] | {filename, additions, deletions}]' > /tmp/blast-files.json
+
+        files=$(jq -r '.[].filename' /tmp/blast-files.json)
+        files_changed=$(jq -r 'length' /tmp/blast-files.json)
+        lines_changed=$(jq -r '[.[] | .additions + .deletions] | add // 0' /tmp/blast-files.json)
+
+        bash "${{ github.action_path }}/assess-blast-radius.sh" \
+          "$files_changed" "$lines_changed" <<<"$files" > /tmp/blast-out.env
+
+        cat /tmp/blast-out.env >> "$GITHUB_OUTPUT"
+
+        # CODEOWNERS refines who is asked; it never decides whether anyone is. A repository
+        # without the file still gets an owner disposition from OWNER_PATHS, and the comment
+        # names the paths instead of a team.
+        owners=""
+        for candidate in CODEOWNERS .github/CODEOWNERS docs/CODEOWNERS; do
+          [ -f "$candidate" ] || continue
+          while read -r pattern rest; do
+            case "$pattern" in ''|'#'*) continue ;; esac
+            glob="${pattern#/}"; glob="${glob%/}"
+            if printf '%s\n' "$files" | grep -qE "^${glob%/\*\*}"; then
+              owners="$owners $rest"
+            fi
+          done < "$candidate"
+          break
+        done
+        echo "required_owners=$(echo "$owners" | tr -s ' ' | sed 's/^ //;s/ $//')" >> "$GITHUB_OUTPUT"
