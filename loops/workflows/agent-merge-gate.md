@@ -64,6 +64,13 @@ env:
   ATTEMPT_MARKER: "<!-- agent-merge-gate-attempt -->"
   MAX_ATTEMPTS: "6"
   PARK_AT_ATTEMPT: "5"
+  # A smaller budget for the one failure that repeating does not fix. A crashed or timed-out run
+  # is a machine failure and worth repeating; a run that finished and handed back a report the
+  # validator could not read is a formatting problem, and the third attempt looks like the first.
+  # The cost is not hypothetical: every retry is a fresh agent run with this worker timeout, and
+  # `call-merge-gate` holds the repo-wide `merge-belt` slot while it runs, so five attempts on
+  # one unusable report can keep every other bot pull request in the repository waiting.
+  PARK_AT_UNUSABLE_OUTPUT: "2"
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
   GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
   GIT_AUTHOR_NAME: "github-actions[bot]"
@@ -546,37 +553,91 @@ jobs:
       # attempts_so_far is a workflow_call input and arrives as '' when the caller passes an
       # empty expression, declared default or not; fromJson('') is a hard failure, so the empty
       # case reads as 0.
+      #
+      # Which budget applies is decided once, here, rather than restated in each step condition:
+      # the same pair of conditions spread across four `if:` expressions is what the trap table
+      # already records going wrong for the protected-files hold.
+      - name: Choose the budget this failure gets
+        id: budget
+        env:
+          ATTEMPTS: ${{ inputs.attempts_so_far || '0' }}
+          AGENT_RESULT: ${{ needs.agent.result }}
+          SAFE_RESULT: ${{ needs.safe_outputs.result }}
+          OUTPUT_VALID: ${{ needs.validate_output.outputs.valid }}
+          PARK_AT_ATTEMPT: ${{ env.PARK_AT_ATTEMPT }}
+          PARK_AT_UNUSABLE_OUTPUT: ${{ env.PARK_AT_UNUSABLE_OUTPUT }}
+        run: |
+          set -euo pipefail
+          attempts=${ATTEMPTS:-0}
+          # The agent ran, published, and produced something the validator refused. Repeating
+          # that reproduces it; a person reading the comment costs less than three more runs
+          # holding the merge belt.
+          if [ "$AGENT_RESULT" = success ] && [ "$SAFE_RESULT" = success ] && [ "$OUTPUT_VALID" != true ]; then
+            threshold="$PARK_AT_UNUSABLE_OUTPUT"
+            kind=unusable
+          else
+            threshold="$PARK_AT_ATTEMPT"
+            kind=machine
+          fi
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "threshold=$threshold" >> "$GITHUB_OUTPUT"
+          echo "park=$([ "$attempts" -ge "$threshold" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - name: Report the failed attempt
-        if: fromJson(inputs.attempts_so_far || '0') < fromJson(env.PARK_AT_ATTEMPT)
+        if: steps.budget.outputs.park == 'false' 
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           body: |
             ${{ env.ATTEMPT_MARKER }}
-            Attempt ${{ inputs.attempts_so_far || '0' }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
+            Attempt ${{ inputs.attempts_so_far || '0' }} of ${{ steps.budget.outputs.threshold }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
             The issue keeps `implement`; the merge belt will retry.
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Report the exhausted attempt budget
-        if: fromJson(inputs.attempts_so_far || '0') >= fromJson(env.PARK_AT_ATTEMPT)
+        if: steps.budget.outputs.park == 'true' && steps.budget.outputs.kind == 'machine'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           body: |
             ${{ env.ATTEMPT_MARKER }}
-            Attempt ${{ inputs.attempts_so_far || '0' }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
+            Attempt ${{ inputs.attempts_so_far || '0' }} of ${{ steps.budget.outputs.threshold }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
             The attempt budget for this CI verdict is exhausted. The review label is set: a human must take over.
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      # A verdict, not an attempt record, and this is the point of the whole split. The belt
+      # bounds its own retries by counting attempt comments to MAX_GATE_ATTEMPTS, so a worker
+      # that merely stopped parking would still be dispatched to the cap: the budget above would
+      # have saved nothing. A comment carrying the gate marker and a Verdict line is the contract
+      # the belt already respects -- it parks the pull request until a new commit moves the head
+      # past it -- and an unusable report is a decision, not a failure to repeat. It carries no
+      # attempt marker, so it is counted once, as what it is.
+      - name: Record an unusable report as a decision
+        if: steps.budget.outputs.park == 'true' && steps.budget.outputs.kind == 'unusable'
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ needs.subject.outputs.issue }}
+          body: |
+            ${{ env.GATE_MARKER }}
+            The agent finished on PR #${{ needs.subject.outputs.pr }} but its report could not be
+            read, ${{ steps.budget.outputs.threshold }} times on this head. Repeating it reproduces
+            it, so the belt stops here rather than spending the rest of the budget holding the
+            merge slot. The run log holds the output the gate refused.
+
+            **Verdict:** human-review
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      # `stalled` means a park the machine caused, and the janitor retries those. An unusable
+      # report is a park the machine caused and retrying reproduces it, so it gets `review`
+      # alone: the janitor's own rule is retry a failure, report a decision.
       - name: Park the issue for a human
-        if: fromJson(inputs.attempts_so_far || '0') >= fromJson(env.PARK_AT_ATTEMPT)
+        if: steps.budget.outputs.park == 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: |-
             ${{ env.REVIEW_LABEL }}
-            ${{ env.STALLED_LABEL }}
+            ${{ steps.budget.outputs.kind == 'machine' && env.STALLED_LABEL || '' }}
       # The reservation only. A failed attempt does not close the pull request, so pr-pending
       # is still true and the board should keep saying so.
       - name: Release the issue

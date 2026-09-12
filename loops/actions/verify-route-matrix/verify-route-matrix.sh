@@ -717,10 +717,11 @@ if worker_installed merge-gate; then
 
   # The worker's own comments must keep the distinction: progress notes carry no marker,
   # failed attempts carry the attempt marker, verdicts carry the marker AND the Verdict line.
-  # Three verdict sites: the owner-review hold on the issue, the agent's report on the issue,
-  # and conclude's disposition block on the pull request itself.
+  # Four verdict sites: the owner-review hold on the issue, the agent's report on the issue,
+  # conclude's disposition block on the pull request itself, and the park that records an
+  # unusable report as a decision so the belt stops dispatching it.
   if grep -q 'ATTEMPT_MARKER: "<!-- agent-merge-gate-attempt -->"' "$MERGE_GATE_WORKER_MD" &&
-    [ "$(count -c '\${{ env.GATE_MARKER }}' "$MERGE_GATE_WORKER_MD")" -eq 3 ]; then
+    [ "$(count -c '\${{ env.GATE_MARKER }}' "$MERGE_GATE_WORKER_MD")" -eq 4 ]; then
     PASS=$((PASS + 1))
   else
     FAIL=$((FAIL + 1))
@@ -1079,6 +1080,13 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
   # through because the words survived in a comment.
   hk 'if \(attempts >= maxRetries \|\| !work\) \{' 'has no retry budget guard on the retry path'
 
+  # The gate's scoreboard. These guard the shape of the counting; the arithmetic is run for real
+  # by verify-gate-metrics.mjs below, because a rate that is quietly wrong is worse than no rate.
+  hk "state: 'closed', sort: 'updated'" 'counts dispositions from closed pull requests, where the merges are'
+  hk "parsed !== 'auto-merge'" 'treats only auto-merge as needing nobody'
+  hk 'revert \.\*#\(' 'attributes a revert to the pull request its title names'
+  hk 'dispositions\[parsed\] = \(dispositions\[parsed\] \?\? 0\) \+ 1' 'tallies every disposition it parses'
+
   # The janitor closes issues, and the only issues it may close are a split parent whose
   # children are all done and its own digest. Anything else is a person's to close.
   #
@@ -1128,6 +1136,17 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
       echo "FAIL: ${knob} is not both declared in the router env: block and read by the housekeeping job" >&2
     fi
   done
+
+  # Not a grep. The renderer is pulled out of the inline script and run against fixtures: an
+  # off-by-one in the rate, or a revert counted against the wrong pull request, would pass every
+  # assertion above and still report a number somebody widens trust on.
+  METRICS_JS="${HERE}/verify-gate-metrics.mjs"
+  if [ -f "$METRICS_JS" ]; then
+    if ! node "$METRICS_JS" "$HOUSEKEEPING_YML" >&2; then
+      HK_OK=0
+      echo "FAIL: the housekeeping gate-metrics renderer does not compute what it claims" >&2
+    fi
+  fi
 
   if [ "$HK_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
@@ -1937,6 +1956,43 @@ if worker_installed merge-gate; then
       echo "FAIL: identify-gate-subject resolves the CI run only when the conclusion is unknown; a router that passes both gets an empty run ID" >&2
     fi
   fi
+# Repeating a report the validator refused reproduces it, and every repeat is a fresh agent run
+# holding the repo-wide merge-belt slot. The worker gives that failure a smaller budget than a
+# crash, and -- the part that actually saves the slot -- records it as a verdict, because the belt
+# bounds its own retries by counting attempt comments and would otherwise dispatch to the cap
+# whatever the worker decided.
+if worker_installed merge-gate; then
+  UNUSABLE_OK=1
+  unusable_cap="$(sed -n 's/^  PARK_AT_UNUSABLE_OUTPUT: "\([0-9]*\)"$/\1/p' "$MERGE_GATE_WORKER_MD" | head -1)"
+  machine_cap="$(sed -n 's/^  PARK_AT_ATTEMPT: "\([0-9]*\)"$/\1/p' "$MERGE_GATE_WORKER_MD" | head -1)"
+  if [ -z "$unusable_cap" ] || [ -z "$machine_cap" ] || [ "$unusable_cap" -ge "$machine_cap" ]; then
+    UNUSABLE_OK=0
+    echo "FAIL: an unusable report must get a smaller budget than a crash (unusable='${unusable_cap:-unset}', machine='${machine_cap:-unset}')" >&2
+  fi
+  # The budget is decided once, not restated per step. Four `if:` expressions repeating the same
+  # pair of conditions is the shape the protected-files hold already got wrong.
+  if [ "$(count -cE "^        if: steps\.budget\.outputs\.park" "$MERGE_GATE_WORKER_MD")" -lt 3 ]; then
+    UNUSABLE_OK=0
+    echo "FAIL: the incomplete job must read one computed budget decision, not re-derive it" >&2
+  fi
+  # The park has to be a verdict or the belt keeps dispatching: a comment carrying the gate
+  # marker AND a Verdict line is what detect-pr-conflicts and the reconcile belt both park on.
+  if ! grep -A 16 "Record an unusable report as a decision" "$MERGE_GATE_WORKER_MD" |
+       grep -q '\${{ env.GATE_MARKER }}' ||
+     ! grep -A 16 "Record an unusable report as a decision" "$MERGE_GATE_WORKER_MD" |
+       grep -q '\*\*Verdict:\*\* human-review'; then
+    UNUSABLE_OK=0
+    echo "FAIL: the unusable-report park must carry the gate marker and a Verdict line, or the belt dispatches it again" >&2
+  fi
+  # And it must not also count as an attempt, or one park is recorded twice.
+  if grep -A 16 "Record an unusable report as a decision" "$MERGE_GATE_WORKER_MD" |
+     grep -q '\${{ env.ATTEMPT_MARKER }}'; then
+    UNUSABLE_OK=0
+    echo "FAIL: the unusable-report park carries the attempt marker as well; it is a decision, not an attempt" >&2
+  fi
+  if [ "$UNUSABLE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
   if [ "$GATE_RUN_ID_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
