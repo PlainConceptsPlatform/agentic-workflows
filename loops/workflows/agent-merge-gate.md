@@ -809,18 +809,24 @@ timeout-minutes: 120
    It is an attention list, not a verdict. Touching one of those areas is not a finding. A
    defect you can demonstrate in one of them is.
 
-   **5b. Verify each candidate.** You have the branch checked out and you can run things. For
-   each candidate, either prove it or drop its severity.
+   **5b. Verify each candidate, and do not be the one who checks your own work.** For each
+   candidate, call `task` with `subagent_type: "finding-verifier"` and hand it the claim alone:
+   the file, the line, what you think is wrong, and what would settle it. Do not hand it your
+   reasoning, and do not tell it what you hope it finds. It reads the code fresh and tries to
+   disprove the claim, which is the check you cannot perform on yourself.
 
-   `verified: true` requires evidence you produced, not evidence you expect to exist:
+   Take its answer. If it returns `verified: false`, the finding is a warning at most, whatever
+   you believed when you wrote it. If it returns `verified: true`, copy its `verification`
+   string into the finding: that string is the evidence, and it has to be a command with its
+   observed output or a code path quoted end to end, never "this looks wrong" or "this could
+   fail if".
 
-   - a command you ran, with what it actually printed, or
-   - the code path quoted end to end, from entry point to the defect, from files you read.
+   Two things make this cheap to do honestly. An unverified finding is capped at a warning by the
+   workflow whatever severity you claim, so overstating one gains you nothing. A verified high or
+   critical finding blocks the merge, so inventing one costs somebody a morning.
 
-   Put that evidence in the `verification` field. "This looks wrong" and "this could fail if"
-   are not verification. An unverified finding is capped at a warning by the workflow whatever
-   severity you claim, so there is nothing to gain by overstating one, and a verified high or
-   critical finding blocks the merge, so there is something real to lose by inventing one.
+   With no candidates, call nothing and move on. The verifier exists for claims, not for
+   reassurance about their absence.
 
    **5c. Check the acceptance criteria.** The issue context at `${{ env.ISSUE_CONTEXT_PATH }}`
    says what this change was supposed to do. Confirm the diff does it. Set

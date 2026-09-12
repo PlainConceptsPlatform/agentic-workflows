@@ -104,6 +104,7 @@ option for installing it in isolation. Includes:
 - `glm-5-3` ("GLM 5.3") and `glm-5-2` ("GLM 5.2") fallback model registrations
 - Default model `forge/glm-5-3`
 - `ci-workflow-agent` agent in `primary` mode with the output discipline directive
+- `finding-verifier` agent in `subagent` mode: the merge gate's independent check on its own findings
 - LSP disabled for `csharp`, `fsharp`, and `razor` (consumers can remove the `lsp` block)
 - `read` permission allow and `/tmp/**` external directory access
 
