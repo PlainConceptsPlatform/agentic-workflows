@@ -58,6 +58,26 @@ jobs:
           echo "root=$root cli=$cli"
           [ "$root" = "$cli" ] || { echo "::error::package.json ($root) and cli/package.json ($cli) disagree"; exit 1; }
 
+      # Every bare import the published dist makes has to be a declared runtime dependency.
+      # `yaml` sat in devDependencies while catalog-installation.js imported it, so the package
+      # installed fine from this repository -- where node_modules already had it -- and crashed
+      # with ERR_MODULE_NOT_FOUND for anyone running it through npx. That is the only way a
+      # consumer ever runs it. Every published version up to 0.20.0 declared no dependencies at
+      # all, so `npx @plainconceptsplatform/workflows update` had never worked.
+      - name: Published build declares what it imports
+        run: |
+          set -euo pipefail
+          declared=$(node -p "Object.keys(require('./cli/package.json').dependencies ?? {}).join('\n')")
+          missing=""
+          for imported in $(grep -rhoE 'from "[^."][^"]*"' cli/dist/*.js | sed 's/from "//;s/"//' | grep -v '^node:' | sed 's#\(@[^/]*/[^/]*\).*#\1#;s#^\([^@][^/]*\).*#\1#' | sort -u); do
+            printf '%s\n' "$declared" | grep -qx "$imported" || missing="$missing $imported"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::cli/dist imports undeclared package(s):$missing. Move them to dependencies."
+            exit 1
+          fi
+          echo "every bare import is declared: $(printf '%s' "$declared" | tr '\n' ' ')"
+
       # `dist/` is published. It once carried eleven compiled test files, one of them 48 kB, to
       # every consumer, because the build used the same tsconfig as the typecheck.
       - name: Published build carries no tests
