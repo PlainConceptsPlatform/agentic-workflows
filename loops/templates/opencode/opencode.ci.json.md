@@ -33,13 +33,16 @@ repository root as `opencode.ci.json`.
 - **ci-workflow-agent** in `primary` mode with the output discipline directive:
   no narration, no prose between tool calls, stop immediately after the final
   Safe Outputs command.
-- **finding-verifier** in `subagent` mode, at temperature 0. The merge gate
-  hands it one candidate finding at a time, with the claim and nothing else, and
-  it tries to disprove it against the code. Only a finding it returns
-  `verified: true` for can block a merge. It exists so that the agent that
-  found a problem is not also the only one who judges it, which is the check
-  self-review cannot provide. It reads and runs; it never writes, pushes, or
-  calls a safe output.
+- **finding-verifier** in `subagent` mode, at temperature 0. It takes one claim
+  about a code change and tries to disprove it against the code, with no sight
+  of the reasoning that produced it. Only a finding it returns `verified: true`
+  for can block a merge. It exists so that the agent that found a problem is not
+  also the only one who judges it, which is the check self-review cannot provide.
+  It reads and runs; it never writes, pushes, or calls a safe output.
+
+  The merge-gate prompt asks for independent verification without naming this
+  agent or the tool that reaches it: opencode routes on the agent's
+  `description`, so the mechanism stays opencode's to change.
 
 ### LSP
 

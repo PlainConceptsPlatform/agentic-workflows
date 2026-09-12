@@ -809,23 +809,22 @@ timeout-minutes: 120
    It is an attention list, not a verdict. Touching one of those areas is not a finding. A
    defect you can demonstrate in one of them is.
 
-   **5b. Verify each candidate, and do not be the one who checks your own work.** For each
-   candidate, call `task` with `subagent_type: "finding-verifier"` and hand it the claim alone:
-   the file, the line, what you think is wrong, and what would settle it. Do not hand it your
-   reasoning, and do not tell it what you hope it finds. It reads the code fresh and tries to
-   disprove the claim, which is the check you cannot perform on yourself.
+   **5b. Have each candidate verified independently.** Do not be the one who checks your own
+   work. Hand each candidate off for verification as a claim on its own: the file, the line,
+   what you think is wrong, and what would settle it. Do not pass on the reasoning that produced
+   it, and do not say what you hope comes back. A verifier that has read the code fresh and
+   tried to disprove the claim is the check you cannot perform on yourself.
 
-   Take its answer. If it returns `verified: false`, the finding is a warning at most, whatever
-   you believed when you wrote it. If it returns `verified: true`, copy its `verification`
-   string into the finding: that string is the evidence, and it has to be a command with its
-   observed output or a code path quoted end to end, never "this looks wrong" or "this could
-   fail if".
+   Take the answer. Not verified means the finding is a warning at most, whatever you believed
+   when you wrote it. Verified means the verification string comes back with it, and that string
+   is the evidence the merge decision will rest on: a command with its observed output, or a
+   code path quoted end to end. Never "this looks wrong" or "this could fail if".
 
    Two things make this cheap to do honestly. An unverified finding is capped at a warning by the
    workflow whatever severity you claim, so overstating one gains you nothing. A verified high or
    critical finding blocks the merge, so inventing one costs somebody a morning.
 
-   With no candidates, call nothing and move on. The verifier exists for claims, not for
+   With no candidates, verify nothing and move on. This step exists for claims, not for
    reassurance about their absence.
 
    **5c. Check the acceptance criteria.** The issue context at `${{ env.ISSUE_CONTEXT_PATH }}`
@@ -972,6 +971,8 @@ timeout-minutes: 120
 
    `"findings": []` on a clean change is the expected output, not a failure to do the job.
 
-   The workflow applies comments, labels, merges, and closures with the App token. Do not call
-   any tools except the one optional `push_to_pull_request_branch` for a verified repair and
-   this one `add_comment`.
+   The workflow applies comments, labels, merges, and closures with the App token. Reading the
+   repository, running verification commands and delegating a finding to be checked are all part
+   of the job. What is restricted is what leaves this run: the only safe outputs you may call are
+   the one optional `push_to_pull_request_branch` for a verified repair and this one
+   `add_comment`.
