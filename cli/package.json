@@ -1,6 +1,6 @@
 {
   "name": "@plainconceptsplatform/workflows",
-  "version": "0.20.0",
+  "version": "0.20.1",
   "description": "Install and update Platform GitHub agentic workflows.",
   "keywords": [
     "github-actions",
@@ -35,10 +35,12 @@
   "engines": {
     "node": ">=20.19"
   },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.8.0",
-    "vitest": "^3.0.0",
-    "yaml": "^2.9.0"
+    "vitest": "^3.0.0"
   }
 }
