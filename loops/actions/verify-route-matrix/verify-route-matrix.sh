@@ -2060,6 +2060,87 @@ fi
   if [ "$GATE_RUN_ID_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+echo "── App error privacy ─────────────────────────────────────────────────────"
+
+# The application error report files into the private repository rather than out of it, so
+# its danger is the opposite one: not that a name escapes, but that an identifier joining a
+# stack trace back to one person's conversation gets written down beside it.
+#
+# Four properties hold that line and each is a line an edit could drop with nothing going red.
+# Asserted the way the error report's are: call sites and set equality, never a bare symbol,
+# because a grep for a name passes against a guard that has been renamed rather than removed.
+APP_ERRORS_MJS="${HERE}/../collect-app-errors/group-and-redact.mjs"
+APP_ERRORS_SH="${HERE}/../collect-app-errors/query-app-errors.sh"
+APP_ERRORS_YML="${HERE}/../collect-app-errors/action.yml"
+
+if [ -f "$APP_ERRORS_MJS" ]; then
+  AE_OK=1
+  ae() {
+    grep -qE "$1" "$2" || { AE_OK=0; echo "FAIL: collect-app-errors ${3}" >&2; }
+  }
+
+  # 1. The query reads one table and names it. AppServiceConsoleLogs and
+  # ContainerAppConsoleLogs live in the same workspace and carry raw engine stdout, which the
+  # application's own no-content rule does not govern. A union here is an incident.
+  ae '^AppExceptions$' "$APP_ERRORS_SH" 'does not query AppExceptions by name'
+  # The heredoc alone. The comment above it names the console tables in order to say they are
+  # never read, and a grep over the whole file cannot tell the warning from the offence.
+  query_body="$(sed -n '/^read -r -d .. QUERY <<KQL/,/^KQL$/p' "$APP_ERRORS_SH")"
+  if printf '%s' "$query_body" | grep -qE 'union |ConsoleLogs|AppTraces|AppRequests|search '; then
+    AE_OK=0
+    echo "FAIL: collect-app-errors reads a table other than AppExceptions" >&2
+  fi
+
+  # 2. Counts are scaled for sampling. A pre environment samples at 0.3, so count() reads a
+  # problem that happened two hundred times as sixty, and it falls under a floor set to catch
+  # it. This is a correctness guard that looks like a style one.
+  ae 'sum\(ItemCount\)' "$APP_ERRORS_SH" 'counts rows instead of summing ItemCount'
+
+  # 3. The field allowlist is what actually holds the line, because a redaction rule filters
+  # values and cannot see a field somebody adds next year. Compared as a set, so reordering is
+  # fine and an addition is not. run_id is the one that matters: it is unhashed on this
+  # telemetry and joins to a conversation and to a person.
+  expected_fields="exceptionType frames fingerprint firstSeen lastSeen occurrences operationName operations problemId roleName"
+  actual_fields="$(sed -n '/export const FINDING_FIELDS = \[/,/\];/p' "$APP_ERRORS_MJS" |
+    grep -oE '"[a-zA-Z]+"' | tr -d '"' | sort | tr '\n' ' ' | sed 's/ $//')"
+  if [ "$actual_fields" = "$(echo "$expected_fields" | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')" ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: collect-app-errors reportable fields changed: ${actual_fields}" >&2
+  fi
+  # Plain grep, not the count() helper: that is `grep || true`, so an `if count -q` is true
+  # whatever it finds and the guard never fires. Three of these were written that way first
+  # and all three failed open, which is the same shape of bug this file exists to catch.
+  if sed -n '/export const FINDING_FIELDS = \[/,/\];/p' "$APP_ERRORS_MJS" | grep -qiE 'run_?id'; then
+    AE_OK=0
+    echo "FAIL: collect-app-errors lists a run id as reportable; it joins telemetry to a person" >&2
+  fi
+
+  # 4. Scrub, then scan, then refuse. Scrubbing masks what is common and safely replaceable so
+  # one unlucky operation name does not leave the job red and filing nothing forever; the
+  # scanner is the backstop for whatever that missed; and a withheld report still turns the
+  # run red so the field that carried it gets fixed.
+  ae 'export const SCRUBS = \[' "$APP_ERRORS_MJS" 'declares no scrubbing'
+  ae 'export const LEAK_CHECKS = \[' "$APP_ERRORS_MJS" 'declares no leak scanner'
+  ae 'core\.setFailed.*withheld by the leak scanner' "$APP_ERRORS_YML" 'does not go red on a withheld report'
+  ae 'not in the reportable field list' "$APP_ERRORS_MJS" 'does not refuse an unlisted field'
+  ae 'core\.setFailed\(`Nothing was filed' "$APP_ERRORS_YML" 'does not stop when the module refuses'
+
+  # A GUID must be masked on the way in, not merely detected on the way out. Both, in fact:
+  # the scrub is what keeps the job alive and the check is what keeps it honest.
+  ae '\{guid\}' "$APP_ERRORS_MJS" 'does not mask GUIDs'
+
+  # 5. No model. This is the same assertion the error report carries, for the same reason: a
+  # model summarising a stack trace paraphrases it, and a paraphrase is a wrong issue.
+  if grep -qiE '(engine:|opencode|safe-outputs|OPENAI_API_KEY)' "$APP_ERRORS_YML"; then
+    AE_OK=0
+    echo "FAIL: collect-app-errors has grown a model" >&2
+  fi
+
+  if [ "$AE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "Route matrix: ${PASS} passed"
