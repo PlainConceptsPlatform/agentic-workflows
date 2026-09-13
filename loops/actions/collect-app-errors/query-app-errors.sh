@@ -46,15 +46,28 @@ KQL
 # read and says "nothing to report" rather than failing on a path that is not there.
 echo '[]' > "$OUTPUT"
 
+# A query that will not run is a warning, not a failure.
+#
+# The commonest reason by far is the one grant this needs: the deploy identity can create the
+# workspace and cannot read it, because creating is a control-plane right and querying is a
+# data-plane one. That grant arrives with an infra apply, which is a deliberate act somebody
+# does later, so between installing this and applying that the job would be red every single
+# morning -- and a job that is red every morning is a job somebody switches off, taking the
+# working version with it.
+#
+# Nothing is lost by being quiet here. There is no report to withhold and no half-written
+# issue: there are no rows. The reason is on the run, in the log and in the job summary.
 if ! az monitor log-analytics query \
   --workspace "$WORKSPACE_ID" \
   --analytics-query "$QUERY" \
   --output json > "${OUTPUT}.tmp" 2> "${OUTPUT}.err"; then
 
   # The reason, without the token the CLI sometimes prints beside it.
-  sed -E 's/(Bearer|access_token|client_secret)[^ ]*/\1 [redacted]/gi' "${OUTPUT}.err" >&2 || true
-  echo "::error::The workspace query failed. The identity needs Monitoring Reader on this workspace." >&2
-  exit 1
+  reason="$(sed -E 's/(Bearer|access_token|client_secret)[^ ]*/\1 [redacted]/gi' "${OUTPUT}.err" | tail -3 | tr '\n' ' ')"
+  rm -f "${OUTPUT}.tmp" "${OUTPUT}.err"
+
+  echo "::warning::The workspace could not be read, so nothing was collected. The identity needs Monitoring Reader on this workspace. ${reason}"
+  exit 0
 fi
 
 mv "${OUTPUT}.tmp" "$OUTPUT"
