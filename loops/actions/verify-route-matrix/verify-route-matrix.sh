@@ -2079,16 +2079,23 @@ if [ -f "$APP_ERRORS_MJS" ]; then
     grep -qE "$1" "$2" || { AE_OK=0; echo "FAIL: collect-app-errors ${3}" >&2; }
   }
 
-  # 1. The query reads one table and names it. AppServiceConsoleLogs and
-  # ContainerAppConsoleLogs live in the same workspace and carry raw engine stdout, which the
-  # application's own no-content rule does not govern. A union here is an incident.
-  ae '^AppExceptions$' "$APP_ERRORS_SH" 'does not query AppExceptions by name'
+  # 1. The query reads the two tables the application's own telemetry goes to, and no others.
+  # AppServiceConsoleLogs and ContainerAppConsoleLogs live in the same workspace and carry raw
+  # engine stdout, which the no-content rule does not govern. A union across them is an
+  # incident rather than a wider query.
+  #
+  # AppTraces is deliberate and was added after the first dry run against a real workspace
+  # returned nought exceptions on a service that had been failing all morning: nothing in
+  # these applications calls RecordException, so every failure they care about is caught in
+  # code, logged through ILogger, and lands in AppTraces alone.
+  ae '^    AppExceptions$' "$APP_ERRORS_SH" 'does not query AppExceptions by name'
+  ae '^    AppTraces$' "$APP_ERRORS_SH" 'does not query AppTraces, where caught failures land'
   # The heredoc alone. The comment above it names the console tables in order to say they are
   # never read, and a grep over the whole file cannot tell the warning from the offence.
   query_body="$(sed -n '/^read -r -d .. QUERY <<KQL/,/^KQL$/p' "$APP_ERRORS_SH")"
-  if printf '%s' "$query_body" | grep -qE 'union |ConsoleLogs|AppTraces|AppRequests|search '; then
+  if printf '%s' "$query_body" | grep -qE 'ConsoleLogs|AppRequests|AppDependencies|union \*|search '; then
     AE_OK=0
-    echo "FAIL: collect-app-errors reads a table other than AppExceptions" >&2
+    echo "FAIL: collect-app-errors reads a table it has no business reading" >&2
   fi
 
   # 2. Counts are scaled for sampling. A pre environment samples at 0.3, so count() reads a

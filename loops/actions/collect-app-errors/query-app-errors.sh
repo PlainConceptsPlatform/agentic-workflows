@@ -3,10 +3,18 @@
 #
 # Ask the Log Analytics workspace what the application threw, and write the rows to a file.
 #
-# Deliberately one table. `AppServiceConsoleLogs` and `ContainerAppConsoleLogs` sit in this
-# same workspace and carry raw engine stdout, which is not governed by the no-content rule the
-# application's own telemetry follows. A `union *` here would be a privacy incident rather
-# than a wider query, so the table is named and nothing else is ever read.
+# Two tables, both named, and never any others. `AppServiceConsoleLogs` and
+# `ContainerAppConsoleLogs` sit in this same workspace and carry raw engine stdout, which is
+# not governed by the no-content rule the application's own telemetry follows. A `union *`
+# here would be a privacy incident rather than a wider query.
+#
+# `AppExceptions` alone was not enough, and the first dry run against a real workspace is what
+# said so: nought exceptions in a day, on a service that had been failing all morning. Nothing
+# in these applications calls RecordException or marks an activity failed. Every failure they
+# actually care about is caught in code and reported through ILogger, so it lands in
+# `AppTraces` at severity Error and never reaches `AppExceptions` at all. Querying only the
+# exception table would have meant a report that ran green every morning and never once saw
+# the thing it was built for.
 #
 # Workspace table names, not the classic ones. These resources are workspace-based
 # (`IngestionMode: LogAnalytics`), so the table is `AppExceptions` and its columns are
@@ -27,16 +35,33 @@ OUTPUT="${5:?output file}"
 # events it stands for. Counting rows under-reports by roughly the inverse of the ratio, which
 # is how a problem that happened two hundred times reads as sixty and falls under a floor set
 # to catch it.
+# Grouped on the message TEMPLATE, not the message.
+#
+# "Run {RunId} failed" is one problem however many runs hit it; the rendered messages are all
+# different and would group into one finding each. The template is what ILogger was given and
+# what Azure Monitor keeps in OriginalFormat, so it is the closest thing traces have to the
+# exception table's ProblemId. Falling back to the rendered message where it is missing costs
+# some grouping and loses nothing.
 read -r -d '' QUERY <<KQL || true
-AppExceptions
-| where TimeGenerated > ago(${LOOKBACK_HOURS}h)
-| where SeverityLevel >= 3
+let window = ago(${LOOKBACK_HOURS}h);
+let thrown =
+    AppExceptions
+    | where TimeGenerated > window
+    | extend Problem = ProblemId, Kind = ExceptionType, Stack = Details;
+let logged =
+    AppTraces
+    | where TimeGenerated > window
+    | where SeverityLevel >= 3
+    | extend Problem = tostring(coalesce(Properties["OriginalFormat"], Message)),
+             Kind    = tostring(coalesce(Properties["ExceptionType"], "LoggedError")),
+             Stack   = dynamic([]);
+union thrown, logged
 | summarize Occurrences = sum(ItemCount),
             Operations  = dcount(OperationName),
             FirstSeen   = min(TimeGenerated),
             LastSeen    = max(TimeGenerated),
-            AnyDetails  = any(Details)
-    by ProblemId, ExceptionType, OperationName, AppRoleName
+            AnyDetails  = any(Stack)
+    by ProblemId = Problem, ExceptionType = Kind, OperationName, AppRoleName
 | where Occurrences >= ${MIN_OCCURRENCES}
 | order by Occurrences desc
 | take ${MAX_ROWS}
