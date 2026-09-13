@@ -491,6 +491,74 @@ matrix asserts by counting.
 
 ---
 
+## agentics-app-errors
+
+An optional template, installed only where there is an Application Insights resource to read, and
+the mirror image of `agentics-error-report` below it. That one carries a *workflow* failure out of a
+private consumer into the public package, so it is built to send almost nothing. This one reads the
+*application's* own exceptions, and they are the private repository's own business: the issue is
+filed beside the code that threw it and nothing travels anywhere.
+
+It runs no model, for the reason that one does not: a model asked to summarise a stack trace
+paraphrases it, and a paraphrased stack trace is a wrong issue that costs somebody an afternoon. The
+agent work happens afterwards, on the belt, because the issue is labelled `bug` + `refine` and that
+is the same handoff the audit already uses.
+
+```mermaid
+flowchart TB
+    aeCron("cron 41 7 * * *") --> aeConfig{"infra/&lt;env&gt;.env<br/>present?"}
+    aeConfig -.->|no| aeIdle(("Job summary only<br/>warning, not a red run"))
+    aeConfig -->|yes| aeLogin("azure/login, OIDC<br/>on the matching Environment")
+    aeLogin --> aeQuery("AppExceptions, one table,<br/>grouped by ProblemId,<br/>sum(ItemCount) for sampling")
+    aeQuery --> aeFloor{"Above the floor,<br/>and any slot left<br/>under the ceiling?"}
+    aeFloor -.->|no| aeDefer("Named in the summary,<br/>picked up tomorrow")
+    aeFloor -->|yes| aeScrub("Mask GUIDs, emails,<br/>paths, query strings")
+    aeScrub --> aeFields{"Every field on<br/>the allowlist?"}
+    aeFields -.->|"no: the module changed"| aeStop(("Nothing filed<br/>run goes red"))
+    aeFields -->|yes| aeScan{"Leak scanner:<br/>a GUID, a secret,<br/>a path, an address?"}
+    aeScan -.->|"this one trips"| aeWithhold("Withheld, the others<br/>still filed, run goes red")
+    aeScan -->|clean| aeSeen{"Filed before?"}
+    aeSeen -.->|"closed and accepted"| aeLeave(("Left alone, for good"))
+    aeSeen -->|"open"| aeNote("A dated line added")
+    aeSeen -->|"closed, not accepted"| aeReopen("Reopened: it came back")
+    aeSeen -->|"never"| aeFile("New issue,<br/>bug + refine + app-error")
+    aeFile --> aeBelt(("On to refine"))
+    aeNote --> aeBelt
+    aeReopen --> aeBelt
+
+    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
+    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
+    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
+    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
+    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
+    classDef idle fill:#f4f4f6,stroke:#5b5b66,stroke-width:2px,color:#2b2b33
+    class aeCron start
+    class aeLogin,aeQuery,aeScrub,aeNote,aeReopen,aeFile,aeDefer action
+    class aeConfig,aeFloor,aeFields,aeScan,aeSeen decision
+    class aeStop,aeWithhold failure
+    class aeBelt success
+    class aeIdle,aeLeave idle
+```
+
+Two failures, handled two different ways, and the difference is the point. A field nobody agreed to
+publish means the module changed and the new field is probably on every finding, so nothing is filed
+at all. A body that still trips the scanner after scrubbing is one unlucky row: that report is
+withheld and the rest are filed, because one bad operation name must never mean the belt stops
+hearing about anything. Both turn the run red.
+
+Scrubbing comes before scanning for the same reason. Masking a GUID keeps the job alive where
+refusing over one would have left it red every morning and filing nothing, which is how a workflow
+gets switched off. The scanner is the backstop for whatever the masks missed, not the first line.
+
+The route matrix asserts the query names one table and only inside the query itself, that counts are
+summed rather than counted, that the reportable field set has not grown a run id, that the scrubs and
+the scanner both still exist, that both `setFailed` paths are intact, and that no model has appeared.
+Every one was mutation-tested. Four of the first drafts used the file's own `count()` helper inside
+an `if`, and since that helper is `grep || true` those guards were true whatever they found: they
+failed open, which is the exact bug this section exists to catch.
+
+---
+
 ## agentics-error-report
 
 An optional template, installed everywhere, and the only job in the fleet that sends anything out of

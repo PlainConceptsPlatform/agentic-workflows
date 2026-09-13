@@ -1,0 +1,11 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/verify-app-errors/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Verify application error collection
+description: >-
+  Run the grouping and redaction that collect-app-errors ships, against rows shaped the way
+  Application Insights returns them. It executes the module rather than reading it.
+runs:
+  using: composite
+  steps:
+    - name: Group and redact, for real
+      shell: bash
+      run: node "${GITHUB_ACTION_PATH}/verify-app-errors.mjs"
