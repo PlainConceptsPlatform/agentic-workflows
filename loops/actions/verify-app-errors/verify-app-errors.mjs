@@ -175,10 +175,24 @@ check(
   "no build-machine path reaches the body",
   !rendered.body.includes("/home/vsts"));
 
+// Two ways to have no frames, and they ask the reader for different things. Pliny-Bot #191 was
+// filed with OWN_CODE_PREFIX set to "Pliny" and still said the repository had not said which
+// assemblies were its own -- it sent a reader to configure a knob that had been set the day
+// before. Only the unconfigured case was covered here, which is why the wording survived.
 check(
-  "a report with no frames says so rather than going quiet",
-  render(toFindings([row()], { ...options, ownCodePrefix: "" })[0], options)
+  "no prefix configured says which knob to set",
+  render(toFindings([row()], { ...options, ownCodePrefix: "" })[0], { ...options, ownCodePrefix: "" })
     .body.includes("has not said which assemblies are its own"));
+
+check(
+  "a prefix that matched nothing does not claim the prefix is missing",
+  !render(toFindings([row()], { ...options, ownCodePrefix: "NoSuchAssembly" })[0], { ...options, ownCodePrefix: "NoSuchAssembly" })
+    .body.includes("has not said which assemblies are its own"));
+
+check(
+  "a prefix that matched nothing names the prefix it tried",
+  render(toFindings([row()], { ...options, ownCodePrefix: "NoSuchAssembly" })[0], { ...options, ownCodePrefix: "NoSuchAssembly" })
+    .body.includes("No frame in this exception belongs to `NoSuchAssembly`"));
 
 section("Fail-closed, but not fail-dead");
 

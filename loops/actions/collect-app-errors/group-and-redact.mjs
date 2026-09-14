@@ -175,7 +175,7 @@ export function toFindings(rows, { environment, ownCodePrefix = "", minOccurrenc
  * plainly that a machine wrote it: somebody reading this in six months should not have to
  * work out whether a person investigated.
  */
-export function render(finding, { environment, lookbackHours }) {
+export function render(finding, { environment, lookbackHours, ownCodePrefix = "" }) {
   const marker = `<!-- pcp-app-error: ${finding.fingerprint} -->`;
   const title = `${finding.exceptionType} in ${finding.operationName || finding.roleName || environment}`;
 
@@ -190,7 +190,14 @@ export function render(finding, { environment, lookbackHours }) {
     `- Last seen: ${finding.lastSeen}`,
     finding.frames.length > 0
       ? `\n**Our own frames, outermost first**\n\n\`\`\`\n${finding.frames.join("\n")}\n\`\`\``
-      : "\n_No stack frames are shown: this repository has not said which assemblies are its own._",
+      : ownCodePrefix
+        // The prefix is set and nothing matched: every frame belongs to the framework or to a
+        // dependency. Routine for an exception raised inside framework code -- a cancelled task
+        // is the common one -- and nothing for the reader to go and configure.
+        ? `\n_No frame in this exception belongs to \`${clip(ownCodePrefix)}\`: all of them are the framework's or a dependency's. That is usual for an exception thrown inside framework code, such as a cancelled task._`
+        // No prefix, so no frame can be recognised as this repository's own and the
+        // stack is dropped rather than publishing somebody else's file paths.
+        : "\n_No stack frames are shown: this repository has not said which assemblies are its own. Set `OWN_CODE_PREFIX` in the workflow to name them._",
     "",
     "---",
     "",
