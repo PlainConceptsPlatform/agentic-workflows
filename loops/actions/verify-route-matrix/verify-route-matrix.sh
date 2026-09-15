@@ -841,19 +841,16 @@ if worker_installed implement; then
     PUSH_FALLBACK_OK=0
     echo "FAIL: implement gates a no-pull-request path on code_push_failure_count, which is 0 when gh-aw files the patch as an issue" >&2
   fi
-  for needed in 'PUSH_CONFLICT_COMMENT' 'NO_PULL_REQUEST_COMMENT'; do
-    grep -qF "env.${needed}" "$IMPLEMENT_WORKER_MD" || {
-      PUSH_FALLBACK_OK=0
-      echo "FAIL: implement no longer says env.${needed} on any path" >&2
-    }
-  done
-  # Collapsing them back into one message is the regression this guards: each is defined once in
-  # the env block and printed on exactly one path, so two usages of either means the conditions
-  # have been merged or duplicated.
-  if [ "$(count -cF 'env.PUSH_CONFLICT_COMMENT' "$IMPLEMENT_WORKER_MD")" -ne 1 ] ||
-     [ "$(count -cF 'env.NO_PULL_REQUEST_COMMENT' "$IMPLEMENT_WORKER_MD")" -ne 1 ]; then
+  grep -qF 'env.PUSH_CONFLICT_COMMENT' "$IMPLEMENT_WORKER_MD" || {
     PUSH_FALLBACK_OK=0
-    echo "FAIL: implement should print each no-pull-request message on exactly one path" >&2
+    echo "FAIL: implement no longer says env.PUSH_CONFLICT_COMMENT on any path" >&2
+  }
+  # Collapsing this back into whatever covers the other endings is the regression this guards: it
+  # is defined once in the env block and printed on exactly one path. The four messages it used to
+  # be paired with are asserted together under "Ways a run ends with nothing".
+  if [ "$(count -cF 'env.PUSH_CONFLICT_COMMENT' "$IMPLEMENT_WORKER_MD")" -ne 1 ]; then
+    PUSH_FALLBACK_OK=0
+    echo "FAIL: implement should print the conflicted-push message on exactly one path" >&2
   fi
   # And the two paths must be mutually exclusive, or a conflicted push gets both comments.
   if [ "$(count -cF "process_safe_outputs_items_succeeded != '0'" "$IMPLEMENT_WORKER_MD")" -lt 2 ] ||
@@ -1870,6 +1867,71 @@ if worker_installed audit; then
     echo "FAIL: the audit's empty_run depends on the conclusion job, which is a dependency cycle and will not compile" >&2
   fi
   if [ "$AUDIT_EMPTY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
+echo "── Ways a run ends with nothing ──────────────────────────────────────────"
+
+# A run can end without a pull request in five ways and they need different answers. One sentence
+# covered all of them, and three issues in two days said "nothing landed": one agent gave up in a
+# minute, one did more work than the run that succeeded the same hour and never asked for a pull
+# request, one was told there was nothing to do. Nobody could act on any of them, and the retry
+# that followed was right for some and wasted on the rest.
+#
+# Asserted because collapsing two of these back together is a one-line edit that turns every run
+# green again while saying less.
+if worker_installed implement; then
+  ENDINGS_OK=1
+  ENDING_MESSAGES="PUSH_CONFLICT_COMMENT OUTPUT_NOT_APPLIED_COMMENT NOOP_COMMENT PATCH_WITHOUT_REQUEST_COMMENT NO_OUTPUT_COMMENT"
+
+  for message in $ENDING_MESSAGES; do
+    # Defined once in the env block and printed on exactly one path. Two usages means two
+    # branches now say the same thing, which is the collapse this guards.
+    if [ "$(count -cF "env.${message}" "$IMPLEMENT_WORKER_MD")" -ne 1 ]; then
+      ENDINGS_OK=0
+      echo "FAIL: implement should print ${message} on exactly one path" >&2
+    fi
+  done
+
+  # The sentence that used to cover all five. Its text survives as NO_OUTPUT_COMMENT; the name
+  # coming back means the branches were merged again.
+  if [ "$(count -cF 'NO_PULL_REQUEST_COMMENT' "$IMPLEMENT_WORKER_MD")" -ne 0 ]; then
+    ENDINGS_OK=0
+    echo "FAIL: implement still carries NO_PULL_REQUEST_COMMENT, which said the same thing about five different endings" >&2
+  fi
+
+  # What tells them apart. Both are the agent job's own outputs, and gh-aw gates on the first
+  # itself, so losing them means guessing again.
+  for signal in 'needs.agent.outputs.output_types' 'needs.agent.outputs.has_patch'; do
+    if [ "$(count -cE "^ *if:.*${signal}" "$IMPLEMENT_WORKER_MD")" -eq 0 ]; then
+      ENDINGS_OK=0
+      echo "FAIL: implement no longer reads ${signal}, so it cannot tell its no-pull-request endings apart" >&2
+    fi
+  done
+
+  # `!x == 'true'` parses as `(!x) == 'true'` in a GitHub expression, which compares a boolean to
+  # a string and is always false. Written wrong here first, and it would have made the
+  # produced-nothing branch unreachable while every other branch still looked right.
+  if [ "$(count -cF "!needs.agent.outputs.has_patch ==" "$IMPLEMENT_WORKER_MD")" -ne 0 ]; then
+    ENDINGS_OK=0
+    echo "FAIL: implement negates has_patch as \`!x == 'true'\`, which binds as \`(!x) == 'true'\` and never matches; use != 'true'" >&2
+  fi
+
+  # A bot that reported nothing to do made a decision. The janitor retries a stalled issue, and
+  # re-running it produces the same answer, so this one path must not be flagged.
+  noop_block=$(awk "/name: Say there was nothing to do/{found=1} found{print} found && /View this workflow run/{exit}" "$IMPLEMENT_WORKER_MD")
+  if [ -n "$noop_block" ] && printf '%s' "$noop_block" | grep -qF 'STALLED_LABEL'; then
+    ENDINGS_OK=0
+    echo "FAIL: implement flags a deliberate noop as stalled, so the janitor will retry a decision until it runs out of attempts" >&2
+  fi
+
+  # The usage artifact carrying the token counts is uploaded by gh-aw's conclusion job, and that
+  # job already depends on conclude. Naming it is a cycle and the worker stops compiling.
+  if [ "$(count -cE "^ *needs:.*conclusion" "$IMPLEMENT_WORKER_MD")" -ne 0 ]; then
+    ENDINGS_OK=0
+    echo "FAIL: implement depends on the conclusion job, which depends on conclude; that cycle does not compile" >&2
+  fi
+
+  if [ "$ENDINGS_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
 echo "── Runner pools ──────────────────────────────────────────────────────────"

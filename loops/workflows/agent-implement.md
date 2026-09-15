@@ -16,7 +16,25 @@ env:
   # re-running a decision produces the same decision. Created idempotently where it is applied.
   STALLED_LABEL: stalled
   PR_PENDING_LABEL: pr-pending
-  NO_PULL_REQUEST_COMMENT: "The implementation run finished without producing a pull request. Nothing was lost, but nothing landed either: the issue keeps `implement` and is flagged for a retry."
+  # Five ways a run ends with no pull request, and they are not the same thing. One sentence
+  # covered all of them, which is why three issues in two days said "nothing landed" and none of
+  # them could be acted on: one agent gave up in a minute, another did more work than the run that
+  # succeeded and never asked for a pull request, and a third was told to stop. The retry that
+  # follows is right for some and wasted on the rest. Each is one line: the compiler flattens a
+  # multi-line env value.
+  #
+  # The agent produced nothing at all. Measured on Pliny-Bot #191: the model was called, replied
+  # with almost nothing each time, and emitted no safe output.
+  NO_OUTPUT_COMMENT: "The implementation run produced nothing at all: no patch, and no request to open a pull request. That is a failed run rather than a decision, so the issue keeps `implement` and is flagged for a retry."
+  # The agent wrote the code and never asked for it to be published. Measured on Pliny-Bot #175,
+  # whose run produced more output than the run that succeeded the same hour.
+  PATCH_WITHOUT_REQUEST_COMMENT: "The implementation wrote code but never asked for a pull request, so nothing was published and the patch is only in the run. The work is not lost -- it is in the run's artifacts -- but it has to be asked for again. The issue keeps `implement` and is flagged for a retry."
+  # The agent asked, and the handler did not apply it. Different from a push that conflicted:
+  # there, gh-aw kept the patch as an issue and said so.
+  OUTPUT_NOT_APPLIED_COMMENT: "The implementation asked for a pull request and it was not applied, so the request exists in the run and nothing reached the repository. That is a failure on our side of the handoff rather than the agent's, and it is flagged for a retry."
+  # The agent was asked to do the work and reported there was none. A decision, not a failure:
+  # retrying it produces the same answer, so it is not flagged stalled and the janitor leaves it.
+  NOOP_COMMENT: "The implementation ran and reported there was nothing to do. That is an answer rather than a failure, so the issue is not queued for another attempt. If it is wrong, say what is missing and label it `implement` again."
   # Said when the agent DID write the code and the push failed. gh-aw pushes through the GraphQL
   # signed-commits API, which rebases onto the current parent, so a `main` that moved under a long
   # run conflicts; gh-aw keeps the work by filing the patch as an issue rather than dropping it,
@@ -299,8 +317,20 @@ jobs:
             ${{ env.IMPLEMENT_MARKER }}
             ${{ env.PUSH_CONFLICT_COMMENT }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-      - name: Flag a run that produced no pull request
-        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '')
+      # Which of the remaining four happened, from what the agent itself reported.
+      #
+      # `output_types` and `has_patch` are the agent job's own outputs, and gh-aw gates on the
+      # first of them itself, so they are read here rather than invented. They are also the only
+      # way to tell these apart from `conclude`: the usage artifact that carries the token counts
+      # is uploaded by `conclusion`, and `conclusion` already depends on this job, so naming it is
+      # a dependency cycle that does not compile.
+      #
+      # Ordered most specific first, and each condition excludes the ones above it, so exactly one
+      # of the four fires. Pliny-Bot #191 is the last of them and #175 is the one before it: both
+      # said "nothing landed" and neither could be acted on, while #175's run had produced more
+      # output than the run that succeeded in the same hour.
+      - name: Flag a request that was not applied
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && contains(needs.agent.outputs.output_types, 'create_pull_request')
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -308,15 +338,78 @@ jobs:
           labels: |-
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
-      - name: Say so on the issue
-        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '')
+      - name: Say the request was not applied
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && contains(needs.agent.outputs.output_types, 'create_pull_request')
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
           body: |
             ${{ env.IMPLEMENT_MARKER }}
-            ${{ env.NO_PULL_REQUEST_COMMENT }}
+            ${{ env.OUTPUT_NOT_APPLIED_COMMENT }}
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Release an issue the agent found nothing to do on
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && contains(needs.agent.outputs.output_types, 'noop')
+        uses: ./.github/actions/add-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+      - name: Take the implement label off a decided issue
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && contains(needs.agent.outputs.output_types, 'noop')
+        uses: ./.github/actions/remove-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: ${{ env.IMPLEMENT_LABEL }}
+      - name: Say there was nothing to do
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && contains(needs.agent.outputs.output_types, 'noop')
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            ${{ env.IMPLEMENT_MARKER }}
+            ${{ env.NOOP_COMMENT }}
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Flag a patch nobody asked to publish
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch == 'true'
+        uses: ./.github/actions/add-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
+      - name: Say the patch was never asked for
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch == 'true'
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            ${{ env.IMPLEMENT_MARKER }}
+            ${{ env.PATCH_WITHOUT_REQUEST_COMMENT }}
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Flag a run that produced nothing
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true'
+        uses: ./.github/actions/add-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ env.STALLED_LABEL }}
+      - name: Say the run produced nothing
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true'
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            ${{ env.IMPLEMENT_MARKER }}
+            ${{ env.NO_OUTPUT_COMMENT }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
   incomplete:
     needs: [agent, safe_outputs, eligibility]
