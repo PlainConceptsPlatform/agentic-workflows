@@ -841,19 +841,16 @@ if worker_installed implement; then
     PUSH_FALLBACK_OK=0
     echo "FAIL: implement gates a no-pull-request path on code_push_failure_count, which is 0 when gh-aw files the patch as an issue" >&2
   fi
-  for needed in 'PUSH_CONFLICT_COMMENT' 'NO_PULL_REQUEST_COMMENT'; do
-    grep -qF "env.${needed}" "$IMPLEMENT_WORKER_MD" || {
-      PUSH_FALLBACK_OK=0
-      echo "FAIL: implement no longer says env.${needed} on any path" >&2
-    }
-  done
-  # Collapsing them back into one message is the regression this guards: each is defined once in
-  # the env block and printed on exactly one path, so two usages of either means the conditions
-  # have been merged or duplicated.
-  if [ "$(count -cF 'env.PUSH_CONFLICT_COMMENT' "$IMPLEMENT_WORKER_MD")" -ne 1 ] ||
-     [ "$(count -cF 'env.NO_PULL_REQUEST_COMMENT' "$IMPLEMENT_WORKER_MD")" -ne 1 ]; then
+  grep -qF 'env.PUSH_CONFLICT_COMMENT' "$IMPLEMENT_WORKER_MD" || {
     PUSH_FALLBACK_OK=0
-    echo "FAIL: implement should print each no-pull-request message on exactly one path" >&2
+    echo "FAIL: implement no longer says env.PUSH_CONFLICT_COMMENT on any path" >&2
+  }
+  # Collapsing this back into whatever covers the other endings is the regression this guards: it
+  # is defined once in the env block and printed on exactly one path. The four messages it used to
+  # be paired with are asserted together under "Ways a run ends with nothing".
+  if [ "$(count -cF 'env.PUSH_CONFLICT_COMMENT' "$IMPLEMENT_WORKER_MD")" -ne 1 ]; then
+    PUSH_FALLBACK_OK=0
+    echo "FAIL: implement should print the conflicted-push message on exactly one path" >&2
   fi
   # And the two paths must be mutually exclusive, or a conflicted push gets both comments.
   if [ "$(count -cF "process_safe_outputs_items_succeeded != '0'" "$IMPLEMENT_WORKER_MD")" -lt 2 ] ||
@@ -1897,6 +1894,71 @@ if worker_installed audit; then
   if [ "$AUDIT_EMPTY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+echo "── Ways a run ends with nothing ──────────────────────────────────────────"
+
+# A run can end without a pull request in five ways and they need different answers. One sentence
+# covered all of them, and three issues in two days said "nothing landed": one agent gave up in a
+# minute, one did more work than the run that succeeded the same hour and never asked for a pull
+# request, one was told there was nothing to do. Nobody could act on any of them, and the retry
+# that followed was right for some and wasted on the rest.
+#
+# Asserted because collapsing two of these back together is a one-line edit that turns every run
+# green again while saying less.
+if worker_installed implement; then
+  ENDINGS_OK=1
+  ENDING_MESSAGES="PUSH_CONFLICT_COMMENT OUTPUT_NOT_APPLIED_COMMENT NOOP_COMMENT PATCH_WITHOUT_REQUEST_COMMENT NO_OUTPUT_COMMENT"
+
+  for message in $ENDING_MESSAGES; do
+    # Defined once in the env block and printed on exactly one path. Two usages means two
+    # branches now say the same thing, which is the collapse this guards.
+    if [ "$(count -cF "env.${message}" "$IMPLEMENT_WORKER_MD")" -ne 1 ]; then
+      ENDINGS_OK=0
+      echo "FAIL: implement should print ${message} on exactly one path" >&2
+    fi
+  done
+
+  # The sentence that used to cover all five. Its text survives as NO_OUTPUT_COMMENT; the name
+  # coming back means the branches were merged again.
+  if [ "$(count -cF 'NO_PULL_REQUEST_COMMENT' "$IMPLEMENT_WORKER_MD")" -ne 0 ]; then
+    ENDINGS_OK=0
+    echo "FAIL: implement still carries NO_PULL_REQUEST_COMMENT, which said the same thing about five different endings" >&2
+  fi
+
+  # What tells them apart. Both are the agent job's own outputs, and gh-aw gates on the first
+  # itself, so losing them means guessing again.
+  for signal in 'needs.agent.outputs.output_types' 'needs.agent.outputs.has_patch'; do
+    if [ "$(count -cE "^ *if:.*${signal}" "$IMPLEMENT_WORKER_MD")" -eq 0 ]; then
+      ENDINGS_OK=0
+      echo "FAIL: implement no longer reads ${signal}, so it cannot tell its no-pull-request endings apart" >&2
+    fi
+  done
+
+  # `!x == 'true'` parses as `(!x) == 'true'` in a GitHub expression, which compares a boolean to
+  # a string and is always false. Written wrong here first, and it would have made the
+  # produced-nothing branch unreachable while every other branch still looked right.
+  if [ "$(count -cF "!needs.agent.outputs.has_patch ==" "$IMPLEMENT_WORKER_MD")" -ne 0 ]; then
+    ENDINGS_OK=0
+    echo "FAIL: implement negates has_patch as \`!x == 'true'\`, which binds as \`(!x) == 'true'\` and never matches; use != 'true'" >&2
+  fi
+
+  # A bot that reported nothing to do made a decision. The janitor retries a stalled issue, and
+  # re-running it produces the same answer, so this one path must not be flagged.
+  noop_block=$(awk "/name: Say there was nothing to do/{found=1} found{print} found && /View this workflow run/{exit}" "$IMPLEMENT_WORKER_MD")
+  if [ -n "$noop_block" ] && printf '%s' "$noop_block" | grep -qF 'STALLED_LABEL'; then
+    ENDINGS_OK=0
+    echo "FAIL: implement flags a deliberate noop as stalled, so the janitor will retry a decision until it runs out of attempts" >&2
+  fi
+
+  # The usage artifact carrying the token counts is uploaded by gh-aw's conclusion job, and that
+  # job already depends on conclude. Naming it is a cycle and the worker stops compiling.
+  if [ "$(count -cE "^ *needs:.*conclusion" "$IMPLEMENT_WORKER_MD")" -ne 0 ]; then
+    ENDINGS_OK=0
+    echo "FAIL: implement depends on the conclusion job, which depends on conclude; that cycle does not compile" >&2
+  fi
+
+  if [ "$ENDINGS_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 echo "── Runner pools ──────────────────────────────────────────────────────────"
 
 # Where every job runs, stated once and asserted, because GitHub gives a wrong pool no error: a
@@ -2083,6 +2145,94 @@ if worker_installed merge-gate; then
 fi
 
   if [ "$GATE_RUN_ID_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
+echo "── App error privacy ─────────────────────────────────────────────────────"
+
+# The application error report files into the private repository rather than out of it, so
+# its danger is the opposite one: not that a name escapes, but that an identifier joining a
+# stack trace back to one person's conversation gets written down beside it.
+#
+# Four properties hold that line and each is a line an edit could drop with nothing going red.
+# Asserted the way the error report's are: call sites and set equality, never a bare symbol,
+# because a grep for a name passes against a guard that has been renamed rather than removed.
+APP_ERRORS_MJS="${HERE}/../collect-app-errors/group-and-redact.mjs"
+APP_ERRORS_SH="${HERE}/../collect-app-errors/query-app-errors.sh"
+APP_ERRORS_YML="${HERE}/../collect-app-errors/action.yml"
+
+if [ -f "$APP_ERRORS_MJS" ]; then
+  AE_OK=1
+  ae() {
+    grep -qE "$1" "$2" || { AE_OK=0; echo "FAIL: collect-app-errors ${3}" >&2; }
+  }
+
+  # 1. The query reads the two tables the application's own telemetry goes to, and no others.
+  # AppServiceConsoleLogs and ContainerAppConsoleLogs live in the same workspace and carry raw
+  # engine stdout, which the no-content rule does not govern. A union across them is an
+  # incident rather than a wider query.
+  #
+  # AppTraces is deliberate and was added after the first dry run against a real workspace
+  # returned nought exceptions on a service that had been failing all morning: nothing in
+  # these applications calls RecordException, so every failure they care about is caught in
+  # code, logged through ILogger, and lands in AppTraces alone.
+  ae '^    AppExceptions$' "$APP_ERRORS_SH" 'does not query AppExceptions by name'
+  ae '^    AppTraces$' "$APP_ERRORS_SH" 'does not query AppTraces, where caught failures land'
+  # The heredoc alone. The comment above it names the console tables in order to say they are
+  # never read, and a grep over the whole file cannot tell the warning from the offence.
+  query_body="$(sed -n '/^read -r -d .. QUERY <<KQL/,/^KQL$/p' "$APP_ERRORS_SH")"
+  if printf '%s' "$query_body" | grep -qE 'ConsoleLogs|AppRequests|AppDependencies|union \*|search '; then
+    AE_OK=0
+    echo "FAIL: collect-app-errors reads a table it has no business reading" >&2
+  fi
+
+  # 2. Counts are scaled for sampling. A pre environment samples at 0.3, so count() reads a
+  # problem that happened two hundred times as sixty, and it falls under a floor set to catch
+  # it. This is a correctness guard that looks like a style one.
+  ae 'sum\(ItemCount\)' "$APP_ERRORS_SH" 'counts rows instead of summing ItemCount'
+
+  # 3. The field allowlist is what actually holds the line, because a redaction rule filters
+  # values and cannot see a field somebody adds next year. Compared as a set, so reordering is
+  # fine and an addition is not. run_id is the one that matters: it is unhashed on this
+  # telemetry and joins to a conversation and to a person.
+  expected_fields="exceptionType frames fingerprint firstSeen lastSeen occurrences operationName operations problemId roleName"
+  actual_fields="$(sed -n '/export const FINDING_FIELDS = \[/,/\];/p' "$APP_ERRORS_MJS" |
+    grep -oE '"[a-zA-Z]+"' | tr -d '"' | sort | tr '\n' ' ' | sed 's/ $//')"
+  if [ "$actual_fields" = "$(echo "$expected_fields" | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')" ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: collect-app-errors reportable fields changed: ${actual_fields}" >&2
+  fi
+  # Plain grep, not the count() helper: that is `grep || true`, so an `if count -q` is true
+  # whatever it finds and the guard never fires. Three of these were written that way first
+  # and all three failed open, which is the same shape of bug this file exists to catch.
+  if sed -n '/export const FINDING_FIELDS = \[/,/\];/p' "$APP_ERRORS_MJS" | grep -qiE 'run_?id'; then
+    AE_OK=0
+    echo "FAIL: collect-app-errors lists a run id as reportable; it joins telemetry to a person" >&2
+  fi
+
+  # 4. Scrub, then scan, then refuse. Scrubbing masks what is common and safely replaceable so
+  # one unlucky operation name does not leave the job red and filing nothing forever; the
+  # scanner is the backstop for whatever that missed; and a withheld report still turns the
+  # run red so the field that carried it gets fixed.
+  ae 'export const SCRUBS = \[' "$APP_ERRORS_MJS" 'declares no scrubbing'
+  ae 'export const LEAK_CHECKS = \[' "$APP_ERRORS_MJS" 'declares no leak scanner'
+  ae 'core\.setFailed.*withheld by the leak scanner' "$APP_ERRORS_YML" 'does not go red on a withheld report'
+  ae 'not in the reportable field list' "$APP_ERRORS_MJS" 'does not refuse an unlisted field'
+  ae 'core\.setFailed\(`Nothing was filed' "$APP_ERRORS_YML" 'does not stop when the module refuses'
+
+  # A GUID must be masked on the way in, not merely detected on the way out. Both, in fact:
+  # the scrub is what keeps the job alive and the check is what keeps it honest.
+  ae '\{guid\}' "$APP_ERRORS_MJS" 'does not mask GUIDs'
+
+  # 5. No model. This is the same assertion the error report carries, for the same reason: a
+  # model summarising a stack trace paraphrases it, and a paraphrase is a wrong issue.
+  if grep -qiE '(engine:|opencode|safe-outputs|OPENAI_API_KEY)' "$APP_ERRORS_YML"; then
+    AE_OK=0
+    echo "FAIL: collect-app-errors has grown a model" >&2
+  fi
+
+  if [ "$AE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
 echo

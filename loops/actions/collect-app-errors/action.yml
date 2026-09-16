@@ -1,0 +1,297 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/collect-app-errors/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Collect application errors
+description: >-
+  Ask Application Insights what the deployed application threw, group it, and file one issue per
+  distinct problem in THIS repository, labelled so the refine and implement workers pick it up.
+  Deterministic: no model runs. Nothing leaves this repository.
+
+inputs:
+  token:
+    description: Token for this repository. Needs issues:write to file anything.
+    required: true
+  workspace-id:
+    description: >-
+      The Log Analytics workspace GUID (its customerId). Empty means do nothing and say so,
+      which is what a repository with no Application Insights should get.
+    required: false
+    default: ''
+  environment:
+    description: Which deployed environment this is, as it appears in issue titles and fingerprints.
+    required: false
+    default: pre
+  lookback-hours:
+    description: How far back to look. Match the schedule, or problems are counted twice.
+    required: false
+    default: '24'
+  min-occurrences:
+    description: Below this many occurrences in the window, nothing is filed.
+    required: false
+    default: '5'
+  min-operations:
+    description: Below this many distinct operations affected, nothing is filed.
+    required: false
+    default: '1'
+  max-findings:
+    description: >-
+      The most issues one run may open. The rest are named in the job summary and picked up
+      next run, never dropped in silence.
+    required: false
+    default: '3'
+  max-open:
+    description: >-
+      Backpressure. While at least this many issues carrying the label are already open,
+      nothing new is filed.
+    required: false
+    default: '5'
+  label:
+    description: The label every issue from here carries, and the one backpressure counts.
+    required: false
+    default: app-error
+  extra-labels:
+    description: >-
+      Comma-separated labels added alongside, which is how a finding reaches the belt.
+      Empty files a bare issue that nothing picks up.
+    required: false
+    default: 'bug,refine'
+  accepted-label:
+    description: >-
+      On a closed issue, this label means the problem is known and accepted, and it is never
+      filed again.
+    required: false
+    default: error-accepted
+  own-code-prefix:
+    description: >-
+      The assembly or namespace prefix that marks a stack frame as this repository's own.
+      Empty publishes no frames at all, which loses detail rather than leaking somebody else's.
+    required: false
+    default: ''
+  dry-run:
+    description: Work out what would be filed, write it to the job summary, and file nothing.
+    required: false
+    default: 'false'
+
+outputs:
+  filed:
+    description: The issue numbers opened or updated, comma separated. Empty if nothing was.
+    value: ${{ steps.file.outputs.filed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Query the workspace
+      id: query
+      if: inputs.workspace-id != ''
+      shell: bash
+      env:
+        WORKSPACE_ID: ${{ inputs.workspace-id }}
+        LOOKBACK_HOURS: ${{ inputs.lookback-hours }}
+        MIN_OCCURRENCES: ${{ inputs.min-occurrences }}
+        MAX_FINDINGS: ${{ inputs.max-findings }}
+      run: |
+        set -euo pipefail
+        # Four times the ceiling, so the grouping step can drop what is already filed or
+        # accepted and still have something left to open. Asking for exactly the ceiling
+        # means one known problem at the top of the list starves everything behind it.
+        bash "${GITHUB_ACTION_PATH}/query-app-errors.sh" \
+          "$WORKSPACE_ID" "$LOOKBACK_HOURS" "$MIN_OCCURRENCES" "$(( MAX_FINDINGS * 4 ))" \
+          "${RUNNER_TEMP}/app-errors.json"
+
+    - name: Group, redact and file
+      id: file
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        WORKSPACE_ID: ${{ inputs.workspace-id }}
+        APP_ENVIRONMENT: ${{ inputs.environment }}
+        LOOKBACK_HOURS: ${{ inputs.lookback-hours }}
+        MIN_OCCURRENCES: ${{ inputs.min-occurrences }}
+        MIN_OPERATIONS: ${{ inputs.min-operations }}
+        MAX_FINDINGS: ${{ inputs.max-findings }}
+        MAX_OPEN: ${{ inputs.max-open }}
+        LABEL: ${{ inputs.label }}
+        EXTRA_LABELS: ${{ inputs.extra-labels }}
+        ACCEPTED_LABEL: ${{ inputs.accepted-label }}
+        OWN_CODE_PREFIX: ${{ inputs.own-code-prefix }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        ACTION_PATH: ${{ github.action_path }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          // No runner expressions anywhere in this block, comments included: the runner
+          // substitutes them before Node parses this, and CI rejects the file if it finds one.
+          const path = require('node:path');
+          const fs = require('node:fs');
+          const { pathToFileURL } = require('node:url');
+
+          const workspaceId = process.env.WORKSPACE_ID ?? '';
+          const environment = process.env.APP_ENVIRONMENT ?? 'pre';
+          const lookbackHours = process.env.LOOKBACK_HOURS ?? '24';
+          const label = process.env.LABEL ?? 'app-error';
+          const acceptedLabel = process.env.ACCEPTED_LABEL ?? 'error-accepted';
+          const extraLabels = (process.env.EXTRA_LABELS ?? '').split(',').map((n) => n.trim()).filter(Boolean);
+          const maxFindings = Number(process.env.MAX_FINDINGS ?? '3');
+          const maxOpen = Number(process.env.MAX_OPEN ?? '5');
+          const dryRun = process.env.DRY_RUN === 'true';
+
+          const summary = core.summary.addHeading('Application errors', 2);
+          const done = async (lines) => {
+            await summary.addList(lines).write();
+            core.setOutput('filed', '');
+          };
+
+          // A repository with no Application Insights installed this by accident, or has not
+          // been configured yet. A warning and a green run, never a failure: a red run every
+          // morning is how a workflow gets switched off for good.
+          if (!workspaceId) {
+            core.warning('No workspace was given, so nothing was queried. Set the workspace id, or uninstall this workflow.');
+            return done(['No workspace configured. Nothing was queried.']);
+          }
+
+          const rowsPath = path.join(process.env.RUNNER_TEMP, 'app-errors.json');
+          const rows = fs.existsSync(rowsPath) ? JSON.parse(fs.readFileSync(rowsPath, 'utf8')) : [];
+          if (rows.length === 0) {
+            return done([`Nothing was thrown in the last ${lookbackHours}h in ${environment}. Good.`]);
+          }
+
+          // The real module, imported rather than restated. It is a file precisely so it can be
+          // executed by its own tests; inlining it here would put it back out of reach.
+          const grouping = await import(pathToFileURL(path.join(process.env.ACTION_PATH, 'group-and-redact.mjs')).href);
+
+          const outcome = grouping.prepare(rows, {
+            environment,
+            lookbackHours,
+            ownCodePrefix: process.env.OWN_CODE_PREFIX ?? '',
+            minOccurrences: Number(process.env.MIN_OCCURRENCES ?? '5'),
+            minOperations: Number(process.env.MIN_OPERATIONS ?? '1'),
+          });
+
+          // A field nobody agreed to publish is a change to the module that got past review.
+          // Nothing is filed, because the new field is probably on all of them.
+          if (outcome.refused) {
+            core.setFailed(`Nothing was filed: ${outcome.refused}.`);
+            return;
+          }
+
+          const open = await github.paginate(github.rest.issues.listForRepo, {
+            ...context.repo, state: 'open', labels: label, per_page: 100,
+          });
+
+          // Backpressure, the audit's rule in a workflow that cannot use skip-if-match:
+          // do not pile reports on top of reports nobody has actioned.
+          if (open.length >= maxOpen) {
+            return done([
+              `${open.length} issue(s) labelled \`${label}\` are already open, which is the limit.`,
+              'Nothing new was filed. Close or accept some, and the next run will carry on.',
+            ]);
+          }
+
+          // Made before anything is filed. A label that does not exist yet is a 422 on the
+          // create, which reads as "the issue could not be filed" and sends whoever is
+          // debugging it looking at permissions.
+          for (const name of [label, acceptedLabel, ...extraLabels]) {
+            try {
+              await github.rest.issues.getLabel({ ...context.repo, name });
+            } catch (missing) {
+              if (missing.status !== 404) { throw missing; }
+              if (dryRun) { continue; }
+              await github.rest.issues.createLabel({
+                ...context.repo, name, color: 'd73a4a',
+                description: 'Filed automatically from Application Insights.',
+              });
+            }
+          }
+
+          const marker = (fingerprint) => `<!-- pcp-app-error: ${fingerprint} -->`;
+
+          // Everything ever filed from here, open or closed. Closed matters as much as open:
+          // it is how "we know, leave it" and "this came back" are told apart.
+          const seen = await github.paginate(github.rest.issues.listForRepo, {
+            ...context.repo, state: 'all', labels: label, per_page: 100,
+          });
+          const find = (fingerprint) => seen.find((issue) => (issue.body ?? '').includes(marker(fingerprint)));
+
+          const today = new Date().toISOString().slice(0, 10);
+          const filed = [];
+          const notes = [];
+          let opened = 0;
+
+          for (const report of outcome.prepared) {
+            const existing = find(report.fingerprint);
+            const accepted = existing
+              && (existing.labels ?? []).some((l) => (typeof l === 'string' ? l : l.name) === acceptedLabel);
+
+            // Somebody looked at this and said it is fine. That decision does not expire.
+            if (existing && existing.state === 'closed' && accepted) {
+              notes.push(`\`${report.fingerprint}\` is accepted (#${existing.number}); left alone.`);
+              continue;
+            }
+
+            const line = `- ${today}: ${report.occurrences} in the last ${lookbackHours}h`;
+
+            if (existing && existing.state === 'open') {
+              if (!dryRun) {
+                await github.rest.issues.createComment({
+                  ...context.repo, issue_number: existing.number, body: line,
+                });
+              }
+              filed.push(existing.number);
+              notes.push(`\`${report.fingerprint}\` still happening; noted on #${existing.number}.`);
+              continue;
+            }
+
+            // Closed, and not accepted. It came back. Reopening keeps the history of what was
+            // tried last time, which is most of what makes the second attempt cheaper.
+            if (existing) {
+              if (!dryRun) {
+                await github.rest.issues.update({
+                  ...context.repo, issue_number: existing.number, state: 'open',
+                });
+                await github.rest.issues.createComment({
+                  ...context.repo,
+                  issue_number: existing.number,
+                  body: `This was closed and has come back.\n${line}`,
+                });
+              }
+              filed.push(existing.number);
+              notes.push(`\`${report.fingerprint}\` regressed; reopened #${existing.number}.`);
+              continue;
+            }
+
+            // The ceiling applies only to new issues. Commenting on one that already exists is
+            // not noise, and stopping early would hide a problem that is getting worse.
+            if (opened >= maxFindings) {
+              notes.push(`\`${report.fingerprint}\` (${report.occurrences}) waits for the next run: the ceiling is ${maxFindings}.`);
+              continue;
+            }
+
+            if (!dryRun) {
+              const created = await github.rest.issues.create({
+                ...context.repo,
+                title: report.title,
+                body: report.body,
+                labels: [label, ...extraLabels],
+              });
+              filed.push(created.data.number);
+              notes.push(`\`${report.fingerprint}\` filed as #${created.data.number}.`);
+            } else {
+              notes.push(`\`${report.fingerprint}\` would be filed: ${report.title}`);
+            }
+
+            opened += 1;
+          }
+
+          for (const held of outcome.withheld) {
+            core.error(`A report was withheld: the leak scanner matched ${held.matched.join('; ')}.`);
+          }
+
+          await summary
+            .addRaw(dryRun ? '\n_Dry run: nothing was filed._\n' : '')
+            .addList(notes.length > 0 ? notes : ['Nothing to report.'])
+            .write();
+
+          core.setOutput('filed', filed.join(','));
+
+          // Red only after everything clean has been filed. A single unlucky operation name
+          // must not mean the belt never hears about anything again.
+          if (outcome.withheld.length > 0) {
+            core.setFailed(`${outcome.withheld.length} report(s) were withheld by the leak scanner; fix the field that carried private text.`);
+          }

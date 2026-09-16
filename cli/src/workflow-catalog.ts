@@ -53,6 +53,7 @@ export const generatedConsumerTargets = [
 ] as const;
 
 export const templateNames = [
+  "agentics-app-errors",
   "agentics-checks",
   "agentics-error-report",
   "agentics-maintenance",
@@ -76,6 +77,7 @@ export interface CatalogTemplate {
 }
 
 export const catalogTemplates: readonly CatalogTemplate[] = [
+  { name: "agentics-app-errors", file: "agentics-app-errors.yml", description: "Daily application error report: asks Application Insights what the deployed app threw, groups it, and files one issue per distinct problem HERE, labelled bug + refine so the belt picks it up. Deterministic, no model; the report never leaves this repository, and a leak scanner withholds anything carrying an identifier." },
   { name: "agentics-checks", file: "agentics-checks.yml", description: "Agentics checks: verifies generated agent lockfiles, actionlint, and compile on PRs touching workflow files." },
   { name: "agentics-error-report", file: "agentics-error-report.yml", description: "Daily error report: classifies the last day of failures in the workflows this package ships and files them upstream so the package gets fixed. Deterministic, no model; sends only package-owned names, conclusions and counts, and refuses to file anything a leak scanner flags." },
   { name: "agentics-maintenance", file: "agentics-maintenance.yml", description: "Agentic maintenance: scheduled daily maintenance workflow for keeping workflows and actions up to date." },

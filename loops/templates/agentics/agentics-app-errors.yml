@@ -1,0 +1,168 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/templates/agentics/agentics-app-errors.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: "Agentics: App Errors"
+
+# Once a day, ask Application Insights what the deployed application actually threw, and file
+# the distinct problems as issues here, labelled so refine sizes them and implement fixes them.
+#
+# THIS REPORT STAYS IN THIS REPOSITORY. That is the design constraint, and it is the opposite
+# of the one in agentics-error-report.yml. That workflow exists to carry a *workflow* failure
+# out of a private repository into the public package, so it is built to send almost nothing.
+# An application's exceptions are this repository's own business: they are filed here, beside
+# the code that threw them, and nothing about them travels anywhere.
+#
+# The job is deterministic -- no model runs -- for the same reason that one is: a model
+# summarising a stack trace paraphrases it, and a paraphrased stack trace is a wrong issue
+# that costs somebody an afternoon. The agent work happens afterwards, on the belt, where
+# refine reads the issue and implement fixes it.
+#
+# To turn it off: delete this file, or clear APP_ENV below.
+#
+# BEFORE THE FIRST RUN the deploy identity needs Monitoring Reader on the Log Analytics
+# workspace. It can create the workspace and cannot read it, which is not a contradiction:
+# creating is a control-plane right and querying is a data-plane one. Either add the role
+# assignment to infra/bicep, or once per environment:
+#
+#   az role assignment create \
+#     --assignee-object-id "$(az ad sp show --id "$AZURE_CLIENT_ID" --query id -o tsv)" \
+#     --assignee-principal-type ServicePrincipal \
+#     --role "Monitoring Reader" \
+#     --scope "$(az monitor log-analytics workspace show -g "$AZURE_RG" -n "$WORKSPACE" --query id -o tsv)"
+
+run-name: "App errors: ${{ github.event.inputs.app-env || 'pre' }}, last ${{ github.event.inputs.lookback-hours || '24' }}h"
+
+on:
+  schedule:
+    # An hour after the workflow error report, so a morning's reading arrives together. This
+    # runs on a GitHub-hosted runner and never touches the agent fleet, so there is no slot to
+    # stagger against other repositories.
+    - cron: "41 7 * * *"
+  workflow_dispatch:
+    inputs:
+      app-env:
+        description: "Which deployed environment to read"
+        required: false
+        type: string
+        default: 'pre'
+      lookback-hours:
+        description: "How far back to look"
+        required: false
+        type: string
+        default: '24'
+      dry-run:
+        description: "Work out what would be filed and file nothing"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # Which infra/<env>.env is read, and the word that appears in issue titles. Clearing it
+  # turns the workflow into a no-op that says so, which is what a repository with no
+  # Application Insights should get.
+  APP_ENV: "pre"
+  # Matches the cron. A window wider than the schedule counts the same problem twice; a
+  # narrower one loses whatever happened in the gap.
+  LOOKBACK_HOURS: "24"
+  # The floor. A problem below this is real but not yet news, and a belt buried under
+  # single-occurrence reports is a belt somebody switches off.
+  MIN_OCCURRENCES: "5"
+  MIN_OPERATIONS: "1"
+  # The ceiling on NEW issues per run. Whatever is left over is named in the job summary and
+  # picked up tomorrow, never dropped in silence.
+  MAX_FINDINGS: "3"
+  # Backpressure, the audit's rule: do not pile reports on top of unactioned reports.
+  MAX_OPEN: "5"
+  # The prefix that marks a stack frame as this repository's own, for example "Pliny" or
+  # "Numa". EMPTY PUBLISHES NO FRAMES AT ALL, which loses detail rather than putting somebody
+  # else's file paths into an issue. Set it once and the issues get much more useful.
+  OWN_CODE_PREFIX: ""
+  # What the issues carry. The first is what backpressure counts; the rest are what puts the
+  # finding on the belt.
+  ERROR_LABEL: "app-error"
+  BELT_LABELS: "bug,refine"
+
+jobs:
+  collect:
+    # Fork of a consumer: not their Azure, not their issues.
+    if: "!github.event.repository.fork"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Load bearing, not decoration. The federated credential on the deploy identity trusts the
+    # subject `repo:<org>/<repo>:environment:<name>`, so without this the OIDC token is issued
+    # with a subject Azure will not accept and the login fails with nothing useful to read.
+    environment: ${{ github.event.inputs.app-env || 'pre' }}
+    concurrency:
+      group: agentics-app-errors
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      # Filing here, with this repository's own token. No App token, no upstream.
+      issues: write
+      # For azure/login.
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Non-secret deployment identifiers: AZURE_RG, WORKLOAD, ENV_TOKEN, INSTANCE. The same
+      # file and the same mechanism the deploy workflows use, so the resource names here can
+      # never drift from the ones that were actually deployed.
+      - name: Load environment config
+        id: config
+        env:
+          APP_ENV_NAME: ${{ github.event.inputs.app-env || env.APP_ENV }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APP_ENV_NAME" ] || [ ! -f "infra/${APP_ENV_NAME}.env" ]; then
+            echo "::warning::No infra/${APP_ENV_NAME}.env, so there is nothing to read. Clear APP_ENV or add the file."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          grep -vE '^\s*#|^\s*$' "infra/${APP_ENV_NAME}.env" >> "$GITHUB_ENV"
+          echo "APP_ENV_NAME=${APP_ENV_NAME}" >> "$GITHUB_ENV"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Azure login (OIDC)
+        if: steps.config.outputs.ready == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve the workspace
+        id: workspace
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          # The Bicep naming convention, the same line app-deploy-env.yml uses to derive the
+          # App Insights name. Reading the name from the convention rather than from a
+          # variable is what stops this pointing at a workspace nobody deploys to.
+          NAME="${WORKLOAD}-${ENV_TOKEN}-log-${INSTANCE}"
+          # The customerId, which is the GUID a query is addressed to. Not the resource id.
+          if ! ID="$(az monitor log-analytics workspace show \
+                --resource-group "$AZURE_RG" --workspace-name "$NAME" \
+                --query customerId --output tsv 2>/dev/null)"; then
+            echo "::warning::No workspace ${NAME} in ${AZURE_RG}, so nothing was queried."
+            ID=""
+          fi
+          echo "id=${ID}" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/collect-app-errors
+        with:
+          token: ${{ github.token }}
+          workspace-id: ${{ steps.workspace.outputs.id }}
+          environment: ${{ env.APP_ENV_NAME || env.APP_ENV }}
+          lookback-hours: ${{ github.event.inputs.lookback-hours || env.LOOKBACK_HOURS }}
+          min-occurrences: ${{ env.MIN_OCCURRENCES }}
+          min-operations: ${{ env.MIN_OPERATIONS }}
+          max-findings: ${{ env.MAX_FINDINGS }}
+          max-open: ${{ env.MAX_OPEN }}
+          label: ${{ env.ERROR_LABEL }}
+          extra-labels: ${{ env.BELT_LABELS }}
+          own-code-prefix: ${{ env.OWN_CODE_PREFIX }}
+          dry-run: ${{ github.event.inputs.dry-run || 'false' }}
