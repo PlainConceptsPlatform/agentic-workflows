@@ -372,6 +372,52 @@ else
 fi
 if [ "$MIRROR_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# Third-party action pins are the same shape of problem. Every `uses:` in a package-managed
+# file is pinned to a full commit SHA, and one action must resolve to exactly one SHA across
+# the whole package: the router, the workers, the shared mechanics and the composite actions
+# are installed together, so two pins for one action mean two versions of it run in the same
+# repository, and the older one is invisible until it breaks. That is how the merge-belt
+# dispatchers ran create-github-app-token v2.0.6 for a release while every worker ran v3.2.0:
+# nothing failed, nothing flagged it, and the action that receives the App's private key was
+# the stale one. Templates are excluded: they are consumer-owned from installation and
+# deliberately carry their own versions (the CI templates pin download-artifact v6 while the
+# loops pin v8). A floating tag (`@v4`) is a missing pin and fails the same check.
+PIN_OK=1
+declare -A PIN_SEEN
+PKG_ROOT="$(cd "${HERE}/../../.." && pwd)"
+pin_scan() {
+  local file="$1" line action ref
+  # Resolve to an absolute path so the package-relative name in the failure reads like the
+  # source tree, not like this script's location.
+  file="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
+  local shown="${file#"${PKG_ROOT}/"}"
+  # Anchored on the line start so a comment quoting a `uses:` cannot match, and tolerant of
+  # both spellings (`uses:` as a mapping key and `- uses:` as a list item). Local composite
+  # actions (`./.github/actions/...`) and docker refs carry no `@` and never match.
+  local pin_re='^[[:space:]]*-?[[:space:]]*uses:[[:space:]]+([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([A-Za-z0-9._-]+)'
+  while IFS= read -r line; do
+    [[ "$line" =~ $pin_re ]] || continue
+    action="${BASH_REMATCH[1]}"
+    ref="${BASH_REMATCH[2]}"
+    if [ "${PIN_SEEN[$action]+set}" ] && [ "${PIN_SEEN[$action]}" != "$ref" ]; then
+      PIN_OK=0
+      echo "FAIL: ${shown} pins ${action}@${ref} but ${PIN_SEEN[$action]} is pinned elsewhere; one action, one pin" >&2
+    else
+      PIN_SEEN[$action]="$ref"
+    fi
+    if [ "${#ref}" -ne 40 ]; then
+      PIN_OK=0
+      echo "FAIL: ${shown} uses ${action}@${ref}; a tag is mutable, pin the full commit SHA" >&2
+    fi
+  done < "$file"
+}
+for pin_file in "$ROUTER_YML" "${WORKFLOWS_DIR}"/agent-*.md "${WORKFLOWS_DIR}"/shared/*.md \
+  "${WORKFLOWS_DIR}"/authorize-bot-work.yml "${HERE}/.."/*/action.yml; do
+  [ -f "$pin_file" ] || continue
+  pin_scan "$pin_file"
+done
+if [ "$PIN_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 # Run the belt's own jq, rather than reading it. The filter that picks which open pull requests
 # the hourly reconcile job acts on was written as
 #   ((env.TRUSTED_BOTS | split(" ")) | index(.user.login) != null)
