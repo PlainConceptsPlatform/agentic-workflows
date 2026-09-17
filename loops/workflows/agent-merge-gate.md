@@ -898,9 +898,35 @@ timeout-minutes: 120
    reassurance about their absence.
 
    **5c. Check the acceptance criteria.** The issue context at `${{ env.ISSUE_CONTEXT_PATH }}`
-   says what this change was supposed to do. Confirm the diff does it. Set
-   `acceptanceCriteriaMet` to false only when you can name a criterion the diff does not
-   satisfy.
+   says what this change was supposed to do. Confirm the diff does it. The double-check the
+   rest of this step asks you to do is the gate's own: a defect an agent did not notice and CI
+   did not catch is a more expensive rollback than a wrong auto-merge.
+
+   Set `acceptanceCriteriaMet` to `false` when you can name a criterion the diff does not
+   satisfy. Name every criterion that is missing or wrong, in `reason` and in `findings` if
+   the gap is a defect (it often is). An empty `findings` array with
+   `acceptanceCriteriaMet: false` is accepted but carries little evidence: prefer one entry
+   per gap, with `category: correctness`, the file and line, and a `suggestedFix`.
+
+   **Correctness remediation.** When `acceptanceCriteriaMet` is `false`, you may fix the
+   gap and push the fix the same way you fix a failed CI run — this is the same
+   `remediated` verdict the merge-conflict and CI-failure paths use, and it re-runs CI and
+   the gate on the new head. To do it:
+
+   - Produce the patch that closes each unmet criterion. Every criterion you named must be
+     addressed by the patch, or the next gate cycle reproduces this verdict.
+   - Run the verification commands below (scoped to the files you changed) before the push.
+   - Push the fix using `push_to_pull_request_branch` (pr_number: ${{ needs.subject.outputs.pr }},
+     branch: the current PR branch), then emit the `add_comment` with
+     **Verdict:** remediated. Set `acceptanceCriteriaMet` to `false` in the report: the
+     criteria were unmet when you reviewed, and the fix is what addresses them. The next
+     cycle validates the fix.
+   - Do not rebase, reset, amend or otherwise rewrite history: the push is fast-forward only.
+
+   If you cannot fix a criterion in one pass — it needs a decision, a question, or a code path
+   you cannot trace — do not push. Report `assessed` with `acceptanceCriteriaMet: false` and no
+   push. The workflow sends the pull request to a human, which is the correct action when the
+   gap is beyond a focused repair.
 
    **5d. Answer the recoverability checklist.** How easy would this be to undo if it were
    wrong? Cite the diff for each answer, and record the ones that fired in
@@ -991,8 +1017,9 @@ timeout-minutes: 120
 
 7. Say which of two things you did, and nothing more.
 
-   - **`remediated`** — CI failed or the branch conflicted, you fixed it, you verified the fix,
-     and you are pushing it. Exactly one `push_to_pull_request_branch` goes with this word.
+   - **`remediated`** — something was wrong (CI failed, the branch conflicted, or the diff did
+     not satisfy the acceptance criteria), you fixed it, you verified the fix, and you are
+     pushing it. Exactly one `push_to_pull_request_branch` goes with this word.
    - **`assessed`** — you reviewed the change and are reporting what you found. No push.
 
    These are the only two words the workflow accepts. You do not write `merge`, `review`,
@@ -1040,6 +1067,12 @@ timeout-minutes: 120
    ```
 
    `"findings": []` on a clean change is the expected output, not a failure to do the job.
+
+   When `acceptanceCriteriaMet` is `false` and you are pushing a fix, the verdict must be
+   `remediated`, not `assessed`: the validator refuses an `assessed` verdict that carries a
+   push. Set `acceptanceCriteriaMet` to `false` in the report you push with the fix — it
+   describes the code you reviewed, not the fix you just produced. The next gate cycle
+   re-evaluates the updated diff and sets it to `true` (or finds another gap).
 
    The workflow applies comments, labels, merges, and closures with the App token. Reading the
    repository, running verification commands and delegating a finding to be checked are all part

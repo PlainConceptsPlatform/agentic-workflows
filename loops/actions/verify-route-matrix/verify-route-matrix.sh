@@ -1522,6 +1522,14 @@ if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
   gate_case "remediated with two pushes"         invalid    "$(gate_items "$(gate_comment remediated),${gate_push},${gate_push}")" failure low
   gate_case "an assessment carrying a push"      invalid    "$(gate_items "$(gate_comment assessed),${gate_push}")" success low
 
+  # Correctness remediation: the agent found the diff does not satisfy the acceptance
+  # criteria, pushed a fix, and emitted remediated. The validator treats this the same as a
+  # CI-failure or conflict remediation -- one push and the remediated word -- regardless of
+  # what acceptanceCriteriaMet says in the report. The next gate cycle re-evaluates the fix.
+  gate_unmet_remedied='{\"findings\":[{\"verified\":false,\"severity\":\"medium\",\"category\":\"correctness\",\"file\":\"src/app.ts\",\"line\":42,\"finding\":\"criterion X not implemented\"}],\"recoverability\":\"high\",\"acceptanceCriteriaMet\":false,\"confidence\":0.9}'
+  gate_case "remediated for unmet acceptance criteria" \
+                                                 remediated  "$(gate_items "$(gate_comment remediated "$gate_unmet_remedied"),${gate_push}")" success low
+
   # Output from a worker version that predates the disposition table. Applying its vocabulary
   # would merge on a word this validator no longer means the same thing by.
   gate_case "the old merge vocabulary is refused"  invalid  '{"items":[{"type":"add_comment","item_number":7,"body":"<!-- agent-merge-gate -->\\n**Verdict:** merge"}]}' success low
