@@ -1,0 +1,100 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/attach-screenshots/action.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: Attach screenshots
+description: Post screenshots captured by agent-browser to the linked issue as a single comment.
+inputs:
+  token:
+    description: GitHub token with issues:write access.
+    required: true
+  issue-number:
+    description: Issue number to comment on.
+    required: true
+  pr-number:
+    description: Pull request number being verified.
+    required: true
+  screenshots-dir:
+    description: Directory containing screenshots and plan.json.
+    required: true
+  screenshot-count:
+    description: Number of screenshots captured (0 if none).
+    required: false
+    default: '0'
+  app-started:
+    description: Whether the app started successfully.
+    required: false
+    default: 'false'
+  enabled:
+    description: Whether visual verification was enabled.
+    required: false
+    default: 'true'
+runs:
+  using: composite
+  steps:
+    - name: Attach screenshots to issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        ISSUE: ${{ inputs.issue-number }}
+        PR: ${{ inputs.pr-number }}
+        SCREENSHOTS_DIR: ${{ inputs.screenshots-dir }}
+        SCREENSHOT_COUNT: ${{ inputs.screenshot-count }}
+        APP_STARTED: ${{ inputs.app-started }}
+        ENABLED: ${{ inputs.enabled }}
+      run: |
+        set -euo pipefail
+
+        if [ "$ENABLED" != "true" ]; then
+          echo "Visual verification disabled; nothing to attach."
+          exit 0
+        fi
+
+        if [ -f "$SCREENSHOTS_DIR/plan.json" ] && [ "$APP_STARTED" = "true" ] && [ "$SCREENSHOT_COUNT" -gt 0 ]; then
+          # Build the comment body from the plan's descriptions.
+          body=$(jq -r --arg pr "$PR" '
+            "<!-- agent-visual-verify -->\n## Visual verification for PR #" + $pr + "\n",
+            (.waypoints | to_entries[] |
+              "**\(.key + 1). " + (.value.description // .value.expect // "waypoint") + "**\n" +
+              "Selector: `" + (.value.selector // "n/a") + "`\n"
+            )
+          ' "$SCREENSHOTS_DIR/plan.json")
+
+          # Collect all screenshot files.
+          attaches=()
+          for png in "$SCREENSHOTS_DIR"/*.png; do
+            [ -f "$png" ] || continue
+            attaches+=("$png")
+          done
+
+          if [ ${#attaches[@]} -gt 0 ]; then
+            gh issue comment "$ISSUE" --repo "$REPO" \
+              --body "attach" \
+              "${attaches[@]/#/--attach=}" \
+              --body-file - <<< "$body" 2>/dev/null || \
+            {
+              # Fallback: gh CLI does not support --body-file with --attach in all versions.
+              # Post the body as the comment and attach each screenshot individually.
+              gh issue comment "$ISSUE" --repo "$REPO" --body "$body"
+              for png in "${attaches[@]}"; do
+                gh issue comment "$ISSUE" --repo "$REPO" --attach "$png" --body ""
+              done
+            }
+            echo "Attached ${#attaches[@]} screenshots to issue #$ISSUE"
+          else
+            gh issue comment "$ISSUE" --repo "$REPO" --body "$body"
+            echo "No screenshots found; posted plan summary only"
+          fi
+        else
+          # App didn't start or no plan was produced. Post a warning.
+          reason="visual verification could not produce screenshots"
+          if [ "$APP_STARTED" != "true" ]; then
+            reason="$reason (app did not start)"
+          elif [ ! -f "$SCREENSHOTS_DIR/plan.json" ]; then
+            reason="$reason (no verification plan was written)"
+          fi
+
+          gh issue comment "$ISSUE" --repo "$REPO" --body \
+            "<!-- agent-visual-verify -->## Visual verification for PR #$PR
+
+⚠ $reason. The merge proceeds without visual evidence."
+          echo "Posted warning: $reason"
+        fi

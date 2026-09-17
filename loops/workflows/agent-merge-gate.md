@@ -72,6 +72,14 @@ env:
   # one unusable report can keep every other bot pull request in the repository waiting.
   PARK_AT_UNUSABLE_OUTPUT: "2"
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
+  # Visual verification runs after auto-merge is decided and before the merge itself. The worker
+  # runs /repo-verify, drives a browser via agent-browser, and attaches screenshots to the linked
+  # issue. Failures never block the merge. Consumers opt out by setting this to "false".
+  VISUAL_VERIFY_ENABLED: "true"
+  VISUAL_VERIFY_BUILD_COMMAND: ""
+  VISUAL_VERIFY_START_COMMAND: ""
+  VISUAL_VERIFY_PORT: "3000"
+  VISUAL_VERIFY_WAIT_SECONDS: "30"
   GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
@@ -449,6 +457,13 @@ jobs:
             ```
 
             Findings and verification on the linked issue: #${{ needs.subject.outputs.issue }}. [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Run visual verification
+        if: needs.validate_output.outputs.outcome == 'auto-merge' && env.VISUAL_VERIFY_ENABLED == 'true'
+        uses: ./.github/workflows/agent-visual-verify.lock.yml
+        with:
+          pr-number: ${{ needs.subject.outputs.pr }}
+          linked-issue: ${{ needs.subject.outputs.issue }}
+        continue-on-error: true
       - name: Merge approved pull request
         if: needs.validate_output.outputs.outcome == 'auto-merge'
         env:

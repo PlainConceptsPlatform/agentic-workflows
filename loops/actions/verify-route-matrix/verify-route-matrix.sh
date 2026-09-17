@@ -1652,6 +1652,44 @@ if worker_installed merge-gate; then
   if [ "$GATE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+echo "── Visual verify wiring ───────────────────────────────────────────────────"
+
+# The merge-gate's conclude job dispatches agent-visual-verify before merging when the outcome
+# is auto-merge and VISUAL_VERIFY_ENABLED is true. Each of these is one line an edit could drop
+# with nothing going red: a missing dispatch step, a missing env var, or a missing worker file.
+if worker_installed merge-gate; then
+  VV_OK=1
+
+  vv() {
+    grep -qE "$1" "$2" || { VV_OK=0; echo "FAIL: $3" >&2; }
+  }
+
+  # The dispatch step exists and runs only on auto-merge with the feature flag on.
+  vv 'name: Run visual verification' "$MERGE_GATE_WORKER_MD" 'merge-gate has no visual-verify dispatch step'
+  vv "outcome == 'auto-merge'.*VISUAL_VERIFY_ENABLED == 'true'" "$MERGE_GATE_WORKER_MD" 'visual-verify dispatch has wrong guard'
+  vv 'continue-on-error: true' "$MERGE_GATE_WORKER_MD" 'visual-verify dispatch must not block the merge'
+
+  # The env vars the worker needs.
+  vv 'VISUAL_VERIFY_ENABLED:' "$MERGE_GATE_WORKER_MD" 'merge-gate missing VISUAL_VERIFY_ENABLED env var'
+  vv 'VISUAL_VERIFY_START_COMMAND:' "$MERGE_GATE_WORKER_MD" 'merge-gate missing VISUAL_VERIFY_START_COMMAND env var'
+
+  # The worker file exists.
+  VV_WORKER_MD="${WORKFLOWS_DIR}/agent-visual-verify.md"
+  if [ ! -f "$VV_WORKER_MD" ]; then
+    VV_OK=0
+    echo "FAIL: agent-visual-verify.md does not exist" >&2
+  fi
+
+  # The attach-screenshots action exists.
+  VV_ATTACH="${HERE}/../attach-screenshots/action.yml"
+  if [ ! -f "$VV_ATTACH" ]; then
+    VV_OK=0
+    echo "FAIL: attach-screenshots/action.yml does not exist" >&2
+  fi
+
+  if [ "$VV_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 echo "── Expression functions ──────────────────────────────────────────────────"
 
 # GitHub's expression language has eleven functions and no more. There is no `split()`, no
