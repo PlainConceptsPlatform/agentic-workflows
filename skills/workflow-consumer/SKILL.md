@@ -117,6 +117,33 @@ deliberately making the file consumer-owned.
 Full customization guidance, the migration path from shared configuration, and the values each worker
 owns are in `references/customize.md`.
 
+### Visual verification
+
+The merge-gate worker can run visual verification before auto-merging. Set these env vars on
+`agent-merge-gate.md`:
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `VISUAL_VERIFY_ENABLED` | `"true"` | Set to `"false"` to disable entirely |
+| `VISUAL_VERIFY_BUILD_COMMAND` | `""` | Build command for the app (e.g. `pnpm --filter @pliny/web build`) |
+| `VISUAL_VERIFY_START_COMMAND` | `""` | Start command for the app (e.g. `pnpm --filter @pliny/web exec next start`) |
+| `VISUAL_VERIFY_PORT` | `"3000"` | Port the app listens on |
+| `VISUAL_VERIFY_WAIT_SECONDS` | `"30"` | Seconds to wait for the app to respond |
+
+When `VISUAL_VERIFY_START_COMMAND` is empty, the agent runs `/repo-verify` and writes a
+verification plan, but the browser capture step is skipped and a warning comment is posted
+on the issue instead. Consumers must set the build and start commands for screenshots to
+appear.
+
+You can also manually dispatch visual verification on any PR from the router's Run
+workflow dropdown by choosing `visual-verify` as the operation.
+
+### Merge gate on all pull requests
+
+The merge gate now runs on all open, non-draft pull requests from this repository,
+regardless of whether the author is a bot or a human. The `identify-gate-subject`
+action previously rejected human-authored PRs; that check has been removed.
+
 ## Compile and verify
 
 Compile in the consumer repository:

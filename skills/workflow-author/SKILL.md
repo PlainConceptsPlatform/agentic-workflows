@@ -78,6 +78,7 @@ loops/workflows/
       call-triage              agent-triage.md              workflow_call only
       call-apply-review        agent-apply-review.md        workflow_call only
       call-merge-gate          agent-merge-gate.md          workflow_call only
+      call-visual-verify       agent-visual-verify.md       workflow_call only
       call-audit               agent-audit.md               workflow_call only
       call-release             agent-release.md             workflow_call only
       deterministic jobs       check-implement-pr, dispatch-triage, bot-approve,
@@ -285,20 +286,68 @@ needed. Both in the `reserve` job, so the claim is atomic.
 ### Naming runs
 
 GitHub titles an issue-triggered run with the issue title, so every run on one issue reads
-identically. Derive the title from the event:
+identically. Give every event a descriptive `run-name` derived from the event and the routed
+operation.
+
+#### Run-name prefix convention
+
+Three prefixes make the All Work Router history scannable and map each run to its sidebar
+workflow entry:
+
+| Prefix | Meaning | Examples |
+|---|---|---|
+| `Agent:` | A worker is being dispatched (has a corresponding `Agent: *` sidebar entry) | `Agent: Merge Gate — PR #286` |
+| `Agentics:` | An infrastructure cron job (no model, deterministic) | `Agentics: Maintenance — 6h` |
+| `Event:` | An event observer; no agent runs, the router classified and stopped | `Event: Comment on #42 by CKGrafico` |
+| `Working:` | A non-agent route with no corresponding sidebar workflow (direct, batch) | `Working: Direct — #275 {title}` |
+
+Rules:
+
+- `Agent: {Name}` matches the sidebar workflow name exactly (`Agent: Merge Gate` ↔ the
+  `Agent: Merge Gate` workflow file).
+- `—` separates the route name from the subject (PR number, issue number, or schedule).
+- `Working:` is reserved for routes that have no `Agent: *.lock.yml` file of their own.
+- Schedule entries use `github.event.schedule` to distinguish crons.
+- The final `|| github.event_name` fallback rarely fires; every event should match a clause.
 
 ```yaml
 run-name: >-
   ${{ github.event_name == 'issues'
-  && format('{0} label on #{1} by {2}', github.event.label.name, github.event.issue.number, github.actor)
-  || github.event_name == 'issue_comment'
-  && format('comment on #{0} by {1}', github.event.issue.number, github.actor)
+  && github.event.action == 'opened'
+  && format('Event: Issue opened — #{0} {1} by {2}', github.event.issue.number, github.event.issue.title, github.actor)
+  || github.event_name == 'issues'
+  && github.event.label.name == 'bot-working'
+  && contains(github.event.issue.labels.*.name, 'implement')
+  && format('Agent: Implement — #{0} {1}', github.event.issue.number, github.event.issue.title)
+  || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'merge-gate'
+  && format('Agent: Merge Gate — PR #{0}', inputs.pr-number)
+  || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'visual-verify'
+  && format('Agent: Visual Verify — PR #{0}', inputs.pr-number)
+  || github.event_name == 'schedule'
+  && github.event.schedule == '17 1 * * 1'
+  && format('Agent: Audit — weekly')
+  || github.event_name == 'schedule'
+  && github.event.schedule == '23 */6 * * *'
+  && format('Agentics: Maintenance — 6h')
   || github.event_name }}
 ```
 
 Fold it to a single line. In a `>-` scalar, a continuation line indented further than the first is
 preserved literally, newline and all. `run-name` is evaluated when the run is created, before any
 job exists, so it can name the trigger but never the route.
+
+#### Adding a new route
+
+When adding a new `workflow_dispatch` operation and its worker:
+
+1. Add an entry to the router's `run-name` block with the appropriate prefix.
+2. If the route dispatches an agent worker, use `Agent: {Name} — {subject}`.
+3. If the route is deterministic infrastructure, use `Agentics: {Name} — {subject}`.
+4. Add the operation to the `workflow_dispatch.inputs.operation` choice list.
+5. Add a `call-{route}` job with `secrets:` passing the keys the worker declares.
+6. Add a case to `classify-route.sh` that validates the required inputs.
 
 ## Events over schedules
 

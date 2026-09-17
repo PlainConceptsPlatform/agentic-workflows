@@ -81,6 +81,8 @@ checkout:
   fetch: ["*"]
   fetch-depth: 0
 
+permissions: read-all
+
 steps:
   - name: Check out the pull request branch
     env:
