@@ -230,6 +230,14 @@ classify_route() {
             error="operation 'merge-gate' needs a positive pr-number, got '${INPUT_PR_NUMBER:-}'"
           fi
           ;;
+        visual-verify)
+          if is_issue_number "${INPUT_PR_NUMBER:-}"; then
+            route="visual-verify"
+            pr_number="${INPUT_PR_NUMBER}"
+          else
+            error="operation 'visual-verify' needs a positive pr-number, got '${INPUT_PR_NUMBER:-}'"
+          fi
+          ;;
         audit)
           route="${OPERATION}"
           trigger_kind="${INPUT_TRIGGER_KIND:-manual}"

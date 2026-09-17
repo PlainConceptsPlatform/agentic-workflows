@@ -67,6 +67,9 @@ run-name: >-
   && inputs.operation == 'merge-gate'
   && format('Working (Merge Gate): PR #{0}', inputs.pr-number)
   || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'visual-verify'
+  && format('Working (Visual Verify): PR #{0}', inputs.pr-number)
+  || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'batch'
   && format('Working (Batch): #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
@@ -175,6 +178,7 @@ on:
           - triage
           - apply-review
           - merge-gate
+          - visual-verify
           - audit
           - audit-close
           - cleanup-artifacts
@@ -597,6 +601,19 @@ jobs:
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+
+  call-visual-verify:
+    needs: classify
+    if: needs.classify.outputs.route == 'visual-verify'
+    uses: ./.github/workflows/agent-visual-verify.lock.yml
+    permissions: write-all
+    with:
+      pr-number: ${{ needs.classify.outputs.pr-number }}
+      linked-issue: ${{ needs.classify.outputs.linked-issue }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
 
   call-audit:
     needs: classify
