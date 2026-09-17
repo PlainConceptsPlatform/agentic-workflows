@@ -10,70 +10,91 @@ name: "All Work Router"
 run-name: >-
   ${{ github.event_name == 'issues'
   && github.event.action == 'opened'
-  && format('Issue opened: {0} (#{1}) by {2}', github.event.issue.title, github.event.issue.number, github.actor)
+  && format('Event: Issue opened — #{0} {1} by {2}', github.event.issue.number, github.event.issue.title, github.actor)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
   && contains(github.event.issue.labels.*.name, 'implement')
-  && format('Working (Implement): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Agent: Implement — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
   && contains(github.event.issue.labels.*.name, 'refine')
-  && format('Working (Refine): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Agent: Refine — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
   && contains(github.event.issue.labels.*.name, 'direct')
-  && format('Working (Direct): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Working: Direct — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
   && contains(github.event.issue.labels.*.name, 'triage')
-  && format('Working (Triage): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Agent: Triage — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
-  && format('Working: {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Working: #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'implement'
   && endsWith(github.actor, '[bot]')
-  && format('Working (Implement): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Agent: Implement — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'refine'
   && endsWith(github.actor, '[bot]')
-  && format('Working (Refine): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Agent: Refine — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'direct'
   && endsWith(github.actor, '[bot]')
-  && format('Working (Direct): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Working: Direct — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
-  && format('{0} label on #{1} by {2}', github.event.label.name, github.event.issue.number, github.actor)
+  && format('Event: {0} on #{1} by {2}', github.event.label.name, github.event.issue.number, github.actor)
   || github.event_name == 'issue_comment'
-  && format('comment on #{0} by {1}', github.event.issue.number, github.actor)
+  && format('Event: Comment on #{0} by {1}', github.event.issue.number, github.actor)
   || github.event_name == 'pull_request_review'
-  && format('review on PR #{0} by {1}', github.event.pull_request.number, github.actor)
+  && format('Event: Review on PR #{0} by {1}', github.event.pull_request.number, github.actor)
   || github.event_name == 'pull_request_review_comment'
-  && format('review comment on PR #{0} by {1}', github.event.pull_request.number, github.actor)
+  && format('Event: Review comment on PR #{0} by {1}', github.event.pull_request.number, github.actor)
   || github.event_name == 'pull_request_target'
-  && format('PR #{0} {1} by {2}', github.event.pull_request.number, github.event.action, github.actor)
+  && format('Event: PR #{0} {1} by {2}', github.event.pull_request.number, github.event.action, github.actor)
   || github.event_name == 'workflow_run'
-  && format('CI {0} on {1}', github.event.workflow_run.conclusion, github.event.workflow_run.head_branch)
+  && format('Event: CI {0} on {1}', github.event.workflow_run.conclusion, github.event.workflow_run.head_branch)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'triage'
-  && format('Working (Triage): #{0}', inputs.issue-number)
+  && format('Agent: Triage — #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'refine'
-  && format('Working (Refine): #{0}', inputs.issue-number)
+  && format('Agent: Refine — #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'implement'
-  && format('Working (Implement): #{0}', inputs.issue-number)
+  && format('Agent: Implement — #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'merge-gate'
-  && format('Working (Merge Gate): PR #{0}', inputs.pr-number)
+  && format('Agent: Merge Gate — PR #{0}', inputs.pr-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'visual-verify'
-  && format('Working (Visual Verify): PR #{0}', inputs.pr-number)
+  && format('Agent: Visual Verify — PR #{0}', inputs.pr-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'batch'
-  && format('Working (Batch): #{0}', inputs.issue-number)
+  && format('Working: Batch — #{0}', inputs.issue-number)
+  || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'audit'
+  && format('Agent: Audit — manual')
+  || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'release'
+  && format('Agent: Release')
   || github.event_name == 'workflow_dispatch'
   && format('dispatch: {0}', inputs.operation)
+  || github.event_name == 'schedule'
+  && github.event.schedule == '17 1 * * 1'
+  && format('Agent: Audit — weekly')
+  || github.event_name == 'schedule'
+  && github.event.schedule == '43 3 * * *'
+  && format('Agentics: Audit Close — daily')
+  || github.event_name == 'schedule'
+  && github.event.schedule == '0 6 * * *'
+  && format('Agentics: Cleanup — daily')
+  || github.event_name == 'schedule'
+  && github.event.schedule == '17 * * * *'
+  && format('Agentics: Reconcile — hourly')
+  || github.event_name == 'schedule'
+  && github.event.schedule == '23 */6 * * *'
+  && format('Agentics: Maintenance — 6h')
   || github.event_name == 'schedule'
   && format('schedule {0}', github.event.schedule)
   || github.event_name }}
