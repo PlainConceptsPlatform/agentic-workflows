@@ -323,22 +323,25 @@ log at `sandbox/firewall/logs/api-proxy-logs/token-usage.jsonl` may be absent en
 
 ## Self-hosted runners
 
-Platform workflows target `ubuntu-latest`. The fleet moved off `[self-hosted, linux, agents]` in
-`0fc7b08`; the model comes from Forge either way, so the only thing the self-hosted runner provided
-was a queue of one.
+The agent workers target `agents-arc`, an ephemeral VM Scale Set hard-capped at two VMs
+(`runners/README.md`). Because that cap is a budget rather than a queue to grow into, nothing that
+does not invoke the model belongs there: CI, infra and release work go to `RunnerLandingZone`,
+which autoscales, and anything that only sleeps or calls an API goes to `ubuntu-latest`. The label
+`[self-hosted, linux, agents]` is dead — it was retired in `0fc7b08` and now matches no runner, so
+a job still carrying it waits forever.
 
 Never on a public repository. A fork pull request would execute arbitrary code on a machine holding
 your credentials.
 
-If a repository moves back, all three runner keys must be set together or the framework jobs go to a
-GitHub-hosted `ubuntu-slim`:
+All three runner keys must be set together or the framework jobs go to a GitHub-hosted
+`ubuntu-slim` while the agent job alone lands on the fleet:
 
 ```yaml
-runs-on: [self-hosted, linux, agents]
-runs-on-slim: [self-hosted, linux, agents]
+runs-on: agents-arc
+runs-on-slim: agents-arc
 safe-outputs:
   threat-detection:
-    runs-on: [self-hosted, linux, agents]
+    runs-on: agents-arc
 ```
 
 A persistent machine breaks assumptions a hosted runner lets you make:
