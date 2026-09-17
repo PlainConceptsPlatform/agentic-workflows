@@ -92,9 +92,9 @@ runs:
             reason="$reason (no verification plan was written)"
           fi
 
-          gh issue comment "$ISSUE" --repo "$REPO" --body \
-            "<!-- agent-visual-verify -->## Visual verification for PR #$PR
+          warning_body="<!-- agent-visual-verify -->## Visual verification for PR #$PR
 
 ⚠ $reason. The merge proceeds without visual evidence."
+          gh issue comment "$ISSUE" --repo "$REPO" --body "$warning_body"
           echo "Posted warning: $reason"
         fi
