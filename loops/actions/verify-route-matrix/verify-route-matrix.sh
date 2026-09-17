@@ -240,14 +240,14 @@ assert "merge-gate dispatch defaults its attempt count to zero" 0 \
   "$(route_field merge-gate-attempts EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7)"
 assert "merge-gate dispatch forwards the attempt count" 3 \
   "$(route_field merge-gate-attempts EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7 INPUT_ATTEMPTS_SO_FAR=3)"
-# The implement worker re-dispatches itself when a run dies before producing an answer, so the
-# count has to survive the round trip or the budget never advances and the retry never stops.
-assert "implement dispatch defaults its attempt count to zero" 0 \
-  "$(route_field implement-attempts EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=42)"
+# A worker re-dispatches itself when a run dies before producing an answer, so the count has to
+# survive the round trip or the budget never advances and the retry never stops. The field is
+# `attempts` for every route now: it was `implement-attempts`, set in the else-branch of a test
+# on refine, so a refine retry arrived as attempt zero and could never reach the park.
+assert "a dispatch defaults its attempt count to zero" 0 \
+  "$(route_field attempts EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=42)"
 assert "implement dispatch forwards the attempt count" 2 \
-  "$(route_field implement-attempts EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=42 INPUT_ATTEMPTS_SO_FAR=2)"
-assert "a refine dispatch carries no implement attempts" 0 \
-  "$(route_field implement-attempts EVENT=workflow_dispatch OPERATION=refine INPUT_ISSUE_NUMBER=42 INPUT_ATTEMPTS_SO_FAR=2)"
+  "$(route_field attempts EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=42 INPUT_ATTEMPTS_SO_FAR=2)"
 assert_route "release dispatch needs no numbers" release \
   EVENT=workflow_dispatch OPERATION=release
 assert_route "reconcile-bot-pr-runs dispatch needs no numbers" reconcile-bot-pr-runs \
@@ -1939,6 +1939,69 @@ if worker_installed audit; then
   fi
   if [ "$AUDIT_EMPTY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
+
+echo "── Retrying a run that died early ────────────────────────────────────────"
+
+# A run that died before producing anything is worth repeating; one that worked and then failed
+# produced an answer that was wrong, and repeating it buys the same wrong answer later. Only the
+# implement worker knew that. An Odyssey refine died in three minutes on `Model 'glm-5-3' not
+# found` -- a gateway fault that clears in seconds -- parked, and waited on the janitor's
+# six-hourly sweep.
+RETRY_OK=1
+for route in refine implement triage apply-review; do
+  worker_md="${WORKFLOWS_DIR}/agent-${route}.md"
+  [ -f "$worker_md" ] || continue
+
+  # Both halves. A worker with only the park is the state this fixes; one with only the retry
+  # never stops trying.
+  if [ "$(count -cE "^ *if:.*steps\.decide\.outputs\.retry == 'true'" "$worker_md")" -eq 0 ] ||
+     [ "$(count -cE "^ *if:.*steps\.decide\.outputs\.retry != 'true'" "$worker_md")" -eq 0 ]; then
+    RETRY_OK=0
+    echo "FAIL: agent-${route} does not have both a retry and a park path, so an early failure either never repeats or never stops" >&2
+  fi
+
+  # Each worker re-dispatches its own route. `-f operation=implement` pasted into refine produces
+  # a plausible run doing the wrong work, and nothing anywhere goes red.
+  # Only the retry dispatch: it is the line that also carries the attempt count. implement
+  # dispatches reconcile-bot-pr-runs too, after it opens a pull request, and that is not a retry.
+  # Only the retry dispatch: it is the line that also carries the attempt count. implement
+  # dispatches reconcile-bot-pr-runs too, after it opens a pull request, and that is not a retry.
+  #
+  # Both greps go through `count`. A worker with no retry dispatch matches nothing, grep exits 1,
+  # and under `set -o pipefail` that killed the whole suite after printing the failure above it --
+  # the tally never ran, so a mutation that removed a retry branch looked like it had been caught
+  # when in fact nothing after it had been checked.
+  dispatched=$(count -E 'operation=[a-z-]+.*attempts_so_far' "$worker_md" \
+    | { count -oE 'operation=[a-z-]+' || true; } | sed 's/operation=//' | sort -u | tr '\n' ' ')
+  dispatched="${dispatched% }"
+  if [ -n "$dispatched" ] && [ "$dispatched" != "$route" ]; then
+    RETRY_OK=0
+    echo "FAIL: agent-${route} re-dispatches '${dispatched}' rather than its own route; that run would do the wrong work and still look healthy" >&2
+  fi
+
+  # The count has to survive the round trip or the park is never reached.
+  if ! grep -qE '^      attempts_so_far:' "$worker_md"; then
+    RETRY_OK=0
+    echo "FAIL: agent-${route} does not take attempts_so_far, so every retry arrives as the first and the budget never binds" >&2
+  fi
+  if [ "$(count -cF 'attempts_so_far: ${{ needs.classify.outputs.attempts }}' "$ROUTER_YML")" -eq 0 ]; then
+    RETRY_OK=0
+    echo "FAIL: the router does not pass classify's attempts to its workers" >&2
+  fi
+done
+
+# The classifier carries the count for every dispatched route. refine needs its mode *and* its
+# count: written as an if/else, a refine retry arrived as attempt zero every time.
+for op in refine implement triage; do
+  got=$(route_field attempts EVENT=workflow_dispatch OPERATION="$op" INPUT_ISSUE_NUMBER=42 INPUT_ATTEMPTS_SO_FAR=3)
+  assert "a dispatched ${op} carries its attempt count" 3 "$got"
+done
+assert "a dispatched apply-review carries its attempt count" 3 \
+  "$(route_field attempts EVENT=workflow_dispatch OPERATION=apply-review INPUT_PR_NUMBER=9 INPUT_ATTEMPTS_SO_FAR=3)"
+assert "a dispatched refine still carries its mode alongside the count" rerefine \
+  "$(route_field refine-mode EVENT=workflow_dispatch OPERATION=refine INPUT_ISSUE_NUMBER=42 INPUT_MODE=rerefine INPUT_ATTEMPTS_SO_FAR=3)"
+
+if [ "$RETRY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 echo "── Ways a run ends with nothing ──────────────────────────────────────────"
 

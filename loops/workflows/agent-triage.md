@@ -17,6 +17,18 @@ env:
   STALLED_LABEL: stalled
   REFINE_LABEL: refine
   TRIAGE_MARKER: "<!-- agent-triage -->"
+  # A run that died before it produced anything is worth repeating; one that worked and then
+  # failed produced an answer that was wrong, and repeating it buys the same wrong answer later.
+  # Duration is what separates them. Odyssey #190 died in three minutes on `Model 'glm-5-3' not
+  # found`, a gateway fault that clears in seconds, and waited on the janitor's six-hourly sweep
+  # because only the implement worker could do this.
+  TRIAGE_ATTEMPT_MARKER: "<!-- agent-triage-attempt -->"
+  MAX_ATTEMPTS: "5"
+  PARK_AT_ATTEMPT: "4"
+  # Ten rather than six: the failure that prompted this took three minutes, and a slower one on a
+  # worse day would fall outside a six-minute window and park for a fault that clears by itself.
+  RETRY_UNDER_MINUTES: "10"
+  RETRY_COMMENT: "That is what a provider outage looks like -- the run ended before it could produce an answer -- so this is being tried again from the start. It is a fresh run rather than a continuation: nothing is carried over from the attempt that failed."
   MAX_TRIAGE_ROUNDS: "3"
   INCOMPLETE_COMMENT: "Automated triage ended without an outcome. The triage label remains for a retry."
   SAFE_OUTPUT_COMMENT_PREFIX: "Triage assessment"
@@ -61,6 +73,11 @@ imports:
 on:
   workflow_call:
     inputs:
+      attempts_so_far:
+        description: Runs already made for this work that died before producing an answer. Filled by the worker when it re-dispatches itself, not by people.
+        required: false
+        type: string
+        default: '0'
       issue-number:
         description: Issue number to triage.
         required: true
@@ -295,6 +312,8 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # the retry re-enters through the router, which is a workflow_dispatch
+      actions: write
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -304,13 +323,59 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Decide whether this failure is worth repeating
+        id: decide
+        uses: ./.github/actions/decide-agent-retry
+        with:
+          token: ${{ github.token }}
+          attempts-so-far: ${{ inputs.attempts_so_far }}
+          park-at: ${{ env.PARK_AT_ATTEMPT }}
+          under-minutes: ${{ env.RETRY_UNDER_MINUTES }}
+      # Recorded before any label moves, so a failure in the steps below leaves a run that can be
+      # counted rather than work released with nothing to show for it.
+      - name: Report the failed attempt
+        if: steps.decide.outputs.retry == 'true'
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            ${{ env.TRIAGE_ATTEMPT_MARKER }}
+            Attempt ${{ steps.decide.outputs.next }} of ${{ env.MAX_ATTEMPTS }} ended after ${{ steps.decide.outputs.minutes }} minutes, before the run could produce an answer.
+            ${{ env.RETRY_COMMENT }}
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Release the reservation for the retry
+        if: steps.decide.outputs.retry == 'true'
+        uses: ./.github/actions/remove-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: ${{ env.WORKING_LABEL }}
+      - name: Send the work back through the router
+        if: steps.decide.outputs.retry == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch }}
+          SUBJECT: ${{ inputs.issue-number }}
+          NEXT: ${{ steps.decide.outputs.next }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          # The provider recovers in seconds, so pause before re-entering rather than dispatching
+          # back into the same outage. The router's own classify and authorize jobs add more.
+          sleep 30
+          gh workflow run work-router.yml --repo "$REPO" --ref "$REF"             -f operation=triage -f issue-number="$SUBJECT" -f mode="$MODE" -f attempts_so_far="$NEXT"
+          echo "Re-dispatched triage for $SUBJECT as attempt $NEXT."
       - name: Release the issue
+        if: steps.decide.outputs.retry != 'true'
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
       - name: Flag for human review
+        if: steps.decide.outputs.retry != 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -319,6 +384,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
       - name: Report missing triage outcome
+        if: steps.decide.outputs.retry != 'true'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}

@@ -1,0 +1,72 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/decide-agent-retry/action.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: Decide agent retry
+description: Say whether an agent job that failed is worth running again, from how long it ran and how many attempts have been made.
+inputs:
+  token:
+    description: GitHub token with actions read access, used to read this run's own jobs.
+    required: true
+  attempts-so-far:
+    description: Attempts already made against this piece of work. Empty counts as none.
+    required: false
+    default: '0'
+  park-at:
+    description: Stop retrying once this many attempts have been made.
+    required: true
+  under-minutes:
+    description: Only a run shorter than this is repeated.
+    required: true
+outputs:
+  retry:
+    description: '"true" when this failure is worth repeating.'
+    value: ${{ steps.decide.outputs.retry }}
+  next:
+    description: The attempt number a retry would be.
+    value: ${{ steps.decide.outputs.next }}
+  minutes:
+    description: How long the agent job ran, or -1 when that could not be read.
+    value: ${{ steps.decide.outputs.minutes }}
+runs:
+  using: composite
+  steps:
+    # A run that died in three minutes produced no answer, so repeating it costs three minutes. A
+    # run that worked for half an hour and then failed produced an answer that was wrong, and
+    # repeating it buys the same wrong answer half an hour later. Duration is what separates them,
+    # and it needs no model and no log parsing to read.
+    #
+    # Written once here because the rule was in the implement worker alone, and refine, triage and
+    # apply-review parked instead -- an Odyssey refine died in three minutes on
+    # `Model 'glm-5-3' not found`, a gateway fault that clears in seconds, and waited on the
+    # janitor's six-hourly sweep. Five copies of sixty lines is how one rule becomes five.
+    - name: Decide whether this failure is worth repeating
+      id: decide
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+        ATTEMPTS: ${{ inputs.attempts-so-far }}
+        PARK_AT: ${{ inputs.park-at }}
+        UNDER_MINUTES: ${{ inputs.under-minutes }}
+      run: |
+        set -euo pipefail
+        # The agent job belongs to this same run: a called workflow shares the caller's run id.
+        read -r started finished <<<"$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+          --jq '[.jobs[] | select(.name | endswith("agent"))] | last // empty
+                | "\(.started_at // "") \(.completed_at // "")"')"
+        minutes=-1
+        if [ -n "${started:-}" ] && [ -n "${finished:-}" ]; then
+          minutes=$(( ( $(date -u -d "$finished" +%s) - $(date -u -d "$started" +%s) ) / 60 ))
+        fi
+        attempts="${ATTEMPTS:-0}"
+        [ -n "$attempts" ] || attempts=0
+        retry=false
+        # An unknown duration is treated as a long run: never retry on a guess.
+        if [ "$minutes" -ge 0 ] && [ "$minutes" -lt "$UNDER_MINUTES" ] && [ "$attempts" -lt "$PARK_AT" ]; then
+          retry=true
+        fi
+        {
+          echo "retry=$retry"
+          echo "next=$((attempts + 1))"
+          echo "minutes=$minutes"
+        } >> "$GITHUB_OUTPUT"
+        echo "agent job ran for ${minutes}m; attempts so far ${attempts}; retry=${retry}"

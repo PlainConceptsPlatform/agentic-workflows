@@ -28,7 +28,7 @@ is_issue_number() {
 
 classify_route() {
   local route="none" error=""
-  local issue_number="" pr_number="" ci_conclusion="" ci_run_id="" merge_gate_attempts="0" implement_attempts="0"
+  local issue_number="" pr_number="" ci_conclusion="" ci_run_id="" merge_gate_attempts="0" attempts="0"
   local refine_mode="" triage_mode="" trigger_kind=""
 
   case "${EVENT:-}" in
@@ -190,13 +190,12 @@ classify_route() {
           if is_issue_number "${INPUT_ISSUE_NUMBER:-}"; then
             route="${OPERATION}"
             issue_number="${INPUT_ISSUE_NUMBER}"
-            if [ "$OPERATION" = "refine" ]; then
-              refine_mode="${INPUT_MODE:-first}"
-            else
-              # The implement worker re-dispatches itself when a run dies before doing any work,
-              # and carries the count so the budget is bounded.
-              implement_attempts="${INPUT_ATTEMPTS_SO_FAR:-0}"
-            fi
+            # Both, not one or the other. A worker re-dispatches itself when a run dies before
+            # doing any work and carries the count so the budget is bounded; refine also carries
+            # the mode it was started in. Written as an if/else, a refine retry arrived as attempt
+            # zero every time and could never reach the park.
+            [ "$OPERATION" = "refine" ] && refine_mode="${INPUT_MODE:-first}"
+            attempts="${INPUT_ATTEMPTS_SO_FAR:-0}"
           else
             error="operation '${OPERATION}' needs a positive issue-number, got '${INPUT_ISSUE_NUMBER:-}'"
           fi
@@ -206,6 +205,7 @@ classify_route() {
             route="triage"
             issue_number="${INPUT_ISSUE_NUMBER}"
             triage_mode="${INPUT_MODE:-first}"
+            attempts="${INPUT_ATTEMPTS_SO_FAR:-0}"
           else
             error="operation 'triage' needs a positive issue-number, got '${INPUT_ISSUE_NUMBER:-}'"
           fi
@@ -214,6 +214,7 @@ classify_route() {
           if is_issue_number "${INPUT_PR_NUMBER:-}"; then
             route="apply-review"
             pr_number="${INPUT_PR_NUMBER}"
+            attempts="${INPUT_ATTEMPTS_SO_FAR:-0}"
           else
             error="operation 'apply-review' needs a positive pr-number, got '${INPUT_PR_NUMBER:-}'"
           fi
@@ -257,7 +258,7 @@ pr-number=${pr_number}
 ci-conclusion=${ci_conclusion}
 ci-run-id=${ci_run_id}
 merge-gate-attempts=${merge_gate_attempts}
-implement-attempts=${implement_attempts}
+attempts=${attempts}
 refine-mode=${refine_mode}
 triage-mode=${triage_mode}
 trigger-kind=${trigger_kind}
