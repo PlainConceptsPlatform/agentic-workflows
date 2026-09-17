@@ -71,11 +71,20 @@ jobs:
           ISSUE: ${{ inputs.linked-issue }}
         run: |
           set -euo pipefail
-          pr_state=$(gh pr view "$PR" --repo "$REPO" --json state --jq '.state')
-          [ "$pr_state" = "OPEN" ] || { echo "found=false"; exit 0; }
+          pr=$(gh pr view "$PR" --repo "$REPO" --json state,closingIssuesReferences,body)
+          [ "$(jq -r '.state' <<<"$pr")" = "OPEN" ] || { echo "found=false"; exit 0; }
           echo "found=true" >> "$GITHUB_OUTPUT"
           echo "pr=$PR" >> "$GITHUB_OUTPUT"
-          echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
+          issue="$ISSUE"
+          if [ -z "$issue" ]; then
+            issue="$(jq -r '.closingIssuesReferences[0].number // empty' <<<"$pr")"
+          fi
+          if [ -z "$issue" ]; then
+            issue="$(jq -r '.body // ""' <<<"$pr" |
+              grep -oiE '(close[sd]?|fixe?[sd]?|resolve[sd]?) +#[0-9]+' |
+              grep -oE '[0-9]+' | head -n 1 || true)"
+          fi
+          echo "issue=$issue" >> "$GITHUB_OUTPUT"
 
 checkout:
   fetch: ["*"]

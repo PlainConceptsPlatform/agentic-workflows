@@ -74,27 +74,27 @@ run-name: >-
   && format('Working: Batch — #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'audit'
-  && format('Agent: Audit — manual')
+  && format('Agent: Audit — manual{0}', '')
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'release'
-  && format('Agent: Release')
+  && format('Agent: Release{0}', '')
   || github.event_name == 'workflow_dispatch'
   && format('dispatch: {0}', inputs.operation)
   || github.event_name == 'schedule'
   && github.event.schedule == '17 1 * * 1'
-  && format('Agent: Audit — weekly')
+  && format('Agent: Audit — weekly{0}', '')
   || github.event_name == 'schedule'
   && github.event.schedule == '43 3 * * *'
-  && format('Agentics: Audit Close — daily')
+  && format('Agentics: Audit Close — daily{0}', '')
   || github.event_name == 'schedule'
   && github.event.schedule == '0 6 * * *'
-  && format('Agentics: Cleanup — daily')
+  && format('Agentics: Cleanup — daily{0}', '')
   || github.event_name == 'schedule'
   && github.event.schedule == '17 * * * *'
-  && format('Agentics: Reconcile — hourly')
+  && format('Agentics: Reconcile — hourly{0}', '')
   || github.event_name == 'schedule'
   && github.event.schedule == '23 */6 * * *'
-  && format('Agentics: Maintenance — 6h')
+  && format('Agentics: Maintenance — 6h{0}', '')
   || github.event_name == 'schedule'
   && format('schedule {0}', github.event.schedule)
   || github.event_name }}
