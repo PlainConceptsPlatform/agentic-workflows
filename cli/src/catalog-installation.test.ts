@@ -311,7 +311,7 @@ describe("catalog installation", () => {
   // values GitHub will not let a job read where they are also needed.
   it("keeps the router's env values and mirrors them into the trigger and the audit cron", async () => {
     const routerFile = (ci: string, cron: string, job: string) =>
-      `# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/work-router.yml. Update with \`workflows update --force\`; consumer edits may be overwritten.\nname: "All Work Router"\n\nenv:\n  CI_WORKFLOW_NAME: "${ci}"\n  AUDIT_CRON: "${cron}"\n\non:\n  workflow_run:\n    workflows: ["${ci}"]\n    types: [completed]\n\n  schedule:\n    - cron: "${cron}" # audit slot, mirrored from env.AUDIT_CRON by the installer\n\njobs:\n  classify:\n    runs-on: ${job}\n`;
+      `# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/work-router.yml. Update with \`workflows update --force\`; consumer edits may be overwritten.\nname: "# Main Work Router"\n\nenv:\n  CI_WORKFLOW_NAME: "${ci}"\n  AUDIT_CRON: "${cron}"\n\non:\n  workflow_run:\n    workflows: ["${ci}"]\n    types: [completed]\n\n  schedule:\n    - cron: "${cron}" # audit slot, mirrored from env.AUDIT_CRON by the installer\n\njobs:\n  classify:\n    runs-on: ${job}\n`;
     const sourcePath = await createDirectory({
       "workflows/work-router.yml": routerFile("App: CI", "17 1 * * 1", "ubuntu-latest"),
       "scripts/compile-agent-workflows.mjs": "compile\n",
