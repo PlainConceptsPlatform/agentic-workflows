@@ -684,10 +684,10 @@ jobs:
   # pull_request_target. Two entry points:
   #   opened / reopened / synchronize → check the pull request that changed. Gated to this
   #     repository's own branches so a fork PR never starts this App-token job.
-  #   closed & merged                 → the target branch moved, so re-check every open bot
+  #   closed & merged                 → the target branch moved, so re-check every open
   #     pull request that may have just become conflicted (the "main changed after another PR
   #     merged" case). A merge into the default branch is an inherently trusted internal event.
-  # It dispatches only for bot-authored, open, non-draft pull requests whose head is this
+  # It dispatches only for open, non-draft pull requests whose head is this
   # repository AND whose CI has already concluded (dispatching while CI is still pending would
   # make the gate read a 'pending' verdict and prematurely ask for human review; that PR is
   # covered by the CI-completion route instead). The gate's subject job re-validates ownership
@@ -732,8 +732,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Dispatch the Merge Gate for one pull request when it is a red-CI open, non-draft,
-          # bot-authored pull request on this repository whose CI has concluded — the
+          # Dispatch the Merge Gate for one pull request when it is a red-CI open, non-draft
+          # pull request on this repository whose CI has concluded — the
           # conflict case is one arm of that, because a conflicting PR never gets a fresh
           # CI run of its own; a merge conflict with red or concluded CI is the same
           # "needs the gate" signal. A green non-conflicting PR is left for the merge belt
@@ -777,7 +777,6 @@ jobs:
             [ -n "$meta" ] || return 0
             if [ "$(jq -r '.state' <<<"$meta")" != "open" ] \
               || [ "$(jq -r '.draft' <<<"$meta")" != "false" ] \
-              || [ "$(jq -r '.bot'   <<<"$meta")" != "Bot" ] \
               || [ "$(jq -r '.head'  <<<"$meta")" != "$REPO" ]; then
               return 0
             fi
