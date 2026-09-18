@@ -1,58 +1,21 @@
 #cloud-config
-# One runner, one job at a time, many jobs per VM. The boot sequence: setup.sh installs the
-# toolchain, then runner-job.service asks the scaler app for a JIT config, runs exactly one
-# job, resets Docker state, and asks again. When nothing is queued for IDLE_LIMIT the VM
-# reports done and the app deletes it.
+# Runtime cloud-init for pre-baked runner images.
 #
-# Why the loop: gh-aw locks split a run into many stages of a few seconds each, while a VM
-# takes about three minutes to boot. One VM per stage spent roughly 78% of billed time
-# booting and added that wait to every stage. Sequential reuse keeps the isolation that
-# matters (one job at a time, never two concurrent workflows on a VM) and drops the boot
-# cost to once per burst.
+# The heavy provisioning (apt packages, docker, gh, az, trivy, actions runner,
+# ripgrep, RTK, agentmemory, codegraph, openspec, .NET SDK, pnpm) is baked into
+# the custom gallery image by Packer (see build-image.pkr.hcl / provision-image.sh).
 #
-# The bearer token below only lets a VM ask the app for work and for deletion; the app
-# verifies the caller is a live instance of this scale set before answering.
-package_update: true
-packages: [git, jq, curl, unzip, apt-transport-https, ca-certificates, gnupg]
+# This cloud-init runs only the runtime steps that cannot be baked:
+#   1. Create swap (needs the ephemeral disk mounted at boot) – logs a warning if setup fails (never silently zero)
+#   2. Drop the VM token (rotated independently)
+#   3. Start runner-job.service
+#
+# Boot time: ~30-60s (Azure cold start + minimal cloud-init) vs ~3 min before.
+# Tunables (FIRST_WAIT, IDLE_LIMIT, MAX_JOBS, DISK_LIMIT) can be overridden via /etc/runner-scaler.env.
+# Image + customData must move together; rollback swaps BOTH.
+package_update: false
+packages: []
 write_files:
-  - path: /opt/runner/setup.sh
-    permissions: "0755"
-    content: |
-      #!/bin/bash
-      set -euo pipefail
-      install -m 0755 -d /etc/apt/keyrings
-      curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-      echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list
-      curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli.gpg
-      echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
-      # azure/login and the infra workflows expect az on PATH; the runner user has no
-      # sudo, so it has to be baked in here
-      curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg
-      echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ noble main" > /etc/apt/sources.list.d/azure-cli.list
-      apt-get update -qq
-      apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin gh azure-cli >/dev/null
-      # Swap: the awf Docker stack + Node.js + pnpm + opencode can spike past 8GB on D2ads_v5.
-      # Without swap the OOM killer terminates the agent (exit 137). 8GB swap costs nothing
-      # on an ephemeral OS disk and prevents the "everything green, nothing pushed" silent
-      # failure that started when we moved from the old host to ephemeral VMs.
-      fallocate -l 8G /mnt/azure_resource_disk/swapfile || fallocate -l 8G /swapfile
-      SWAP=/mnt/azure_resource_disk/swapfile; [ -f /swapfile ] && SWAP=/swapfile
-      chmod 600 "$SWAP"
-      mkswap "$SWAP" >/dev/null
-      swapon "$SWAP"
-      echo "$SWAP none swap sw 0 0" >> /etc/fstab
-      # trivy-action expects the binary on PATH and its own installer is unreliable here
-      curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz" \
-        | tar -xz -C /usr/local/bin trivy
-      useradd -m -s /bin/bash runner || true
-      usermod -aG docker runner
-      mkdir -p /opt/actions-runner && cd /opt/actions-runner
-      RUNNER_VERSION=$(curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name' | tr -d v)
-      curl -fsSL -o runner.tgz "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
-      tar xzf runner.tgz && rm runner.tgz
-      ./bin/installdependencies.sh >/dev/null 2>&1 || true
-      chown -R runner:runner /opt/actions-runner
-      touch /opt/runner/.ready
   - path: /etc/runner-scaler.env
     permissions: "0600"
     content: |
@@ -63,15 +26,20 @@ write_files:
     content: |
       #!/bin/bash
       # Serve jobs one at a time until the queue stays empty, then ask to be deleted.
+      # Identical to the pre-baked-image version; kept in cloud-init because it carries
+      # tunable constants the VM operator may want to change without rebuilding.
       set -u
       . /etc/runner-scaler.env
 
-      FIRST_WAIT=120     # a VM that boots into no work at all dies quickly
-      IDLE_LIMIT=300     # after real work, stay warm this long for the next stage
-      MAX_JOBS=20        # bound state and disk growth on a long-lived instance
-      DISK_LIMIT=85      # percent used on / before refusing more work
+        FIRST_WAIT=${FIRST_WAIT:-120}   # a VM that boots into no work at all dies quickly
+        IDLE_LIMIT=${IDLE_LIMIT:-300}   # after real work, stay warm this long for the next stage
+        MAX_JOBS=${MAX_JOBS:-20}        # bound state and disk growth on a long-lived instance
+        DISK_LIMIT=${DISK_LIMIT:-85}    # percent used on / before refusing more work
 
-      for i in $(seq 1 120); do [ -f /opt/runner/.ready ] && break; sleep 5; done
+      # The image bakes /opt/actions-runner/.ready during provisioning, but a
+      # generalized image may not preserve the marker. Recreate if absent.
+      [ -f /opt/runner/.ready ] || touch /opt/runner/.ready
+
       NAME=$(curl -s -H Metadata:true "http://169.254.169.254/metadata/instance/compute/name?api-version=2021-02-01&format=text")
       ID=${NAME##*_}
       JOBS_RUN=0
@@ -146,5 +114,5 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 runcmd:
-  - [bash, /opt/runner/setup.sh]
+  - [bash, -c, "set -u; SWAP=/mnt/swapfile; mountpoint /mnt/resource || true; for P in /mnt/azure_resource_disk /mnt/resource /mnt; do [ -d \"$P\" ] && SWAP=\"$P/swapfile\" && break; done; fallocate -l 8G \"$SWAP\" && chmod 600 \"$SWAP\" && mkswap \"$SWAP\" >/dev/null && swapon \"$SWAP\" && echo \"swap enabled at $SWAP ($(swapon --show --noheadings --bytes --output SIZE 2>/dev/null | head -1) bytes)\" || echo 'WARN: swap setup failed'; swapon --show"]
   - [systemctl, enable, --now, --no-block, runner-job.service]
