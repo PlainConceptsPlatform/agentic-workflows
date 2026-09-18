@@ -57,6 +57,10 @@ context, give it a bounded task, and require one complete final Safe Outputs pay
   lockfiles by hand.
 - Workers depend on `PlainConceptsPlatform/agent-harness`. Keep required skill and command use
   explicit in each worker's prompt.
+- The `agents-arc` fleet runs a pre-baked runner image whose toolchain is pinned by
+  `runners/versions.env`. When `loops/workflows/shared/opencode-ci.md` bumps a pinned version,
+  `versions.env` moves with it and the image is rebuilt (`runners/README.md`) — or every job's
+  install guard fails its version check and re-downloads the tool.
 - Do not create a repository configuration file. Each worker owns a complete top-level `env:` block
   with concrete defaults for every value it uses. Imports may add shared mechanics but cannot hide
   worker setup or policy.
@@ -189,6 +193,7 @@ cost a real debugging session.
 | Merge gate parks every pull request that touches a domain entity | The gate used to escalate on category: any warning became `review`, and `RISK_INDICATORS` named areas every feature PR touches. Dispositions are now computed in `validate-merge-gate-output.sh` from measured blast radius and *verified* findings. An unverified finding never blocks. |
 | Merge gate output is `invalid` on every run after an upgrade | The agent writes `assessed` or `remediated` and a fenced JSON block; the old `merge`/`review` vocabulary is refused on purpose, because those words no longer mean what the validator computes. Recompile the worker. |
 | `Invalid secret, BOT_APP_ID is not defined in the referenced workflow` | The router's caller job passes secrets the called worker does not declare in its `secrets:` block. Only pass secrets the worker declares. The release worker needs only `OPENAI_API_KEY`. |
+| A pin bump in the shared setup ships without rebuilding the runner image | The fleet's install steps are guards against the baked toolchain, and a version that disagrees re-downloads on every job. The pre-baked image's saving is spent and nothing is red. `runners/versions.env` must move with every bump; see `references/opencode.md` |
 
 The full trap descriptions, including the caller permission trap, the artifact prefix trap, the
 composite action manifest trap, and the App-token event loop, are in
