@@ -1990,7 +1990,7 @@ echo "── Retrying a run that died early ────────────
 
 # A run that died before producing anything is worth repeating; one that worked and then failed
 # produced an answer that was wrong, and repeating it buys the same wrong answer later. Only the
-# implement worker knew that. An Odyssey refine died in three minutes on `Model 'glm-5-3' not
+# implement worker knew that. An Odyssey refine died in three minutes on `Model 'glm-5-2' not
 # found` -- a gateway fault that clears in seconds -- parked, and waited on the janitor's
 # six-hourly sweep.
 RETRY_OK=1

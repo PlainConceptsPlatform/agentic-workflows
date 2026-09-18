@@ -19,7 +19,7 @@ env:
   TRIAGE_MARKER: "<!-- agent-triage -->"
   # A run that died before it produced anything is worth repeating; one that worked and then
   # failed produced an answer that was wrong, and repeating it buys the same wrong answer later.
-  # Duration is what separates them. Odyssey #190 died in three minutes on `Model 'glm-5-3' not
+  # Duration is what separates them. Odyssey #190 died in three minutes on `Model 'glm-5-2' not
   # found`, a gateway fault that clears in seconds, and waited on the janitor's six-hourly sweep
   # because only the implement worker could do this.
   TRIAGE_ATTEMPT_MARKER: "<!-- agent-triage-attempt -->"
@@ -409,9 +409,9 @@ engine:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
   args:
     - "--model"
-    - "plainconcepts/glm-5-3"
+    - "plainconcepts/glm-5-2"
 
-model: openai/glm-5-3
+model: openai/glm-5-2
 max-turns: 120
 max-turn-cache-misses: 3000
 max-ai-credits: 5000

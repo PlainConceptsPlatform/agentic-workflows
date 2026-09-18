@@ -14,7 +14,7 @@ env:
   REVIEW_MARKER: "<!-- agent-apply-review -->"
   # A run that died before it produced anything is worth repeating; one that worked and then
   # failed produced an answer that was wrong, and repeating it buys the same wrong answer later.
-  # Duration is what separates them. Odyssey #190 died in three minutes on `Model 'glm-5-3' not
+  # Duration is what separates them. Odyssey #190 died in three minutes on `Model 'glm-5-2' not
   # found`, a gateway fault that clears in seconds, and waited on the janitor's six-hourly sweep
   # because only the implement worker could do this.
   APPLY_REVIEW_ATTEMPT_MARKER: "<!-- agent-apply-review-attempt -->"
@@ -399,7 +399,7 @@ engine:
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
-model: openai/glm-5-3
+model: openai/glm-5-2
 
 max-turns: 300
 max-turn-cache-misses: 3000

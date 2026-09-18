@@ -26,7 +26,7 @@ env:
   REFINE_MARKER: "<!-- agent-refine -->"
   # A run that died before it produced anything is worth repeating; one that worked and then
   # failed produced an answer that was wrong, and repeating it buys the same wrong answer later.
-  # Duration is what separates them. Odyssey #190 died in three minutes on `Model 'glm-5-3' not
+  # Duration is what separates them. Odyssey #190 died in three minutes on `Model 'glm-5-2' not
   # found`, a gateway fault that clears in seconds, and waited on the janitor's six-hourly sweep
   # because only the implement worker could do this.
   REFINE_ATTEMPT_MARKER: "<!-- agent-refine-attempt -->"
@@ -483,9 +483,9 @@ engine:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
   args:
     - "--model"
-    - "plainconcepts/glm-5-3"
+    - "plainconcepts/glm-5-2"
 
-model: openai/glm-5-3
+model: openai/glm-5-2
 # 150 rather than 500. With a four-hour clock this is the loop guard, and the worst
 # observed run used 44 turns, so this leaves better than three times the worst case.
 max-turns: 150
