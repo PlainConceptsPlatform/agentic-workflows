@@ -32,6 +32,14 @@ env:
   REFINE_ATTEMPT_MARKER: "<!-- agent-refine-attempt -->"
   MAX_ATTEMPTS: "5"
   PARK_AT_ATTEMPT: "4"
+  # The size gate. An issue over either limit is refused before any model runs: a real
+  # one, Pliny-Bot #305 (13,398 chars, 92 work units), burned a full agent -- 17 minutes,
+  # 2.4M tokens -- and died at the provider's 32K output cap with zero outcome, twice.
+  # Both numbers are measured before the agent starts, so refusal is deterministic and
+  # costs ten seconds instead of half an hour.
+  REFINE_MAX_BODY_CHARS: "8000"
+  REFINE_MAX_WORK_UNITS: "24"
+  REFUSE_MARKER: "<!-- agent-refine-refused -->"
   # Ten rather than six: the failure that prompted this took three minutes, and a slower one on a
   # worse day would fall outside a six-minute window and park for a fault that clears by itself.
   RETRY_UNDER_MINUTES: "10"
@@ -98,12 +106,12 @@ on:
         required: false
         type: string
         default: first
-  # The gate job that the top-level `if:` reads. gh-aw folds that `if:` into the generated
-  # activation job but gives activation no dependency on the job, so the reference resolves
+  # The gate jobs that the top-level `if:` reads. gh-aw folds that `if:` into the generated
+  # activation job but gives activation no dependency on the jobs, so the reference resolves
   # to '' and the clause is false -- the agent would never run. The package's own validator
   # catches it after compilation; this is the line it asks for, the same one the merge gate
   # uses for protected_changes.
-  needs: [still_open]
+  needs: [still_open, size_guard]
 
 jobs:
   # A route dispatched while the issue was open must not execute after it has been closed. The
@@ -130,9 +138,100 @@ jobs:
         with:
           token: ${{ github.token }}
           issue-number: ${{ inputs.issue-number }}
-  reserve:
+  # The size gate, rung 4. Measures the issue before any model starts, because an oversized
+  # body does not fail fast on its own: it produces an agent that explores for seventeen
+  # minutes and then dies mid-generation at the provider's response cap having written
+  # nothing, which reads as a green run with no outcome (Pliny-Bot #305, twice). Pure
+  # shell, no network beyond one issue read; over either limit it is a refusal, not a
+  # smaller attempt.
+  size_guard:
     needs: [still_open]
     if: needs.still_open.outputs.open == 'true'
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      too_big: ${{ steps.measure.outputs.too_big }}
+      reason: ${{ steps.measure.outputs.reason }}
+    steps:
+      - name: Measure the issue against the size limits
+        id: measure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+          MAX_BODY_CHARS: ${{ env.REFINE_MAX_BODY_CHARS }}
+          MAX_WORK_UNITS: ${{ env.REFINE_MAX_WORK_UNITS }}
+        run: |
+          set -euo pipefail
+          body=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json title,body --jq '.title + "\n\n" + (.body // "")')
+          chars=$(printf '%s' "$body" | wc -c)
+          # One work unit per markdown bullet, the same split the prompt's step 3 makes.
+          units=$(printf '%s' "$body" | grep -cE '^[[:space:]]*[-*] ' || true)
+          reason=""
+          too_big=false
+          if [ "$chars" -gt "$MAX_BODY_CHARS" ]; then
+            too_big=true
+            reason="body ${chars} chars > ${MAX_BODY_CHARS}"
+          fi
+          if [ "$units" -gt "$MAX_WORK_UNITS" ]; then
+            too_big=true
+            reason="${reason:+$reason; }work units ${units} > ${MAX_WORK_UNITS}"
+          fi
+          echo "too_big=$too_big" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "::notice::measured $chars chars, $units work units (limits: ${MAX_BODY_CHARS} chars, ${MAX_WORK_UNITS} units) -> $too_big"
+  # The deterministic refusal. Runs only when the size gate tripped, so it costs one
+  # comment and no model. The refine label stays: a human who shrinks the body and
+  # replies re-enters rerefine through the comment route, and the classifier ignores
+  # bot comments, so this comment cannot re-trigger the worker.
+  refuse_big_issue:
+    needs: [still_open, size_guard]
+    if: needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big == 'true'
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Refuse the oversized issue
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            ${{ env.REFUSE_MARKER }}
+            This issue is too large to refine automatically: ${{ needs.size_guard.outputs.reason }}.
+            A story this size does not fail fast; it burns a full agent run and dies mid-generation at the provider's response cap, producing nothing.
+
+            Split it into smaller issues, each describing one story, or edit this body down under the limits (at most ${{ env.REFINE_MAX_BODY_CHARS }} characters and ${{ env.REFINE_MAX_WORK_UNITS }} work-unit bullets), then reply here and refinement will run again.
+      - name: Flag the issue for a person
+        uses: ./.github/actions/add-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: review
+      - name: Clear a stale stalled flag
+        uses: ./.github/actions/remove-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: stalled
+  reserve:
+    needs: [still_open, size_guard]
+    if: needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big != 'true'
     runs-on: agents-arc
     permissions:
       contents: read
@@ -374,7 +473,9 @@ jobs:
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
   incomplete:
-    needs: [agent, safe_outputs, validate_output]
+    # activation for the artifact prefix the usage read needs; validate_output for its
+    # valid output, which decides whether the usage read should look for truncation at all.
+    needs: [activation, agent, safe_outputs, validate_output]
     if: >
       always() &&
       (
@@ -407,6 +508,33 @@ jobs:
           under-minutes: ${{ env.RETRY_UNDER_MINUTES }}
       # Recorded before any label moves, so a failure in the steps below leaves a run that can be
       # counted rather than work released with nothing to show for it.
+      # The usage read distinguishes the two very different failures that end here. A provider
+      # outage consumes almost no tokens; an output-cap truncation (Pliny-Bot #305: 32,000 output
+      # tokens, zero outcomes, run green) burns a full run and emits nothing. The comment names
+      # the second so a person does not triage it as a flaky provider. Best-effort by design:
+      # on an attempt where the agent job itself died there is no artifact, and this step must
+      # never fail the incomplete job's label release.
+      - name: Read the agent's token usage
+        id: usage
+        if: needs.agent.result == 'success' && needs.safe_outputs.result == 'success' && needs.validate_output.outputs.valid != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ARTIFACT: ${{ needs.activation.outputs.artifact_prefix }}agent
+        run: |
+          set -euo pipefail
+          output_tokens=""
+          if gh run download "$RUN_ID" --repo "$REPO" --name "$ARTIFACT" --dir usage-read 2>/dev/null \
+            && [ -f usage-read/agent_usage.json ]; then
+            output_tokens=$(jq -r '.output_tokens // empty' usage-read/agent_usage.json 2>/dev/null || echo "")
+          fi
+          if [ -n "$output_tokens" ] && [ "$output_tokens" -gt 20000 ]; then
+            echo "truncated=This attempt consumed ${output_tokens} output tokens and still produced no outcome. That is what provider output truncation looks like, not an outage: the model hit the single-response cap mid-generation and every call it was writing was lost. If this repeats, split the issue or tighten its body." >> "$GITHUB_OUTPUT"
+          else
+            echo "truncated=" >> "$GITHUB_OUTPUT"
+          fi
+          echo "output_tokens=$output_tokens" >> "$GITHUB_OUTPUT"
       - name: Report the failed attempt
         if: steps.decide.outputs.retry == 'true'
         uses: ./.github/actions/create-issue-comment
@@ -417,6 +545,7 @@ jobs:
             ${{ env.REFINE_ATTEMPT_MARKER }}
             Attempt ${{ steps.decide.outputs.next }} of ${{ env.MAX_ATTEMPTS }} ended after ${{ steps.decide.outputs.minutes }} minutes, before the run could produce an answer.
             ${{ env.RETRY_COMMENT }}
+            ${{ steps.usage.outputs.truncated }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Release the reservation for the retry
         if: steps.decide.outputs.retry == 'true'
@@ -466,9 +595,10 @@ jobs:
           body: |
             ${{ env.REFINE_MARKER }}
             ${{ env.INCOMPLETE_COMMENT }}
+            ${{ steps.usage.outputs.truncated }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true'
+if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big != 'true'
 
 runs-on: agents-arc
 runs-on-slim: agents-arc
@@ -623,7 +753,16 @@ timeout-minutes: 90
    The visible line is for people and the marker is read by the workflow, which turns it into the
    `sp-N` label. A body without the marker gets no estimate label at all.
 
-7. Decide exactly one outcome:
+ 7. **One safe-output call per turn.** Never batch multiple safe-output calls into a single
+    message: `update_issue`, `create_issue` and `add_comment` each go in their own turn, with
+    nothing else in the message. The provider caps one response at a fixed size, and a batch of
+    large calls is truncated mid-JSON before any of them executes, ending the run green with
+    nothing written. On the split path, sequence `create_issue` → `create_issue` → … →
+    `update_issue` → `add_comment`, one per turn. If a single body is so large it approaches the
+    size of a very long message, tighten the body; a shorter call that lands beats a longer one
+    that is cut off.
+
+ 8. Decide exactly one outcome:
 
     Labels are workflow-owned state. Do not call `add_labels` or `remove_labels`.
 
