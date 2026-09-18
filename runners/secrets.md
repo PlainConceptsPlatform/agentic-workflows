@@ -17,6 +17,9 @@ declares.
 
 | Secret | Used by | Purpose |
 |---|---|---|
+| `AZ_SUBSCRIPTION_ID` / `AZ_TENANT_ID` | `build-runner-image.yml` (this repo) | the subscription and tenant the image build and boot test run against |
+| `AZ_RUNNER_IMAGE_CLIENT_ID` / `AZ_RUNNER_IMAGE_CLIENT_SECRET` | `build-runner-image.yml` (this repo) | service principal with Contributor on `agentrunner-pro-rg-01`, used by Packer and by the boot test / fleet flip |
+| `VM_TOKEN` | `build-runner-image.yml` flip step | same value as the scaler app setting; substituted into cloud-init when `flip_fleet` flips the VMSS |
 | `FORGE_API_KEY` | every agent run | the **Forge key** (forge.plainconcepts.com), the only stored LLM credential; per-repo value (each consumer holds its own) |
 
 **One stored secret, three names.** gh-aw's generated locks read `OPENAI_API_KEY`,
@@ -137,6 +140,21 @@ gh secret set FORGE_API_KEY --repo PlainConceptsPlatform/<consumer> --body "<for
 Consumers deliberately hold **different** key values. The router aliases this
 one secret into every name the locks expect (see above); no other LLM secret exists.
 
+### `AZ_RUNNER_IMAGE_CLIENT_ID` / `AZ_RUNNER_IMAGE_CLIENT_SECRET` (repo secrets, this repo)
+
+Packer and the boot test need a service principal with Contributor on the runner resource group
+(the scaler app's managed identity is bound to its App Service and cannot authenticate Packer from CI):
+
+```bash
+az ad sp create-for-rbac --name agentrunner-image-builder \
+  --role Contributor --scopes /subscriptions/<sub>/resourceGroups/agentrunner-pro-rg-01 \
+  --query '{appId: appId, tenant: tenant, secret: password}' -o json
+gh secret set AZ_SUBSCRIPTION_ID --repo PlainConceptsPlatform/agentic-workflows --body "<sub>"
+gh secret set AZ_TENANT_ID --repo PlainConceptsPlatform/agentic-workflows --body "<tenant>"
+gh secret set AZ_RUNNER_IMAGE_CLIENT_ID --repo PlainConceptsPlatform/agentic-workflows --body "<appId>"
+gh secret set AZ_RUNNER_IMAGE_CLIENT_SECRET --repo PlainConceptsPlatform/agentic-workflows --body "<secret>"
+```
+
 ### Deleting the retired ones
 
 ```bash
@@ -157,6 +175,8 @@ lives on as the app's `GH_PAT` (same underlying token).
   runners" only appears once that owner is selected, and the enterprise SSO gate
   must be authorized). Update the app setting, restart the app.
 - `WEBHOOK_SECRET` / `VM_TOKEN`: random hex; on rotation update the app settings
-  plus, respectively, the org webhook config and the VMSS custom data.
+  plus, respectively, the org webhook config and the VMSS custom data. `VM_TOKEN` now has
+  three copies: scaler app setting, VMSS custom data, and this repo's `VM_TOKEN` secret
+  (used by the image-build flip step) — rotate all three together.
 - `Platform Agents Pro` client secret transited chat during setup: still worth
   rotating in the app registration; nothing in the runner platform uses it anymore.
