@@ -44,6 +44,11 @@ All parts are load-bearing:
 4. Ecosystem identifiers, not hostnames. `dotnet` and `node` expand to every registry, CDN and OCSP
    endpoint. The compiler nags on every compile if you list hostnames.
 
+Omitting the `engine:` block entirely leaves `OPENAI_BASE_URL` at the gh-aw default
+`http://host.docker.internal:10001`, the awf API proxy on the Docker loopback. That proxy forwards
+to `api.openai.com`, which rejects a Forge key (`agc_...`) with exit code 1. The compile script
+detects and replaces this default, but a worker that has its own `engine:` block avoids the trap.
+
 ---
 
 ## Where the model actually comes from

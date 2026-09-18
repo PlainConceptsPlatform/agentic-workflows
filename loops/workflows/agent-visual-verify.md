@@ -199,7 +199,17 @@ post-steps:
       kill "$APP_PID" 2>/dev/null || true
 
 timeout-minutes: 15
+
+engine:
+  id: opencode
+  version: "1.2.14"
+  env:
+    OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
+
 model: openai/glm-5-3
+max-turns: 120
+max-turn-cache-misses: 3000
+max-ai-credits: 5000
 ---
 
 1. You are visually verifying pull request **#${{ needs.subject.outputs.pr }}**, which closes
