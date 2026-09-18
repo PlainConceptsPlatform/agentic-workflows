@@ -548,93 +548,33 @@ timeout-minutes: 90
      temporal draft from the earlier pass: reuse what still holds, and resolve its pending
      marks with the author's answers.
 
-3. Explore before you write. Call skill("pc-plan-explore"); it owns the stance for this step.
+3. **Explore and write the story.** Split the issue into work units first. If the issue body is
+   a bullet list of distinct tasks, treat each bullet as its own work unit. Otherwise treat the
+   whole issue as a single work unit.
 
-   Split the issue into work units first. If the issue body is a bullet list of distinct tasks
-   (for example "- check the button component", "- then check the login", "- then suggest a
-   register page"), treat each bullet as its own work unit. Otherwise treat the whole issue as a
-   single work unit.
+   Call `skill("pc-plan-explore")` and pass it the work-unit list. It owns the exploration
+   stance: sequential per-unit investigation, self-answered questions from the codebase, and
+   findings held as internal working. Never write a self-asked question or its answer to the
+   issue. At most ${{ env.MAX_SELF_QUESTIONS }} self-asked questions per work unit, and stop
+   sooner once more exploring stops changing your understanding.
 
-   Create a todo entry for each work unit before you start exploring. Process them one at a
-   time, strictly sequentially: explore unit 1, self-answer its questions, mark the todo
-   complete, then move to unit 2. Do not explore multiple work units in the same pass. Do not
-   start unit N+1 until unit N is marked complete.
+   Then classify the change complexity. A change is **trivial** only if every one of these
+   holds: ${{ env.TRIVIAL_CRITERIA }}
 
-   For the current work unit, answer your own questions from the codebase and the docs, and
-   set one aside for the author only when it is a business or product decision the code cannot
-   settle. A unit's todo is complete when its findings would support acceptance criteria: if you
-   read a file but cannot say what changes for this unit, it is not.
+   **Trivial path.** Skip the story skill. Prepare the replacement issue body as valid Markdown:
+   `${{ env.TRIVIAL_MARKER }}`, a short plain-English summary (2-3 sentences max), and a simple
+   checklist of concrete steps. No "As a / I want / so that" form, no Given/When/Then, no Mermaid.
+   Load `@humanizer` and prepare the body, then go directly to step 4 (estimate).
 
-   At most ${{ env.MAX_SELF_QUESTIONS }} self-asked questions per work unit, and stop sooner
-   once more exploring stops changing your understanding. Never write a self-asked question or
-   its answer to the issue: this is internal working, and the issue is read by people.
+   **Standard path.** Call `skill("pc-plan-story")` and pass it the work units and the exploration
+   findings. `pc-plan-story` owns the story's shape: drafting, coverage gate, repo-docs application,
+   issue-form discovery and wrapping, humanizer pass, and the structured implementation plan. Do not
+   repeat any of those steps yourself. Adhere to ${{ env.REPO_RULES }}.
 
-4. **Classify the change complexity.** Based on your exploration, determine whether this is a
-   trivial change. A change is **trivial** only if every one of these holds:
-   ${{ env.TRIVIAL_CRITERIA }}
+   The story body the skill returns has its machine-readable lines at the very top, above the
+   form's first heading, so the workflow can read them whatever the form's shape.
 
-   If all hold → **trivial path** (step 4a). If any fails → **standard path** (step 5).
-
-   **4a. Trivial path.** Skip `/plan-story`. Do not write Gherkin acceptance criteria or
-   Mermaid diagrams. Instead, prepare the replacement issue body as valid Markdown:
-
-   1. `${{ env.TRIVIAL_MARKER }}`
-   2. A short plain-English summary of what needs to change and why (2-3 sentences max)
-   3. A simple checklist of concrete steps:
-      ```
-      ## Tasks
-      - [ ] Change X in file Y
-      - [ ] Verify Z
-      ```
-
-   No "As a / I want / so that" form. No Given/When/Then. No Mermaid. Just the marker,
-   the summary, and the checklist.
-
-   Load `@humanizer` and prepare the replacement issue body, then go directly to step 8
-   (estimate). Skip steps 5-7.
-
-5. Before writing the story, verify coverage: list every work unit and confirm each one has
-   exploration findings concrete enough for acceptance criteria. If any unit is missing, go back
-   and explore it now. Then call skill("pc-plan-story") and run `/plan-story` for the issue,
-   passing everything you learned while exploring as the exploration findings. Ground the story
-   in the actual codebase by reading the relevant files. Never read outside this repository root.
-   `pc-plan-story` owns the story's shape. This workflow's own requirement is coverage: several
-   work units become one story that covers all of them, with at least one acceptance scenario
-   per unit.
-
-     Apply repository documentation and established conventions before finalizing the story.
-     Adhere to ${{ env.REPO_RULES }}.
-
-6. **Wrap the story in the repository's issue form.** The body people read must follow the
-   repository's own issue template when one exists; the story is the content, the template
-   is the shape.
-
-   Find the form first:
-
-   - List the YAML and Markdown forms under `.github/ISSUE_TEMPLATE/`, plus a legacy
-     `.github/issue_template.md` or a root `template.yml`. `config.yml` there only declares
-     contact links, which are not forms: ignore it.
-   - When a form filters by labels and the issue carries one of those labels, that form
-     wins. Otherwise use the repository's default form.
-   - When the repository has no form at all, keep the free-form story shape from step 5:
-     there is nothing to wrap around.
-
-   Then fill it:
-
-   - Draw every field's content from your exploration findings. Required fields always get
-     real content; optional fields only when you genuinely have something for them.
-   - The story narrative lands in the field that asks for it — proposal, description, or
-     what-happened, depending on the form.
-   - The Given/When/Then scenarios go into the form's acceptance-criteria field when it has
-     one; otherwise they stay a section of their own. The Mermaid diagram goes where it
-     reads best inside the filled form.
-   - The machine-readable lines the later steps add — split markers in step 9, estimate
-     lines in step 10 — always sit at the very top of the body, above the form's first
-     heading, so the workflow can read them whatever the form's shape.
-
-7. Load `@humanizer` and prepare the complete replacement issue body as valid Markdown.
-
-8. **Estimate the story in points.** Use the Fibonacci scale, where one point is roughly one
+4. **Estimate the story in points.** Use the Fibonacci scale, where one point is roughly one
    human day of work for a developer who knows this codebase. Estimate the whole story: code,
    tests, and the edge cases the acceptance criteria imply.
 
@@ -647,7 +587,7 @@ timeout-minutes: 90
    Elapsed clock time is not evidence. A large change can land in minutes and a small one can
    wait days for a human, so never reason from how long anything took.
 
-9. **Split when the estimate is ${{ env.SPLIT_THRESHOLD }} or more.** An oversized story is the
+5. **Split when the estimate is ${{ env.SPLIT_THRESHOLD }} or more.** An oversized story is the
    single best predictor of a pull request that never lands.
 
    First test whether it *can* split. A story splits when it contains slices that are each
@@ -672,7 +612,7 @@ timeout-minutes: 90
    single story and say so in one sentence in the body, under the estimate. An honest 8 is more
    useful than three fake threes that each break the build.
 
-10. **Record the estimate in every body you write**, parent and children alike, immediately below
+6. **Record the estimate in every body you write**, parent and children alike, immediately below
    the title line, as exactly these two lines:
 
    ```
@@ -683,7 +623,7 @@ timeout-minutes: 90
    The visible line is for people and the marker is read by the workflow, which turns it into the
    `sp-N` label. A body without the marker gets no estimate label at all.
 
-11. Decide exactly one outcome:
+7. Decide exactly one outcome:
 
     Labels are workflow-owned state. Do not call `add_labels` or `remove_labels`.
 
@@ -691,9 +631,9 @@ timeout-minutes: 90
     could not answer. Leave the partial work visible: first call `update_issue` with a
     temporal draft, then call `add_comment` once with the questions.
 
-    The temporal draft is the replacement body your path would have written — the filled
-    issue form from step 6 on the standard path, the marker, summary and checklist from
-    step 4a on the trivial path — holding everything you already established, with every
+    The temporal draft is the replacement body your path would have written — the story
+    body from the standard path, the marker, summary and checklist from the trivial path —
+    holding everything you already established, with every
     part the questions leave open marked `_pending — see questions below_`. Its very
     first line is `${{ env.DRAFT_MARKER }}`; the next run replaces the draft wholesale
     with the final body.
