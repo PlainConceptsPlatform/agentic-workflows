@@ -1657,6 +1657,10 @@ echo "── Visual verify wiring ───────────────�
 # The merge-gate's conclude job dispatches agent-visual-verify before merging when the outcome
 # is auto-merge and VISUAL_VERIFY_ENABLED is true. Each of these is one line an edit could drop
 # with nothing going red: a missing dispatch step, a missing env var, or a missing worker file.
+# The guard against the original bug comes first: the call is a dispatch, never a step doing
+# `uses:` on a workflow file -- that resolves as a local action, dies with "Can't find
+# action.yml", and under continue-on-error every auto-merge shipped with zero screenshots
+# and nothing red.
 if worker_installed merge-gate; then
   VV_OK=1
 
@@ -1665,13 +1669,26 @@ if worker_installed merge-gate; then
   }
 
   # The dispatch step exists and runs only on auto-merge with the feature flag on.
-  vv 'name: Run visual verification' "$MERGE_GATE_WORKER_MD" 'merge-gate has no visual-verify dispatch step'
+  vv 'name: Dispatch visual verification' "$MERGE_GATE_WORKER_MD" 'merge-gate has no visual-verify dispatch step'
   vv "outcome == 'auto-merge'.*VISUAL_VERIFY_ENABLED == 'true'" "$MERGE_GATE_WORKER_MD" 'visual-verify dispatch has wrong guard'
-  vv 'continue-on-error: true' "$MERGE_GATE_WORKER_MD" 'visual-verify dispatch must not block the merge'
+
+  # The shape that never worked: a step calling a reusable workflow file. Also reject the
+  # swallowed-failure form it shipped with.
+  vv 'operation=visual-verify' "$MERGE_GATE_WORKER_MD" 'the dispatch must target the router operation, not a nested file'
+  if grep -qE '^      - name:.*\n.*uses: \./\.github/workflows/agent-visual-verify' "$MERGE_GATE_WORKER_MD" 2>/dev/null \
+    || grep -A2 '^      - name:' "$MERGE_GATE_WORKER_MD" | grep -q 'uses: \./\.github/workflows/'; then
+    VV_OK=0
+    echo "FAIL: a step still uses: a workflow file; the runner resolves it as a local action and it cannot work" >&2
+  fi
 
   # The env vars the worker needs.
   vv 'VISUAL_VERIFY_ENABLED:' "$MERGE_GATE_WORKER_MD" 'merge-gate missing VISUAL_VERIFY_ENABLED env var'
   vv 'VISUAL_VERIFY_START_COMMAND:' "$MERGE_GATE_WORKER_MD" 'merge-gate missing VISUAL_VERIFY_START_COMMAND env var'
+
+  # The worker gates its agent on its own configuration, so an unconfigured repository
+  # runs no model: the subject job exposes it, the top-level if: reads it.
+  vv 'enabled: ' "${WORKFLOWS_DIR}/agent-visual-verify.md" 'visual-verify subject does not expose the enabled output'
+  vv "outputs.enabled == 'true'" "${WORKFLOWS_DIR}/agent-visual-verify.md" 'visual-verify agent gate does not read the enabled output'
 
   # The worker file exists.
   VV_WORKER_MD="${WORKFLOWS_DIR}/agent-visual-verify.md"

@@ -43,6 +43,10 @@ on:
         description: Issue number the pull request closes.
         required: true
         type: string
+  # The gate job the top-level `if:` reads. gh-aw folds that `if:` into the generated
+  # activation job but gives activation no dependency on the job, so the reference resolves
+  # to '' and the clause is false -- the agent would never run.
+  needs: [subject]
 
 # Rung 3-4. The agent reads the verification plan and writes waypoints as JSON; a post-agent
 # shell step runs agent-browser to capture screenshots outside the awf sandbox.
@@ -57,11 +61,28 @@ jobs:
       found: ${{ steps.subject.outputs.found }}
       pr: ${{ steps.subject.outputs.pr }}
       issue: ${{ steps.subject.outputs.issue }}
+      enabled: ${{ steps.config.outputs.enabled }}
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Rung 4. A step can read the env: context; a job-level if: cannot. The enablement
+      # check therefore happens here and the agent gate reads the output -- a runnable
+      # snippet on an unconfigured repository burns the model otherwise.
+      - name: Read the visual-verify configuration
+        id: config
+        env:
+          ENABLED: ${{ env.VISUAL_VERIFY_ENABLED }}
+          START_COMMAND: ${{ env.VISUAL_VERIFY_START_COMMAND }}
+        run: |
+          set -euo pipefail
+          if [ "$ENABLED" = "true" ] && [ -n "$START_COMMAND" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::visual verification is not configured (VISUAL_VERIFY_ENABLED=$ENABLED, start command ${START_COMMAND:-unset}); the agent will not run."
+          fi
       - name: Identify the pull request and its issue
         id: subject
         env:
@@ -80,7 +101,7 @@ jobs:
             issue="$(jq -r '.closingIssuesReferences[0].number // empty' <<<"$pr")"
           fi
           if [ -z "$issue" ]; then
-            issue="$(jq -r '.body // ""' <<<"$pr" |
+            issue="$(jq -r '.body // ""' <<<"$pr")"
               grep -oiE '(close[sd]?|fixe?[sd]?|resolve[sd]?) +#[0-9]+' |
               grep -oE '[0-9]+' | head -n 1 || true)"
           fi
@@ -197,6 +218,11 @@ post-steps:
       APP_PID: ${{ steps.app.outputs.app_pid }}
     run: |
       kill "$APP_PID" 2>/dev/null || true
+
+# `!failure()` because subject skips on an unconfigured repository and a closed pull
+# request: without a status function the implicit success() would let those skips look
+# like failures to every job that needs this one.
+if: needs.subject.outputs.found == 'true' && needs.subject.outputs.enabled == 'true' && !failure()
 
 timeout-minutes: 15
 
