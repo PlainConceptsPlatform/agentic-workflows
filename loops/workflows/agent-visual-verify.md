@@ -145,7 +145,10 @@ post-steps:
     run: |
       set -euo pipefail
       mkdir -p /tmp/gh-aw/screenshots
-      npm install -g "@anthropic-ai/agent-browser@${{ env.AGENT_BROWSER_VERSION }}"
+      # Unscoped: the package is Vercel Labs' agent-browser. The scoped
+      # @anthropic-ai/agent-browser does not exist on npm and 404s the install, which
+      # took down the agent job on the first run that ever reached this step.
+      npm install -g "agent-browser@${{ env.AGENT_BROWSER_VERSION }}"
       agent-browser --version
 
   - name: Build and start the app
