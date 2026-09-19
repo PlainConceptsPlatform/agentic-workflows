@@ -101,7 +101,7 @@ jobs:
             issue="$(jq -r '.closingIssuesReferences[0].number // empty' <<<"$pr")"
           fi
           if [ -z "$issue" ]; then
-            issue="$(jq -r '.body // ""' <<<"$pr")"
+            issue="$(jq -r '.body // ""' <<<"$pr" |
               grep -oiE '(close[sd]?|fixe?[sd]?|resolve[sd]?) +#[0-9]+' |
               grep -oE '[0-9]+' | head -n 1 || true)"
           fi
