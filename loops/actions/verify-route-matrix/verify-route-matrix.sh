@@ -2130,13 +2130,20 @@ if worker_installed refine; then
   SIZE_GATE_OK=1
   REFINE_WORKER_MD="${WORKFLOWS_DIR}/agent-refine.md"
 
-  top_level_if="$(sed -n '/^# `!failure()` is load-bearing/,$p' "$REFINE_WORKER_MD" | sed -n 's/^if: //p' | head -1)"
+  # The top-level if: starts at column 0 -- job-level ifs: are indented -- so anchor on that,
+  # not on the prose comment above it. It must end with !failure().
+  top_level_if="$(sed -n 's/^if: //p' "$REFINE_WORKER_MD" | head -1)"
   if [[ "$top_level_if" != *'!failure()' ]]; then
     SIZE_GATE_OK=0
     echo "FAIL: refine gates the agent without !failure(); a skipped refuse_big_issue poisons the implicit success() and skips the agent on every under-limit issue" >&2
   fi
 
-  if ! grep -qE "^ *needs: \[.*size_guard" "$REFINE_WORKER_MD" || ! grep -qE "needs.size_guard.outputs.too_big != 'true'" "$REFINE_WORKER_MD"; then
+  # Extract the incomplete job's own block. A whole-file grep cannot make this claim: reserve,
+  # refuse_big_issue and the agent gate all read size_guard, so the exclusion clause could be
+  # deleted from incomplete while every grep still passes.
+  incomplete_block="$(awk '/^  incomplete:/{found=1; next} found && /^  [a-z_]+:/{exit} found{print}' "$REFINE_WORKER_MD")"
+  if ! printf '%s' "$incomplete_block" | grep -qE '^    needs: \[.*size_guard' \
+    || ! printf '%s' "$incomplete_block" | grep -qF "needs.size_guard.outputs.too_big != 'true'"; then
     SIZE_GATE_OK=0
     echo "FAIL: refine's incomplete does not exclude the refusal path; every refused issue also loops attempts" >&2
   fi

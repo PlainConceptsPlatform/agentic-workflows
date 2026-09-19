@@ -778,16 +778,16 @@ timeout-minutes: 90
    The visible line is for people and the marker is read by the workflow, which turns it into the
    `sp-N` label. A body without the marker gets no estimate label at all.
 
- 7. **One safe-output call per turn.** Never batch multiple safe-output calls into a single
-    message: `update_issue`, `create_issue` and `add_comment` each go in their own turn, with
-    nothing else in the message. The provider caps one response at a fixed size, and a batch of
-    large calls is truncated mid-JSON before any of them executes, ending the run green with
-    nothing written. On the split path, sequence `create_issue` → `create_issue` → … →
-    `update_issue` → `add_comment`, one per turn. If a single body is so large it approaches the
-    size of a very long message, tighten the body; a shorter call that lands beats a longer one
-    that is cut off.
+7. **One safe-output call per turn.** Never batch multiple safe-output calls into a single
+   message: `update_issue`, `create_issue` and `add_comment` each go in their own turn, with
+   nothing else in the message. The provider caps one response at a fixed size, and a batch of
+   large calls is truncated mid-JSON before any of them executes, ending the run green with
+   nothing written. On the split path, sequence `create_issue` → `create_issue` → … →
+   `update_issue` → `add_comment`, one per turn. If a single body is so large it approaches the
+   size of a very long message, tighten the body; a shorter call that lands beats a longer one
+   that is cut off.
 
- 8. Decide exactly one outcome:
+8. Decide exactly one outcome:
 
     Labels are workflow-owned state. Do not call `add_labels` or `remove_labels`.
 
