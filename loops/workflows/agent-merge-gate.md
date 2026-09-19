@@ -807,6 +807,7 @@ safe-outputs:
   push-to-pull-request-branch:
     target: "*"
     required-title-prefix: "[bot] "
+    max-patch-size: 10240
     # A failed bot PR may already contain protected files. Permit a verified repair push,
     # but protected_changes still prevents the later green-CI cycle from auto-merging it.
     protected-files: allowed

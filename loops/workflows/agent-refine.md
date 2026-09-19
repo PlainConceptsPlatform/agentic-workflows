@@ -310,7 +310,13 @@ jobs:
           issue-number: ${{ inputs.issue-number }}
   conclude:
     needs: [activation, agent, safe_outputs, validate_output]
+    # `always()` is load-bearing: without it GitHub prepends `success()`, which returns false
+    # if any needed job was skipped. If activation was skipped (Pliny-Bot #321: refuse_big_issue
+    # skip-poisoned activation in v0.28.0), both conclude AND incomplete skipped and the refine
+    # label never transitioned. The explicit conditions below are still the guard; `always()`
+    # just prevents a skipped need from short-circuiting the whole expression.
     if: >
+      always() &&
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.validate_output.outputs.valid == 'true'

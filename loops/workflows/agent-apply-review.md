@@ -408,6 +408,12 @@ max-ai-credits: 5000
 
 permissions: read-all
 
+# push-to-pull-request-branch with target "*" cannot reach a branch the shallow clone
+# does not have. Fetch full history so the agent can merge on conflict without rewriting.
+checkout:
+  fetch: ["*"]
+  fetch-depth: 0
+
 # Rung 3. A reviewer often makes one point across several comments, so the agent needs the
 # whole conversation, not just the one that triggered it. Fetching all of it is deterministic.
 steps:
@@ -459,6 +465,7 @@ safe-outputs:
   # with "requires pull request context", so the agent's fix is computed and discarded.
   push-to-pull-request-branch:
     target: "*"
+    max-patch-size: 10240
   add-comment:
     target: "*"
 
@@ -480,6 +487,12 @@ timeout-minutes: 90
 
    It has already been confirmed that this pull request is open, that we authored it, and that
    the reviewer has write access. Do not re-check any of that.
+
+   You are on the pull request branch. Never rebase, reset, amend or otherwise rewrite
+   history: the workflow applies your commits as a bundle with a fast-forward-only push and
+   discards anything that is not a descendant of the branch tip. The
+   `push_to_pull_request_branch` tool's own description recommends rebasing; in this
+   repository that advice is wrong. Merge, commit, and let the workflow push.
 
 2. Read `${{ env.ISSUE_CONTEXT_PATH }}`. It contains the issue body and discussion this pull
    request closes. The acceptance criteria there define what the implementation must still
