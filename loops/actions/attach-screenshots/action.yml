@@ -66,19 +66,14 @@ runs:
           done
 
           if [ ${#attaches[@]} -gt 0 ]; then
-            gh issue comment "$ISSUE" --repo "$REPO" \
-              --body "attach" \
-              "${attaches[@]/#/--attach=}" \
-              --body-file - <<< "$body" 2>/dev/null || \
-            {
-              # Fallback: gh CLI does not support --body-file with --attach in all versions.
-              # Post the body as the comment and attach each screenshot individually.
-              gh issue comment "$ISSUE" --repo "$REPO" --body "$body"
-              for png in "${attaches[@]}"; do
-                gh issue comment "$ISSUE" --repo "$REPO" --attach "$png" --body ""
-              done
-            }
-            echo "Attached ${#attaches[@]} screenshots to issue #$ISSUE"
+            # --body-file with --attach is not supported by every gh version; --body with a
+            # here-string is, and one comment per screenshot loses the narrative. Post the
+            # body first, then attach each file to that same comment so the story stays whole.
+            comment_url=$(gh issue comment "$ISSUE" --repo "$REPO" --body "$body" --json url --jq '.url')
+            for png in "${attaches[@]}"; do
+              gh issue comment "$ISSUE" --repo "$REPO" --attach "$png" --body "" 2>/dev/null || true
+            done
+            echo "Attached ${#attaches[@]} screenshots to issue #$ISSUE ($comment_url)"
           else
             gh issue comment "$ISSUE" --repo "$REPO" --body "$body"
             echo "No screenshots found; posted plan summary only"

@@ -132,7 +132,8 @@ steps:
       output-path: ${{ env.ISSUE_CONTEXT_PATH }}
 
 safe-outputs:
-  staged: true
+  # Never staged: staged mode only previews writes ("Would add comment"), so the run goes
+  # green and the issue never hears anything. The audit worker learned this the same way.
   report-failure-as-issue: false
   threat-detection: false
   add-comment:
@@ -149,6 +150,9 @@ post-steps:
       # @anthropic-ai/agent-browser does not exist on npm and 404s the install, which
       # took down the agent job on the first run that ever reached this step.
       npm install -g "agent-browser@${{ env.AGENT_BROWSER_VERSION }}"
+      # The npm package alone cannot drive a browser: the Chromium binary is a separate
+      # download, and a self-hosted Linux runner needs the system dependencies too.
+      agent-browser install --with-deps
       agent-browser --version
 
   - name: Build and start the app
@@ -199,11 +203,37 @@ post-steps:
       fi
       waypoint_count=$(jq -r '.waypoints | length' "$PLAN_FILE")
       echo "Found $waypoint_count waypoints"
-      echo "captured=true" >> "$GITHUB_OUTPUT"
-      echo "screenshot_count=$waypoint_count" >> "$GITHUB_OUTPUT"
+      captured=0
+      i=0
+      while [ "$i" -lt "$waypoint_count" ]; do
+        i=$((i + 1))
+        url=$(jq -r ".waypoints[$((i - 1))].url" "$PLAN_FILE")
+        selector=$(jq -r ".waypoints[$((i - 1))].selector // empty" "$PLAN_FILE")
+        echo "Waypoint $i/$waypoint_count: $url (waiting for: ${selector:-nothing})"
+        # A failing waypoint must not lose the screenshots already taken: the count is
+        # reported and the run stays green, because evidence is what this worker produces.
+        if ! agent-browser open "http://localhost:$PORT$url"; then
+          echo "::warning::waypoint $i: could not open $url; skipping"
+          continue
+        fi
+        if [ -n "$selector" ]; then
+          agent-browser wait "$selector" || echo "::warning::waypoint $i: selector $selector did not appear; screenshotting anyway"
+        fi
+        agent-browser wait --load networkidle || true
+        if agent-browser screenshot "$OUTPUT_DIR/waypoint-$i.png" --full; then
+          captured=$((captured + 1))
+        else
+          echo "::warning::waypoint $i: screenshot failed"
+        fi
+      done
+      echo "captured=$([ "$captured" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      echo "screenshot_count=$captured" >> "$GITHUB_OUTPUT"
 
+  # The attach action reads the screenshots directory; on no capture it explains that
+  # instead (app never started, no plan, or every waypoint failed). `always()` because it
+  # must run even when the capture step above warned its way to the end.
   - name: Attach screenshots to the issue
-    if: always() && steps.subject.outputs.found == 'true'
+    if: always() && needs.subject.outputs.found == 'true' && needs.subject.outputs.enabled == 'true'
     uses: ./.github/actions/attach-screenshots
     with:
       token: ${{ github.token }}
