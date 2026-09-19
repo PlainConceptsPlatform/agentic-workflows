@@ -2114,6 +2114,42 @@ if worker_installed implement; then
   if [ "$ENDINGS_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+echo "── Refine size gate ──────────────────────────────────────────────────────"
+
+# The size gate added a job that skips in the happy path, and gh-aw adds every custom job to
+# the agent's needs. Three claims about that shape are asserted, because each one broke in
+# production in the same week (Pliny-Bot #320-322: sixteen runs, three parked issues, a
+# refusal loop on an issue the author was shrinking live):
+#
+#   1. the agent's gate carries !failure(), so a skipped refusal no longer poisons the
+#      implicit success() and kills the agent in 0s
+#   2. the incomplete job excludes the refusal, so a refused issue is terminal: no attempt
+#      counter, no x/5, no re-dispatch, no stalled
+#   3. the refusal itself releases bot-working, so a refused issue is not left reserved
+if worker_installed refine; then
+  SIZE_GATE_OK=1
+  REFINE_WORKER_MD="${WORKFLOWS_DIR}/agent-refine.md"
+
+  top_level_if="$(sed -n '/^# `!failure()` is load-bearing/,$p' "$REFINE_WORKER_MD" | sed -n 's/^if: //p' | head -1)"
+  if [[ "$top_level_if" != *'!failure()' ]]; then
+    SIZE_GATE_OK=0
+    echo "FAIL: refine gates the agent without !failure(); a skipped refuse_big_issue poisons the implicit success() and skips the agent on every under-limit issue" >&2
+  fi
+
+  if ! grep -qE "^ *needs: \[.*size_guard" "$REFINE_WORKER_MD" || ! grep -qE "needs.size_guard.outputs.too_big != 'true'" "$REFINE_WORKER_MD"; then
+    SIZE_GATE_OK=0
+    echo "FAIL: refine's incomplete does not exclude the refusal path; every refused issue also loops attempts" >&2
+  fi
+
+  refuse_block="$(awk '/^  refuse_big_issue:/{found=1; next} found && /^  [a-z_]+:/{exit} found{print}' "$REFINE_WORKER_MD")"
+  if ! printf '%s' "$refuse_block" | grep -qF 'WORKING_LABEL'; then
+    SIZE_GATE_OK=0
+    echo "FAIL: the refine refusal never releases bot-working; a refused issue stays reserved with no run behind it" >&2
+  fi
+
+  if [ "$SIZE_GATE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 echo "── Runner pools ──────────────────────────────────────────────────────────"
 
 # Where every job runs, stated once and asserted, because GitHub gives a wrong pool no error: a

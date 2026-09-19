@@ -229,6 +229,17 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
           labels: stalled
+      # A refusal must also release the reservation. authorize-bot-work adds bot-working
+      # before the router dispatches, and this job is the refused run's only terminal path:
+      # incomplete is gated off it (see there), so without this removal a refused issue
+      # stays reserved with no run behind it -- parked, invisible, not re-triggerable until
+      # the hourly reconcile sweep clears it hours later.
+      - name: Release the reservation
+        uses: ./.github/actions/remove-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: ${{ env.WORKING_LABEL }}
   reserve:
     needs: [still_open, size_guard]
     if: needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big != 'true'
@@ -475,9 +486,15 @@ jobs:
   incomplete:
     # activation for the artifact prefix the usage read needs; validate_output for its
     # valid output, which decides whether the usage read should look for truncation at all.
-    needs: [activation, agent, safe_outputs, validate_output]
+    # size_guard because a refusal is terminal: when too_big is true, refuse_big_issue has
+    # already spoken on the issue and no attempt, retry or park may follow. Without this
+    # clause every refused issue also looped here -- one human-label visit produced eight
+    # refusal comments and eight "Attempt N of 5" comments, none of which could succeed
+    # (Pliny-Bot #322).
+    needs: [activation, agent, safe_outputs, validate_output, size_guard]
     if: >
       always() &&
+      needs.size_guard.outputs.too_big != 'true' &&
       (
         needs.agent.result != 'success' ||
         needs.safe_outputs.result != 'success' ||
@@ -598,7 +615,15 @@ jobs:
             ${{ steps.usage.outputs.truncated }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big != 'true'
+# `!failure()` is load-bearing, not decoration. gh-aw adds every custom job to the agent's
+# `needs`, including refuse_big_issue -- a job that skips precisely when refinement should
+# run. Without a status function in this `if:` GitHub prepends an implicit `success()`,
+# and a skipped need fails it, so every under-limit issue skipped the agent in 0s and the
+# incomplete loop parked the issue (Pliny-Bot #320-322, 16 runs). `!failure()` suppresses
+# the implicit success(): a refused skip no longer poisons the agent, while any real
+# failure -- size_guard erroring, the refusal job erroring mid-refuse, reserve failing --
+# still blocks it and lands in incomplete.
+if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big != 'true' && !failure()
 
 runs-on: agents-arc
 runs-on-slim: agents-arc
