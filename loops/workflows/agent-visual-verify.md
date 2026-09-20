@@ -233,7 +233,7 @@ post-steps:
   # instead (app never started, no plan, or every waypoint failed). `always()` because it
   # must run even when the capture step above warned its way to the end.
   - name: Attach screenshots to the issue
-    if: always() && needs.subject.outputs.found == 'true' && needs.subject.outputs.enabled == 'true'
+    if: always() && env.VISUAL_VERIFY_ENABLED == 'true' && env.VISUAL_VERIFY_START_COMMAND != ''
     uses: ./.github/actions/attach-screenshots
     with:
       token: ${{ github.token }}
