@@ -152,6 +152,17 @@ post-steps:
       npm install -g "agent-browser@${{ env.AGENT_BROWSER_VERSION }}"
       # The npm package alone cannot drive a browser: the Chromium binary is a separate
       # download, and a self-hosted Linux runner needs the system dependencies too.
+      # --with-deps is agent-browser's best effort but misses libraries on ubuntu-24.04.
+      chrome_dir=$(agent-browser path 2>/dev/null | grep -oE '/[^ ]+chrome[^ ]*' | head -1 || true)
+      if [ -n "$chrome_dir" ] && [ -d "$(dirname "$chrome_dir")/.." ]; then
+        ldd "$chrome_dir" 2>/dev/null | grep "not found" || true
+      fi
+      # Install the known missing Chromium dependencies on Debian/ubuntu runners.
+      # agent-browser install --with-deps may leave these out depending on the runner image.
+      sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends \
+        libnss3 libatk1.0-0 libatk-bridge2.0-0 libdrm2 libgbm1 \
+        libasound2t64 libxkbcommon0 libcairo2 libpango-1.0-0 libxcomposite1 \
+        libxdamage1 libxfixes3 libxrandr2 2>/dev/null || true
       agent-browser install --with-deps
       agent-browser --version
 
@@ -205,6 +216,9 @@ post-steps:
       echo "Found $waypoint_count waypoints"
       captured=0
       i=0
+      # agent-browser uses Chromium which needs --no-sandbox on CI runners where
+      # there is no SYS_ADMIN capability. Set it once via the config file.
+      export AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS:-} --no-sandbox"
       while [ "$i" -lt "$waypoint_count" ]; do
         i=$((i + 1))
         url=$(jq -r ".waypoints[$((i - 1))].url" "$PLAN_FILE")
@@ -224,6 +238,10 @@ post-steps:
           captured=$((captured + 1))
         else
           echo "::warning::waypoint $i: screenshot failed"
+          # Diagnostic: show what's in the output dir and any browser errors
+          ls -la "$OUTPUT_DIR/" 2>/dev/null || true
+          echo "--- agent-browser debug ---"
+          agent-browser screenshot "$OUTPUT_DIR/debug-$i.png" --full 2>&1 || true
         fi
       done
       echo "captured=$([ "$captured" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
