@@ -43,6 +43,10 @@ on:
         description: Issue number the pull request closes.
         required: true
         type: string
+  # The gate job the top-level `if:` reads. gh-aw folds that `if:` into the generated
+  # activation job but gives activation no dependency on the job, so the reference resolves
+  # to '' and the clause is false -- the agent would never run.
+  needs: [subject]
 
 # Rung 3-4. The agent reads the verification plan and writes waypoints as JSON; a post-agent
 # shell step runs agent-browser to capture screenshots outside the awf sandbox.
@@ -57,11 +61,28 @@ jobs:
       found: ${{ steps.subject.outputs.found }}
       pr: ${{ steps.subject.outputs.pr }}
       issue: ${{ steps.subject.outputs.issue }}
+      enabled: ${{ steps.config.outputs.enabled }}
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Rung 4. A step can read the env: context; a job-level if: cannot. The enablement
+      # check therefore happens here and the agent gate reads the output -- a runnable
+      # snippet on an unconfigured repository burns the model otherwise.
+      - name: Read the visual-verify configuration
+        id: config
+        env:
+          ENABLED: ${{ env.VISUAL_VERIFY_ENABLED }}
+          START_COMMAND: ${{ env.VISUAL_VERIFY_START_COMMAND }}
+        run: |
+          set -euo pipefail
+          if [ "$ENABLED" = "true" ] && [ -n "$START_COMMAND" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::visual verification is not configured (VISUAL_VERIFY_ENABLED=$ENABLED, start command ${START_COMMAND:-unset}); the agent will not run."
+          fi
       - name: Identify the pull request and its issue
         id: subject
         env:
@@ -111,7 +132,8 @@ steps:
       output-path: ${{ env.ISSUE_CONTEXT_PATH }}
 
 safe-outputs:
-  staged: true
+  # Never staged: staged mode only previews writes ("Would add comment"), so the run goes
+  # green and the issue never hears anything. The audit worker learned this the same way.
   report-failure-as-issue: false
   threat-detection: false
   add-comment:
@@ -124,7 +146,13 @@ post-steps:
     run: |
       set -euo pipefail
       mkdir -p /tmp/gh-aw/screenshots
-      npm install -g "@anthropic-ai/agent-browser@${{ env.AGENT_BROWSER_VERSION }}"
+      # Unscoped: the package is Vercel Labs' agent-browser. The scoped
+      # @anthropic-ai/agent-browser does not exist on npm and 404s the install, which
+      # took down the agent job on the first run that ever reached this step.
+      npm install -g "agent-browser@${{ env.AGENT_BROWSER_VERSION }}"
+      # The npm package alone cannot drive a browser: the Chromium binary is a separate
+      # download, and a self-hosted Linux runner needs the system dependencies too.
+      agent-browser install --with-deps
       agent-browser --version
 
   - name: Build and start the app
@@ -175,11 +203,37 @@ post-steps:
       fi
       waypoint_count=$(jq -r '.waypoints | length' "$PLAN_FILE")
       echo "Found $waypoint_count waypoints"
-      echo "captured=true" >> "$GITHUB_OUTPUT"
-      echo "screenshot_count=$waypoint_count" >> "$GITHUB_OUTPUT"
+      captured=0
+      i=0
+      while [ "$i" -lt "$waypoint_count" ]; do
+        i=$((i + 1))
+        url=$(jq -r ".waypoints[$((i - 1))].url" "$PLAN_FILE")
+        selector=$(jq -r ".waypoints[$((i - 1))].selector // empty" "$PLAN_FILE")
+        echo "Waypoint $i/$waypoint_count: $url (waiting for: ${selector:-nothing})"
+        # A failing waypoint must not lose the screenshots already taken: the count is
+        # reported and the run stays green, because evidence is what this worker produces.
+        if ! agent-browser open "http://localhost:$PORT$url"; then
+          echo "::warning::waypoint $i: could not open $url; skipping"
+          continue
+        fi
+        if [ -n "$selector" ]; then
+          agent-browser wait "$selector" || echo "::warning::waypoint $i: selector $selector did not appear; screenshotting anyway"
+        fi
+        agent-browser wait --load networkidle || true
+        if agent-browser screenshot "$OUTPUT_DIR/waypoint-$i.png" --full; then
+          captured=$((captured + 1))
+        else
+          echo "::warning::waypoint $i: screenshot failed"
+        fi
+      done
+      echo "captured=$([ "$captured" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      echo "screenshot_count=$captured" >> "$GITHUB_OUTPUT"
 
+  # The attach action reads the screenshots directory; on no capture it explains that
+  # instead (app never started, no plan, or every waypoint failed). `always()` because it
+  # must run even when the capture step above warned its way to the end.
   - name: Attach screenshots to the issue
-    if: always() && steps.subject.outputs.found == 'true'
+    if: always() && needs.subject.outputs.found == 'true' && needs.subject.outputs.enabled == 'true'
     uses: ./.github/actions/attach-screenshots
     with:
       token: ${{ github.token }}
@@ -198,8 +252,23 @@ post-steps:
     run: |
       kill "$APP_PID" 2>/dev/null || true
 
+# `!failure()` because subject skips on an unconfigured repository and a closed pull
+# request: without a status function the implicit success() would let those skips look
+# like failures to every job that needs this one.
+if: needs.subject.outputs.found == 'true' && needs.subject.outputs.enabled == 'true' && !failure()
+
 timeout-minutes: 15
-model: openai/glm-5-3
+
+engine:
+  id: opencode
+  version: "1.2.14"
+  env:
+    OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
+
+model: openai/glm-5-2
+max-turns: 120
+max-turn-cache-misses: 3000
+max-ai-credits: 5000
 ---
 
 1. You are visually verifying pull request **#${{ needs.subject.outputs.pr }}**, which closes

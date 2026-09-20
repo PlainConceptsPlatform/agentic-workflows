@@ -1657,6 +1657,10 @@ echo "── Visual verify wiring ───────────────�
 # The merge-gate's conclude job dispatches agent-visual-verify before merging when the outcome
 # is auto-merge and VISUAL_VERIFY_ENABLED is true. Each of these is one line an edit could drop
 # with nothing going red: a missing dispatch step, a missing env var, or a missing worker file.
+# The guard against the original bug comes first: the call is a dispatch, never a step doing
+# `uses:` on a workflow file -- that resolves as a local action, dies with "Can't find
+# action.yml", and under continue-on-error every auto-merge shipped with zero screenshots
+# and nothing red.
 if worker_installed merge-gate; then
   VV_OK=1
 
@@ -1665,13 +1669,26 @@ if worker_installed merge-gate; then
   }
 
   # The dispatch step exists and runs only on auto-merge with the feature flag on.
-  vv 'name: Run visual verification' "$MERGE_GATE_WORKER_MD" 'merge-gate has no visual-verify dispatch step'
+  vv 'name: Dispatch visual verification' "$MERGE_GATE_WORKER_MD" 'merge-gate has no visual-verify dispatch step'
   vv "outcome == 'auto-merge'.*VISUAL_VERIFY_ENABLED == 'true'" "$MERGE_GATE_WORKER_MD" 'visual-verify dispatch has wrong guard'
-  vv 'continue-on-error: true' "$MERGE_GATE_WORKER_MD" 'visual-verify dispatch must not block the merge'
+
+  # The shape that never worked: a step calling a reusable workflow file. Also reject the
+  # swallowed-failure form it shipped with.
+  vv 'operation=visual-verify' "$MERGE_GATE_WORKER_MD" 'the dispatch must target the router operation, not a nested file'
+  if grep -qE '^      - name:.*\n.*uses: \./\.github/workflows/agent-visual-verify' "$MERGE_GATE_WORKER_MD" 2>/dev/null \
+    || grep -A2 '^      - name:' "$MERGE_GATE_WORKER_MD" | grep -q 'uses: \./\.github/workflows/'; then
+    VV_OK=0
+    echo "FAIL: a step still uses: a workflow file; the runner resolves it as a local action and it cannot work" >&2
+  fi
 
   # The env vars the worker needs.
   vv 'VISUAL_VERIFY_ENABLED:' "$MERGE_GATE_WORKER_MD" 'merge-gate missing VISUAL_VERIFY_ENABLED env var'
   vv 'VISUAL_VERIFY_START_COMMAND:' "$MERGE_GATE_WORKER_MD" 'merge-gate missing VISUAL_VERIFY_START_COMMAND env var'
+
+  # The worker gates its agent on its own configuration, so an unconfigured repository
+  # runs no model: the subject job exposes it, the top-level if: reads it.
+  vv 'enabled: ' "${WORKFLOWS_DIR}/agent-visual-verify.md" 'visual-verify subject does not expose the enabled output'
+  vv "outputs.enabled == 'true'" "${WORKFLOWS_DIR}/agent-visual-verify.md" 'visual-verify agent gate does not read the enabled output'
 
   # The worker file exists.
   VV_WORKER_MD="${WORKFLOWS_DIR}/agent-visual-verify.md"
@@ -1990,7 +2007,7 @@ echo "── Retrying a run that died early ────────────
 
 # A run that died before producing anything is worth repeating; one that worked and then failed
 # produced an answer that was wrong, and repeating it buys the same wrong answer later. Only the
-# implement worker knew that. An Odyssey refine died in three minutes on `Model 'glm-5-3' not
+# implement worker knew that. An Odyssey refine died in three minutes on `Model 'glm-5-2' not
 # found` -- a gateway fault that clears in seconds -- parked, and waited on the janitor's
 # six-hourly sweep.
 RETRY_OK=1
@@ -2112,6 +2129,49 @@ if worker_installed implement; then
   fi
 
   if [ "$ENDINGS_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
+echo "── Refine size gate ──────────────────────────────────────────────────────"
+
+# The size gate added a job that skips in the happy path, and gh-aw adds every custom job to
+# the agent's needs. Three claims about that shape are asserted, because each one broke in
+# production in the same week (Pliny-Bot #320-322: sixteen runs, three parked issues, a
+# refusal loop on an issue the author was shrinking live):
+#
+#   1. the agent's gate carries !failure(), so a skipped refusal no longer poisons the
+#      implicit success() and kills the agent in 0s
+#   2. the incomplete job excludes the refusal, so a refused issue is terminal: no attempt
+#      counter, no x/5, no re-dispatch, no stalled
+#   3. the refusal itself releases bot-working, so a refused issue is not left reserved
+if worker_installed refine; then
+  SIZE_GATE_OK=1
+  REFINE_WORKER_MD="${WORKFLOWS_DIR}/agent-refine.md"
+
+  # The top-level if: starts at column 0 -- job-level ifs: are indented -- so anchor on that,
+  # not on the prose comment above it. It must end with !failure().
+  top_level_if="$(sed -n 's/^if: //p' "$REFINE_WORKER_MD" | head -1)"
+  if [[ "$top_level_if" != *'!failure()' ]]; then
+    SIZE_GATE_OK=0
+    echo "FAIL: refine gates the agent without !failure(); a skipped refuse_big_issue poisons the implicit success() and skips the agent on every under-limit issue" >&2
+  fi
+
+  # Extract the incomplete job's own block. A whole-file grep cannot make this claim: reserve,
+  # refuse_big_issue and the agent gate all read size_guard, so the exclusion clause could be
+  # deleted from incomplete while every grep still passes.
+  incomplete_block="$(awk '/^  incomplete:/{found=1; next} found && /^  [a-z_]+:/{exit} found{print}' "$REFINE_WORKER_MD")"
+  if ! printf '%s' "$incomplete_block" | grep -qE '^    needs: \[.*size_guard' \
+    || ! printf '%s' "$incomplete_block" | grep -qF "needs.size_guard.outputs.too_big != 'true'"; then
+    SIZE_GATE_OK=0
+    echo "FAIL: refine's incomplete does not exclude the refusal path; every refused issue also loops attempts" >&2
+  fi
+
+  refuse_block="$(awk '/^  refuse_big_issue:/{found=1; next} found && /^  [a-z_]+:/{exit} found{print}' "$REFINE_WORKER_MD")"
+  if ! printf '%s' "$refuse_block" | grep -qF 'WORKING_LABEL'; then
+    SIZE_GATE_OK=0
+    echo "FAIL: the refine refusal never releases bot-working; a refused issue stays reserved with no run behind it" >&2
+  fi
+
+  if [ "$SIZE_GATE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
 echo "── Runner pools ──────────────────────────────────────────────────────────"
