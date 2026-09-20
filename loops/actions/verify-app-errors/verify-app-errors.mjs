@@ -14,6 +14,7 @@ import {
   fingerprint,
   leaks,
   ownFrames,
+  topFrames,
   prepare,
   render,
   scrub,
@@ -49,6 +50,8 @@ function row(overrides = {}) {
     Operations: 3,
     FirstSeen: "2026-09-13T01:10:00Z",
     LastSeen: "2026-09-13T06:40:00Z",
+    AnyMessage: "Sequence contains no elements",
+    AnyCategory: "Pliny.Application.Agents.RunExecutor",
     AnyOperationId: "6f1c1b0e9a2f4d55",
     AnyDetails: [
       {
@@ -113,6 +116,16 @@ check(
 
 check("a row with no details does not throw", ownFrames(undefined, "Pliny").length === 0);
 
+check(
+  "topFrames returns frames without prefix filter",
+  topFrames(row().AnyDetails).length >= 1);
+
+check(
+  "topFrames includes framework methods",
+  topFrames(row().AnyDetails).includes("Microsoft.AspNetCore.Routing.EndpointMiddleware.Invoke"));
+
+check("topFrames empty when no details", topFrames(undefined).length === 0);
+
 section("Fingerprints");
 
 check(
@@ -158,6 +171,16 @@ check(
   "run_id is not a reportable field",
   !FINDING_FIELDS.includes("runId") && !FINDING_FIELDS.includes("run_id"));
 
+check(
+  "new fields are in the allowlist",
+  FINDING_FIELDS.includes("message") && FINDING_FIELDS.includes("category") && FINDING_FIELDS.includes("topFrames"));
+
+check(
+  "toFindings maps the new fields",
+  toFindings([row()], options)[0].message === "Sequence contains no elements" &&
+  toFindings([row()], options)[0].category === "Pliny.Application.Agents.RunExecutor" &&
+  toFindings([row()], options)[0].topFrames.length >= 1);
+
 section("Rendering and the scanner");
 
 const rendered = render(toFindings([row()], options)[0], options);
@@ -175,13 +198,18 @@ check(
   "no build-machine path reaches the body",
   !rendered.body.includes("/home/vsts"));
 
-// Two ways to have no frames, and they ask the reader for different things. Pliny-Bot #191 was
+// Two ways to have no own frames, and they ask the reader for different things. Pliny-Bot #191 was
 // filed with OWN_CODE_PREFIX set to "Pliny" and still said the repository had not said which
 // assemblies were its own -- it sent a reader to configure a knob that had been set the day
 // before. Only the unconfigured case was covered here, which is why the wording survived.
 check(
-  "no prefix configured says which knob to set",
+  "no prefix configured but top frames exist shows top frames",
   render(toFindings([row()], { ...options, ownCodePrefix: "" })[0], { ...options, ownCodePrefix: "" })
+    .body.includes("Top stack frames"));
+
+check(
+  "no prefix configured and no frames at all says which knob to set",
+  render(toFindings([row({ AnyDetails: [] })], { ...options, ownCodePrefix: "" })[0], { ...options, ownCodePrefix: "" })
     .body.includes("has not said which assemblies are its own"));
 
 check(
@@ -193,6 +221,28 @@ check(
   "a prefix that matched nothing names the prefix it tried",
   render(toFindings([row()], { ...options, ownCodePrefix: "NoSuchAssembly" })[0], { ...options, ownCodePrefix: "NoSuchAssembly" })
     .body.includes("No frame in this exception belongs to `NoSuchAssembly`"));
+
+check("body includes the message", rendered.body.includes("Message: `Sequence contains no elements`"));
+
+check("body includes the source", rendered.body.includes("Source: `Pliny.Application.Agents.RunExecutor`"));
+
+check(
+  "title uses category as fallback",
+  render(toFindings([row({ OperationName: "" })], options)[0], options).title ===
+    "System.InvalidOperationException in Pliny.Application.Agents.RunExecutor");
+
+check("body shows own frames when available", rendered.body.includes("Our own frames"));
+
+check(
+  "body shows top frames when no own frames",
+  render(toFindings([row({
+    ProblemId: "System.Threading.Tasks.TaskCanceledException",
+    ExceptionType: "System.Threading.Tasks.TaskCanceledException",
+    AnyDetails: [{ parsedStack: [{ method: "System.Net.Http.HttpClient.SendAsync" }] }],
+    AnyMessage: "A task was canceled.",
+  })], { ...options, ownCodePrefix: "Pliny" })[0],
+  { ...options, ownCodePrefix: "Pliny" })
+  .body.includes("Top stack frames"));
 
 section("Fail-closed, but not fail-dead");
 
