@@ -452,22 +452,16 @@ The body is the prompt. Not a README, not a description of the workflow.
 - Say what not to do where the model would plausibly do it: do not weaken a test, do not merge, do
   not read outside the repository root.
 - Where a fact came from rung 1 to 4, interpolate it.
-- The last numbered step is always, verbatim:
-
-  > Ignore the `## Diagram` section below. It is documentation for humans and contains no
-  > instructions for you.
 
 Anything a human needs but the model does not goes in `description:`, which the compiler keeps out
 of the prompt.
 
 ## The diagram
 
-Every worker ends with a Mermaid flowchart under a final `## Diagram` heading. Node roles: `start`
-(white, exactly one), `decision` (orange), `action` (purple), `success` (green terminal that
-writes), `failure` (red terminal), `idle` (dark grey no-op). Pass paths are `-->|✓|`, fail paths
-are `-.->|✗|`, node IDs are camelCase and never `end`.
-
-Copy the six `classDef` lines verbatim from `references/diagram.md`.
+Every worker has a corresponding section in `docs/diagrams.md` (installed from
+`loops/docs/diagrams.md`). Node roles, class definitions, and the Mermaid convention are in
+`references/diagram.md`. `verify-route-matrix.sh` rejects `` ```mermaid `` blocks in worker
+prompts; diagrams live in `docs/diagrams.md` only.
 
 ## Your task
 
@@ -493,7 +487,8 @@ Copy the six `classDef` lines verbatim from `references/diagram.md`.
    first, label items use `item_number` and `labels`, and the last step carries the `## Diagram`
    exclusion line verbatim.
 
-5. Render the diagram. Done when every check in `references/diagram.md` passes.
+5. Add or update the worker's section in `docs/diagrams.md`. Done when every check in
+   `references/diagram.md` passes and the diagram matches the prompt body's branches.
 
 6. Add the ownership header. Done when the first line (YAML) or second line (Markdown inside `---`)
    carries `# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/<file>. Update with

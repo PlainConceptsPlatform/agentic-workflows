@@ -44,6 +44,7 @@ describe("catalog installation", () => {
       "workflows/work-router.yml": "name: Router\n",
       "scripts/compile-agent-workflows.mjs": "compile\n",
       "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }\n",
+      "docs/diagrams.md": "---\n# Managed by @plainconceptsplatform/workflows. Source: loops/docs/diagrams.md. Update with `workflows update --force`; consumer edits may be overwritten.\n---\n\n# Diagrams\n",
     });
     const repositoryPath = await createDirectory({});
 
@@ -54,6 +55,7 @@ describe("catalog installation", () => {
     expect(result.installed).toContain(".github/actions/check/action.yml");
     expect(result.installed.some((f) => f.endsWith("shared/defaults.md"))).toBe(true);
     expect(result.installed.some((f) => f.endsWith("work-router.yml"))).toBe(true);
+    expect(result.installed).toContain("docs/diagrams.md");
     // No worker .md files
     expect(result.installed).not.toContain(".github/workflows/agent-refine.md");
     expect(result.installed).not.toContain(".github/workflows/agent-implement.md");
@@ -72,6 +74,7 @@ describe("catalog installation", () => {
       "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }\n",
       "workflows/agent-check.lock.yml": "generated\n",
       "actions/actions-lock.json": "generated\n",
+      "docs/diagrams.md": "---\n# Managed by @plainconceptsplatform/workflows. Source: loops/docs/diagrams.md. Update with `workflows update --force`; consumer edits may be overwritten.\n---\n\n# Diagrams\n",
     });
     const repositoryPath = await createDirectory({});
 
@@ -80,6 +83,7 @@ describe("catalog installation", () => {
         ".github/actions/check/action.yml",
         ".github/workflows/agent-check.md",
         ".github/workflows/shared/defaults.md",
+        "docs/diagrams.md",
         "opencode.ci.json",
         "scripts/compile-agent-workflows.mjs",
         "scripts/compile.mjs",
@@ -96,6 +100,7 @@ describe("catalog installation", () => {
       "workflows/agent-check.md": worker("  REPO_RULES: \"rules\"\n"),
       "scripts/compile-agent-workflows.mjs": "// " + header("loops/scripts/compile-agent-workflows.mjs").slice(2),
       "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }\n",
+      "docs/diagrams.md": `---\n${header("loops/docs/diagrams.md")}---\n\n# Diagrams\n`,
     });
     const repositoryPath = await createDirectory({});
 
@@ -109,6 +114,8 @@ describe("catalog installation", () => {
       .resolves.toMatch(/^# Managed by @plainconceptsplatform\/workflows@1\.2\.3\. Source: loops\/actions\/check\/action\.yml\./);
     await expect(readFile(join(repositoryPath, "scripts/compile-agent-workflows.mjs"), "utf8"))
       .resolves.toMatch(/^\/\/ Managed by @plainconceptsplatform\/workflows@1\.2\.3\./);
+    await expect(readFile(join(repositoryPath, "docs/diagrams.md"), "utf8"))
+      .resolves.toMatch(/^---\n# Managed by @plainconceptsplatform\/workflows@1\.2\.3\. Source: loops\/docs\/diagrams\.md\./);
   });
 
   it("copies template ownership headers verbatim", async () => {
