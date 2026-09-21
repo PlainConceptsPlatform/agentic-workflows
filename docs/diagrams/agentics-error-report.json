@@ -13,10 +13,10 @@
       "label": "cron 11 7 * * *",
       "pos": [
         40,
-        250
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -26,34 +26,36 @@
       "label": "List runs",
       "sublabel": "last 24h",
       "pos": [
-        240,
-        250
+        260,
+        130
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
     {
       "id": "owned",
       "type": "security",
-      "label": "Package-owned workflow?",
+      "label": "Package-owned?",
+      "sublabel": "this package ships",
       "pos": [
-        440,
-        250
+        480,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
     {
       "id": "state",
       "type": "security",
-      "label": "Failed or queued > 45 min?",
+      "label": "Failed or queued?",
+      "sublabel": "past 45 min",
       "pos": [
-        640,
-        250
+        700,
+        130
       ],
       "size": [
         140,
@@ -64,13 +66,13 @@
       "id": "classify",
       "type": "backend",
       "label": "Classify",
-      "sublabel": "match catalogue, keep id",
+      "sublabel": "match catalogue",
       "pos": [
-        840,
-        250
+        920,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -78,10 +80,10 @@
       "id": "body",
       "type": "backend",
       "label": "Build report",
-      "sublabel": "package-owned names, conclusion, count",
+      "sublabel": "names, conclusion, count",
       "pos": [
-        1040,
-        250
+        1140,
+        130
       ],
       "size": [
         140,
@@ -92,13 +94,13 @@
       "id": "scan",
       "type": "security",
       "label": "Leak scanner?",
-      "sublabel": "repo name, URL, email, path, token, ref",
+      "sublabel": "repo, URL, email, path, token",
       "pos": [
-        1060,
-        420
+        1360,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -107,11 +109,11 @@
       "type": "security",
       "label": "Upstream token?",
       "pos": [
-        840,
-        380
+        1580,
+        130
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -119,13 +121,13 @@
       "id": "file",
       "type": "backend",
       "label": "One upstream issue",
-      "sublabel": "per signature, appended",
+      "sublabel": "per signature",
       "pos": [
-        640,
-        380
+        1800,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -134,11 +136,11 @@
       "type": "backend",
       "label": "Filed upstream",
       "pos": [
-        440,
-        380
+        2020,
+        130
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -146,13 +148,13 @@
       "id": "withhold",
       "type": "security",
       "label": "Withheld",
-      "sublabel": "nothing filed, run goes red",
+      "sublabel": "nothing filed, run red",
       "pos": [
-        1240,
-        380
+        1360,
+        40
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -160,13 +162,13 @@
       "id": "summary",
       "type": "external",
       "label": "Job summary only",
-      "sublabel": "warning, not a red run",
+      "sublabel": "warning, not red",
       "pos": [
-        640,
-        480
+        1580,
+        40
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -176,11 +178,11 @@
       "label": "Counted",
       "sublabel": "never inspected",
       "pos": [
-        700,
-        150
+        480,
+        40
       ],
       "size": [
-        120,
+        140,
         52
       ]
     }
@@ -200,7 +202,7 @@
       "id": "owned-count",
       "from": "owned",
       "to": "count",
-      "label": "no: name could be anything",
+      "label": "no",
       "variant": "dashed"
     },
     {
@@ -231,9 +233,7 @@
     {
       "id": "body-scan",
       "from": "body",
-      "to": "scan",
-      "fromSide": "bottom",
-      "toSide": "top"
+      "to": "scan"
     },
     {
       "id": "scan-withhold",
@@ -276,17 +276,7 @@
       "title": "Only package-owned facts cross the boundary",
       "items": [
         "File names, job and step names, a conclusion, a runner label, a count",
-        "A matched entry from a catalogue of sixteen known failure shapes",
         "No free text: no log line, no branch name, no issue title, no path, no URL"
-      ]
-    },
-    {
-      "dot": "rose",
-      "title": "Fails closed and loud",
-      "items": [
-        "A report the scanner flags is not filed and the run goes red",
-        "At least as many scans as upstream writes",
-        "Both exit paths call setFailed"
       ]
     }
   ]

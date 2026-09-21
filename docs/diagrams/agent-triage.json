@@ -13,7 +13,7 @@
       "label": "Router triage route",
       "pos": [
         40,
-        250
+        130
       ],
       "size": [
         140,
@@ -26,10 +26,10 @@
       "label": "Outside collaborator?",
       "pos": [
         260,
-        250
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -39,11 +39,11 @@
       "label": "Reserve (rung 4)",
       "sublabel": "bot-working + triage",
       "pos": [
-        460,
-        170
+        480,
+        40
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -51,13 +51,13 @@
       "id": "facts",
       "type": "backend",
       "label": "Facts (rung 3)",
-      "sublabel": "issue, comments, open issues",
+      "sublabel": "issue, comments",
       "pos": [
-        620,
-        250
+        480,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -66,11 +66,11 @@
       "type": "backend",
       "label": "Round N of 3",
       "pos": [
-        460,
-        330
+        480,
+        220
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -80,11 +80,11 @@
       "label": "Agent (rung 5)",
       "sublabel": "10 checks",
       "pos": [
-        660,
-        250
+        700,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -93,11 +93,11 @@
       "type": "security",
       "label": "Outcome valid?",
       "pos": [
-        860,
-        250
+        920,
+        130
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -107,11 +107,11 @@
       "label": "Passed",
       "sublabel": "refine added",
       "pos": [
-        1060,
-        80
+        1140,
+        40
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -119,13 +119,13 @@
       "id": "needsInfo",
       "type": "backend",
       "label": "Needs info",
-      "sublabel": "review, questions posted",
+      "sublabel": "questions posted",
       "pos": [
-        1060,
-        170
+        1140,
+        130
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -133,13 +133,13 @@
       "id": "maintainer",
       "type": "backend",
       "label": "Needs maintainer",
-      "sublabel": "stays open with review",
+      "sublabel": "stays open",
       "pos": [
-        1060,
-        250
+        1140,
+        220
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -147,13 +147,13 @@
       "id": "blocked",
       "type": "security",
       "label": "Blocked",
-      "sublabel": "closed with reason",
+      "sublabel": "closed",
       "pos": [
-        1060,
-        330
+        1140,
+        310
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -163,11 +163,11 @@
       "label": "Idle",
       "sublabel": "write+ user, skipped",
       "pos": [
-        320,
-        380
+        260,
+        40
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -175,13 +175,13 @@
       "id": "incomplete",
       "type": "security",
       "label": "Incomplete",
-      "sublabel": "retry, label kept",
+      "sublabel": "retry",
       "pos": [
-        760,
-        380
+        920,
+        220
       ],
       "size": [
-        120,
+        140,
         52
       ]
     }
@@ -208,12 +208,14 @@
     {
       "id": "reserve-facts",
       "from": "reserve",
-      "to": "facts"
+      "to": "facts",
+      "variant": "dashed"
     },
     {
       "id": "facts-round",
       "from": "facts",
-      "to": "round"
+      "to": "round",
+      "variant": "dashed"
     },
     {
       "id": "round-agent",
@@ -242,7 +244,7 @@
       "id": "validate-maintainer",
       "from": "validate",
       "to": "maintainer",
-      "label": "needs-maintainer"
+      "label": "maintainer"
     },
     {
       "id": "validate-blocked",
@@ -256,21 +258,8 @@
       "from": "validate",
       "to": "incomplete",
       "label": "no",
-      "variant": "dashed"
-    },
-    {
-      "id": "round-agent-back",
-      "from": "round",
-      "to": "agent",
-      "label": "round 3: no more needs-info",
-      "variant": "dashed"
-    },
-    {
-      "id": "info-start",
-      "from": "needsInfo",
-      "to": "start",
-      "label": "author replies",
-      "variant": "dashed"
+      "variant": "dashed",
+      "labelDy": 22
     }
   ],
   "cards": [

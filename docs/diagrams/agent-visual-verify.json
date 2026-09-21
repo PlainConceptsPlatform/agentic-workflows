@@ -14,10 +14,10 @@
       "sublabel": "auto-merge verdict",
       "pos": [
         40,
-        250
+        130
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -25,13 +25,13 @@
       "id": "subject",
       "type": "security",
       "label": "Subject (rung 4)",
-      "sublabel": "PR open? visual verify enabled?",
+      "sublabel": "PR open? enabled?",
       "pos": [
-        240,
-        250
+        260,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -39,13 +39,13 @@
       "id": "activation",
       "type": "backend",
       "label": "Activation (rung 3)",
-      "sublabel": "checkout, load context, build prompt",
+      "sublabel": "checkout, load context",
       "pos": [
-        440,
-        250
+        480,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -53,13 +53,13 @@
       "id": "agent",
       "type": "backend",
       "label": "Agent (rung 5)",
-      "sublabel": "write plan.json waypoints",
+      "sublabel": "write plan.json",
       "pos": [
-        640,
-        250
+        700,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -67,13 +67,13 @@
       "id": "build",
       "type": "backend",
       "label": "Build and start app",
-      "sublabel": "on configured port",
+      "sublabel": "on port",
       "pos": [
-        840,
-        250
+        920,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -82,11 +82,11 @@
       "type": "security",
       "label": "App up?",
       "pos": [
-        1040,
-        250
+        1140,
+        130
       ],
       "size": [
-        100,
+        140,
         52
       ]
     },
@@ -94,10 +94,10 @@
       "id": "capture",
       "type": "backend",
       "label": "Capture screenshots",
-      "sublabel": "agent-browser, each waypoint",
+      "sublabel": "agent-browser",
       "pos": [
-        1200,
-        150
+        1360,
+        40
       ],
       "size": [
         140,
@@ -109,11 +109,11 @@
       "type": "security",
       "label": "Any captured?",
       "pos": [
-        1040,
-        380
+        1580,
+        40
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -121,13 +121,13 @@
       "id": "attach",
       "type": "backend",
       "label": "Attach to issue",
-      "sublabel": "plan + screenshots as comment",
+      "sublabel": "plan + screenshots",
       "pos": [
-        1240,
-        150
+        1800,
+        40
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -135,10 +135,9 @@
       "id": "done",
       "type": "backend",
       "label": "Screenshots posted",
-      "sublabel": "visual evidence on issue",
       "pos": [
-        1400,
-        80
+        2020,
+        40
       ],
       "size": [
         140,
@@ -149,13 +148,13 @@
       "id": "warn",
       "type": "security",
       "label": "Warning posted",
-      "sublabel": "no screenshots, merge proceeds",
+      "sublabel": "merge proceeds",
       "pos": [
-        840,
-        480
+        1360,
+        220
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -165,11 +164,11 @@
       "label": "Idle",
       "sublabel": "not enabled or not our PR",
       "pos": [
-        320,
-        380
+        260,
+        40
       ],
       "size": [
-        120,
+        140,
         52
       ]
     }
@@ -226,8 +225,7 @@
     {
       "id": "capture-gotShots",
       "from": "capture",
-      "to": "gotShots",
-      "label": "done"
+      "to": "gotShots"
     },
     {
       "id": "gotShots-attach",
@@ -256,16 +254,7 @@
       "title": "Agent writes the plan, not the screenshots",
       "items": [
         "Agent writes plan.json with url + selector per step",
-        "A shell step drives agent-browser to capture",
-        "Chromium needs --no-sandbox on CI runners"
-      ]
-    },
-    {
-      "dot": "amber",
-      "title": "Failures never block merge",
-      "items": [
-        "Warning posted but merge proceeds",
-        "Runs after auto-merge verdict, before the merge itself"
+        "A shell step drives agent-browser to capture"
       ]
     }
   ]

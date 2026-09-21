@@ -13,10 +13,10 @@
       "label": "cron 23 */6 * * *",
       "pos": [
         40,
-        250
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -24,13 +24,13 @@
       "id": "scan",
       "type": "backend",
       "label": "List open issues",
-      "sublabel": "pull requests and branches",
+      "sublabel": "PRs and branches",
       "pos": [
-        240,
-        250
+        260,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -39,11 +39,11 @@
       "type": "security",
       "label": "Issue has review?",
       "pos": [
-        440,
-        250
+        480,
+        130
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -52,11 +52,11 @@
       "type": "security",
       "label": "And stalled?",
       "pos": [
-        640,
-        250
+        700,
+        130
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -66,11 +66,11 @@
       "label": "Budget spent?",
       "sublabel": "6h, under 3 tries",
       "pos": [
-        840,
-        250
+        920,
+        40
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -78,13 +78,13 @@
       "id": "retry",
       "type": "backend",
       "label": "Retry",
-      "sublabel": "comment, drop review+stalled, dispatch",
+      "sublabel": "comment, dispatch",
       "pos": [
-        880,
-        150
+        1140,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -92,13 +92,13 @@
       "id": "strand",
       "type": "backend",
       "label": "Strands",
-      "sublabel": "drop pr-pending where no open PR",
+      "sublabel": "drop pr-pending",
       "pos": [
-        480,
-        380
+        700,
+        220
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -106,27 +106,27 @@
       "id": "parent",
       "type": "backend",
       "label": "Close split parent",
-      "sublabel": "once every child is closed",
+      "sublabel": "all children closed",
       "pos": [
-        640,
-        380
+        920,
+        220
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
     {
       "id": "branch",
       "type": "security",
-      "label": "All bot PRs finished?",
-      "sublabel": "no open, no human, not default",
+      "label": "Bot PRs done?",
+      "sublabel": "no open, no human",
       "pos": [
-        840,
-        380
+        1140,
+        220
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -135,11 +135,11 @@
       "type": "backend",
       "label": "Delete branch",
       "pos": [
-        1040,
-        380
+        1360,
+        220
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -147,13 +147,13 @@
       "id": "digest",
       "type": "backend",
       "label": "Digest",
-      "sublabel": "rewrite 'Needs a human'",
+      "sublabel": "Needs a human",
       "pos": [
-        1200,
-        250
+        1360,
+        40
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -163,11 +163,11 @@
       "label": "One place to look",
       "sublabel": "instead of four repos",
       "pos": [
-        1240,
-        250
+        1580,
+        40
       ],
       "size": [
-        130,
+        140,
         52
       ]
     }
@@ -199,14 +199,14 @@
       "id": "why-digest",
       "from": "why",
       "to": "digest",
-      "label": "no: a decision",
+      "label": "decision",
       "variant": "emphasis"
     },
     {
       "id": "why-budget",
       "from": "why",
       "to": "budget",
-      "label": "yes: machine failure"
+      "label": "stalled"
     },
     {
       "id": "budget-digest",
@@ -254,7 +254,8 @@
     {
       "id": "delete-digest",
       "from": "delete",
-      "to": "digest"
+      "to": "digest",
+      "variant": "dashed"
     },
     {
       "id": "digest-end",
@@ -268,17 +269,8 @@
       "dot": "cyan",
       "title": "Retry a failure, report a decision",
       "items": [
-        "A crash, timeout or empty output is a machine failure (stalled) - worth retrying",
+        "A crash, timeout or empty output is a machine failure (stalled) - retry",
         "A triage needs-maintainer, refine questions, or merge-gate review is a verdict - retrying reproduces it"
-      ]
-    },
-    {
-      "dot": "amber",
-      "title": "Safe to leave running unattended",
-      "items": [
-        "Uses the App token, because GitHub starts no workflow run from GITHUB_TOKEN",
-        "Every write goes through one act() wrapper with dry-run",
-        "Closes exactly two kinds of issue: split parents and its own digest"
       ]
     }
   ]

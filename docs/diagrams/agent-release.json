@@ -124,35 +124,47 @@
     {
       "id": "start-facts",
       "from": "start",
-      "to": "facts"
+      "to": "facts",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "facts-agent",
       "from": "facts",
-      "to": "agent"
+      "to": "agent",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "agent-noop",
       "from": "agent",
-      "to": "noop"
+      "to": "noop",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "noop-conclude",
       "from": "noop",
-      "to": "conclude"
+      "to": "conclude",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "conclude-push",
       "from": "conclude",
       "to": "push",
       "label": "bumps version",
-      "variant": "emphasis"
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "push-done",
       "from": "push",
       "to": "done",
-      "variant": "emphasis"
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "conclude-fail",

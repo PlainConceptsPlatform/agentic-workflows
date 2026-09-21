@@ -152,65 +152,85 @@
     {
       "id": "start-subject",
       "from": "start",
-      "to": "subject"
+      "to": "subject",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "subject-facts",
       "from": "subject",
       "to": "facts",
       "label": "yes",
-      "variant": "emphasis"
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "subject-idle",
       "from": "subject",
       "to": "idle",
       "label": "no",
-      "variant": "dashed"
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "facts-triage",
       "from": "facts",
-      "to": "triage"
+      "to": "triage",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "triage-apply",
       "from": "triage",
       "to": "apply",
-      "label": "yes"
+      "label": "yes",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "triage-satisfied",
       "from": "triage",
       "to": "satisfied",
       "label": "all addressed",
-      "variant": "emphasis"
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "apply-verify",
       "from": "apply",
-      "to": "verify"
+      "to": "verify",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "verify-apply",
       "from": "verify",
       "to": "apply",
       "label": "fails",
-      "variant": "dashed"
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "right"
     },
     {
       "id": "verify-push",
       "from": "verify",
       "to": "push",
       "label": "passes",
-      "variant": "emphasis"
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "apply-human",
       "from": "apply",
       "to": "human",
       "label": "ambiguous or unsafe",
-      "variant": "dashed"
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
     }
   ],
   "cards": [

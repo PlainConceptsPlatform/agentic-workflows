@@ -16,7 +16,7 @@
         40
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -27,10 +27,10 @@
       "sublabel": "self-labels",
       "pos": [
         40,
-        150
+        130
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -40,11 +40,11 @@
       "label": "Triage",
       "sublabel": "outside collaborator",
       "pos": [
-        240,
+        260,
         40
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -54,11 +54,11 @@
       "label": "Refine",
       "sublabel": "estimate in points",
       "pos": [
-        400,
-        150
+        260,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -68,11 +68,11 @@
       "label": "Split",
       "sublabel": "2-6 children",
       "pos": [
-        240,
-        250
+        40,
+        220
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -82,11 +82,11 @@
       "label": "Implement",
       "sublabel": "branch, PR, closes #N",
       "pos": [
-        460,
-        150
+        480,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -95,11 +95,11 @@
       "type": "backend",
       "label": "CI",
       "pos": [
-        820,
-        150
+        700,
+        130
       ],
       "size": [
-        80,
+        140,
         52
       ]
     },
@@ -108,11 +108,11 @@
       "type": "security",
       "label": "Merge Gate",
       "pos": [
-        820,
-        150
+        920,
+        130
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -121,11 +121,11 @@
       "type": "backend",
       "label": "Merged",
       "pos": [
-        1000,
-        80
+        1140,
+        40
       ],
       "size": [
-        100,
+        140,
         52
       ]
     },
@@ -134,11 +134,11 @@
       "type": "security",
       "label": "Human review",
       "pos": [
-        1000,
-        150
+        1140,
+        130
       ],
       "size": [
-        110,
+        140,
         52
       ]
     },
@@ -148,11 +148,11 @@
       "label": "Fix, push",
       "sublabel": "CI again",
       "pos": [
-        980,
-        280
+        920,
+        220
       ],
       "size": [
-        100,
+        140,
         52
       ]
     },
@@ -161,11 +161,11 @@
       "type": "backend",
       "label": "Apply Review",
       "pos": [
-        660,
-        300
+        700,
+        220
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -174,11 +174,11 @@
       "type": "external",
       "label": "Someone reviews",
       "pos": [
-        460,
-        300
+        480,
+        220
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -186,13 +186,13 @@
       "id": "audit",
       "type": "external",
       "label": "Audit",
-      "sublabel": "weekly, files one issue",
+      "sublabel": "weekly",
       "pos": [
         40,
-        250
+        310
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -201,11 +201,11 @@
       "type": "security",
       "label": "Closed",
       "pos": [
-        460,
+        480,
         40
       ],
       "size": [
-        100,
+        140,
         52
       ]
     },
@@ -214,11 +214,11 @@
       "type": "external",
       "label": "Author replies",
       "pos": [
-        460,
-        380
+        480,
+        310
       ],
       "size": [
-        120,
+        140,
         52
       ]
     }
@@ -233,7 +233,11 @@
       "id": "triage-pass",
       "from": "triage",
       "to": "refine",
-      "label": "pass"
+      "label": "pass",
+      "labelAt": [
+        330,
+        100
+      ]
     },
     {
       "id": "triage-block",
@@ -301,7 +305,8 @@
       "from": "gate",
       "to": "fix",
       "label": "CI failed",
-      "variant": "dashed"
+      "variant": "dashed",
+      "labelDy": 22
     },
     {
       "id": "fix-gate",
@@ -313,7 +318,11 @@
       "from": "gate",
       "to": "human",
       "label": "risk or protected",
-      "variant": "dashed"
+      "variant": "dashed",
+      "labelAt": [
+        970,
+        100
+      ]
     },
     {
       "id": "review-apply",

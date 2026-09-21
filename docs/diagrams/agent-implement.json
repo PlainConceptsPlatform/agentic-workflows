@@ -11,10 +11,9 @@
       "id": "start",
       "type": "external",
       "label": "Router implement route",
-      "sublabel": "no open PR confirmed",
       "pos": [
         40,
-        250
+        130
       ],
       "size": [
         140,
@@ -27,11 +26,11 @@
       "label": "Eligibility (rung 4)",
       "sublabel": "open? not future?",
       "pos": [
-        240,
-        250
+        260,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -39,13 +38,12 @@
       "id": "reserve",
       "type": "backend",
       "label": "Reserve (rung 4)",
-      "sublabel": "bot-working",
       "pos": [
-        440,
-        250
+        480,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -53,13 +51,12 @@
       "id": "facts",
       "type": "backend",
       "label": "Facts (rung 3)",
-      "sublabel": "issue and comments to disk",
       "pos": [
-        640,
-        250
+        700,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -68,11 +65,11 @@
       "type": "security",
       "label": "Trivial marker?",
       "pos": [
-        840,
-        250
+        920,
+        130
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -80,13 +77,13 @@
       "id": "todos",
       "type": "backend",
       "label": "Direct path",
-      "sublabel": "one todo per checklist item",
+      "sublabel": "one todo per item",
       "pos": [
-        980,
-        170
+        1140,
+        40
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -96,11 +93,11 @@
       "label": "Standard path",
       "sublabel": "plan-goal pipeline",
       "pos": [
-        980,
-        250
+        1140,
+        130
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -108,24 +105,24 @@
       "id": "verify",
       "type": "security",
       "label": "Verify",
-      "sublabel": "scoped to changed files",
+      "sublabel": "scoped files",
       "pos": [
-        1160,
-        250
+        1360,
+        130
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
     {
       "id": "pr",
       "type": "backend",
-      "label": "create_pull_request",
+      "label": "Create PR",
       "sublabel": "one safe output",
       "pos": [
-        1320,
-        170
+        1580,
+        130
       ],
       "size": [
         140,
@@ -136,13 +133,13 @@
       "id": "handoff",
       "type": "backend",
       "label": "Handed off",
-      "sublabel": "PR open, gate decides",
+      "sublabel": "gate decides",
       "pos": [
-        1160,
-        80
+        1800,
+        40
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -151,11 +148,11 @@
       "type": "security",
       "label": "Died under 6 min?",
       "pos": [
-        980,
-        380
+        1580,
+        220
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -165,11 +162,11 @@
       "label": "Retry",
       "sublabel": "attempt N of 5",
       "pos": [
-        840,
-        380
+        1360,
+        40
       ],
       "size": [
-        100,
+        140,
         52
       ]
     },
@@ -177,13 +174,13 @@
       "id": "idle",
       "type": "external",
       "label": "Idle",
-      "sublabel": "closed or held by future",
+      "sublabel": "closed or future",
       "pos": [
-        320,
-        380
+        260,
+        40
       ],
       "size": [
-        120,
+        140,
         52
       ]
     },
@@ -193,11 +190,11 @@
       "label": "Parked",
       "sublabel": "review added",
       "pos": [
-        1160,
-        380
+        1800,
+        220
       ],
       "size": [
-        120,
+        140,
         52
       ]
     }
@@ -247,7 +244,8 @@
     {
       "id": "todos-verify",
       "from": "todos",
-      "to": "verify"
+      "to": "verify",
+      "variant": "dashed"
     },
     {
       "id": "code-verify",
@@ -279,27 +277,21 @@
       "from": "pr",
       "to": "retry",
       "label": "run died",
-      "variant": "dashed"
+      "variant": "dashed",
+      "labelDy": 22
     },
     {
       "id": "retry-again",
       "from": "retry",
       "to": "again",
-      "label": "yes: provider outage",
+      "label": "yes: outage",
       "variant": "emphasis"
     },
     {
       "id": "retry-fail",
       "from": "retry",
       "to": "fail",
-      "label": "no: answered wrongly",
-      "variant": "dashed"
-    },
-    {
-      "id": "again-start",
-      "from": "again",
-      "to": "start",
-      "label": "re-enters via router",
+      "label": "no: wrong",
       "variant": "dashed"
     }
   ],
@@ -309,17 +301,7 @@
       "title": "One PR, then stop",
       "items": [
         "Writes code and opens one pull request",
-        "The merge decision belongs to the gate",
-        "Waiting for CI inside this run would hold a fleet machine doing nothing"
-      ]
-    },
-    {
-      "dot": "amber",
-      "title": "Retry belt",
-      "items": [
-        "Only short pre-answer provider deaths are retried (under 6 min)",
-        "A run that worked for half an hour and then failed produced a wrong answer",
-        "Up to 5 attempts, label kept"
+        "The merge decision belongs to the gate"
       ]
     }
   ]

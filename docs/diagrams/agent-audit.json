@@ -87,7 +87,7 @@
         250
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -129,7 +129,7 @@
         380
       ],
       "size": [
-        130,
+        140,
         52
       ]
     },
@@ -153,7 +153,7 @@
       "label": "Idle",
       "sublabel": "backlog already full",
       "pos": [
-        340,
+        280,
         380
       ],
       "size": [
@@ -166,68 +166,90 @@
     {
       "id": "start-back",
       "from": "start",
-      "to": "backpressure"
+      "to": "backpressure",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "back-facts",
       "from": "backpressure",
       "to": "facts",
       "label": "yes",
-      "variant": "emphasis"
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "back-idle",
       "from": "backpressure",
       "to": "idle",
       "label": "no",
-      "variant": "dashed"
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
     },
     {
       "id": "facts-run",
       "from": "facts",
-      "to": "run"
+      "to": "run",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "run-filter",
       "from": "run",
-      "to": "filter"
+      "to": "filter",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "filter-score",
       "from": "filter",
       "to": "score",
-      "label": "keeps some"
+      "label": "keeps some",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "filter-quiet",
       "from": "filter",
       "to": "quiet",
       "label": "keeps none",
-      "variant": "dashed"
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "score-dedupe",
       "from": "score",
-      "to": "dedupe"
+      "to": "dedupe",
+      "fromSide": "left",
+      "toSide": "right"
     },
     {
       "id": "dedupe-file",
       "from": "dedupe",
       "to": "file",
-      "label": "some are new"
+      "label": "some are new",
+      "fromSide": "left",
+      "toSide": "right"
     },
     {
       "id": "dedupe-quiet",
       "from": "dedupe",
       "to": "quiet",
       "label": "all dupes",
-      "variant": "dashed"
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "file-report",
       "from": "file",
       "to": "report",
-      "variant": "emphasis"
+      "variant": "emphasis",
+      "fromSide": "left",
+      "toSide": "right"
     }
   ],
   "cards": [
