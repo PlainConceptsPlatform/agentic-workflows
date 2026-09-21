@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agentics Error Report",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "cron",
+      "type": "external",
+      "label": "cron 11 7 * * *",
+      "pos": [
+        40,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "runs",
+      "type": "backend",
+      "label": "List runs",
+      "sublabel": "last 24h",
+      "pos": [
+        240,
+        250
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "owned",
+      "type": "security",
+      "label": "Package-owned workflow?",
+      "pos": [
+        440,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "state",
+      "type": "security",
+      "label": "Failed or queued > 45 min?",
+      "pos": [
+        640,
+        250
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "classify",
+      "type": "backend",
+      "label": "Classify",
+      "sublabel": "match catalogue, keep id",
+      "pos": [
+        840,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "body",
+      "type": "backend",
+      "label": "Build report",
+      "sublabel": "package-owned names, conclusion, count",
+      "pos": [
+        1040,
+        250
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "scan",
+      "type": "security",
+      "label": "Leak scanner?",
+      "sublabel": "repo name, URL, email, path, token, ref",
+      "pos": [
+        1060,
+        420
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "token",
+      "type": "security",
+      "label": "Upstream token?",
+      "pos": [
+        840,
+        380
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "file",
+      "type": "backend",
+      "label": "One upstream issue",
+      "sublabel": "per signature, appended",
+      "pos": [
+        640,
+        380
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "done",
+      "type": "backend",
+      "label": "Filed upstream",
+      "pos": [
+        440,
+        380
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "withhold",
+      "type": "security",
+      "label": "Withheld",
+      "sublabel": "nothing filed, run goes red",
+      "pos": [
+        1240,
+        380
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "summary",
+      "type": "external",
+      "label": "Job summary only",
+      "sublabel": "warning, not a red run",
+      "pos": [
+        640,
+        480
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "count",
+      "type": "backend",
+      "label": "Counted",
+      "sublabel": "never inspected",
+      "pos": [
+        700,
+        150
+      ],
+      "size": [
+        120,
+        52
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "cron-runs",
+      "from": "cron",
+      "to": "runs"
+    },
+    {
+      "id": "runs-owned",
+      "from": "runs",
+      "to": "owned"
+    },
+    {
+      "id": "owned-count",
+      "from": "owned",
+      "to": "count",
+      "label": "no: name could be anything",
+      "variant": "dashed"
+    },
+    {
+      "id": "owned-state",
+      "from": "owned",
+      "to": "state",
+      "label": "yes",
+      "variant": "emphasis"
+    },
+    {
+      "id": "state-count",
+      "from": "state",
+      "to": "count",
+      "label": "neither",
+      "variant": "dashed"
+    },
+    {
+      "id": "state-classify",
+      "from": "state",
+      "to": "classify",
+      "label": "yes"
+    },
+    {
+      "id": "classify-body",
+      "from": "classify",
+      "to": "body"
+    },
+    {
+      "id": "body-scan",
+      "from": "body",
+      "to": "scan",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "scan-withhold",
+      "from": "scan",
+      "to": "withhold",
+      "label": "matches",
+      "variant": "dashed"
+    },
+    {
+      "id": "scan-token",
+      "from": "scan",
+      "to": "token",
+      "label": "clean",
+      "variant": "emphasis"
+    },
+    {
+      "id": "token-summary",
+      "from": "token",
+      "to": "summary",
+      "label": "no",
+      "variant": "dashed"
+    },
+    {
+      "id": "token-file",
+      "from": "token",
+      "to": "file",
+      "label": "yes",
+      "variant": "emphasis"
+    },
+    {
+      "id": "file-done",
+      "from": "file",
+      "to": "done",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Only package-owned facts cross the boundary",
+      "items": [
+        "File names, job and step names, a conclusion, a runner label, a count",
+        "A matched entry from a catalogue of sixteen known failure shapes",
+        "No free text: no log line, no branch name, no issue title, no path, no URL"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Fails closed and loud",
+      "items": [
+        "A report the scanner flags is not filed and the run goes red",
+        "At least as many scans as upstream writes",
+        "Both exit paths call setFailed"
+      ]
+    }
+  ]
+}

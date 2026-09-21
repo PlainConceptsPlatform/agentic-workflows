@@ -1,0 +1,395 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agentics App Errors",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "cron",
+      "type": "external",
+      "label": "cron 41 7 * * *",
+      "pos": [
+        40,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "config",
+      "type": "security",
+      "label": "env config present?",
+      "pos": [
+        240,
+        250
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "login",
+      "type": "cloud",
+      "label": "azure/login",
+      "sublabel": "OIDC on matching Environment",
+      "pos": [
+        440,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "query",
+      "type": "database",
+      "label": "AppExceptions query",
+      "sublabel": "grouped by ProblemId",
+      "pos": [
+        640,
+        250
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "floor",
+      "type": "security",
+      "label": "Above floor?",
+      "sublabel": "and slot under ceiling?",
+      "pos": [
+        840,
+        250
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "scrub",
+      "type": "backend",
+      "label": "Scrub",
+      "sublabel": "mask GUIDs, emails, paths, queries",
+      "pos": [
+        1040,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "fields",
+      "type": "security",
+      "label": "Fields on allowlist?",
+      "sublabel": "module did not change",
+      "pos": [
+        840,
+        380
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "scan",
+      "type": "security",
+      "label": "Leak scanner clean?",
+      "sublabel": "GUID, secret, path, address",
+      "pos": [
+        1040,
+        380
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "seen",
+      "type": "security",
+      "label": "Filed before?",
+      "pos": [
+        640,
+        380
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "file",
+      "type": "backend",
+      "label": "New issue",
+      "sublabel": "bug + refine + app-error",
+      "pos": [
+        440,
+        380
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "note",
+      "type": "backend",
+      "label": "A dated line added",
+      "pos": [
+        440,
+        480
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "reopen",
+      "type": "backend",
+      "label": "Reopened",
+      "sublabel": "it came back",
+      "pos": [
+        440,
+        560
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "belt",
+      "type": "backend",
+      "label": "On to refine",
+      "pos": [
+        240,
+        380
+      ],
+      "size": [
+        110,
+        52
+      ]
+    },
+    {
+      "id": "defer",
+      "type": "backend",
+      "label": "Named in summary",
+      "sublabel": "picked up tomorrow",
+      "pos": [
+        1040,
+        150
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "stop",
+      "type": "security",
+      "label": "Nothing filed",
+      "sublabel": "run goes red",
+      "pos": [
+        1040,
+        480
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "withhold",
+      "type": "security",
+      "label": "Withheld",
+      "sublabel": "others still filed, run red",
+      "pos": [
+        1220,
+        560
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "idle",
+      "type": "external",
+      "label": "Job summary only",
+      "sublabel": "warning, not a red run",
+      "pos": [
+        400,
+        120
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "leave",
+      "type": "external",
+      "label": "Left alone",
+      "sublabel": "closed and accepted",
+      "pos": [
+        800,
+        480
+      ],
+      "size": [
+        120,
+        52
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "cron-config",
+      "from": "cron",
+      "to": "config"
+    },
+    {
+      "id": "config-idle",
+      "from": "config",
+      "to": "idle",
+      "label": "no",
+      "variant": "dashed"
+    },
+    {
+      "id": "config-login",
+      "from": "config",
+      "to": "login",
+      "label": "yes"
+    },
+    {
+      "id": "login-query",
+      "from": "login",
+      "to": "query"
+    },
+    {
+      "id": "query-floor",
+      "from": "query",
+      "to": "floor"
+    },
+    {
+      "id": "floor-defer",
+      "from": "floor",
+      "to": "defer",
+      "label": "no",
+      "variant": "dashed"
+    },
+    {
+      "id": "floor-scrub",
+      "from": "floor",
+      "to": "scrub",
+      "label": "yes",
+      "variant": "emphasis"
+    },
+    {
+      "id": "scrub-fields",
+      "from": "scrub",
+      "to": "fields"
+    },
+    {
+      "id": "fields-stop",
+      "from": "fields",
+      "to": "stop",
+      "label": "no: module changed",
+      "variant": "dashed"
+    },
+    {
+      "id": "fields-scan",
+      "from": "fields",
+      "to": "scan",
+      "label": "yes"
+    },
+    {
+      "id": "scan-withhold",
+      "from": "scan",
+      "to": "withhold",
+      "label": "trips",
+      "variant": "dashed"
+    },
+    {
+      "id": "scan-seen",
+      "from": "scan",
+      "to": "seen",
+      "label": "clean"
+    },
+    {
+      "id": "seen-leave",
+      "from": "seen",
+      "to": "leave",
+      "label": "closed and accepted",
+      "variant": "dashed"
+    },
+    {
+      "id": "seen-note",
+      "from": "seen",
+      "to": "note",
+      "label": "open"
+    },
+    {
+      "id": "seen-reopen",
+      "from": "seen",
+      "to": "reopen",
+      "label": "closed, not accepted"
+    },
+    {
+      "id": "seen-file",
+      "from": "seen",
+      "to": "file",
+      "label": "never",
+      "variant": "emphasis"
+    },
+    {
+      "id": "file-belt",
+      "from": "file",
+      "to": "belt",
+      "variant": "emphasis"
+    },
+    {
+      "id": "note-belt",
+      "from": "note",
+      "to": "belt"
+    },
+    {
+      "id": "reopen-belt",
+      "from": "reopen",
+      "to": "belt"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "No model, no paraphrasing",
+      "items": [
+        "A model asked to summarise a stack trace paraphrases it",
+        "A paraphrased stack trace is a wrong issue",
+        "Scrubbing comes before scanning: masking a GUID keeps the job alive"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Two failure modes, handled differently",
+      "items": [
+        "A field nobody agreed to publish: nothing filed at all, run goes red",
+        "A body that trips the scanner: one row withheld, the rest filed, run goes red",
+        "Both turn the run red so the field gets fixed"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,349 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agent Merge Gate",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "start",
+      "type": "external",
+      "label": "Router merge-gate route",
+      "sublabel": "CI reported or hourly reconcile",
+      "pos": [
+        40,
+        250
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "subject",
+      "type": "security",
+      "label": "Subject (rung 4)",
+      "sublabel": "our open PR, closes an issue?",
+      "pos": [
+        240,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "branch",
+      "type": "backend",
+      "label": "Checkout PR branch",
+      "sublabel": "fast-forward only, no rebase",
+      "pos": [
+        440,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "facts",
+      "type": "backend",
+      "label": "Facts (rung 3)",
+      "sublabel": "diff, PR shape, failing CI logs",
+      "pos": [
+        640,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "ci",
+      "type": "security",
+      "label": "CI conclusion?",
+      "pos": [
+        840,
+        250
+      ],
+      "size": [
+        100,
+        52
+      ]
+    },
+    {
+      "id": "fix",
+      "type": "backend",
+      "label": "Repair",
+      "sublabel": "read failure, fix, verify",
+      "pos": [
+        1000,
+        170
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "pushed",
+      "type": "backend",
+      "label": "Pushed",
+      "sublabel": "CI runs again, re-enters",
+      "pos": [
+        640,
+        170
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "protected",
+      "type": "security",
+      "label": "Protected paths (rung 4b)",
+      "sublabel": "blast radius, CODEOWNERS",
+      "pos": [
+        1000,
+        340
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "assess",
+      "type": "backend",
+      "label": "Agent (rung 5)",
+      "sublabel": "find defects, verify them",
+      "pos": [
+        1040,
+        340
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "disposition",
+      "type": "security",
+      "label": "Disposition",
+      "sublabel": "computed in shell",
+      "pos": [
+        1200,
+        250
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "merge",
+      "type": "backend",
+      "label": "Auto-merge",
+      "sublabel": "squash, issue closed",
+      "pos": [
+        1240,
+        170
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "human",
+      "type": "security",
+      "label": "Human review",
+      "pos": [
+        1240,
+        250
+      ],
+      "size": [
+        110,
+        52
+      ]
+    },
+    {
+      "id": "owner",
+      "type": "security",
+      "label": "Owner review",
+      "sublabel": "CODEOWNERS asked",
+      "pos": [
+        1240,
+        340
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "blocked",
+      "type": "security",
+      "label": "Blocked",
+      "sublabel": "belt does not retry",
+      "pos": [
+        1240,
+        420
+      ],
+      "size": [
+        110,
+        52
+      ]
+    },
+    {
+      "id": "idle",
+      "type": "external",
+      "label": "Idle",
+      "sublabel": "not ours, or not open",
+      "pos": [
+        320,
+        380
+      ],
+      "size": [
+        120,
+        52
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "start-subject",
+      "from": "start",
+      "to": "subject"
+    },
+    {
+      "id": "subject-branch",
+      "from": "subject",
+      "to": "branch",
+      "label": "yes",
+      "variant": "emphasis"
+    },
+    {
+      "id": "subject-idle",
+      "from": "subject",
+      "to": "idle",
+      "label": "no",
+      "variant": "dashed"
+    },
+    {
+      "id": "branch-facts",
+      "from": "branch",
+      "to": "facts"
+    },
+    {
+      "id": "facts-ci",
+      "from": "facts",
+      "to": "ci"
+    },
+    {
+      "id": "ci-fix",
+      "from": "ci",
+      "to": "fix",
+      "label": "failure"
+    },
+    {
+      "id": "fix-pushed",
+      "from": "fix",
+      "to": "pushed",
+      "label": "fixed",
+      "variant": "emphasis"
+    },
+    {
+      "id": "fix-human",
+      "from": "fix",
+      "to": "human",
+      "label": "cannot fix",
+      "variant": "dashed"
+    },
+    {
+      "id": "ci-protected",
+      "from": "ci",
+      "to": "protected",
+      "label": "success",
+      "variant": "emphasis"
+    },
+    {
+      "id": "protected-owner",
+      "from": "protected",
+      "to": "owner",
+      "label": "protected path",
+      "variant": "dashed"
+    },
+    {
+      "id": "protected-assess",
+      "from": "protected",
+      "to": "assess",
+      "label": "low/medium/high"
+    },
+    {
+      "id": "assess-disposition",
+      "from": "assess",
+      "to": "disposition"
+    },
+    {
+      "id": "disposition-merge",
+      "from": "disposition",
+      "to": "merge",
+      "label": "no blocker, low radius",
+      "variant": "emphasis"
+    },
+    {
+      "id": "disposition-human",
+      "from": "disposition",
+      "to": "human",
+      "label": "fragile, unmet",
+      "variant": "dashed"
+    },
+    {
+      "id": "disposition-owner",
+      "from": "disposition",
+      "to": "owner",
+      "label": "high radius",
+      "variant": "dashed"
+    },
+    {
+      "id": "disposition-blocked",
+      "from": "disposition",
+      "to": "blocked",
+      "label": "CI red, high finding",
+      "variant": "dashed"
+    },
+    {
+      "id": "fix-blocked",
+      "from": "fix",
+      "to": "blocked",
+      "label": "attempt 6 of 6",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Disposition computed in shell",
+      "items": [
+        "Agent reports what it found and what it verified",
+        "Validator computes outcome from report and blast radius",
+        "A category the diff touches is no longer on its own a reason to park"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "One at a time for the whole repo",
+      "items": [
+        "Several overnight PRs mean every merge moves the default branch",
+        "6 attempts max, then blocked"
+      ]
+    }
+  ]
+}

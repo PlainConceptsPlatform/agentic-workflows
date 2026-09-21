@@ -1,0 +1,326 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agent Implement",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "start",
+      "type": "external",
+      "label": "Router implement route",
+      "sublabel": "no open PR confirmed",
+      "pos": [
+        40,
+        250
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "eligible",
+      "type": "security",
+      "label": "Eligibility (rung 4)",
+      "sublabel": "open? not future?",
+      "pos": [
+        240,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "reserve",
+      "type": "backend",
+      "label": "Reserve (rung 4)",
+      "sublabel": "bot-working",
+      "pos": [
+        440,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "facts",
+      "type": "backend",
+      "label": "Facts (rung 3)",
+      "sublabel": "issue and comments to disk",
+      "pos": [
+        640,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "checkTrivial",
+      "type": "security",
+      "label": "Trivial marker?",
+      "pos": [
+        840,
+        250
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "todos",
+      "type": "backend",
+      "label": "Direct path",
+      "sublabel": "one todo per checklist item",
+      "pos": [
+        980,
+        170
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "code",
+      "type": "backend",
+      "label": "Standard path",
+      "sublabel": "plan-goal pipeline",
+      "pos": [
+        980,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "verify",
+      "type": "security",
+      "label": "Verify",
+      "sublabel": "scoped to changed files",
+      "pos": [
+        1160,
+        250
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "pr",
+      "type": "backend",
+      "label": "create_pull_request",
+      "sublabel": "one safe output",
+      "pos": [
+        1320,
+        170
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "handoff",
+      "type": "backend",
+      "label": "Handed off",
+      "sublabel": "PR open, gate decides",
+      "pos": [
+        1160,
+        80
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "retry",
+      "type": "security",
+      "label": "Died under 6 min?",
+      "pos": [
+        980,
+        380
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "again",
+      "type": "backend",
+      "label": "Retry",
+      "sublabel": "attempt N of 5",
+      "pos": [
+        840,
+        380
+      ],
+      "size": [
+        100,
+        52
+      ]
+    },
+    {
+      "id": "idle",
+      "type": "external",
+      "label": "Idle",
+      "sublabel": "closed or held by future",
+      "pos": [
+        320,
+        380
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "fail",
+      "type": "security",
+      "label": "Parked",
+      "sublabel": "review added",
+      "pos": [
+        1160,
+        380
+      ],
+      "size": [
+        120,
+        52
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "start-eligible",
+      "from": "start",
+      "to": "eligible"
+    },
+    {
+      "id": "eligible-reserve",
+      "from": "eligible",
+      "to": "reserve",
+      "label": "yes",
+      "variant": "emphasis"
+    },
+    {
+      "id": "eligible-idle",
+      "from": "eligible",
+      "to": "idle",
+      "label": "no",
+      "variant": "dashed"
+    },
+    {
+      "id": "reserve-facts",
+      "from": "reserve",
+      "to": "facts"
+    },
+    {
+      "id": "facts-check",
+      "from": "facts",
+      "to": "checkTrivial"
+    },
+    {
+      "id": "check-todos",
+      "from": "checkTrivial",
+      "to": "todos",
+      "label": "yes"
+    },
+    {
+      "id": "check-code",
+      "from": "checkTrivial",
+      "to": "code",
+      "label": "no"
+    },
+    {
+      "id": "todos-verify",
+      "from": "todos",
+      "to": "verify"
+    },
+    {
+      "id": "code-verify",
+      "from": "code",
+      "to": "verify"
+    },
+    {
+      "id": "verify-code",
+      "from": "verify",
+      "to": "code",
+      "label": "fails",
+      "variant": "dashed"
+    },
+    {
+      "id": "verify-pr",
+      "from": "verify",
+      "to": "pr",
+      "label": "passes",
+      "variant": "emphasis"
+    },
+    {
+      "id": "pr-handoff",
+      "from": "pr",
+      "to": "handoff",
+      "variant": "emphasis"
+    },
+    {
+      "id": "pr-retry",
+      "from": "pr",
+      "to": "retry",
+      "label": "run died",
+      "variant": "dashed"
+    },
+    {
+      "id": "retry-again",
+      "from": "retry",
+      "to": "again",
+      "label": "yes: provider outage",
+      "variant": "emphasis"
+    },
+    {
+      "id": "retry-fail",
+      "from": "retry",
+      "to": "fail",
+      "label": "no: answered wrongly",
+      "variant": "dashed"
+    },
+    {
+      "id": "again-start",
+      "from": "again",
+      "to": "start",
+      "label": "re-enters via router",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One PR, then stop",
+      "items": [
+        "Writes code and opens one pull request",
+        "The merge decision belongs to the gate",
+        "Waiting for CI inside this run would hold a fleet machine doing nothing"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Retry belt",
+      "items": [
+        "Only short pre-answer provider deaths are retried (under 6 min)",
+        "A run that worked for half an hour and then failed produced a wrong answer",
+        "Up to 5 attempts, label kept"
+      ]
+    }
+  ]
+}

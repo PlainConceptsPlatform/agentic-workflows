@@ -1,0 +1,356 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agent Refine",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "start",
+      "type": "external",
+      "label": "Router refine route",
+      "pos": [
+        40,
+        250
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "reserve",
+      "type": "backend",
+      "label": "Reserve (rung 4)",
+      "sublabel": "bot-working",
+      "pos": [
+        240,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "facts",
+      "type": "backend",
+      "label": "Facts (rung 3)",
+      "sublabel": "issue and comments to disk",
+      "pos": [
+        440,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "explore",
+      "type": "backend",
+      "label": "Explore (rung 5)",
+      "sublabel": "one unit at a time",
+      "pos": [
+        640,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "classify",
+      "type": "security",
+      "label": "Trivial?",
+      "pos": [
+        840,
+        250
+      ],
+      "size": [
+        100,
+        52
+      ]
+    },
+    {
+      "id": "trivial",
+      "type": "backend",
+      "label": "Trivial plan",
+      "sublabel": "marker, summary, checklist",
+      "pos": [
+        980,
+        170
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "story",
+      "type": "backend",
+      "label": "Story",
+      "sublabel": "Given/When/Then, grounded",
+      "pos": [
+        980,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "wrap",
+      "type": "backend",
+      "label": "Wrap",
+      "sublabel": "into repo issue form",
+      "pos": [
+        1160,
+        250
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "prose",
+      "type": "backend",
+      "label": "Prose",
+      "sublabel": "@humanizer",
+      "pos": [
+        1340,
+        170
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "estimate",
+      "type": "security",
+      "label": "Estimate",
+      "sublabel": "Fibonacci, ESTIMATE_BANDS",
+      "pos": [
+        1160,
+        340
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "split",
+      "type": "security",
+      "label": "8 or more?",
+      "pos": [
+        1020,
+        420
+      ],
+      "size": [
+        100,
+        52
+      ]
+    },
+    {
+      "id": "children",
+      "type": "backend",
+      "label": "Split",
+      "sublabel": "2-6 children, each 5 or less",
+      "pos": [
+        880,
+        420
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "outcome",
+      "type": "security",
+      "label": "Questions left?",
+      "pos": [
+        800,
+        520
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "done",
+      "type": "backend",
+      "label": "Refined",
+      "sublabel": "estimate recorded, implement added",
+      "pos": [
+        1060,
+        480
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "ask",
+      "type": "backend",
+      "label": "Questions",
+      "sublabel": "temporal draft, batched comment",
+      "pos": [
+        640,
+        520
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "fail",
+      "type": "security",
+      "label": "Incomplete",
+      "sublabel": "retry",
+      "pos": [
+        1100,
+        480
+      ],
+      "size": [
+        120,
+        52
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "start-reserve",
+      "from": "start",
+      "to": "reserve"
+    },
+    {
+      "id": "reserve-facts",
+      "from": "reserve",
+      "to": "facts"
+    },
+    {
+      "id": "facts-explore",
+      "from": "facts",
+      "to": "explore"
+    },
+    {
+      "id": "explore-classify",
+      "from": "explore",
+      "to": "classify"
+    },
+    {
+      "id": "classify-trivial",
+      "from": "classify",
+      "to": "trivial",
+      "label": "yes"
+    },
+    {
+      "id": "classify-story",
+      "from": "classify",
+      "to": "story",
+      "label": "no"
+    },
+    {
+      "id": "trivial-estimate",
+      "from": "trivial",
+      "to": "estimate"
+    },
+    {
+      "id": "story-wrap",
+      "from": "story",
+      "to": "wrap"
+    },
+    {
+      "id": "wrap-prose",
+      "from": "wrap",
+      "to": "prose"
+    },
+    {
+      "id": "prose-estimate",
+      "from": "prose",
+      "to": "estimate"
+    },
+    {
+      "id": "estimate-split",
+      "from": "estimate",
+      "to": "split"
+    },
+    {
+      "id": "split-outcome",
+      "from": "split",
+      "to": "outcome",
+      "label": "no"
+    },
+    {
+      "id": "split-children",
+      "from": "split",
+      "to": "children",
+      "label": "yes, splits",
+      "variant": "emphasis"
+    },
+    {
+      "id": "children-refine",
+      "from": "children",
+      "to": "explore",
+      "label": "each child"
+    },
+    {
+      "id": "outcome-done",
+      "from": "outcome",
+      "to": "done",
+      "label": "no",
+      "variant": "emphasis"
+    },
+    {
+      "id": "outcome-ask",
+      "from": "outcome",
+      "to": "ask",
+      "label": "yes"
+    },
+    {
+      "id": "ask-start",
+      "from": "ask",
+      "to": "start",
+      "label": "author replies",
+      "variant": "dashed"
+    },
+    {
+      "id": "story-fail",
+      "from": "story",
+      "to": "fail",
+      "label": "cannot ground",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Size decision",
+      "items": [
+        "Fibonacci estimate against ESTIMATE_BANDS",
+        "8 or more splits into 2-6 children of 5 or less",
+        "Each child walks the pipeline alone"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Questions shape",
+      "items": [
+        "Temporal draft left on the issue",
+        "One batched comment with all questions",
+        "review added so a reply re-enters via the router"
+      ]
+    }
+  ]
+}

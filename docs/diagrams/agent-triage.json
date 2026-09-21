@@ -1,0 +1,296 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agent Triage",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "start",
+      "type": "external",
+      "label": "Router triage route",
+      "pos": [
+        40,
+        250
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "pick",
+      "type": "security",
+      "label": "Outside collaborator?",
+      "pos": [
+        260,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "reserve",
+      "type": "backend",
+      "label": "Reserve (rung 4)",
+      "sublabel": "bot-working + triage",
+      "pos": [
+        460,
+        170
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "facts",
+      "type": "backend",
+      "label": "Facts (rung 3)",
+      "sublabel": "issue, comments, open issues",
+      "pos": [
+        620,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "round",
+      "type": "backend",
+      "label": "Round N of 3",
+      "pos": [
+        460,
+        330
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "agent",
+      "type": "backend",
+      "label": "Agent (rung 5)",
+      "sublabel": "10 checks",
+      "pos": [
+        660,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "validate",
+      "type": "security",
+      "label": "Outcome valid?",
+      "pos": [
+        860,
+        250
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "pass",
+      "type": "backend",
+      "label": "Passed",
+      "sublabel": "refine added",
+      "pos": [
+        1060,
+        80
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "needsInfo",
+      "type": "backend",
+      "label": "Needs info",
+      "sublabel": "review, questions posted",
+      "pos": [
+        1060,
+        170
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "maintainer",
+      "type": "backend",
+      "label": "Needs maintainer",
+      "sublabel": "stays open with review",
+      "pos": [
+        1060,
+        250
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "blocked",
+      "type": "security",
+      "label": "Blocked",
+      "sublabel": "closed with reason",
+      "pos": [
+        1060,
+        330
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "idle",
+      "type": "external",
+      "label": "Idle",
+      "sublabel": "write+ user, skipped",
+      "pos": [
+        320,
+        380
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "incomplete",
+      "type": "security",
+      "label": "Incomplete",
+      "sublabel": "retry, label kept",
+      "pos": [
+        760,
+        380
+      ],
+      "size": [
+        120,
+        52
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "start-pick",
+      "from": "start",
+      "to": "pick"
+    },
+    {
+      "id": "pick-reserve",
+      "from": "pick",
+      "to": "reserve",
+      "label": "yes"
+    },
+    {
+      "id": "pick-idle",
+      "from": "pick",
+      "to": "idle",
+      "label": "no, write+",
+      "variant": "dashed"
+    },
+    {
+      "id": "reserve-facts",
+      "from": "reserve",
+      "to": "facts"
+    },
+    {
+      "id": "facts-round",
+      "from": "facts",
+      "to": "round"
+    },
+    {
+      "id": "round-agent",
+      "from": "round",
+      "to": "agent"
+    },
+    {
+      "id": "agent-validate",
+      "from": "agent",
+      "to": "validate"
+    },
+    {
+      "id": "validate-pass",
+      "from": "validate",
+      "to": "pass",
+      "label": "pass",
+      "variant": "emphasis"
+    },
+    {
+      "id": "validate-info",
+      "from": "validate",
+      "to": "needsInfo",
+      "label": "needs-info"
+    },
+    {
+      "id": "validate-maintainer",
+      "from": "validate",
+      "to": "maintainer",
+      "label": "needs-maintainer"
+    },
+    {
+      "id": "validate-blocked",
+      "from": "validate",
+      "to": "blocked",
+      "label": "block",
+      "variant": "dashed"
+    },
+    {
+      "id": "validate-incomplete",
+      "from": "validate",
+      "to": "incomplete",
+      "label": "no",
+      "variant": "dashed"
+    },
+    {
+      "id": "round-agent-back",
+      "from": "round",
+      "to": "agent",
+      "label": "round 3: no more needs-info",
+      "variant": "dashed"
+    },
+    {
+      "id": "info-start",
+      "from": "needsInfo",
+      "to": "start",
+      "label": "author replies",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Four outcomes",
+      "items": [
+        "Pass: refine added, no human",
+        "Needs info: questions posted, reply re-runs",
+        "Needs maintainer: stays open with review",
+        "Block: closed only on genuine rejection"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Three rounds max",
+      "items": [
+        "Round counter from markers already on the issue",
+        "Round 3: needs-info is no longer allowed"
+      ]
+    }
+  ]
+}

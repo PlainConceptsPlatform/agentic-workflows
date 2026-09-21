@@ -1,0 +1,285 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Housekeeping",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "cron",
+      "type": "external",
+      "label": "cron 23 */6 * * *",
+      "pos": [
+        40,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "scan",
+      "type": "backend",
+      "label": "List open issues",
+      "sublabel": "pull requests and branches",
+      "pos": [
+        240,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "park",
+      "type": "security",
+      "label": "Issue has review?",
+      "pos": [
+        440,
+        250
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "why",
+      "type": "security",
+      "label": "And stalled?",
+      "pos": [
+        640,
+        250
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "budget",
+      "type": "security",
+      "label": "Budget spent?",
+      "sublabel": "6h, under 3 tries",
+      "pos": [
+        840,
+        250
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "retry",
+      "type": "backend",
+      "label": "Retry",
+      "sublabel": "comment, drop review+stalled, dispatch",
+      "pos": [
+        880,
+        150
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "strand",
+      "type": "backend",
+      "label": "Strands",
+      "sublabel": "drop pr-pending where no open PR",
+      "pos": [
+        480,
+        380
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "parent",
+      "type": "backend",
+      "label": "Close split parent",
+      "sublabel": "once every child is closed",
+      "pos": [
+        640,
+        380
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "branch",
+      "type": "security",
+      "label": "All bot PRs finished?",
+      "sublabel": "no open, no human, not default",
+      "pos": [
+        840,
+        380
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "delete",
+      "type": "backend",
+      "label": "Delete branch",
+      "pos": [
+        1040,
+        380
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "digest",
+      "type": "backend",
+      "label": "Digest",
+      "sublabel": "rewrite 'Needs a human'",
+      "pos": [
+        1200,
+        250
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "end",
+      "type": "backend",
+      "label": "One place to look",
+      "sublabel": "instead of four repos",
+      "pos": [
+        1240,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "cron-scan",
+      "from": "cron",
+      "to": "scan"
+    },
+    {
+      "id": "scan-park",
+      "from": "scan",
+      "to": "park"
+    },
+    {
+      "id": "park-strand",
+      "from": "park",
+      "to": "strand",
+      "label": "no"
+    },
+    {
+      "id": "park-why",
+      "from": "park",
+      "to": "why",
+      "label": "yes"
+    },
+    {
+      "id": "why-digest",
+      "from": "why",
+      "to": "digest",
+      "label": "no: a decision",
+      "variant": "emphasis"
+    },
+    {
+      "id": "why-budget",
+      "from": "why",
+      "to": "budget",
+      "label": "yes: machine failure"
+    },
+    {
+      "id": "budget-digest",
+      "from": "budget",
+      "to": "digest",
+      "label": "spent",
+      "variant": "dashed"
+    },
+    {
+      "id": "budget-retry",
+      "from": "budget",
+      "to": "retry",
+      "label": "yes",
+      "variant": "emphasis"
+    },
+    {
+      "id": "retry-strand",
+      "from": "retry",
+      "to": "strand",
+      "variant": "dashed"
+    },
+    {
+      "id": "strand-parent",
+      "from": "strand",
+      "to": "parent"
+    },
+    {
+      "id": "parent-branch",
+      "from": "parent",
+      "to": "branch"
+    },
+    {
+      "id": "branch-delete",
+      "from": "branch",
+      "to": "delete",
+      "label": "yes"
+    },
+    {
+      "id": "branch-digest",
+      "from": "branch",
+      "to": "digest",
+      "label": "no",
+      "variant": "dashed"
+    },
+    {
+      "id": "delete-digest",
+      "from": "delete",
+      "to": "digest"
+    },
+    {
+      "id": "digest-end",
+      "from": "digest",
+      "to": "end",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Retry a failure, report a decision",
+      "items": [
+        "A crash, timeout or empty output is a machine failure (stalled) - worth retrying",
+        "A triage needs-maintainer, refine questions, or merge-gate review is a verdict - retrying reproduces it"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Safe to leave running unattended",
+      "items": [
+        "Uses the App token, because GitHub starts no workflow run from GITHUB_TOKEN",
+        "Every write goes through one act() wrapper with dry-run",
+        "Closes exactly two kinds of issue: split parents and its own digest"
+      ]
+    }
+  ]
+}
