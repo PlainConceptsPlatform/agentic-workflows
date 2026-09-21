@@ -444,53 +444,6 @@ a file on disk, so a confused model cannot publish a release.
 
 ---
 
-## agent-visual-verify.md
-
-Runs after the merge gate decides auto-merge and before the merge itself. The agent reads the
-change, writes a verification plan as JSON waypoints, and a post-agent shell step drives
-agent-browser to capture screenshots at each waypoint. A final step attaches the screenshots
-to the linked issue as a comment. Failures never block the merge.
-
-```mermaid
-flowchart TD
-    vvStart("Merge Gate<br/>auto-merge verdict") --> vvSubject
-    vvSubject{"subject (rung 4)<br/>PR open? Visual<br/>verify enabled?"}
-    vvSubject -.->|"no"| vvIdle
-    vvSubject -->|"yes"| vvActivation
-    vvActivation("Activation (rung 3)<br/>Checkout, load issue context,<br/>build the prompt") --> vvAgent
-    vvAgent("Agent (rung 5)<br/>Explore the change, write<br/>plan.json with waypoints<br/>(url + selector per step)") --> vvBuild
-    vvBuild("Build and start app<br/>VISUAL_VERIFY_BUILD_COMMAND,<br/>then VISUAL_VERIFY_START_COMMAND<br/>on the configured port") --> vvAppUp{"App up on<br/>the port?"}
-    vvAppUp -.->|"no"| vvWarn
-    vvAppUp -->|"yes"| vvCapture
-    vvCapture["Capture screenshots<br/>agent-browser opens each waypoint,<br/>waits for selectors,<br/>screenshot --full --no-sandbox"] --> vvGotShots{"Any captured?"}
-    vvGotShots -->|"yes"| vvAttach
-    vvGotShots -.->|"no, all failed"| vvWarn
-    vvAttach("Attach to issue<br/>post plan + screenshots<br/>as a single comment") --> vvDone
-    vvDone(("Screenshots posted<br/>visual evidence on the issue"))
-    vvWarn(("Warning posted<br/>no screenshots, merge proceeds"))
-    vvIdle(("Idle<br/>not enabled or not our PR"))
-
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
-    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-    class vvStart start
-    class vvActivation,vvAgent,vvBuild,vvCapture,vvAttach action
-    class vvSubject,vvAppUp,vvGotShots decision
-    class vvIdle idle
-    class vvWarn failure
-    class vvDone success
-```
-
-The agent does not take screenshots itself. It writes a plan; a shell step runs agent-browser
-against the running app. Chromium needs --no-sandbox on CI runners (set via
-AGENT_BROWSER_ARGS), and the explicit apt-get install covers libraries gent-browser
-install --with-deps misses on ubuntu-24.04.
-
----
-
 ## housekeeping
 
 Not a worker: a deterministic job in the router, on its own six-hourly cron, with no model. It is
