@@ -1,0 +1,39 @@
+name: Pages
+
+# Deploys the docs/ folder to GitHub Pages. The site is pre-built HTML committed by the
+# workflow-docs skill (archify-rendered diagrams). No build step runs in CI.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - loops/docs/diagrams.md
+      - docs/**
+      - skills/workflow-docs/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    environment: github-pages
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/configure-pages@981d2d42e89b27bad853e43817e5a29de6e3d01f # v5.0.0
+      - uses: actions/upload-pages-artifact@56afc609e7650f33bc1bf6a5f4611c4c5abb46e9 # v3.0.0
+        with:
+          path: ./docs
+      - uses: actions/deploy-pages@d6dbafd316b3933f83c897079f5e7cb2eb7d0d6b # v4.0.5

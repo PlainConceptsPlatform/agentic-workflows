@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agentic Workflows — diagrams</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --fg: #e6edf3;
+      --link: #58a6ff;
+      --border: #30363d;
+      --muted: #8b949e;
+      --card-bg: #161b22;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #ffffff;
+        --fg: #172033;
+        --link: #0969da;
+        --border: #d0d7de;
+        --muted: #57606a;
+        --card-bg: #f6f8fa;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+    }
+    header {
+      padding: 2rem 1.5rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    header h1 { margin: 0 0 .25rem; font-size: 1.5rem; }
+    header p { margin: 0; color: var(--muted); font-size: .9rem; }
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+    section { margin-bottom: 2.5rem; }
+    section h2 {
+      font-size: 1.15rem;
+      margin: 0 0 .75rem;
+      padding-bottom: .35rem;
+      border-bottom: 1px solid var(--border);
+    }
+    ul { list-style: none; padding: 0; margin: 0; display: grid; gap: .5rem; }
+    li a {
+      display: block;
+      padding: .65rem .85rem;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      text-decoration: none;
+      color: var(--link);
+      transition: border-color .15s;
+    }
+    li a:hover { border-color: var(--link); }
+    li small { color: var(--muted); margin-left: .5rem; }
+    footer {
+      padding: 1.5rem;
+      text-align: center;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: .8rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Agentic Workflows</h1>
+    <p>Interactive diagrams of the GitHub Agentic Workflows loop system.</p>
+  </header>
+  <main>
+    <section>
+      <h2>Router</h2>
+      <ul>
+        <li><a href="diagrams/router.html">Work Router <small>one event in, one route out</small></a></li>
+        <li><a href="diagrams/route-chain.html">How the routes chain <small>refine to merged, with feedback loops</small></a></li>
+      </ul>
+    </section>
+    <section>
+      <h2>Workers</h2>
+      <ul>
+        <li><a href="diagrams/agent-triage.html">Agent Triage <small>front door for issues</small></a></li>
+        <li><a href="diagrams/agent-refine.html">Agent Refine <small>size and split the work</small></a></li>
+        <li><a href="diagrams/agent-implement.html">Agent Implement <small>write code, open one PR</small></a></li>
+        <li><a href="diagrams/agent-merge-gate.html">Agent Merge Gate <small>the only worker that merges</small></a></li>
+        <li><a href="diagrams/agent-apply-review.html">Agent Apply Review <small>apply reviewer feedback</small></a></li>
+        <li><a href="diagrams/agent-audit.html">Agent Audit <small>read-only, files one issue</small></a></li>
+        <li><a href="diagrams/agent-release.html">Agent Release <small>manual dispatch, tag and publish</small></a></li>
+        <li><a href="diagrams/agent-visual-verify.html">Agent Visual Verify <small>screenshot before merge</small></a></li>
+      </ul>
+    </section>
+    <section>
+      <h2>Infrastructure</h2>
+      <ul>
+        <li><a href="diagrams/housekeeping.html">Housekeeping <small>cron janitor</small></a></li>
+        <li><a href="diagrams/agentics-app-errors.html">Agentics App Errors <small>daily App Insights query</small></a></li>
+        <li><a href="diagrams/agentics-error-report.html">Agentics Error Report <small>daily workflow failure classification</small></a></li>
+      </ul>
+    </section>
+    <section>
+      <h2>Docs</h2>
+      <ul>
+        <li><a href="ownership.md">Ownership <small>who manages what</small></a></li>
+        <li><a href="self-hosted-runners.md">Self-hosted Runners <small>VM Scale Set fleet</small></a></li>
+      </ul>
+    </section>
+  </main>
+  <footer>
+    Source: <code>loops/docs/diagrams.md</code> (Mermaid). Rendered by archify.
+  </footer>
+</body>
+</html>

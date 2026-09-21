@@ -4,10 +4,11 @@ description: >
   Author GitHub Agentic Workflows (gh-aw) for this package, pushing every
   deterministic decision into GitHub Actions primitives and spending the agent only on
   judgement. Load when creating or reviewing a loops/workflows/*.md agentic workflow, when
-  adding or changing a route on the Work Router, when a workflow needs its Mermaid diagram,
-  when choosing a trigger or a safe output, or when a compiled workflow misbehaves. Covers the
-  router architecture, the determinism ladder, the verified frontmatter contract, the opencode
-  engine on Forge, the safe-output surface, and the ways a workflow can be green and dead.
+  adding or changing a route on the Work Router, when a workflow needs its Mermaid diagram
+  (delegates to workflow-docs), when choosing a trigger or a safe output, or when a compiled
+  workflow misbehaves. Covers the router architecture, the determinism ladder, the verified
+  frontmatter contract, the opencode engine on Forge, the safe-output surface, and the ways a
+  workflow can be green and dead.
 ---
 
 # Workflow author
@@ -29,7 +30,8 @@ Which is why no worker carries one any more. Diagrams live in `docs/diagrams.md`
 unauthenticated in CI, so a prompt ordering one burns turns and fails), or a duplicate step number
 in its instruction list. All three were real: seven diagrams charged on every run and then skipped,
 an unreachable `gh pr list` in implement, and three prompts with a repeated step where one of the
-duplicates contradicted the other.
+duplicates contradicted the other. Diagram maintenance is owned by
+`skills/workflow-docs/SKILL.md`, which this skill loads at step 5.
 
 Anyone can write an agentic workflow. Trigger on everything, grant broad permissions, and write a
 paragraph asking the model to sort it out. It will appear to work, and it will be slow, expensive,
@@ -459,9 +461,10 @@ of the prompt.
 ## The diagram
 
 Every worker has a corresponding section in `docs/diagrams.md` (installed from
-`loops/docs/diagrams.md`). Node roles, class definitions, and the Mermaid convention are in
-`references/diagram.md`. `verify-route-matrix.sh` rejects `` ```mermaid `` blocks in worker
-prompts; diagrams live in `docs/diagrams.md` only.
+`loops/docs/diagrams.md`). Diagram ownership has moved to `skills/workflow-docs/SKILL.md`: when you
+reach step 5 below, load that skill and follow its Mermaid refresh path, then its archify HTML
+refresh path for the GitHub Pages site. `verify-route-matrix.sh` still rejects `` ```mermaid ``
+blocks in worker prompts; diagrams live in `docs/diagrams.md` only.
 
 ## Your task
 
@@ -487,8 +490,10 @@ prompts; diagrams live in `docs/diagrams.md` only.
    first, label items use `item_number` and `labels`, and the last step carries the `## Diagram`
    exclusion line verbatim.
 
-5. Add or update the worker's section in `docs/diagrams.md`. Done when every check in
-   `references/diagram.md` passes and the diagram matches the prompt body's branches.
+5. Add or update the worker's section in `docs/diagrams.md`. Load `skills/workflow-docs/SKILL.md`
+   and follow its Path A (Mermaid refresh) then Path B (archify HTML for the Pages site). Done
+   when every check in `workflow-docs/references/diagram.md` passes and the diagram matches the
+   prompt body's branches.
 
 6. Add the ownership header. Done when the first line (YAML) or second line (Markdown inside `---`)
    carries `# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/<file>. Update with
@@ -521,5 +526,5 @@ Load these as needed; do not read all of them up front.
 | `references/frontmatter.md` | Any frontmatter field: the verified surface, triggers, filters, the merge table for imports, the worker contract, step ordering, known gaps |
 | `references/safe-outputs.md` | What a workflow may write, staged versus framework writes, the App token pattern, the conclude/incomplete skeleton |
 | `references/opencode.md` | The engine, the Forge wiring, the `tools:` trap, budgets, bot PRs, self-hosted runners |
-| `references/diagram.md` | Writing the `## Diagram` section. Contains the verbatim `classDef` lines |
+| `references/diagram.md` | (moved to `skills/workflow-docs/references/diagram.md`) |
 | `references/verify.md` | Compiling, compiling on commit, quietening the agent log, linting, probing an unfamiliar field, debugging a failed run, what static checks cannot catch |
