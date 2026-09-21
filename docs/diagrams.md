@@ -606,3 +606,52 @@ The route matrix asserts the scanner exists, that both exit paths call `setFaile
 at least as many scans as upstream writes, that each individual check is still present, and that no
 model or `OPENAI_API_KEY` has appeared in the action. Every one of those was mutation-tested; three
 earlier versions of them passed against a deliberately broken guard and were rewritten.
+
+---
+
+## agent-visual-verify.md
+
+Runs after merge-gate decides to auto-merge, before the actual merge, and produces **evidence, not
+code changes**: it writes a verification plan, drives a real browser through the app, and attaches
+screenshots to the linked issue. It is called directly by merge-gate's `conclude` job, so it is not
+a router route. Failures never block the merge — a browser that will not start or an app that never
+comes up emits a warning comment and the merge proceeds.
+
+```mermaid
+flowchart TD
+    vvStart("merge-gate conclude<br/>calls agent-visual-verify") --> vvSubject
+    vvSubject["subject (rung 4)<br/>PR open? linked issue found?"] --> vvConfig
+    vvConfig{"config (rung 4)<br/>VISUAL_VERIFY_ENABLED and<br/>START_COMMAND set?"}
+    vvConfig -.->|"no"| vvIdle
+    vvConfig -->|"yes"| vvFacts
+    vvFacts["Facts (rung 3)<br/>PR branch checked out,<br/>issue context loaded"] --> vvPlan
+    vvPlan{"/repo-verify (rung 5)<br/>reachable UI surface?"}
+    vvPlan -.->|"not-applicable"| vvNoUi
+    vvPlan -->|"yes"| vvStartCmd
+    vvStartCmd{"start command set?<br/>VISUAL_VERIFY_START_COMMAND"}
+    vvStartCmd -.->|"empty"| vvNoStart
+    vvStartCmd -->|"yes"| vvAgent
+    vvAgent["Agent (rung 5)<br/>parse waypoints into plan.json,<br/>one add_comment on the issue"] --> vvCapture
+    vvCapture["post-agent (rung 6)<br/>build + start the app,<br/>agent-browser captures per waypoint"] --> vvAttach
+    vvAttach["attach-screenshots (rung 6)<br/>always(), subject found + enabled"] --> vvShutdown
+    vvShutdown["shut down the app"] --> vvDone
+    vvCapture -.->|"app never started,<br/>no plan, or all waypoints failed"| vvPartial
+    vvDone(("Verified<br/>screenshots attached,<br/>merge proceeds"))
+    vvPartial(("Attach what exists<br/>no-capture explanation,<br/>run stays green"))
+    vvNoUi(("No UI surface<br/>summary comment, stop"))
+    vvNoStart(("Not configured<br/>warning comment, stop"))
+    vvIdle(("Idle<br/>unconfigured or PR not open"))
+
+    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
+    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
+    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
+    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
+    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
+    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
+    class vvStart start
+    class vvSubject,vvFacts,vvCapture,vvAttach,vvShutdown action
+    class vvConfig,vvPlan,vvStartCmd decision
+    class vvIdle idle
+    class vvNoUi,vvNoStart,vvPartial failure
+    class vvDone success
+```
