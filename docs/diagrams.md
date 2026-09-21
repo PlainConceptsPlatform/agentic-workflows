@@ -54,7 +54,7 @@ flowchart TD
     wTriage("agent-triage")
     classify -.->|"cron or dispatch"| plumbing
     plumbing["deterministic jobs<br/>no model runs in any of these"] --> pJobs
-    pJobs("bot-approve · audit-close<br/>cleanup-artifacts · validate<br/>reconcile-bot-pr-runs · detect-pr-conflicts")
+    pJobs("bot-approve · audit-close<br/>cleanup-artifacts · validate<br/>reconcile-bot-pr-runs · detect-pr-conflicts<br/>check-stack-branch · dispatch-implement")
     idle(("Idle<br/>run ends, ~10s, every job skipped"))
 
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
@@ -106,6 +106,43 @@ flowchart LR
 Audit creates work rather than consuming it, and files into `refine` rather than straight to
 `implement`, so a report of several unrelated findings becomes one properly sized issue per finding
 instead of one pull request that has to fix them all.
+
+### How a feature stacks
+
+When refine splits a story that carries real sequencing — a feature whose children build on each
+other — the split can open a stack instead of independent work. The children stay ordinary issues
+walking the normal pipeline above; only where they land changes: each child's pull request targets
+the feature branch rather than the default branch, and one root pull request (spec plus the
+feature's acceptance journey, open from the start) carries the whole feature to `main` at the end.
+
+```mermaid
+flowchart TD
+    feat("Feature issue<br/>8+ points, ordered children") --> splitStack("refine split<br/>stamps stack-root-branch + stack-root-pr<br/>on the feature issue") --> rootPr("root pull request on feat/&lt;N&gt;<br/>spec + red journey e2e,<br/>base: main, HELD")
+    splitStack --> child1("child T1: implement<br/>PR base: feat/&lt;N&gt;")
+    child1 --> merge1("merge-gate<br/>auto-merge into feat/&lt;N&gt;<br/>closes T1") --> child2("child T2, T3 ...<br/>same shape, one at a time")
+    child2 --> stacked{"every child landed<br/>and the root is green?"}
+    stacked -.->|"no: a bug found"| fixChild("new child issue<br/>mid-stack insertion") --> child2
+    stacked -->|yes| announce("stack-complete announcement<br/>on the root pull request")
+    announce --> humanStack(("human merges the root<br/>feature issue closes with it"))
+    flat("story with no<br/>sequencing") -.->|"no stack markers:<br/>byte-for-byte the old path"| implement
+
+    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
+    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
+    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
+    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
+    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
+    class feat,flat start
+    class splitStack,rootPr,child1,merge1,child2,announce,fixChild action
+    class stacked decision
+    class humanStack success
+    class merged success
+```
+
+The stack exists only in markers on the issues — `stack-root-branch` and `stack-root-pr` on the
+feature issue, `stack-root-branch` stamped on each child at hand-over — so a repository with none
+of them runs exactly the pipeline above and nothing else. The root is never auto-merged: a person
+merges it after every child has landed and the feature branch is green, which is the point where
+the feature's own acceptance journey, not one child's scope, is the thing being verified.
 
 ---
 
@@ -186,6 +223,8 @@ flowchart TD
     refSplit -->|"yes, and it splits"| refChildren
     refSplit -->|"yes, indivisible"| refOutcome
     refChildren(("Split<br/>2-6 children, each 5 or less<br/>parent becomes their tracker"))
+    refChildren -->|"children build on each other"| refStack
+    refStack("Stamp stack-root-branch + stack-root-pr<br/>on the feature issue, and open the<br/>held root pull request on feat/&lt;N&gt;") --> refOutcome
     refOutcome{"Questions left<br/>for the author?"}
     refOutcome -->|no| refDone
     refOutcome -->|yes| refAsk
@@ -200,7 +239,7 @@ flowchart TD
     classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class refStart start
-    class refReserve,refFacts,refExplore,refTrivial,refStory,refWrap,refProse action
+    class refReserve,refFacts,refExplore,refTrivial,refStory,refWrap,refProse,refStack action
     class refClassify,refEstimate,refSplit,refOutcome decision
     class refFail failure
     class refDone,refAsk,refChildren success
@@ -239,6 +278,9 @@ flowchart TD
     implIdle(("Idle<br/>closed, or held by future"))
     implFail(("Parked<br/>review added, a rerun<br/>would fail the same way"))
 
+    implStackStart("check-stack-branch<br/>(router job, rung 1)<br/>the issue carries<br/>stack-root-branch?") -.->|"no: flat mode,<br/>nothing happens"| implIdle
+    implStackStart -->|"yes: the workflow dispatches<br/>this worker with ref: feat/N<br/>so the agent never fetches"| implStart
+
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
     classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
     classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
@@ -246,7 +288,7 @@ flowchart TD
     classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class implStart start
-    class implReserve,implFacts,implTodos,implCode,implPr action
+    class implReserve,implFacts,implTodos,implCode,implPr,implStackStart action
     class implEligible,implCheck,implVerify,implRetry decision
     class implIdle idle
     class implFail failure
@@ -257,6 +299,13 @@ The retry belt exists because a provider outage kills a run in a couple of minut
 and that used to burn the issue and hand it to a human. A run that worked for half an hour and then
 failed produced an answer that was wrong; repeating it costs the whole fleet the same half hour to
 be wrong again, so only the short deaths are retried.
+
+A stacked child enters the same worker through a different door: the router's `check-stack-branch`
+job reads the issue's markers before anything runs, and dispatches the compiled workflow with
+`ref:` set to the feature branch, because the agent sandbox has no credentials to fetch or choose
+a branch itself. The prompt then tells `create_pull_request` its base: the feature branch for a
+stacked child, the default branch for everything else. Nothing about the standard path above
+changes for an issue without the markers.
 
 ---
 
@@ -284,11 +333,14 @@ flowchart TD
     gateProtected -->|"measured low, medium or high"| gateAssess
     gateAssess("Agent (rung 5)<br/>find defects, verify them,<br/>rate recoverability") --> gateDisposition
     gateDisposition{"Disposition<br/>computed in shell from<br/>the facts and the report"}
-    gateDisposition -->|"no verified blocker,<br/>radius low or recoverable medium"| gateMerge
+    gateDisposition -->|"no verified blocker,<br/>radius low or recoverable medium"| gateRootCheck
+    gateRootCheck{"PR base is a<br/>stack feature branch<br/>and this PR is the root?"}
+    gateRootCheck -->|"child PR: no"| gateMerge
     gateDisposition -.->|"radius high, protected<br/>or owner path"| gateOwner
     gateDisposition -.->|"fragile, unmet criteria<br/>or low confidence"| gateHuman
     gateDisposition -.->|"CI red or a verified<br/>high finding"| gateBlocked
-    gateMerge(("AUTO-MERGE<br/>squash, issue closed,<br/>pr-pending removed"))
+    gateMerge(("AUTO-MERGE<br/>squash into the PR's base<br/>(main, or the feature branch:<br/>then the child issue closes,<br/>pr-pending removed)"))
+    gateRootCheck -->|"yes: the root"| gateHeld(("HELD<br/>stack root never auto-merges,<br/>a person merges it once every<br/>child has landed and it is green"))
     gateHuman(("HUMAN REVIEW<br/>review label,<br/>implement label kept"))
     gateOwner(("OWNER REVIEW<br/>review + owner-review,<br/>CODEOWNERS asked when named"))
     gateBlocked(("BLOCKED<br/>review + blocked,<br/>the belt does not retry"))
@@ -303,11 +355,19 @@ flowchart TD
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class gateStart start
     class gateBranch,gateFacts,gateFix,gateAssess action
-    class gateSubject,gateCi,gateProtected,gateDisposition decision
+    class gateSubject,gateCi,gateProtected,gateDisposition,gateRootCheck decision
     class gateIdle idle
     class gateHuman,gateOwner,gateBlocked failure
     class gateMerge,gatePush success
 ```
+
+For a child pull request — one whose base is a stack feature branch — everything above is
+unchanged: the risk assessment sees the same diff it always would, and auto-merge means squash
+into the feature branch, closing exactly that child issue. The root pull request is the one
+exception in the whole system: it can be as clean as any merge that ever shipped and the gate
+still will not take it, because a feature is only done when the whole branch is done. AABB holds
+it with an App-token comment and a person takes it from there, after the router's stack-completion
+check has announced that every child landed and the branch is green.
 
 A protected-path match holds the merge but does not stop the repair path: the agent may still fix
 failed CI on those files, and `conclude` is what refuses to merge them.
@@ -465,7 +525,16 @@ flowchart TB
     hkRetry --> hkStrand
 
     hkStrand("Strands: drop pr-pending<br/>where no open PR closes the issue") --> hkParent("Close a split parent<br/>once every child is closed")
-    hkParent --> hkBranch{"Branch whose PRs<br/>are all finished<br/>and all bot-authored?"}
+    hkParent --> hkStack{"stack-root-pr<br/>marker on the<br/>feature issue?"}
+    hkStack -.->|"no: flat mode"| hkBranch
+    hkStack -->|"root open"| hkStackWait{"children left,<br/>or the completion<br/>announcement missing?"}
+    hkStackWait -->|"children open: mid-stack,<br/>the normal state"| hkBranch
+    hkStackWait -->|"all landed, never told"| hkDigest
+    hkStackWait -->|"told, but nobody merged for days"| hkDigest
+    hkStack -->|"root merged,<br/>feature issue still open"| hkStackClose("close the feature issue,<br/>close child issues whose<br/>PR merged but stayed open")
+    hkStack -->|"root closed unmerged"| hkDigest
+    hkStackClose --> hkBranch
+    hkBranch{"Branch whose PRs<br/>are all finished<br/>and all bot-authored?"}
     hkBranch -->|yes| hkDelete("Delete the branch")
     hkBranch -.->|"open PR, human PR,<br/>or the default branch"| hkDigest
     hkDelete --> hkDigest
@@ -477,8 +546,8 @@ flowchart TB
     classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class hkCron start
-    class hkScan,hkRetry,hkStrand,hkParent,hkDelete,hkDigest action
-    class hkPark,hkWhy,hkBudget,hkBranch decision
+    class hkScan,hkRetry,hkStrand,hkParent,hkDelete,hkDigest,hkStackClose action
+    class hkPark,hkWhy,hkBudget,hkBranch,hkStack,hkStackWait decision
     class hkEnd success
 ```
 
@@ -488,6 +557,15 @@ would be a green no-op. Every write goes through one `act()` wrapper, which is t
 `dry-run` is read, so there is no second path that forgets to check it. And it closes exactly two
 kinds of issue — a split parent whose children are all done, and its own digest — which the route
 matrix asserts by counting.
+
+The stack section extends the same two rules to stacked features without adding a third closed
+kind: a merged child whose issue stayed open is closed exactly like a flat split parent (its work
+landed, the close was lost to a race), and a merged root closes the feature issue the same way
+section 3 closes a split parent. Everything else about a stack is a *report*, never an action:
+mid-stack is the normal state and stays silent; a root that finished but was never announced, one
+held for days after its announcement, a root closed by accident with children open, and a missing
+root pull request each get one line in the digest. No labels move, so nothing the router listens
+for is raised by the sweep itself.
 
 ---
 

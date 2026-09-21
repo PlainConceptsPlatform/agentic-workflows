@@ -285,6 +285,13 @@ for (const file of readdirSync(workflowDirectory)) {
   // pull request as an issue instead of a pull request). Checking out the branch tip at
   // execution time makes the commit parent current main; the implement-global queue
   // already keeps sibling merges out of the window while the agent runs.
+  //
+  // A stack child dispatches this workflow directly (`gh workflow run
+  // agent-implement.lock.yml --ref feat/N`), and there the pin must select the feature
+  // branch tip, not main: github.ref_name is the ref the dispatch named. Under
+  // workflow_call the callee inherits the caller's event, and the router is only ever
+  // dispatched on the default branch, so the dispatch arm of the ternary resolves to
+  // main there too -- flat behavior is byte-identical.
   if (file === "agent-implement.lock.yml") {
     const start = rewritten.indexOf("\n  agent:\n");
     const rest = start === -1 ? "" : rewritten.slice(start + 1);
@@ -294,7 +301,11 @@ for (const file of readdirSync(workflowDirectory)) {
       const span = rewritten.slice(start, end).replace(
         /(uses: actions\/checkout@[^\n]*\n(\s+)with:\n(?:\2  [^\n]+\n)*)/,
         (whole, _block, indent) =>
-          whole.includes("ref:") ? whole : whole + indent + "  ref: ${{ github.event.repository.default_branch }}\n",
+          whole.includes("ref:")
+            ? whole
+            : whole +
+              indent +
+              "  ref: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || github.event.repository.default_branch }}\n",
       );
       rewritten = rewritten.slice(0, start) + span + rewritten.slice(end);
     }

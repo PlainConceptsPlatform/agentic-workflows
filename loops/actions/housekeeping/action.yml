@@ -169,6 +169,14 @@ runs:
           for (const [parent, children] of childrenOf) {
             const open = children.filter((c) => c.state === 'open');
             if (open.length > 0 || !issues.some((i) => i.number === parent)) continue;
+            // A stack feature issue. Its root pull request closing the issue is what ends it, not
+            // this sweep: closing the tracker here would close a feature whose root pull request
+            // is still open and holding a branch with real work on it. Refine stamps the root
+            // markers on the parent before the first child is ever handed over, so the marker
+            // is there from birth; finding none means flat mode, and the original rule applies.
+            // Everything stack-specific about these parents is decided in section 3b below,
+            // which sees the whole stack, not just the child count.
+            if (issues.some((i) => i.number === parent && /<!-- stack-root-branch: \S+ -->/.test(i.body ?? ''))) continue;
             await act(`#${parent}: closing split parent, all ${children.length} children are done`, async () => {
               await github.rest.issues.createComment({
                 ...context.repo, issue_number: parent,
@@ -176,6 +184,87 @@ runs:
               });
               await github.rest.issues.update({ ...context.repo, issue_number: parent, state: 'closed', state_reason: 'completed' });
             });
+          }
+
+          // The stack and branch sections both need every pull request the repository has ever
+          // seen, closed included, so it is paginated once here rather than once per section.
+          const allPulls = await github.paginate(github.rest.pulls.list, { ...context.repo, state: 'all', per_page: 100 });
+
+          // 3b. Stacks. Section 3 refused to close stack feature issues; this is what happens to
+          // them instead. The whole stack state is on the feature issue (root pull request) plus
+          // the children of the split, and both are already in memory, so a repository without
+          // stacks pays nothing: the marker test below fails first and the loop body never runs.
+          // No polling is added -- this runs on the same cadence the janitor already has, and it
+          // is the backstop for the one event the router can miss: a child issue that closes
+          // seconds after a router run already counted it as open.
+          for (const issue of issues) {
+            if (issue.pull_request) continue;
+            const marker = /<!-- stack-root-pr: (\d+) -->/.exec(issue.body ?? '');
+            if (!marker) continue;
+            const rootPr = Number(marker[1]);
+            const root = allPulls.find((p) => p.number === rootPr);
+            const children = childrenOf.get(issue.number) ?? [];
+            // A child only means work in progress while its pull request is still open.
+            // merge-gate closes the child issue the moment its pull request lands on the
+            // feature branch; if that close was lost -- an API blip, a run that died between
+            // the merge and the close -- the child stays open here for ever and the stack
+            // never reads as finished, which is the stall this sweep exists to prevent. The
+            // child's own `implement-pr` marker names its pull request, so the test is exact:
+            // an open child whose named pull request has merged has landed, whatever its issue
+            // state still claims. Closing it here is the same idempotent backstop section 3 is
+            // for flat splits, and the App token this sweep runs on is what raises the event.
+            let openChildren = 0;
+            for (const child of children) {
+              if (child.state !== 'open') continue;
+              const prMarker = /<!-- implement-pr: (\d+) -->/.exec(child.body ?? '');
+              const landed = prMarker && allPulls.some((p) => p.number === Number(prMarker[1]) && p.merged_at);
+              if (!landed) { openChildren += 1; continue; }
+              await act(`#${child.number}: closing child, its pull request #${prMarker[1]} merged into the stack`, async () => {
+                await github.rest.issues.createComment({
+                  ...context.repo, issue_number: child.number,
+                  body: `${DIGEST_MARKER}\nClosed automatically: its pull request #${prMarker[1]} merged into the feature branch, so this child is done.`,
+                });
+                await github.rest.issues.update({ ...context.repo, issue_number: child.number, state: 'closed', state_reason: 'completed' });
+              });
+            }
+            if (!root) {
+              needsHuman.push({ kind: 'stack-root-missing', issue, rootPr, waited: age(issue.updated_at) });
+            } else if (root.state === 'open') {
+              if (openChildren > 0) continue; // mid-stack: the normal state, not worth a line
+              // Every child is done, so the completion announcement should exist on the root
+              // pull request. Its absence is the lost race above; a person is told here rather
+              // than the stack sitting finished and silent. When the announcement exists but
+              // nobody has merged for days, that is staleness worth one line too.
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                ...context.repo, issue_number: rootPr, per_page: 100,
+              });
+              const told = comments.find((c) => (c.body ?? '').includes('<!-- stack-complete -->'));
+              if (!told) {
+                needsHuman.push({ kind: 'stack-ready', issue, pull: root, waited: age(issue.updated_at) });
+              } else if (age(told.created_at) > stalePrMs) {
+                needsHuman.push({ kind: 'stack-held', issue, pull: root, waited: age(told.created_at) });
+              }
+            } else if (root.merged_at) {
+              // The root merged to the default branch and its closing keyword should have
+              // closed this issue with it. If something raced that, the same rule section 3
+              // applies to flat splits closes it here: every child done, root landed, done.
+              if (openChildren === 0) {
+                await act(`#${issue.number}: closing stack feature, its root PR #${rootPr} merged`, async () => {
+                  await github.rest.issues.createComment({
+                    ...context.repo, issue_number: issue.number,
+                    body: `${DIGEST_MARKER}\nClosed automatically: the stack's root pull request #${rootPr} merged with every child landed (${children.map((c) => `#${c.number}`).join(', ')}).`,
+                  });
+                  await github.rest.issues.update({ ...context.repo, issue_number: issue.number, state: 'closed', state_reason: 'completed' });
+                });
+              } else {
+                needsHuman.push({ kind: 'stack-orphaned', issue, pull: root, waited: age(root.merged_at), openChildren });
+              }
+            } else {
+              // Closed without merging. That is a person's decision or an accident, and the
+              // landed child work only exists on the feature branch, which section 4 may have
+              // already deleted -- restorable through refs/pull/<n>/head, but a person decides.
+              needsHuman.push({ kind: 'stack-root-closed', issue, pull: root, waited: age(root.closed_at), openChildren });
+            }
           }
 
           // 4. Branches. Nothing in the fleet has ever deleted one, so they accumulate for ever
@@ -190,7 +279,6 @@ runs:
           // back, and the pull request page still shows the diff.
           const branches = await github.paginate(github.rest.repos.listBranches, { ...context.repo, per_page: 100 });
           const defaultBranch = context.payload.repository.default_branch;
-          const allPulls = await github.paginate(github.rest.pulls.list, { ...context.repo, state: 'all', per_page: 100 });
           const byHead = new Map();
           for (const pull of allPulls) {
             if (!byHead.has(pull.head.ref)) byHead.set(pull.head.ref, []);
@@ -268,6 +356,11 @@ runs:
           const line = (entry) => {
             if (entry.kind === 'pr-parked') return `- PR #${entry.pull.number} · parked ${days(entry.waited)}d · gate verdict \`${entry.verdict}\` · ${entry.pull.title}`;
             if (entry.kind === 'pr-stale') return `- PR #${entry.pull.number} · ${days(entry.waited)}d old · no gate verdict yet · ${entry.pull.title}`;
+            if (entry.kind === 'stack-ready') return `- PR #${entry.pull.number} · stack finished ${days(entry.waited)}d ago, never announced · human merge needed · ${entry.pull.title}`;
+            if (entry.kind === 'stack-held') return `- PR #${entry.pull.number} · stack ready and waiting on a human merge for ${days(entry.waited)}d · ${entry.pull.title}`;
+            if (entry.kind === 'stack-root-missing') return `- #${entry.issue.number} · names root PR #${entry.rootPr}, which does not exist · ${entry.issue.title}`;
+            if (entry.kind === 'stack-root-closed') return `- PR #${entry.pull.number} · stack root closed unmerged, ${entry.openChildren} child(ren) still open · ${entry.issue.title} · restore the branch from refs/pull/${entry.pull.number}/head if accidental`;
+            if (entry.kind === 'stack-orphaned') return `- #${entry.issue.number} · root merged but ${entry.openChildren} child(ren) still open · ${entry.issue.title}`;
             if (entry.kind === 'retries-exhausted') return `- #${entry.issue.number} · stalled ${days(entry.waited)}d · retried ${entry.attempts}× and still stalling · ${entry.issue.title}`;
             if (entry.kind === 'no-work-label') return `- #${entry.issue.number} · stalled ${days(entry.waited)}d · no work label to retry with · ${entry.issue.title}`;
             if (entry.kind === 'stale-audit') return `- #${entry.issue.number} · open ${days(entry.waited)}d · audit report nobody actioned · ${entry.issue.title}`;
@@ -305,6 +398,7 @@ runs:
             DIGEST_MARKER,
             `_Updated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC. This issue is rewritten by the housekeeping job; edits to it are lost._`,
             section('Waiting on a decision', ['decided']),
+            section('Stacked features waiting on a human', ['stack-ready', 'stack-held', 'stack-root-missing', 'stack-root-closed', 'stack-orphaned']),
             section('Pull requests parked by the gate', ['pr-parked', 'pr-stale']),
             section('Stalled beyond the retry budget', ['retries-exhausted', 'no-work-label']),
             section('Audit reports nobody actioned', ['stale-audit']),

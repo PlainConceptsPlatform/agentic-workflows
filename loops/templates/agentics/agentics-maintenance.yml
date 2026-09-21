@@ -1,5 +1,5 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/templates/agentics/agentics-maintenance.yml. Update with `workflows update --force`; consumer edits may be overwritten.
-# Derived from the gh-aw v0.83.4 maintenance workflow.
+# Derived from the gh-aw v0.87.5 maintenance workflow.
 # Copy provenance is documented in docs/ownership.md.
 name: Agentic Maintenance
 
@@ -53,7 +53,7 @@ jobs:
       discussions: write
     steps:
       - name: Setup Scripts
-        uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
+        uses: github/gh-aw-actions/setup@2a78d04403fdc6907d0f05327cffac9dbad5312d # v0.87.5
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
       - name: Close expired discussions
@@ -71,7 +71,7 @@ jobs:
       issues: write
     steps:
       - name: Setup Scripts
-        uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
+        uses: github/gh-aw-actions/setup@2a78d04403fdc6907d0f05327cffac9dbad5312d # v0.87.5
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
       - name: Close expired issues
@@ -89,7 +89,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Setup Scripts
-        uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
+        uses: github/gh-aw-actions/setup@2a78d04403fdc6907d0f05327cffac9dbad5312d # v0.87.5
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
       - name: Close expired pull requests
@@ -107,7 +107,7 @@ jobs:
       actions: write
     steps:
       - name: Setup Scripts
-        uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
+        uses: github/gh-aw-actions/setup@2a78d04403fdc6907d0f05327cffac9dbad5312d # v0.87.5
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
       - name: Cleanup outdated cache-memory entries
