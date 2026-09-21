@@ -1,0 +1,369 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "How the Routes Chain",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "open",
+      "type": "external",
+      "label": "Issue opened",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "write",
+      "type": "external",
+      "label": "Write+ user",
+      "sublabel": "self-labels",
+      "pos": [
+        40,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "triage",
+      "type": "security",
+      "label": "Triage",
+      "sublabel": "outside collaborator",
+      "pos": [
+        260,
+        40
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "refine",
+      "type": "backend",
+      "label": "Refine",
+      "sublabel": "estimate in points",
+      "pos": [
+        260,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "split",
+      "type": "backend",
+      "label": "Split",
+      "sublabel": "2-6 children",
+      "pos": [
+        40,
+        220
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "implement",
+      "type": "backend",
+      "label": "Implement",
+      "sublabel": "branch, PR, closes #N",
+      "pos": [
+        480,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "ci",
+      "type": "backend",
+      "label": "CI",
+      "pos": [
+        700,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "gate",
+      "type": "security",
+      "label": "Merge Gate",
+      "pos": [
+        920,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "merged",
+      "type": "backend",
+      "label": "Merged",
+      "pos": [
+        1140,
+        40
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "human",
+      "type": "security",
+      "label": "Human review",
+      "pos": [
+        1140,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "fix",
+      "type": "backend",
+      "label": "Fix, push",
+      "sublabel": "CI again",
+      "pos": [
+        920,
+        220
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "applyReview",
+      "type": "backend",
+      "label": "Apply Review",
+      "pos": [
+        700,
+        220
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "review",
+      "type": "external",
+      "label": "Someone reviews",
+      "pos": [
+        480,
+        220
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "audit",
+      "type": "external",
+      "label": "Audit",
+      "sublabel": "weekly",
+      "pos": [
+        40,
+        310
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "closed",
+      "type": "security",
+      "label": "Closed",
+      "pos": [
+        480,
+        40
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "author",
+      "type": "external",
+      "label": "Author replies",
+      "pos": [
+        480,
+        310
+      ],
+      "size": [
+        140,
+        52
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "open-triage",
+      "from": "open",
+      "to": "triage"
+    },
+    {
+      "id": "triage-pass",
+      "from": "triage",
+      "to": "refine",
+      "label": "pass",
+      "labelAt": [
+        330,
+        100
+      ]
+    },
+    {
+      "id": "triage-block",
+      "from": "triage",
+      "to": "closed",
+      "label": "block",
+      "variant": "dashed"
+    },
+    {
+      "id": "triage-needsinfo",
+      "from": "triage",
+      "to": "author",
+      "label": "needs-info",
+      "variant": "dashed"
+    },
+    {
+      "id": "write-refine",
+      "from": "write",
+      "to": "refine"
+    },
+    {
+      "id": "refine-impl",
+      "from": "refine",
+      "to": "implement",
+      "label": "5 or less",
+      "variant": "emphasis"
+    },
+    {
+      "id": "refine-split",
+      "from": "refine",
+      "to": "split",
+      "label": "8 or more"
+    },
+    {
+      "id": "split-refine",
+      "from": "split",
+      "to": "refine"
+    },
+    {
+      "id": "refine-author",
+      "from": "refine",
+      "to": "author",
+      "label": "questions",
+      "variant": "dashed"
+    },
+    {
+      "id": "impl-ci",
+      "from": "implement",
+      "to": "ci"
+    },
+    {
+      "id": "ci-gate",
+      "from": "ci",
+      "to": "gate"
+    },
+    {
+      "id": "gate-merge",
+      "from": "gate",
+      "to": "merged",
+      "label": "merge",
+      "variant": "emphasis"
+    },
+    {
+      "id": "gate-fix",
+      "from": "gate",
+      "to": "fix",
+      "label": "CI failed",
+      "variant": "dashed",
+      "labelDy": 22
+    },
+    {
+      "id": "fix-gate",
+      "from": "fix",
+      "to": "gate"
+    },
+    {
+      "id": "gate-human",
+      "from": "gate",
+      "to": "human",
+      "label": "risk or protected",
+      "variant": "dashed",
+      "labelAt": [
+        970,
+        100
+      ]
+    },
+    {
+      "id": "review-apply",
+      "from": "review",
+      "to": "applyReview"
+    },
+    {
+      "id": "apply-ci",
+      "from": "applyReview",
+      "to": "ci"
+    },
+    {
+      "id": "audit-refine",
+      "from": "audit",
+      "to": "refine",
+      "label": "files one issue"
+    },
+    {
+      "id": "author-triage",
+      "from": "author",
+      "to": "triage",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Main path",
+      "items": [
+        "refine decides size (5 or less = implement, 8+ = split)",
+        "implement opens one PR, CI runs, merge gate decides"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Feedback loops",
+      "items": [
+        "Audit feeds into refine, not implement",
+        "Triage needs-info re-enters when the author replies",
+        "Fix path re-enters the gate after CI"
+      ]
+    }
+  ]
+}

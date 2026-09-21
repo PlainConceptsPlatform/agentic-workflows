@@ -1,0 +1,343 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agent Refine",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "start",
+      "type": "external",
+      "label": "Router refine route",
+      "pos": [
+        40,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "reserve",
+      "type": "backend",
+      "label": "Reserve (rung 4)",
+      "pos": [
+        260,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "facts",
+      "type": "backend",
+      "label": "Facts (rung 3)",
+      "pos": [
+        480,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "explore",
+      "type": "backend",
+      "label": "Explore (rung 5)",
+      "sublabel": "one unit at a time",
+      "pos": [
+        700,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "classify",
+      "type": "security",
+      "label": "Trivial?",
+      "pos": [
+        920,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "trivial",
+      "type": "backend",
+      "label": "Trivial plan",
+      "sublabel": "no Gherkin",
+      "pos": [
+        1140,
+        40
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "story",
+      "type": "backend",
+      "label": "Story",
+      "sublabel": "Given/When/Then",
+      "pos": [
+        1140,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "wrap",
+      "type": "backend",
+      "label": "Wrap",
+      "sublabel": "into issue form",
+      "pos": [
+        1360,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "prose",
+      "type": "backend",
+      "label": "Prose",
+      "sublabel": "@humanizer",
+      "pos": [
+        1580,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "estimate",
+      "type": "security",
+      "label": "Estimate",
+      "sublabel": "Fibonacci",
+      "pos": [
+        1800,
+        40
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "split",
+      "type": "security",
+      "label": "8 or more?",
+      "pos": [
+        1800,
+        220
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "children",
+      "type": "backend",
+      "label": "Split",
+      "sublabel": "2-6 children",
+      "pos": [
+        1360,
+        220
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "outcome",
+      "type": "security",
+      "label": "Questions?",
+      "pos": [
+        1800,
+        310
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "done",
+      "type": "backend",
+      "label": "Refined",
+      "sublabel": "implement added",
+      "pos": [
+        1800,
+        400
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "ask",
+      "type": "backend",
+      "label": "Questions",
+      "sublabel": "batched comment",
+      "pos": [
+        1360,
+        310
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "fail",
+      "type": "security",
+      "label": "Incomplete",
+      "sublabel": "retry",
+      "pos": [
+        1140,
+        400
+      ],
+      "size": [
+        140,
+        52
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "start-reserve",
+      "from": "start",
+      "to": "reserve"
+    },
+    {
+      "id": "reserve-facts",
+      "from": "reserve",
+      "to": "facts"
+    },
+    {
+      "id": "facts-explore",
+      "from": "facts",
+      "to": "explore"
+    },
+    {
+      "id": "explore-classify",
+      "from": "explore",
+      "to": "classify"
+    },
+    {
+      "id": "classify-trivial",
+      "from": "classify",
+      "to": "trivial",
+      "label": "yes"
+    },
+    {
+      "id": "classify-story",
+      "from": "classify",
+      "to": "story",
+      "label": "no"
+    },
+    {
+      "id": "trivial-estimate",
+      "from": "trivial",
+      "to": "estimate",
+      "variant": "dashed"
+    },
+    {
+      "id": "story-wrap",
+      "from": "story",
+      "to": "wrap"
+    },
+    {
+      "id": "wrap-prose",
+      "from": "wrap",
+      "to": "prose"
+    },
+    {
+      "id": "prose-estimate",
+      "from": "prose",
+      "to": "estimate",
+      "variant": "dashed"
+    },
+    {
+      "id": "estimate-split",
+      "from": "estimate",
+      "to": "split"
+    },
+    {
+      "id": "split-outcome",
+      "from": "split",
+      "to": "outcome",
+      "label": "no",
+      "labelAt": [
+        1990,
+        260
+      ]
+    },
+    {
+      "id": "split-children",
+      "from": "split",
+      "to": "children",
+      "label": "yes, splits",
+      "variant": "emphasis"
+    },
+    {
+      "id": "outcome-done",
+      "from": "outcome",
+      "to": "done",
+      "label": "no",
+      "variant": "emphasis",
+      "labelAt": [
+        1990,
+        355
+      ]
+    },
+    {
+      "id": "outcome-ask",
+      "from": "outcome",
+      "to": "ask",
+      "label": "yes"
+    },
+    {
+      "id": "story-fail",
+      "from": "story",
+      "to": "fail",
+      "label": "cannot ground",
+      "variant": "dashed",
+      "labelDy": 30
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Size decision",
+      "items": [
+        "Fibonacci estimate against ESTIMATE_BANDS",
+        "8 or more splits into 2-6 children of 5 or less",
+        "Each child walks the pipeline alone"
+      ]
+    }
+  ]
+}

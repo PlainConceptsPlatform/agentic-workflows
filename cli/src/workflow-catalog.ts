@@ -35,6 +35,7 @@ export const packageOwnedTargets = [
   ".github/workflows/work-router.yml",
   "scripts/compile-agent-workflows.mjs",
   "opencode.ci.json",
+  "docs/diagrams.md",
 ] as const;
 
 export interface MandatoryFile {

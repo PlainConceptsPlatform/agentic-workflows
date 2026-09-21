@@ -32,6 +32,9 @@ export const FINDING_FIELDS = [
   "firstSeen",
   "lastSeen",
   "frames",
+  "topFrames",
+  "message",
+  "category",
   "fingerprint",
 ];
 
@@ -112,6 +115,16 @@ export function ownFrames(details, prefix) {
     .slice(0, MAX_FRAMES);
 }
 
+export function topFrames(details) {
+  const stacks = (Array.isArray(details) ? details : []).flatMap((detail) =>
+    Array.isArray(detail?.parsedStack) ? detail.parsedStack : []);
+
+  return stacks
+    .filter((frame) => typeof frame?.method === "string")
+    .map((frame) => clip(frame.method))
+    .slice(0, MAX_FRAMES);
+}
+
 /** Masks everything in SCRUBS. Applied to every string before it is rendered or scanned. */
 export function scrub(value) {
   return SCRUBS.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), value);
@@ -162,6 +175,9 @@ export function toFindings(rows, { environment, ownCodePrefix = "", minOccurrenc
       firstSeen: clip(row.FirstSeen),
       lastSeen: clip(row.LastSeen),
       frames: ownFrames(row.AnyDetails, ownCodePrefix),
+      topFrames: topFrames(row.AnyDetails),
+      message: clip(row.AnyMessage),
+      category: clip(row.AnyCategory),
       fingerprint: fingerprint(clip(row.ProblemId), clip(row.OperationName), environment),
     }))
     .filter((finding) => finding.occurrences >= minOccurrences && finding.operations >= minOperations)
@@ -177,34 +193,41 @@ export function toFindings(rows, { environment, ownCodePrefix = "", minOccurrenc
  */
 export function render(finding, { environment, lookbackHours, ownCodePrefix = "" }) {
   const marker = `<!-- pcp-app-error: ${finding.fingerprint} -->`;
-  const title = `${finding.exceptionType} in ${finding.operationName || finding.roleName || environment}`;
+  const title = `${finding.exceptionType} in ${finding.operationName || finding.category || finding.roleName || environment}`;
 
   const body = [
     marker,
     `**${finding.occurrences} occurrence(s)** in the last ${lookbackHours}h in \`${environment}\`, across ${finding.operations} operation(s).`,
     "",
     `- Exception: \`${finding.exceptionType}\``,
+    finding.message ? `- Message: \`${finding.message}\`` : null,
     `- Operation: \`${finding.operationName || "(none recorded)"}\``,
+    finding.category ? `- Source: \`${finding.category}\`` : null,
     `- Role: \`${finding.roleName || "(none recorded)"}\``,
     `- First seen: ${finding.firstSeen}`,
     `- Last seen: ${finding.lastSeen}`,
     finding.frames.length > 0
       ? `\n**Our own frames, outermost first**\n\n\`\`\`\n${finding.frames.join("\n")}\n\`\`\``
-      : ownCodePrefix
-        // The prefix is set and nothing matched: every frame belongs to the framework or to a
-        // dependency. Routine for an exception raised inside framework code -- a cancelled task
-        // is the common one -- and nothing for the reader to go and configure.
-        ? `\n_No frame in this exception belongs to \`${clip(ownCodePrefix)}\`: all of them are the framework's or a dependency's. That is usual for an exception thrown inside framework code, such as a cancelled task._`
-        // No prefix, so no frame can be recognised as this repository's own and the
-        // stack is dropped rather than publishing somebody else's file paths.
-        : "\n_No stack frames are shown: this repository has not said which assemblies are its own. Set `OWN_CODE_PREFIX` in the workflow to name them._",
+      : finding.topFrames.length > 0
+        ? ownCodePrefix
+          // The prefix is set and nothing matched: every frame belongs to the framework or to a
+          // dependency. Show the top frames anyway, because a framework stack is still better
+          // than nothing when the exception is something like a cancelled task raised inside
+          // framework code.
+          ? `\n_No frame in this exception belongs to \`${clip(ownCodePrefix)}\`: all of them are the framework's or a dependency's._\n\n**Top stack frames, outermost first**\n\n\`\`\`\n${finding.topFrames.join("\n")}\n\`\`\``
+          : `\n**Top stack frames, outermost first**\n\n\`\`\`\n${finding.topFrames.join("\n")}\n\`\`\``
+        : ownCodePrefix
+          ? `\n_No frame in this exception belongs to \`${clip(ownCodePrefix)}\`: all of them are the framework's or a dependency's. That is usual for an exception thrown inside framework code, such as a cancelled task._`
+          // No prefix, so no frame can be recognised as this repository's own and the
+          // stack is dropped rather than publishing somebody else's file paths.
+          : "\n_No stack frames are shown: this repository has not said which assemblies are its own. Set `OWN_CODE_PREFIX` in the workflow to name them._",
     "",
     "---",
     "",
     "Filed automatically from Application Insights. Nothing here was read by a model, and no",
     "identifier that joins back to a person is included, so the reproduction is still somebody's",
     "to work out. Close this with the `error-accepted` label to stop it being filed again.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 
   return { title, body, marker };
 }

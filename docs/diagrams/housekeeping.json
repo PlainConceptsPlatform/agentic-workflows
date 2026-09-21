@@ -1,0 +1,277 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Housekeeping",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "cron",
+      "type": "external",
+      "label": "cron 23 */6 * * *",
+      "pos": [
+        40,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "scan",
+      "type": "backend",
+      "label": "List open issues",
+      "sublabel": "PRs and branches",
+      "pos": [
+        260,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "park",
+      "type": "security",
+      "label": "Issue has review?",
+      "pos": [
+        480,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "why",
+      "type": "security",
+      "label": "And stalled?",
+      "pos": [
+        700,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "budget",
+      "type": "security",
+      "label": "Budget spent?",
+      "sublabel": "6h, under 3 tries",
+      "pos": [
+        920,
+        40
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "retry",
+      "type": "backend",
+      "label": "Retry",
+      "sublabel": "comment, dispatch",
+      "pos": [
+        1140,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "strand",
+      "type": "backend",
+      "label": "Strands",
+      "sublabel": "drop pr-pending",
+      "pos": [
+        700,
+        220
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "parent",
+      "type": "backend",
+      "label": "Close split parent",
+      "sublabel": "all children closed",
+      "pos": [
+        920,
+        220
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "branch",
+      "type": "security",
+      "label": "Bot PRs done?",
+      "sublabel": "no open, no human",
+      "pos": [
+        1140,
+        220
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "delete",
+      "type": "backend",
+      "label": "Delete branch",
+      "pos": [
+        1360,
+        220
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "digest",
+      "type": "backend",
+      "label": "Digest",
+      "sublabel": "Needs a human",
+      "pos": [
+        1360,
+        40
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "end",
+      "type": "backend",
+      "label": "One place to look",
+      "sublabel": "instead of four repos",
+      "pos": [
+        1580,
+        40
+      ],
+      "size": [
+        140,
+        52
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "cron-scan",
+      "from": "cron",
+      "to": "scan"
+    },
+    {
+      "id": "scan-park",
+      "from": "scan",
+      "to": "park"
+    },
+    {
+      "id": "park-strand",
+      "from": "park",
+      "to": "strand",
+      "label": "no"
+    },
+    {
+      "id": "park-why",
+      "from": "park",
+      "to": "why",
+      "label": "yes"
+    },
+    {
+      "id": "why-digest",
+      "from": "why",
+      "to": "digest",
+      "label": "decision",
+      "variant": "emphasis"
+    },
+    {
+      "id": "why-budget",
+      "from": "why",
+      "to": "budget",
+      "label": "stalled"
+    },
+    {
+      "id": "budget-digest",
+      "from": "budget",
+      "to": "digest",
+      "label": "spent",
+      "variant": "dashed"
+    },
+    {
+      "id": "budget-retry",
+      "from": "budget",
+      "to": "retry",
+      "label": "yes",
+      "variant": "emphasis"
+    },
+    {
+      "id": "retry-strand",
+      "from": "retry",
+      "to": "strand",
+      "variant": "dashed"
+    },
+    {
+      "id": "strand-parent",
+      "from": "strand",
+      "to": "parent"
+    },
+    {
+      "id": "parent-branch",
+      "from": "parent",
+      "to": "branch"
+    },
+    {
+      "id": "branch-delete",
+      "from": "branch",
+      "to": "delete",
+      "label": "yes"
+    },
+    {
+      "id": "branch-digest",
+      "from": "branch",
+      "to": "digest",
+      "label": "no",
+      "variant": "dashed"
+    },
+    {
+      "id": "delete-digest",
+      "from": "delete",
+      "to": "digest",
+      "variant": "dashed"
+    },
+    {
+      "id": "digest-end",
+      "from": "digest",
+      "to": "end",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Retry a failure, report a decision",
+      "items": [
+        "A crash, timeout or empty output is a machine failure (stalled) - retry",
+        "A triage needs-maintainer, refine questions, or merge-gate review is a verdict - retrying reproduces it"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agent Release",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "start",
+      "type": "external",
+      "label": "Router release route",
+      "sublabel": "operation=release",
+      "pos": [
+        40,
+        200
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "facts",
+      "type": "backend",
+      "label": "Facts (rung 3)",
+      "sublabel": "commit log since last tag",
+      "pos": [
+        260,
+        200
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "agent",
+      "type": "backend",
+      "label": "Agent (rung 5)",
+      "sublabel": "write release-notes.md",
+      "pos": [
+        460,
+        200
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "noop",
+      "type": "backend",
+      "label": "Noop",
+      "sublabel": "agent writes a file",
+      "pos": [
+        660,
+        200
+      ],
+      "size": [
+        150,
+        52
+      ]
+    },
+    {
+      "id": "conclude",
+      "type": "security",
+      "label": "Conclude (rung 6)",
+      "sublabel": "bump: BREAKING=major, feat=minor",
+      "pos": [
+        860,
+        200
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "push",
+      "type": "backend",
+      "label": "Commit, tag, push",
+      "sublabel": "create GitHub Release",
+      "pos": [
+        1060,
+        200
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "done",
+      "type": "backend",
+      "label": "Released",
+      "sublabel": "tag and Release published",
+      "pos": [
+        1240,
+        200
+      ],
+      "size": [
+        120,
+        52
+      ]
+    },
+    {
+      "id": "fail",
+      "type": "security",
+      "label": "Failed",
+      "sublabel": "no tag, nothing partial",
+      "pos": [
+        860,
+        330
+      ],
+      "size": [
+        120,
+        52
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "start-facts",
+      "from": "start",
+      "to": "facts",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "facts-agent",
+      "from": "facts",
+      "to": "agent",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "agent-noop",
+      "from": "agent",
+      "to": "noop",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "noop-conclude",
+      "from": "noop",
+      "to": "conclude",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "conclude-push",
+      "from": "conclude",
+      "to": "push",
+      "label": "bumps version",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "push-done",
+      "from": "push",
+      "to": "done",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "conclude-fail",
+      "from": "conclude",
+      "to": "fail",
+      "label": "fails",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Agent writes prose, shell does the rest",
+      "items": [
+        "The agent's only output is a file on disk",
+        "Version bump, tag and Release are deterministic",
+        "A confused model cannot publish a release"
+      ]
+    }
+  ]
+}

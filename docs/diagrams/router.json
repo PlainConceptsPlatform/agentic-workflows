@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Work Router",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "ev",
+      "type": "external",
+      "label": "GitHub event",
+      "pos": [
+        40,
+        250
+      ],
+      "size": [
+        120,
+        56
+      ]
+    },
+    {
+      "id": "classify",
+      "type": "backend",
+      "label": "Classify",
+      "sublabel": "rung 1, pure shell",
+      "pos": [
+        240,
+        250
+      ],
+      "size": [
+        130,
+        56
+      ]
+    },
+    {
+      "id": "authorize",
+      "type": "security",
+      "label": "Authorize",
+      "sublabel": "write + org member?",
+      "pos": [
+        440,
+        250
+      ],
+      "size": [
+        130,
+        56
+      ]
+    },
+    {
+      "id": "work",
+      "type": "security",
+      "label": "Route",
+      "sublabel": "dispatch one worker",
+      "pos": [
+        640,
+        250
+      ],
+      "size": [
+        130,
+        56
+      ]
+    },
+    {
+      "id": "wRefine",
+      "type": "backend",
+      "label": "agent-refine",
+      "pos": [
+        870,
+        70
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "wImpl",
+      "type": "backend",
+      "label": "agent-implement",
+      "pos": [
+        870,
+        140
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "wReview",
+      "type": "backend",
+      "label": "agent-apply-review",
+      "pos": [
+        870,
+        210
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "wGate",
+      "type": "backend",
+      "label": "agent-merge-gate",
+      "pos": [
+        870,
+        280
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "wAudit",
+      "type": "backend",
+      "label": "agent-audit",
+      "pos": [
+        870,
+        350
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "wRelease",
+      "type": "backend",
+      "label": "agent-release",
+      "pos": [
+        870,
+        420
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "wTriage",
+      "type": "backend",
+      "label": "agent-triage",
+      "pos": [
+        870,
+        490
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "pJobs",
+      "type": "backend",
+      "label": "Deterministic jobs",
+      "sublabel": "no model runs",
+      "pos": [
+        440,
+        420
+      ],
+      "size": [
+        130,
+        56
+      ]
+    },
+    {
+      "id": "idle",
+      "type": "external",
+      "label": "Idle",
+      "sublabel": "~10s, all skipped",
+      "pos": [
+        240,
+        470
+      ],
+      "size": [
+        120,
+        52
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Router (rung 1)",
+      "wraps": [
+        "classify",
+        "authorize",
+        "work"
+      ],
+      "pad": 16
+    }
+  ],
+  "connections": [
+    {
+      "id": "ev-classify",
+      "from": "ev",
+      "to": "classify",
+      "variant": "emphasis"
+    },
+    {
+      "id": "classify-authorize",
+      "from": "classify",
+      "to": "authorize"
+    },
+    {
+      "id": "authorize-work",
+      "from": "authorize",
+      "to": "work",
+      "label": "trusted",
+      "variant": "emphasis"
+    },
+    {
+      "id": "authorize-idle",
+      "from": "authorize",
+      "to": "idle",
+      "label": "no permission",
+      "variant": "dashed"
+    },
+    {
+      "id": "authorize-triage",
+      "from": "authorize",
+      "to": "wTriage",
+      "label": "outside collab"
+    },
+    {
+      "id": "work-refine",
+      "from": "work",
+      "to": "wRefine",
+      "label": "refine",
+      "variant": "emphasis"
+    },
+    {
+      "id": "work-impl",
+      "from": "work",
+      "to": "wImpl",
+      "label": "implement"
+    },
+    {
+      "id": "work-review",
+      "from": "work",
+      "to": "wReview",
+      "label": "apply-review"
+    },
+    {
+      "id": "work-gate",
+      "from": "work",
+      "to": "wGate",
+      "label": "merge-gate"
+    },
+    {
+      "id": "work-audit",
+      "from": "work",
+      "to": "wAudit",
+      "label": "audit"
+    },
+    {
+      "id": "work-release",
+      "from": "work",
+      "to": "wRelease",
+      "label": "release"
+    },
+    {
+      "id": "classify-pjobs",
+      "from": "classify",
+      "to": "pJobs",
+      "label": "cron or dispatch",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Router guarantees",
+      "items": [
+        "One event creates one run, at most one thing happens",
+        "Classification is pure shell with no network calls",
+        "Bots authorize via bot-working label pattern"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Cost of an idle run",
+      "items": [
+        "A run still appears for every matching event even when nothing downstream happens",
+        "Idle runs cost about ten seconds with every job skipped"
+      ]
+    }
+  ]
+}
