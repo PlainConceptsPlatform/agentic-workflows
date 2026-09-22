@@ -1,4 +1,9 @@
-## ADDED Requirements
+# agent-workflows Specification
+
+## Purpose
+TBD - created by archiving change add-stacked-pr-delivery. Update Purpose after archive.
+
+## Requirements
 
 ### Requirement: Refine may open a stack for dependent children
 
@@ -96,21 +101,3 @@ move any label, and stack reconciliation SHALL run only when a `stack-root-pr` m
 
 - **WHEN** a stack has open children and an open root
 - **THEN** housekeeping does nothing and the digest carries no line for it
-
-## MODIFIED Requirements
-
-### Requirement: Refine splits oversized stories into right-sized children
-
-Refine SHALL split a story estimated 8 or more into at most 6 children of 5 or less. When the
-children build on each other it SHALL additionally open a stack per the
-*Refine may open a stack for dependent children* requirement; when they do not, the split SHALL
-remain marker-free and behave exactly as before.
-
-### Requirement: Housekeeping closes split parents and reconciles stuck work
-
-Housekeeping SHALL continue to retry stalled work, drop orphaned `pr-pending` labels, close flat
-split parents once every child is closed, and delete finished bot-authored branches, with the
-single addition of the stack reconciliations defined in the
-*Housekeeping reconciles stack states without moving labels* requirement. For a stack feature
-issue, the split-parent close SHALL be suppressed: only the root pull request's merge ends a
-stack feature issue.

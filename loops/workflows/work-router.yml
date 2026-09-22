@@ -654,7 +654,7 @@ jobs:
           REPO: ${{ github.repository }}
           STACK_BRANCH: ${{ needs.check-stack-branch.outputs.stack-branch }}
           ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
-          ATTEMPTS: ${{ needs.classify.outputs.implement-attempts }}
+          ATTEMPTS: ${{ needs.classify.outputs.attempts }}
         run: |
           set -euo pipefail
           gh workflow run agent-implement.lock.yml --repo "$REPO" --ref "$STACK_BRANCH" \

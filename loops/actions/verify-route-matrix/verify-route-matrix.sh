@@ -2410,8 +2410,10 @@ if [ -f "$APP_ERRORS_MJS" ]; then
   # 3. The field allowlist is what actually holds the line, because a redaction rule filters
   # values and cannot see a field somebody adds next year. Compared as a set, so reordering is
   # fine and an addition is not. run_id is the one that matters: it is unhashed on this
-  # telemetry and joins to a conversation and to a person.
-  expected_fields="exceptionType frames fingerprint firstSeen lastSeen occurrences operationName operations problemId roleName"
+  # telemetry and joins to a conversation and to a person. category, fingerprint, message and
+  # topFrames joined in v0.28.7 to enrich the filed issues (a84928a); they are set-side
+  # fields, never engine telemetry, so the allowlist grows with them.
+  expected_fields="category exceptionType fingerprint firstSeen frames lastSeen message occurrences operationName operations problemId roleName topFrames"
   actual_fields="$(sed -n '/export const FINDING_FIELDS = \[/,/\];/p' "$APP_ERRORS_MJS" |
     grep -oE '"[a-zA-Z]+"' | tr -d '"' | sort | tr '\n' ' ' | sed 's/ $//')"
   if [ "$actual_fields" = "$(echo "$expected_fields" | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')" ]; then
