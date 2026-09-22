@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "archify": {
+      "source": "tt-a1i/archify",
+      "sourceType": "github",
+      "skillPath": "archify/SKILL.md",
+      "computedHash": "00fe4e2a7a54364c028a91292369b04ad399bae1992a337a7243b6e0627dfd6f"
+    },
+    "pc-plan-story": {
+      "source": "plainconceptsplatform/agent-harness",
+      "sourceType": "github",
+      "skillPath": "skills/pc-plan-story/SKILL.md",
+      "computedHash": "0080626ecf354bcaefaf93b69aaace8d14807ffcecb33a28bdbc0019afc0ead8"
+    }
+  }
+}
