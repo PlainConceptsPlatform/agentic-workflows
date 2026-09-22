@@ -4,7 +4,7 @@ import { excludedWorkerFiles, processRoutes, stripRouteFromRouter } from "./rout
 import { routeNames, type RouteName } from "./workflow-catalog.js";
 
 const ROUTER_YAML = `# header
-name: "All Work Router"
+name: "# Main Work Router"
 
 on:
   schedule:

@@ -1,5 +1,5 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/work-router.yml. Update with `workflows update --force`; consumer edits may be overwritten.
-name: "All Work Router"
+name: "# Main Work Router"
 
 # Owns every repository automation trigger. Classifies each event into exactly one route,
 # then calls at most one worker or runs one deterministic job. No model runs here.
@@ -10,67 +10,91 @@ name: "All Work Router"
 run-name: >-
   ${{ github.event_name == 'issues'
   && github.event.action == 'opened'
-  && format('Issue opened: {0} (#{1}) by {2}', github.event.issue.title, github.event.issue.number, github.actor)
+  && format('Event: Issue opened — #{0} {1} by {2}', github.event.issue.number, github.event.issue.title, github.actor)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
   && contains(github.event.issue.labels.*.name, 'implement')
-  && format('Working (Implement): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Agent: Implement — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
   && contains(github.event.issue.labels.*.name, 'refine')
-  && format('Working (Refine): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Agent: Refine — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
   && contains(github.event.issue.labels.*.name, 'direct')
-  && format('Working (Direct): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Working: Direct — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
   && contains(github.event.issue.labels.*.name, 'triage')
-  && format('Working (Triage): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Agent: Triage — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
-  && format('Working: {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Working: #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'implement'
   && endsWith(github.actor, '[bot]')
-  && format('Working (Implement): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Agent: Implement — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'refine'
   && endsWith(github.actor, '[bot]')
-  && format('Working (Refine): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Agent: Refine — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'direct'
   && endsWith(github.actor, '[bot]')
-  && format('Working (Direct): {0} (#{1})', github.event.issue.title, github.event.issue.number)
+  && format('Working: Direct — #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
-  && format('{0} label on #{1} by {2}', github.event.label.name, github.event.issue.number, github.actor)
+  && format('Event: {0} on #{1} by {2}', github.event.label.name, github.event.issue.number, github.actor)
   || github.event_name == 'issue_comment'
-  && format('comment on #{0} by {1}', github.event.issue.number, github.actor)
+  && format('Event: Comment on #{0} by {1}', github.event.issue.number, github.actor)
   || github.event_name == 'pull_request_review'
-  && format('review on PR #{0} by {1}', github.event.pull_request.number, github.actor)
+  && format('Event: Review on PR #{0} by {1}', github.event.pull_request.number, github.actor)
   || github.event_name == 'pull_request_review_comment'
-  && format('review comment on PR #{0} by {1}', github.event.pull_request.number, github.actor)
+  && format('Event: Review comment on PR #{0} by {1}', github.event.pull_request.number, github.actor)
   || github.event_name == 'pull_request_target'
-  && format('PR #{0} {1} by {2}', github.event.pull_request.number, github.event.action, github.actor)
+  && format('Event: PR #{0} {1} by {2}', github.event.pull_request.number, github.event.action, github.actor)
   || github.event_name == 'workflow_run'
-  && format('CI {0} on {1}', github.event.workflow_run.conclusion, github.event.workflow_run.head_branch)
+  && format('Event: CI {0} on {1}', github.event.workflow_run.conclusion, github.event.workflow_run.head_branch)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'triage'
-  && format('Working (Triage): #{0}', inputs.issue-number)
+  && format('Agent: Triage — #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'refine'
-  && format('Working (Refine): #{0}', inputs.issue-number)
+  && format('Agent: Refine — #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'implement'
-  && format('Working (Implement): #{0}', inputs.issue-number)
+  && format('Agent: Implement — #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'merge-gate'
-  && format('Working (Merge Gate): PR #{0}', inputs.pr-number)
+  && format('Agent: Merge Gate — PR #{0}', inputs.pr-number)
+  || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'visual-verify'
+  && format('Agent: Visual Verify — PR #{0}', inputs.pr-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'batch'
-  && format('Working (Batch): #{0}', inputs.issue-number)
+  && format('Working: Batch — #{0}', inputs.issue-number)
+  || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'audit'
+  && format('Agent: Audit — manual{0}', '')
+  || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'release'
+  && format('Agent: Release{0}', '')
   || github.event_name == 'workflow_dispatch'
   && format('dispatch: {0}', inputs.operation)
+  || github.event_name == 'schedule'
+  && github.event.schedule == '17 1 * * 1'
+  && format('Agent: Audit — weekly{0}', '')
+  || github.event_name == 'schedule'
+  && github.event.schedule == '43 3 * * *'
+  && format('Agentics: Audit Close — daily{0}', '')
+  || github.event_name == 'schedule'
+  && github.event.schedule == '0 6 * * *'
+  && format('Agentics: Cleanup — daily{0}', '')
+  || github.event_name == 'schedule'
+  && github.event.schedule == '17 * * * *'
+  && format('Agentics: Reconcile — hourly{0}', '')
+  || github.event_name == 'schedule'
+  && github.event.schedule == '23 */6 * * *'
+  && format('Agentics: Maintenance — 6h{0}', '')
   || github.event_name == 'schedule'
   && format('schedule {0}', github.event.schedule)
   || github.event_name }}
@@ -175,6 +199,7 @@ on:
           - triage
           - apply-review
           - merge-gate
+          - visual-verify
           - audit
           - audit-close
           - cleanup-artifacts
@@ -358,7 +383,7 @@ jobs:
       ci-conclusion: ${{ steps.route.outputs.ci-conclusion }}
       ci-run-id: ${{ steps.route.outputs.ci-run-id }}
       merge-gate-attempts: ${{ steps.route.outputs.merge-gate-attempts }}
-      implement-attempts: ${{ steps.route.outputs.implement-attempts }}
+      attempts: ${{ steps.route.outputs.attempts }}
       refine-mode: ${{ steps.route.outputs.refine-mode }}
       triage-mode: ${{ steps.route.outputs.triage-mode }}
       trigger-kind: ${{ steps.route.outputs.trigger-kind }}
@@ -388,6 +413,7 @@ jobs:
     with:
       issue-number: ${{ needs.classify.outputs.issue-number }}
       mode: ${{ needs.classify.outputs.refine-mode }}
+      attempts_so_far: ${{ needs.classify.outputs.attempts }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
       CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
@@ -583,7 +609,7 @@ jobs:
     permissions: write-all
     with:
       issue-number: ${{ needs.classify.outputs.issue-number }}
-      attempts_so_far: ${{ needs.classify.outputs.implement-attempts }}
+      attempts_so_far: ${{ needs.classify.outputs.attempts }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
       CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
@@ -678,6 +704,7 @@ jobs:
     with:
       issue-number: ${{ needs.classify.outputs.issue-number }}
       mode: ${{ needs.classify.outputs.triage-mode }}
+      attempts_so_far: ${{ needs.classify.outputs.attempts }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
       CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
@@ -697,6 +724,7 @@ jobs:
     with:
       pr-number: ${{ needs.classify.outputs.pr-number }}
       linked-issue: ${{ needs.classify.outputs.linked-issue }}
+      attempts_so_far: ${{ needs.classify.outputs.attempts }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
       CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
@@ -739,6 +767,19 @@ jobs:
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+
+  call-visual-verify:
+    needs: classify
+    if: needs.classify.outputs.route == 'visual-verify'
+    uses: ./.github/workflows/agent-visual-verify.lock.yml
+    permissions: write-all
+    with:
+      pr-number: ${{ needs.classify.outputs.pr-number }}
+      linked-issue: ${{ needs.classify.outputs.linked-issue }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
 
   call-audit:
     needs: classify
@@ -809,10 +850,10 @@ jobs:
   # pull_request_target. Two entry points:
   #   opened / reopened / synchronize → check the pull request that changed. Gated to this
   #     repository's own branches so a fork PR never starts this App-token job.
-  #   closed & merged                 → the target branch moved, so re-check every open bot
+  #   closed & merged                 → the target branch moved, so re-check every open
   #     pull request that may have just become conflicted (the "main changed after another PR
   #     merged" case). A merge into the default branch is an inherently trusted internal event.
-  # It dispatches only for bot-authored, open, non-draft pull requests whose head is this
+  # It dispatches only for open, non-draft pull requests whose head is this
   # repository AND whose CI has already concluded (dispatching while CI is still pending would
   # make the gate read a 'pending' verdict and prematurely ask for human review; that PR is
   # covered by the CI-completion route instead). The gate's subject job re-validates ownership
@@ -843,7 +884,7 @@ jobs:
           persist-credentials: false
       - name: Generate App token
         id: app-token
-        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
@@ -857,8 +898,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Dispatch the Merge Gate for one pull request when it is a red-CI open, non-draft,
-          # bot-authored pull request on this repository whose CI has concluded — the
+          # Dispatch the Merge Gate for one pull request when it is a red-CI open, non-draft
+          # pull request on this repository whose CI has concluded — the
           # conflict case is one arm of that, because a conflicting PR never gets a fresh
           # CI run of its own; a merge conflict with red or concluded CI is the same
           # "needs the gate" signal. A green non-conflicting PR is left for the merge belt
@@ -902,7 +943,6 @@ jobs:
             [ -n "$meta" ] || return 0
             if [ "$(jq -r '.state' <<<"$meta")" != "open" ] \
               || [ "$(jq -r '.draft' <<<"$meta")" != "false" ] \
-              || [ "$(jq -r '.bot'   <<<"$meta")" != "Bot" ] \
               || [ "$(jq -r '.head'  <<<"$meta")" != "$REPO" ]; then
               return 0
             fi
@@ -1140,7 +1180,7 @@ jobs:
           persist-credentials: false
       - name: Generate App token
         id: app-token
-        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}

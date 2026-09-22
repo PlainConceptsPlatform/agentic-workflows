@@ -74,6 +74,7 @@ const sourceMappings = [
   ["actions", ".github/actions"],
   ["workflows", ".github/workflows"],
   ["scripts", "scripts"],
+  ["docs", "docs"],
 ] as const;
 
 export function mandatoryFileSpecs(sourcePath: string): CatalogFile[] {
@@ -267,7 +268,7 @@ function hasEmptyVerifyCommands(current: unknown): boolean {
 // consumer forever: that is how `stale-recovery` and `update-changelog` outlived the code that
 // called them. Deliberately not `.github/workflows/`, where a worker's absence means the route
 // is not installed rather than gone, and never anything without a header, which is a fork.
-const pruneRoots = [".github/actions", ".github/workflows/shared"] as const;
+const pruneRoots = [".github/actions", ".github/workflows/shared", "docs"] as const;
 
 async function orphanedManagedFiles(repositoryPath: string, keep: ReadonlySet<string>): Promise<string[]> {
   const orphans: string[] = [];

@@ -72,6 +72,14 @@ env:
   # one unusable report can keep every other bot pull request in the repository waiting.
   PARK_AT_UNUSABLE_OUTPUT: "2"
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
+  # Visual verification runs after auto-merge is decided and before the merge itself. The worker
+  # runs /repo-verify, drives a browser via agent-browser, and attaches screenshots to the linked
+  # issue. Failures never block the merge. Consumers opt out by setting this to "false".
+  VISUAL_VERIFY_ENABLED: "true"
+  VISUAL_VERIFY_BUILD_COMMAND: ""
+  VISUAL_VERIFY_START_COMMAND: ""
+  VISUAL_VERIFY_PORT: "3000"
+  VISUAL_VERIFY_WAIT_SECONDS: "30"
   GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
@@ -314,7 +322,7 @@ jobs:
             Protected files:
             ${{ needs.protected_changes.outputs.files }}
 
-            Required owners: ${{ needs.protected_changes.outputs.required_owners || 'none configured' }}
+            Required owners: `${{ needs.protected_changes.outputs.required_owners || 'none configured' }}`
 
             **Verdict:** owner-review
 
@@ -399,6 +407,17 @@ jobs:
           protected-hit: ${{ needs.protected_changes.outputs.requires_review }}
           owner-hit: ${{ needs.protected_changes.outputs.owner_hit }}
           confidence-threshold: ${{ env.CONFIDENCE_THRESHOLD }}
+  # The pre-merge screenshot pass is dispatched rather than nested. A nested
+  # workflow_call job cannot live downstream of this worker's agent: the compiler hoists
+  # prompt-referenced jobs into the agent's needs, and any call job depending on
+  # validate_output closes a cycle through agent (measured: the graph refuses to compile).
+  # The first version of this wiring was a step doing `uses:` on the worker's lock file,
+  # which is not a call at all -- the runner resolved it as a local action and died with
+  # "Can't find action.yml" under continue-on-error, so every auto-merge since the feature
+  # shipped merged with zero screenshots and nothing red. This dispatches the router's
+  # existing visual-verify operation (the dispatch-triage pattern) before the merge below.
+  # The merge pins the head SHA with --match-head-commit, and visual-verify re-reads the
+  # pull request itself, so the called worker owns its own subject validation.
   conclude:
     needs: [activation, subject, protected_changes, agent, safe_outputs, validate_output]
     # `protected_changes.result == 'success'` is stated rather than relied on. GitHub skips a job
@@ -417,6 +436,8 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+      # dispatching the visual-verify pass through the router's workflow_dispatch
+      actions: write
     steps:
       - name: Create bot token
         id: app-token
@@ -468,7 +489,9 @@ jobs:
             | Files / lines | ${{ needs.protected_changes.outputs.files_changed }} / ${{ needs.protected_changes.outputs.lines_changed }} |
             | Protected paths | ${{ needs.protected_changes.outputs.requires_review == 'true' && 'yes' || 'no' }} |
             | Owner paths | ${{ needs.protected_changes.outputs.owner_hit == 'true' && 'yes' || 'no' }} |
-            | Required owners | ${{ needs.protected_changes.outputs.required_owners || 'none configured' }} |
+            ${{ needs.validate_output.outputs.outcome == 'owner-review'
+              && format('| Required owners | `{0}` |', needs.protected_changes.outputs.required_owners != '' && needs.protected_changes.outputs.required_owners || 'none configured, see the matched paths above')
+              || '' }}
 
             Why this blast radius:
             ```
@@ -476,6 +499,31 @@ jobs:
             ```
 
             Findings and verification on the linked issue: #${{ needs.subject.outputs.issue }}. [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      # Screenshots before the merge. The visual-verify pass is dispatched through the
+      # router (see the visual_verify note above conclude) and cannot be awaited from here;
+      # the merge below pins the head SHA with --match-head-commit, so a screenshot run on
+      # the same head describes exactly what is being merged. GITHUB_TOKEN: a dispatch
+      # raises one workflow_run-free event, and the called worker re-owns its subject.
+      # A stack root never enters either branch: its screenshots wait with it.
+      - name: Dispatch visual verification
+        if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.stack_root != 'true' && env.VISUAL_VERIFY_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch }}
+          PR: ${{ needs.subject.outputs.pr }}
+          ISSUE: ${{ needs.subject.outputs.issue }}
+        run: |
+          set -euo pipefail
+          if gh workflow run work-router.yml --repo "$REPO" --ref "$REF" \
+            -f operation=visual-verify -f pr-number="$PR" -f issue-number="$ISSUE"; then
+            echo "Visual verification dispatched for PR #$PR."
+          else
+            echo "::warning::could not dispatch visual verification for PR #$PR; merging without screenshots."
+          fi
+      # The visual verification pass is the visual_verify dispatch above. It runs as its own
+      # worker because a step cannot call a reusable workflow, and the merge below may land
+      # while the capture is still running -- the head SHA pin keeps the two honest.
       # A stack root never merges on its own. The feature issue parks with `review` (refine
       # puts it there), so the subject job normally cannot even find the root PR — this
       # guard is the defense in depth for a root that reaches the merge step anyway, for
@@ -735,7 +783,7 @@ engine:
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
-model: openai/glm-5-3
+model: openai/glm-5-2
 
 max-turns: 300
 max-turn-cache-misses: 3000
@@ -827,6 +875,7 @@ safe-outputs:
   push-to-pull-request-branch:
     target: "*"
     required-title-prefix: "[bot] "
+    max-patch-size: 10240
     # A failed bot PR may already contain protected files. Permit a verified repair push,
     # but protected_changes still prevents the later green-CI cycle from auto-merging it.
     protected-files: allowed
@@ -965,9 +1014,35 @@ timeout-minutes: 120
    reassurance about their absence.
 
    **5c. Check the acceptance criteria.** The issue context at `${{ env.ISSUE_CONTEXT_PATH }}`
-   says what this change was supposed to do. Confirm the diff does it. Set
-   `acceptanceCriteriaMet` to false only when you can name a criterion the diff does not
-   satisfy.
+   says what this change was supposed to do. Confirm the diff does it. The double-check the
+   rest of this step asks you to do is the gate's own: a defect an agent did not notice and CI
+   did not catch is a more expensive rollback than a wrong auto-merge.
+
+   Set `acceptanceCriteriaMet` to `false` when you can name a criterion the diff does not
+   satisfy. Name every criterion that is missing or wrong, in `reason` and in `findings` if
+   the gap is a defect (it often is). An empty `findings` array with
+   `acceptanceCriteriaMet: false` is accepted but carries little evidence: prefer one entry
+   per gap, with `category: correctness`, the file and line, and a `suggestedFix`.
+
+   **Correctness remediation.** When `acceptanceCriteriaMet` is `false`, you may fix the
+   gap and push the fix the same way you fix a failed CI run — this is the same
+   `remediated` verdict the merge-conflict and CI-failure paths use, and it re-runs CI and
+   the gate on the new head. To do it:
+
+   - Produce the patch that closes each unmet criterion. Every criterion you named must be
+     addressed by the patch, or the next gate cycle reproduces this verdict.
+   - Run the verification commands below (scoped to the files you changed) before the push.
+   - Push the fix using `push_to_pull_request_branch` (pr_number: ${{ needs.subject.outputs.pr }},
+     branch: the current PR branch), then emit the `add_comment` with
+     **Verdict:** remediated. Set `acceptanceCriteriaMet` to `false` in the report: the
+     criteria were unmet when you reviewed, and the fix is what addresses them. The next
+     cycle validates the fix.
+   - Do not rebase, reset, amend or otherwise rewrite history: the push is fast-forward only.
+
+   If you cannot fix a criterion in one pass — it needs a decision, a question, or a code path
+   you cannot trace — do not push. Report `assessed` with `acceptanceCriteriaMet: false` and no
+   push. The workflow sends the pull request to a human, which is the correct action when the
+   gap is beyond a focused repair.
 
    **5d. Answer the recoverability checklist.** How easy would this be to undo if it were
    wrong? Cite the diff for each answer, and record the ones that fired in
@@ -1059,8 +1134,9 @@ timeout-minutes: 120
 
 7. Say which of two things you did, and nothing more.
 
-   - **`remediated`** — CI failed or the branch conflicted, you fixed it, you verified the fix,
-     and you are pushing it. Exactly one `push_to_pull_request_branch` goes with this word.
+   - **`remediated`** — something was wrong (CI failed, the branch conflicted, or the diff did
+     not satisfy the acceptance criteria), you fixed it, you verified the fix, and you are
+     pushing it. Exactly one `push_to_pull_request_branch` goes with this word.
    - **`assessed`** — you reviewed the change and are reporting what you found. No push.
 
    These are the only two words the workflow accepts. You do not write `merge`, `review`,
@@ -1108,6 +1184,12 @@ timeout-minutes: 120
    ```
 
    `"findings": []` on a clean change is the expected output, not a failure to do the job.
+
+   When `acceptanceCriteriaMet` is `false` and you are pushing a fix, the verdict must be
+   `remediated`, not `assessed`: the validator refuses an `assessed` verdict that carries a
+   push. Set `acceptanceCriteriaMet` to `false` in the report you push with the fix — it
+   describes the code you reviewed, not the fix you just produced. The next gate cycle
+   re-evaluates the updated diff and sets it to `true` (or finds another gap).
 
    The workflow applies comments, labels, merges, and closures with the App token. Reading the
    repository, running verification commands and delegating a finding to be checked are all part

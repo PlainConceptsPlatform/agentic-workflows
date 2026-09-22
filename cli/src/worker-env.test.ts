@@ -158,7 +158,7 @@ describe("mergeWorkerEnv with a baseline", () => {
 });
 
 const router = (env: string, ciName = "App: CI", cron = "17 1 * * 1") =>
-  `# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/work-router.yml. Update with \`workflows update --force\`; consumer edits may be overwritten.\nname: "All Work Router"\n\nenv:\n${env}\non:\n  workflow_run:\n    # Mirrored from env.CI_WORKFLOW_NAME by the installer.\n    workflows: ["${ciName}"]\n    types: [completed]\n\n  schedule:\n    - cron: "${cron}" # audit slot, mirrored from env.AUDIT_CRON by the installer\n    - cron: "43 3 * * *"\n\njobs:\n  classify:\n    runs-on: ubuntu-latest\n`;
+  `# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/work-router.yml. Update with \`workflows update --force\`; consumer edits may be overwritten.\nname: "# Main Work Router"\n\nenv:\n${env}\non:\n  workflow_run:\n    # Mirrored from env.CI_WORKFLOW_NAME by the installer.\n    workflows: ["${ciName}"]\n    types: [completed]\n\n  schedule:\n    - cron: "${cron}" # audit slot, mirrored from env.AUDIT_CRON by the installer\n    - cron: "43 3 * * *"\n\njobs:\n  classify:\n    runs-on: ubuntu-latest\n`;
 
 describe("parseYamlEnv", () => {
   it("reads a top-level env block from plain YAML and round-trips it", () => {

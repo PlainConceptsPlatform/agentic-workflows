@@ -43,7 +43,8 @@ describe("catalog installation", () => {
       "workflows/shared/defaults.md": "defaults\n",
       "workflows/work-router.yml": "name: Router\n",
       "scripts/compile-agent-workflows.mjs": "compile\n",
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
+      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }\n",
+      "docs/diagrams.md": "---\n# Managed by @plainconceptsplatform/workflows. Source: loops/docs/diagrams.md. Update with `workflows update --force`; consumer edits may be overwritten.\n---\n\n# Diagrams\n",
     });
     const repositoryPath = await createDirectory({});
 
@@ -54,6 +55,7 @@ describe("catalog installation", () => {
     expect(result.installed).toContain(".github/actions/check/action.yml");
     expect(result.installed.some((f) => f.endsWith("shared/defaults.md"))).toBe(true);
     expect(result.installed.some((f) => f.endsWith("work-router.yml"))).toBe(true);
+    expect(result.installed).toContain("docs/diagrams.md");
     // No worker .md files
     expect(result.installed).not.toContain(".github/workflows/agent-refine.md");
     expect(result.installed).not.toContain(".github/workflows/agent-implement.md");
@@ -69,9 +71,10 @@ describe("catalog installation", () => {
       "workflows/shared/defaults.md": "defaults\n",
       "scripts/compile-agent-workflows.mjs": "console.log('compile');\n",
       "scripts/compile.mjs": "console.log('old compile');\n",
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
+      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }\n",
       "workflows/agent-check.lock.yml": "generated\n",
       "actions/actions-lock.json": "generated\n",
+      "docs/diagrams.md": "---\n# Managed by @plainconceptsplatform/workflows. Source: loops/docs/diagrams.md. Update with `workflows update --force`; consumer edits may be overwritten.\n---\n\n# Diagrams\n",
     });
     const repositoryPath = await createDirectory({});
 
@@ -80,6 +83,7 @@ describe("catalog installation", () => {
         ".github/actions/check/action.yml",
         ".github/workflows/agent-check.md",
         ".github/workflows/shared/defaults.md",
+        "docs/diagrams.md",
         "opencode.ci.json",
         "scripts/compile-agent-workflows.mjs",
         "scripts/compile.mjs",
@@ -95,7 +99,8 @@ describe("catalog installation", () => {
       "actions/check/action.yml": header("loops/actions/check/action.yml") + "name: Check\n",
       "workflows/agent-check.md": worker("  REPO_RULES: \"rules\"\n"),
       "scripts/compile-agent-workflows.mjs": "// " + header("loops/scripts/compile-agent-workflows.mjs").slice(2),
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
+      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }\n",
+      "docs/diagrams.md": `---\n${header("loops/docs/diagrams.md")}---\n\n# Diagrams\n`,
     });
     const repositoryPath = await createDirectory({});
 
@@ -109,6 +114,8 @@ describe("catalog installation", () => {
       .resolves.toMatch(/^# Managed by @plainconceptsplatform\/workflows@1\.2\.3\. Source: loops\/actions\/check\/action\.yml\./);
     await expect(readFile(join(repositoryPath, "scripts/compile-agent-workflows.mjs"), "utf8"))
       .resolves.toMatch(/^\/\/ Managed by @plainconceptsplatform\/workflows@1\.2\.3\./);
+    await expect(readFile(join(repositoryPath, "docs/diagrams.md"), "utf8"))
+      .resolves.toMatch(/^---\n# Managed by @plainconceptsplatform\/workflows@1\.2\.3\. Source: loops\/docs\/diagrams\.md\./);
   });
 
   it("copies template ownership headers verbatim", async () => {
@@ -154,7 +161,7 @@ describe("catalog installation", () => {
       "actions/check/action.yml": "name: Check\n",
       "workflows/agent-check.md": "# Check\n",
       "scripts/compile-agent-workflows.mjs": "compile\n",
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
+      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }\n",
     });
     const repositoryPath = await createDirectory({
       ".github/workflows/shared/repo-config.md": "legacy consumer config\n",
@@ -311,7 +318,7 @@ describe("catalog installation", () => {
   // values GitHub will not let a job read where they are also needed.
   it("keeps the router's env values and mirrors them into the trigger and the audit cron", async () => {
     const routerFile = (ci: string, cron: string, job: string) =>
-      `# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/work-router.yml. Update with \`workflows update --force\`; consumer edits may be overwritten.\nname: "All Work Router"\n\nenv:\n  CI_WORKFLOW_NAME: "${ci}"\n  AUDIT_CRON: "${cron}"\n\non:\n  workflow_run:\n    workflows: ["${ci}"]\n    types: [completed]\n\n  schedule:\n    - cron: "${cron}" # audit slot, mirrored from env.AUDIT_CRON by the installer\n\njobs:\n  classify:\n    runs-on: ${job}\n`;
+      `# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/work-router.yml. Update with \`workflows update --force\`; consumer edits may be overwritten.\nname: "# Main Work Router"\n\nenv:\n  CI_WORKFLOW_NAME: "${ci}"\n  AUDIT_CRON: "${cron}"\n\non:\n  workflow_run:\n    workflows: ["${ci}"]\n    types: [completed]\n\n  schedule:\n    - cron: "${cron}" # audit slot, mirrored from env.AUDIT_CRON by the installer\n\njobs:\n  classify:\n    runs-on: ${job}\n`;
     const sourcePath = await createDirectory({
       "workflows/work-router.yml": routerFile("App: CI", "17 1 * * 1", "ubuntu-latest"),
       "scripts/compile-agent-workflows.mjs": "compile\n",
@@ -464,7 +471,7 @@ describe("catalog installation", () => {
       "actions/check/action.yml": "name: Check\n",
       "workflows/agent-check.md": "# Check\n",
       "scripts/compile-agent-workflows.mjs": "compile\n",
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
+      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }\n",
       "templates/agentics/agentics-checks.yml": "name: Agentics checks\n",
       "templates/ci/app-ci-node-monorepo.yml": "name: Node CI\n",
       "templates/release/github-release.yml": "name: Publish GitHub release\n",
@@ -492,14 +499,14 @@ describe("catalog installation", () => {
       "actions/check/action.yml": "name: Check\n",
       "workflows/agent-check.md": "# Check\n",
       "scripts/compile-agent-workflows.mjs": "compile\n",
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
+      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }\n",
     });
     const repositoryPath = await createDirectory({});
 
     const result = await installCatalog(repositoryPath, { sourcePath });
     expect(result.installed).toContain("opencode.ci.json");
     expect(result.installed).toContain("scripts/compile-agent-workflows.mjs");
-    await expect(readFile(join(repositoryPath, "opencode.ci.json"), "utf8")).resolves.toBe("{ \"model\": \"plainconcepts/glm-5-3\" }\n");
+    await expect(readFile(join(repositoryPath, "opencode.ci.json"), "utf8")).resolves.toBe("{ \"model\": \"plainconcepts/glm-5-2\" }\n");
     await expect(readFile(join(repositoryPath, "scripts/compile-agent-workflows.mjs"), "utf8")).resolves.toBe("compile\n");
   });
 
@@ -508,7 +515,7 @@ describe("catalog installation", () => {
       "actions/check/action.yml": "name: Check\n",
       "workflows/agent-check.md": "# Check\n",
       "scripts/compile-agent-workflows.mjs": "same compile script\n",
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
+      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }\n",
     });
     const repositoryPath = await createDirectory({});
 
@@ -542,7 +549,7 @@ describe("catalog installation", () => {
     await ensurePreCommitHook(repositoryPath);
 
     await expect(readFile(join(repositoryPath, ".husky", "pre-commit"), "utf8"))
-       .resolves.toContain("if git diff --cached --name-only -- .github | grep -q .; then");
+      .resolves.toContain("if git diff --cached --name-only -- .github | grep -q .; then");
   });
 
   it("repairs a malformed compiler hook prefixed with pnpm exec", async () => {
@@ -710,7 +717,7 @@ describe("catalog installation", () => {
 
   it("installs the opencode.ci.json template to the repository root", async () => {
     const sourcePath = await createDirectory({
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
+      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }\n",
     });
     const repositoryPath = await createDirectory({});
 
@@ -718,7 +725,7 @@ describe("catalog installation", () => {
       installed: ["opencode.ci.json"],
       conflicts: [],
     });
-    await expect(readFile(join(repositoryPath, "opencode.ci.json"), "utf8")).resolves.toBe("{ \"model\": \"plainconcepts/glm-5-3\" }\n");
+    await expect(readFile(join(repositoryPath, "opencode.ci.json"), "utf8")).resolves.toBe("{ \"model\": \"plainconcepts/glm-5-2\" }\n");
   });
 
   it("installs the .NET and Next.js CI template as app-ci.yml", async () => {
@@ -736,7 +743,7 @@ describe("catalog installation", () => {
 
   it("requires force to replace the opencode.ci.json template", async () => {
     const sourcePath = await createDirectory({
-      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-3\" }\n",
+      "templates/opencode/opencode.ci.json": "{ \"model\": \"plainconcepts/glm-5-2\" }\n",
     });
     const repositoryPath = await createDirectory({
       "opencode.ci.json": "{ \"model\": \"consumer-model\" }\n",
@@ -749,7 +756,7 @@ describe("catalog installation", () => {
     await expect(installTemplate(repositoryPath, "opencode.ci.json", { force: true, sourcePath })).resolves.toMatchObject({
       installed: ["opencode.ci.json"],
     });
-    await expect(readFile(join(repositoryPath, "opencode.ci.json"), "utf8")).resolves.toBe("{ \"model\": \"plainconcepts/glm-5-3\" }\n");
+    await expect(readFile(join(repositoryPath, "opencode.ci.json"), "utf8")).resolves.toBe("{ \"model\": \"plainconcepts/glm-5-2\" }\n");
   });
 
   it("requires force to replace a selected template", async () => {

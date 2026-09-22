@@ -1,0 +1,275 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agent Audit",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "start",
+      "type": "external",
+      "label": "Router audit route",
+      "sublabel": "weekly cron or dispatch",
+      "pos": [
+        40,
+        250
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "backpressure",
+      "type": "security",
+      "label": "Backpressure (rung 1)",
+      "sublabel": "fewer than 3 open reports?",
+      "pos": [
+        260,
+        250
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "facts",
+      "type": "backend",
+      "label": "Facts (rung 3)",
+      "sublabel": "open issues, titles, labels",
+      "pos": [
+        460,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "run",
+      "type": "backend",
+      "label": "Audit (rung 5)",
+      "sublabel": "/repo-audit, read-only",
+      "pos": [
+        660,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "filter",
+      "type": "security",
+      "label": "Filter",
+      "sublabel": "specific, reproducible, impact?",
+      "pos": [
+        860,
+        250
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "score",
+      "type": "backend",
+      "label": "Score 1-10",
+      "sublabel": "severity, likelihood, blast radius",
+      "pos": [
+        1060,
+        250
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "dedupe",
+      "type": "security",
+      "label": "Dedupe",
+      "sublabel": "already tracked or rejected?",
+      "pos": [
+        860,
+        380
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "file",
+      "type": "backend",
+      "label": "File one issue",
+      "sublabel": "top 3 refined as stories",
+      "pos": [
+        660,
+        380
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "report",
+      "type": "backend",
+      "label": "Filed",
+      "sublabel": "bug + refine, gets sized and split",
+      "pos": [
+        460,
+        380
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "quiet",
+      "type": "backend",
+      "label": "Nothing to file",
+      "sublabel": "clean codebase",
+      "pos": [
+        1060,
+        420
+      ],
+      "size": [
+        130,
+        52
+      ]
+    },
+    {
+      "id": "idle",
+      "type": "external",
+      "label": "Idle",
+      "sublabel": "backlog already full",
+      "pos": [
+        280,
+        380
+      ],
+      "size": [
+        120,
+        52
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "start-back",
+      "from": "start",
+      "to": "backpressure",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "back-facts",
+      "from": "backpressure",
+      "to": "facts",
+      "label": "yes",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "back-idle",
+      "from": "backpressure",
+      "to": "idle",
+      "label": "no",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "facts-run",
+      "from": "facts",
+      "to": "run",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "run-filter",
+      "from": "run",
+      "to": "filter",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "filter-score",
+      "from": "filter",
+      "to": "score",
+      "label": "keeps some",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "filter-quiet",
+      "from": "filter",
+      "to": "quiet",
+      "label": "keeps none",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "score-dedupe",
+      "from": "score",
+      "to": "dedupe",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "dedupe-file",
+      "from": "dedupe",
+      "to": "file",
+      "label": "some are new",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "dedupe-quiet",
+      "from": "dedupe",
+      "to": "quiet",
+      "label": "all dupes",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "file-report",
+      "from": "file",
+      "to": "report",
+      "variant": "emphasis",
+      "fromSide": "left",
+      "toSide": "right"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Creates work, read-only",
+      "items": [
+        "The only worker that creates work rather than consuming it",
+        "Files one issue, changes nothing",
+        "Feeds into refine so findings get sized and split"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Memory",
+      "items": [
+        "Open issues only cover what is still open",
+        "Audit records dispositions and reads them next time",
+        "Backpressure: fewer than 3 open reports"
+      ]
+    }
+  ]
+}

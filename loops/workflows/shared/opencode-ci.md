@@ -105,7 +105,7 @@ pre-agent-steps:
     # post step), so two concurrent runs never write the same entry: the newest snapshot simply
     # wins the next restore. The index lives in .codegraph inside the checkout plus a small
     # registry in ~/.codegraph.
-    uses: actions/cache@v4
+    uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
     with:
       path: |
         .codegraph
@@ -149,7 +149,7 @@ pre-agent-steps:
   - name: Setup .NET
     # Ephemeral VMs carry no SDK; the old host had it baked in, and GitHub-hosted images made
     # the dependency invisible. setup-dotnet caches per run from the MS CDN.
-    uses: actions/setup-dotnet@v5
+    uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
     with:
       dotnet-version: 10.0.x
     env:

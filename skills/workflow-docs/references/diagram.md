@@ -1,20 +1,20 @@
-# The `## Diagram` section
+# The `docs/diagrams.md` file
 
-Every worker ends with a Mermaid flowchart under a final `## Diagram` heading, sharing one visual
-language with the `loop-task-diagram` convention, so a reader moving between them sees one scheme.
+Every worker has a corresponding section in `docs/diagrams.md` (installed from
+`loops/docs/diagrams.md`), sharing one visual language with the `loop-task-diagram`
+convention, so a reader moving between them sees one scheme.
 
 ---
 
-## The prompt must exclude it
+## Why diagrams live outside the prompt
 
-The body is the prompt, so a diagram in the body is read as instructions. Two things are required:
+The body is the prompt, so a diagram in the body is read as instructions. Mermaid code is
+charged as tokens on every agent run, and a closing instruction telling the model to ignore
+the section still costs the parse. Diagrams were about 240 lines across the workers, and in
+the release worker's case 21 of its 48 prompt lines.
 
-One. The diagram lives under a final `## Diagram` heading, after every numbered step.
-
-Two. The last numbered step says, verbatim:
-
-> Ignore the `## Diagram` section below. It is documentation for humans and contains no
-> instructions for you.
+`verify-route-matrix.sh` rejects ` ```mermaid ` blocks in worker prompts. Diagrams live in
+`docs/diagrams.md` and nowhere else.
 
 ---
 
@@ -166,8 +166,8 @@ flowchart TD
 
 ## Checks
 
-- [ ] The diagram is the last section, under `## Diagram`
-- [ ] The final numbered prompt step carries the exclusion line verbatim
+- [ ] Every worker has a `## agent-<name>.md` section in `docs/diagrams.md`
+- [ ] `verify-route-matrix.sh` rejects ` ```mermaid ` blocks in worker prompts
 - [ ] `flowchart TD`
 - [ ] Exactly one node of class `start`, with no incoming edges
 - [ ] Every pass path is `-->|✓|` and every fail path is `-.->|✗|`, except where a named path is

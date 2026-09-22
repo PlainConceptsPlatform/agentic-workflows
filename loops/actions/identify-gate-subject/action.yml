@@ -68,11 +68,6 @@ runs:
 
         [ "$(jq -r '.state' <<<"$pr")" = "OPEN" ] || none "PR #$PR_NUMBER is not open"
 
-        # Use GitHub's bot flag because App login formats differ across APIs.
-        if [ "$(jq -r '.author.is_bot' <<<"$pr")" != "true" ]; then
-          none "PR #$PR_NUMBER was authored by $(jq -r '.author.login' <<<"$pr"), a human."
-        fi
-
         issue="$LINKED_ISSUE"
 
         if [ -z "$issue" ]; then

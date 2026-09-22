@@ -4,10 +4,11 @@ description: >
   Author GitHub Agentic Workflows (gh-aw) for this package, pushing every
   deterministic decision into GitHub Actions primitives and spending the agent only on
   judgement. Load when creating or reviewing a loops/workflows/*.md agentic workflow, when
-  adding or changing a route on the Work Router, when a workflow needs its Mermaid diagram,
-  when choosing a trigger or a safe output, or when a compiled workflow misbehaves. Covers the
-  router architecture, the determinism ladder, the verified frontmatter contract, the opencode
-  engine on Forge, the safe-output surface, and the ways a workflow can be green and dead.
+  adding or changing a route on the Work Router, when a workflow needs its Mermaid diagram
+  (delegates to workflow-docs), when choosing a trigger or a safe output, or when a compiled
+  workflow misbehaves. Covers the router architecture, the determinism ladder, the verified
+  frontmatter contract, the opencode engine on Forge, the safe-output surface, and the ways a
+  workflow can be green and dead.
 ---
 
 # Workflow author
@@ -29,7 +30,8 @@ Which is why no worker carries one any more. Diagrams live in `docs/diagrams.md`
 unauthenticated in CI, so a prompt ordering one burns turns and fails), or a duplicate step number
 in its instruction list. All three were real: seven diagrams charged on every run and then skipped,
 an unreachable `gh pr list` in implement, and three prompts with a repeated step where one of the
-duplicates contradicted the other.
+duplicates contradicted the other. Diagram maintenance is owned by
+`skills/workflow-docs/SKILL.md`, which this skill loads at step 5.
 
 Anyone can write an agentic workflow. Trigger on everything, grant broad permissions, and write a
 paragraph asking the model to sort it out. It will appear to work, and it will be slow, expensive,
@@ -78,6 +80,7 @@ loops/workflows/
       call-triage              agent-triage.md              workflow_call only
       call-apply-review        agent-apply-review.md        workflow_call only
       call-merge-gate          agent-merge-gate.md          workflow_call only
+      call-visual-verify       agent-visual-verify.md       workflow_call only
       call-audit               agent-audit.md               workflow_call only
       call-release             agent-release.md             workflow_call only
       deterministic jobs       check-implement-pr, dispatch-triage, bot-approve,
@@ -188,6 +191,8 @@ cost a real debugging session.
 | Merge gate parks every pull request that touches a domain entity | The gate used to escalate on category: any warning became `review`, and `RISK_INDICATORS` named areas every feature PR touches. Dispositions are now computed in `validate-merge-gate-output.sh` from measured blast radius and *verified* findings. An unverified finding never blocks. |
 | Merge gate output is `invalid` on every run after an upgrade | The agent writes `assessed` or `remediated` and a fenced JSON block; the old `merge`/`review` vocabulary is refused on purpose, because those words no longer mean what the validator computes. Recompile the worker. |
 | `Invalid secret, BOT_APP_ID is not defined in the referenced workflow` | The router's caller job passes secrets the called worker does not declare in its `secrets:` block. Only pass secrets the worker declares. The release worker needs only `OPENAI_API_KEY`. |
+| Every under-limit issue skips the agent in 0s, every gate green, incomplete re-dispatches until the issue parks | A custom job that skips in the happy path (an exclusive alternative: refusal on `too_big != 'true'`) sits in the agent's `needs`, which gh-aw assembles automatically. With no status function in the top-level `if:` GitHub prepends `success()`, and a skipped need fails it. Add `&& !failure()` to the gate, exclude the false branch from `incomplete`'s `if:`, and have the false branch's job release the reservation itself (Pliny-Bot #320-322) |
+| A feature runs "green" on every merge but never once executed (visual-verify: zero screenshots ever) | A step did `uses: ./.github/workflows/<worker>.lock.yml`. A step cannot call a reusable workflow: the runner resolves the path as a local action and dies with "Can't find action.yml", swallowed by `continue-on-error`. Call workers from a job-level `uses:` (router pattern) — and if the call must sit downstream of the worker's own agent, the compiler's needs-hoisting forces a cycle, so dispatch the router operation instead (the dispatch-triage pattern) |
 
 The full trap descriptions, including the caller permission trap, the artifact prefix trap, the
 composite action manifest trap, and the App-token event loop, are in
@@ -285,20 +290,68 @@ needed. Both in the `reserve` job, so the claim is atomic.
 ### Naming runs
 
 GitHub titles an issue-triggered run with the issue title, so every run on one issue reads
-identically. Derive the title from the event:
+identically. Give every event a descriptive `run-name` derived from the event and the routed
+operation.
+
+#### Run-name prefix convention
+
+Three prefixes make the # Main Work Router history scannable and map each run to its sidebar
+workflow entry:
+
+| Prefix | Meaning | Examples |
+|---|---|---|
+| `Agent:` | A worker is being dispatched (has a corresponding `Agent: *` sidebar entry) | `Agent: Merge Gate — PR #286` |
+| `Agentics:` | An infrastructure cron job (no model, deterministic) | `Agentics: Maintenance — 6h` |
+| `Event:` | An event observer; no agent runs, the router classified and stopped | `Event: Comment on #42 by CKGrafico` |
+| `Working:` | A non-agent route with no corresponding sidebar workflow (direct, batch) | `Working: Direct — #275 {title}` |
+
+Rules:
+
+- `Agent: {Name}` matches the sidebar workflow name exactly (`Agent: Merge Gate` ↔ the
+  `Agent: Merge Gate` workflow file).
+- `—` separates the route name from the subject (PR number, issue number, or schedule).
+- `Working:` is reserved for routes that have no `Agent: *.lock.yml` file of their own.
+- Schedule entries use `github.event.schedule` to distinguish crons.
+- The final `|| github.event_name` fallback rarely fires; every event should match a clause.
 
 ```yaml
 run-name: >-
   ${{ github.event_name == 'issues'
-  && format('{0} label on #{1} by {2}', github.event.label.name, github.event.issue.number, github.actor)
-  || github.event_name == 'issue_comment'
-  && format('comment on #{0} by {1}', github.event.issue.number, github.actor)
+  && github.event.action == 'opened'
+  && format('Event: Issue opened — #{0} {1} by {2}', github.event.issue.number, github.event.issue.title, github.actor)
+  || github.event_name == 'issues'
+  && github.event.label.name == 'bot-working'
+  && contains(github.event.issue.labels.*.name, 'implement')
+  && format('Agent: Implement — #{0} {1}', github.event.issue.number, github.event.issue.title)
+  || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'merge-gate'
+  && format('Agent: Merge Gate — PR #{0}', inputs.pr-number)
+  || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'visual-verify'
+  && format('Agent: Visual Verify — PR #{0}', inputs.pr-number)
+  || github.event_name == 'schedule'
+  && github.event.schedule == '17 1 * * 1'
+  && format('Agent: Audit — weekly')
+  || github.event_name == 'schedule'
+  && github.event.schedule == '23 */6 * * *'
+  && format('Agentics: Maintenance — 6h')
   || github.event_name }}
 ```
 
 Fold it to a single line. In a `>-` scalar, a continuation line indented further than the first is
 preserved literally, newline and all. `run-name` is evaluated when the run is created, before any
 job exists, so it can name the trigger but never the route.
+
+#### Adding a new route
+
+When adding a new `workflow_dispatch` operation and its worker:
+
+1. Add an entry to the router's `run-name` block with the appropriate prefix.
+2. If the route dispatches an agent worker, use `Agent: {Name} — {subject}`.
+3. If the route is deterministic infrastructure, use `Agentics: {Name} — {subject}`.
+4. Add the operation to the `workflow_dispatch.inputs.operation` choice list.
+5. Add a `call-{route}` job with `secrets:` passing the keys the worker declares.
+6. Add a case to `classify-route.sh` that validates the required inputs.
 
 ## Events over schedules
 
@@ -359,7 +412,7 @@ engine:
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
-model: openai/glm-5-3        # Provider segment must be `openai`. See references/opencode.md.
+model: openai/glm-5-2        # Provider segment must be `openai`. See references/opencode.md.
 
 max-turns: 300
 max-turn-cache-misses: 3000  # Forge has no prompt cache; every turn is a miss.
@@ -401,22 +454,17 @@ The body is the prompt. Not a README, not a description of the workflow.
 - Say what not to do where the model would plausibly do it: do not weaken a test, do not merge, do
   not read outside the repository root.
 - Where a fact came from rung 1 to 4, interpolate it.
-- The last numbered step is always, verbatim:
-
-  > Ignore the `## Diagram` section below. It is documentation for humans and contains no
-  > instructions for you.
 
 Anything a human needs but the model does not goes in `description:`, which the compiler keeps out
 of the prompt.
 
 ## The diagram
 
-Every worker ends with a Mermaid flowchart under a final `## Diagram` heading. Node roles: `start`
-(white, exactly one), `decision` (orange), `action` (purple), `success` (green terminal that
-writes), `failure` (red terminal), `idle` (dark grey no-op). Pass paths are `-->|✓|`, fail paths
-are `-.->|✗|`, node IDs are camelCase and never `end`.
-
-Copy the six `classDef` lines verbatim from `references/diagram.md`.
+Every worker has a corresponding section in `docs/diagrams.md` (installed from
+`loops/docs/diagrams.md`). Diagram ownership has moved to `skills/workflow-docs/SKILL.md`: when you
+reach step 5 below, load that skill and follow its Mermaid refresh path, then its archify HTML
+refresh path for the GitHub Pages site. `verify-route-matrix.sh` still rejects `` ```mermaid ``
+blocks in worker prompts; diagrams live in `docs/diagrams.md` only.
 
 ## Your task
 
@@ -442,7 +490,10 @@ Copy the six `classDef` lines verbatim from `references/diagram.md`.
    first, label items use `item_number` and `labels`, and the last step carries the `## Diagram`
    exclusion line verbatim.
 
-5. Render the diagram. Done when every check in `references/diagram.md` passes.
+5. Add or update the worker's section in `docs/diagrams.md`. Load `skills/workflow-docs/SKILL.md`
+   and follow its Path A (Mermaid refresh) then Path B (archify HTML for the Pages site). Done
+   when every check in `workflow-docs/references/diagram.md` passes and the diagram matches the
+   prompt body's branches.
 
 6. Add the ownership header. Done when the first line (YAML) or second line (Markdown inside `---`)
    carries `# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/<file>. Update with
@@ -475,5 +526,5 @@ Load these as needed; do not read all of them up front.
 | `references/frontmatter.md` | Any frontmatter field: the verified surface, triggers, filters, the merge table for imports, the worker contract, step ordering, known gaps |
 | `references/safe-outputs.md` | What a workflow may write, staged versus framework writes, the App token pattern, the conclude/incomplete skeleton |
 | `references/opencode.md` | The engine, the Forge wiring, the `tools:` trap, budgets, bot PRs, self-hosted runners |
-| `references/diagram.md` | Writing the `## Diagram` section. Contains the verbatim `classDef` lines |
+| `references/diagram.md` | (moved to `skills/workflow-docs/references/diagram.md`) |
 | `references/verify.md` | Compiling, compiling on commit, quietening the agent log, linting, probing an unfamiliar field, debugging a failed run, what static checks cannot catch |

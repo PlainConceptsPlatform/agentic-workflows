@@ -234,6 +234,8 @@ for (const file of readdirSync(workflowDirectory)) {
     .replace(/^env:\n/m, 'env:\n  AGENTMEMORY_URL: https://agentmemory-pro-01.azurewebsites.net\n')
     // the secret is scoped to the one step that runs the agent (semgrep: a secret in
     // workflow-level env is visible to every job and step)
+    .replaceAll('          OPENAI_BASE_URL: http://host.docker.internal:10001',
+      '          OPENAI_BASE_URL: https://forge.plainconcepts.com/v1')
     .replaceAll('          OPENAI_BASE_URL: https://forge.plainconcepts.com/v1',
       '          OPENAI_BASE_URL: https://forge.plainconcepts.com/v1' + '\n' +
       '          AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}')

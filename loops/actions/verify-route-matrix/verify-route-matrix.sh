@@ -240,14 +240,14 @@ assert "merge-gate dispatch defaults its attempt count to zero" 0 \
   "$(route_field merge-gate-attempts EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7)"
 assert "merge-gate dispatch forwards the attempt count" 3 \
   "$(route_field merge-gate-attempts EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7 INPUT_ATTEMPTS_SO_FAR=3)"
-# The implement worker re-dispatches itself when a run dies before producing an answer, so the
-# count has to survive the round trip or the budget never advances and the retry never stops.
-assert "implement dispatch defaults its attempt count to zero" 0 \
-  "$(route_field implement-attempts EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=42)"
+# A worker re-dispatches itself when a run dies before producing an answer, so the count has to
+# survive the round trip or the budget never advances and the retry never stops. The field is
+# `attempts` for every route now: it was `implement-attempts`, set in the else-branch of a test
+# on refine, so a refine retry arrived as attempt zero and could never reach the park.
+assert "a dispatch defaults its attempt count to zero" 0 \
+  "$(route_field attempts EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=42)"
 assert "implement dispatch forwards the attempt count" 2 \
-  "$(route_field implement-attempts EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=42 INPUT_ATTEMPTS_SO_FAR=2)"
-assert "a refine dispatch carries no implement attempts" 0 \
-  "$(route_field implement-attempts EVENT=workflow_dispatch OPERATION=refine INPUT_ISSUE_NUMBER=42 INPUT_ATTEMPTS_SO_FAR=2)"
+  "$(route_field attempts EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=42 INPUT_ATTEMPTS_SO_FAR=2)"
 assert_route "release dispatch needs no numbers" release \
   EVENT=workflow_dispatch OPERATION=release
 assert_route "reconcile-bot-pr-runs dispatch needs no numbers" reconcile-bot-pr-runs \
@@ -371,6 +371,52 @@ else
     tr -d "'\"" | sort -u)
 fi
 if [ "$MIRROR_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# Third-party action pins are the same shape of problem. Every `uses:` in a package-managed
+# file is pinned to a full commit SHA, and one action must resolve to exactly one SHA across
+# the whole package: the router, the workers, the shared mechanics and the composite actions
+# are installed together, so two pins for one action mean two versions of it run in the same
+# repository, and the older one is invisible until it breaks. That is how the merge-belt
+# dispatchers ran create-github-app-token v2.0.6 for a release while every worker ran v3.2.0:
+# nothing failed, nothing flagged it, and the action that receives the App's private key was
+# the stale one. Templates are excluded: they are consumer-owned from installation and
+# deliberately carry their own versions (the CI templates pin download-artifact v6 while the
+# loops pin v8). A floating tag (`@v4`) is a missing pin and fails the same check.
+PIN_OK=1
+declare -A PIN_SEEN
+PKG_ROOT="$(cd "${HERE}/../../.." && pwd)"
+pin_scan() {
+  local file="$1" line action ref
+  # Resolve to an absolute path so the package-relative name in the failure reads like the
+  # source tree, not like this script's location.
+  file="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
+  local shown="${file#"${PKG_ROOT}/"}"
+  # Anchored on the line start so a comment quoting a `uses:` cannot match, and tolerant of
+  # both spellings (`uses:` as a mapping key and `- uses:` as a list item). Local composite
+  # actions (`./.github/actions/...`) and docker refs carry no `@` and never match.
+  local pin_re='^[[:space:]]*-?[[:space:]]*uses:[[:space:]]+([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([A-Za-z0-9._-]+)'
+  while IFS= read -r line; do
+    [[ "$line" =~ $pin_re ]] || continue
+    action="${BASH_REMATCH[1]}"
+    ref="${BASH_REMATCH[2]}"
+    if [ "${PIN_SEEN[$action]+set}" ] && [ "${PIN_SEEN[$action]}" != "$ref" ]; then
+      PIN_OK=0
+      echo "FAIL: ${shown} pins ${action}@${ref} but ${PIN_SEEN[$action]} is pinned elsewhere; one action, one pin" >&2
+    else
+      PIN_SEEN[$action]="$ref"
+    fi
+    if [ "${#ref}" -ne 40 ]; then
+      PIN_OK=0
+      echo "FAIL: ${shown} uses ${action}@${ref}; a tag is mutable, pin the full commit SHA" >&2
+    fi
+  done < "$file"
+}
+for pin_file in "$ROUTER_YML" "${WORKFLOWS_DIR}"/agent-*.md "${WORKFLOWS_DIR}"/shared/*.md \
+  "${WORKFLOWS_DIR}"/authorize-bot-work.yml "${HERE}/.."/*/action.yml; do
+  [ -f "$pin_file" ] || continue
+  pin_scan "$pin_file"
+done
+if [ "$PIN_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # Run the belt's own jq, rather than reading it. The filter that picks which open pull requests
 # the hourly reconcile job acts on was written as
@@ -1201,6 +1247,31 @@ echo "── Merge gate validator ───────────────�
 # reasoning alone, and the worker has not run in production since, so these fixtures are the only
 # evidence the change is right. Executing the real script is the same technique that finally
 # caught the belt's jq bug, which every reading assertion had walked past.
+# The gate comments on every bot pull request, so anything it writes there is written dozens of
+# times a week. A CODEOWNERS of `* @someone` matches every pull request, so the owners row was
+# naming four people on routine auto-merges and @-mentioning each of them, which notifies them.
+# The row belongs to the disposition that actually wants an owner, and the names go in a code
+# span so the comment reports who owns the area without pinging them: on owner-review the gate
+# requests the review properly, and that is the notification.
+if worker_installed merge-gate; then
+  OWNERS_OK=1
+  if ! grep -q "outcome == 'owner-review'" "$MERGE_GATE_WORKER_MD"; then
+    OWNERS_OK=0
+    echo "FAIL: the gate comment names required owners unconditionally; gate the row on owner-review" >&2
+  fi
+  # Every rendering of required_owners has to sit inside a code span.
+  while IFS= read -r line; do
+    case "$line" in
+      *'`{0}`'*|*'`${{ needs.protected_changes.outputs.required_owners'*) continue ;;
+      *)
+        OWNERS_OK=0
+        echo "FAIL: required_owners is rendered without a code span, so the gate @-mentions people: ${line# }" >&2
+        ;;
+    esac
+  done < <(grep -F 'required_owners' "$MERGE_GATE_WORKER_MD" | grep -vE '^\s*(#|[a-z_]+:)' | grep -F 'Required owners')
+  if [ "$OWNERS_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 # Blast radius is the input the merge decision leans on hardest, and it is the one a reader
 # cannot check by eye. These cases are the six real pull requests the redesign was measured
 # against, reduced to their shape: the three that used to be parked for a person purely because
@@ -1453,6 +1524,14 @@ if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
   gate_case "remediated with two pushes"         invalid    "$(gate_items "$(gate_comment remediated),${gate_push},${gate_push}")" failure low
   gate_case "an assessment carrying a push"      invalid    "$(gate_items "$(gate_comment assessed),${gate_push}")" success low
 
+  # Correctness remediation: the agent found the diff does not satisfy the acceptance
+  # criteria, pushed a fix, and emitted remediated. The validator treats this the same as a
+  # CI-failure or conflict remediation -- one push and the remediated word -- regardless of
+  # what acceptanceCriteriaMet says in the report. The next gate cycle re-evaluates the fix.
+  gate_unmet_remedied='{\"findings\":[{\"verified\":false,\"severity\":\"medium\",\"category\":\"correctness\",\"file\":\"src/app.ts\",\"line\":42,\"finding\":\"criterion X not implemented\"}],\"recoverability\":\"high\",\"acceptanceCriteriaMet\":false,\"confidence\":0.9}'
+  gate_case "remediated for unmet acceptance criteria" \
+                                                 remediated  "$(gate_items "$(gate_comment remediated "$gate_unmet_remedied"),${gate_push}")" success low
+
   # Output from a worker version that predates the disposition table. Applying its vocabulary
   # would merge on a word this validator no longer means the same thing by.
   gate_case "the old merge vocabulary is refused"  invalid  '{"items":[{"type":"add_comment","item_number":7,"body":"<!-- agent-merge-gate -->\\n**Verdict:** merge"}]}' success low
@@ -1573,6 +1652,61 @@ if worker_installed merge-gate; then
   fi
 
   if [ "$GATE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
+echo "── Visual verify wiring ───────────────────────────────────────────────────"
+
+# The merge-gate's conclude job dispatches agent-visual-verify before merging when the outcome
+# is auto-merge and VISUAL_VERIFY_ENABLED is true. Each of these is one line an edit could drop
+# with nothing going red: a missing dispatch step, a missing env var, or a missing worker file.
+# The guard against the original bug comes first: the call is a dispatch, never a step doing
+# `uses:` on a workflow file -- that resolves as a local action, dies with "Can't find
+# action.yml", and under continue-on-error every auto-merge shipped with zero screenshots
+# and nothing red.
+if worker_installed merge-gate; then
+  VV_OK=1
+
+  vv() {
+    grep -qE "$1" "$2" || { VV_OK=0; echo "FAIL: $3" >&2; }
+  }
+
+  # The dispatch step exists and runs only on auto-merge with the feature flag on.
+  vv 'name: Dispatch visual verification' "$MERGE_GATE_WORKER_MD" 'merge-gate has no visual-verify dispatch step'
+  vv "outcome == 'auto-merge'.*VISUAL_VERIFY_ENABLED == 'true'" "$MERGE_GATE_WORKER_MD" 'visual-verify dispatch has wrong guard'
+
+  # The shape that never worked: a step calling a reusable workflow file. Also reject the
+  # swallowed-failure form it shipped with.
+  vv 'operation=visual-verify' "$MERGE_GATE_WORKER_MD" 'the dispatch must target the router operation, not a nested file'
+  if grep -qE '^      - name:.*\n.*uses: \./\.github/workflows/agent-visual-verify' "$MERGE_GATE_WORKER_MD" 2>/dev/null \
+    || grep -A2 '^      - name:' "$MERGE_GATE_WORKER_MD" | grep -q 'uses: \./\.github/workflows/'; then
+    VV_OK=0
+    echo "FAIL: a step still uses: a workflow file; the runner resolves it as a local action and it cannot work" >&2
+  fi
+
+  # The env vars the worker needs.
+  vv 'VISUAL_VERIFY_ENABLED:' "$MERGE_GATE_WORKER_MD" 'merge-gate missing VISUAL_VERIFY_ENABLED env var'
+  vv 'VISUAL_VERIFY_START_COMMAND:' "$MERGE_GATE_WORKER_MD" 'merge-gate missing VISUAL_VERIFY_START_COMMAND env var'
+
+  # The worker gates its agent on its own configuration, so an unconfigured repository
+  # runs no model: the subject job exposes it, the top-level if: reads it.
+  vv 'enabled: ' "${WORKFLOWS_DIR}/agent-visual-verify.md" 'visual-verify subject does not expose the enabled output'
+  vv "outputs.enabled == 'true'" "${WORKFLOWS_DIR}/agent-visual-verify.md" 'visual-verify agent gate does not read the enabled output'
+
+  # The worker file exists.
+  VV_WORKER_MD="${WORKFLOWS_DIR}/agent-visual-verify.md"
+  if [ ! -f "$VV_WORKER_MD" ]; then
+    VV_OK=0
+    echo "FAIL: agent-visual-verify.md does not exist" >&2
+  fi
+
+  # The attach-screenshots action exists.
+  VV_ATTACH="${HERE}/../attach-screenshots/action.yml"
+  if [ ! -f "$VV_ATTACH" ]; then
+    VV_OK=0
+    echo "FAIL: attach-screenshots/action.yml does not exist" >&2
+  fi
+
+  if [ "$VV_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
 echo "── Expression functions ──────────────────────────────────────────────────"
@@ -1871,6 +2005,69 @@ if worker_installed audit; then
   if [ "$AUDIT_EMPTY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+echo "── Retrying a run that died early ────────────────────────────────────────"
+
+# A run that died before producing anything is worth repeating; one that worked and then failed
+# produced an answer that was wrong, and repeating it buys the same wrong answer later. Only the
+# implement worker knew that. An Odyssey refine died in three minutes on `Model 'glm-5-2' not
+# found` -- a gateway fault that clears in seconds -- parked, and waited on the janitor's
+# six-hourly sweep.
+RETRY_OK=1
+for route in refine implement triage apply-review; do
+  worker_md="${WORKFLOWS_DIR}/agent-${route}.md"
+  [ -f "$worker_md" ] || continue
+
+  # Both halves. A worker with only the park is the state this fixes; one with only the retry
+  # never stops trying.
+  if [ "$(count -cE "^ *if:.*steps\.decide\.outputs\.retry == 'true'" "$worker_md")" -eq 0 ] ||
+     [ "$(count -cE "^ *if:.*steps\.decide\.outputs\.retry != 'true'" "$worker_md")" -eq 0 ]; then
+    RETRY_OK=0
+    echo "FAIL: agent-${route} does not have both a retry and a park path, so an early failure either never repeats or never stops" >&2
+  fi
+
+  # Each worker re-dispatches its own route. `-f operation=implement` pasted into refine produces
+  # a plausible run doing the wrong work, and nothing anywhere goes red.
+  # Only the retry dispatch: it is the line that also carries the attempt count. implement
+  # dispatches reconcile-bot-pr-runs too, after it opens a pull request, and that is not a retry.
+  # Only the retry dispatch: it is the line that also carries the attempt count. implement
+  # dispatches reconcile-bot-pr-runs too, after it opens a pull request, and that is not a retry.
+  #
+  # Both greps go through `count`. A worker with no retry dispatch matches nothing, grep exits 1,
+  # and under `set -o pipefail` that killed the whole suite after printing the failure above it --
+  # the tally never ran, so a mutation that removed a retry branch looked like it had been caught
+  # when in fact nothing after it had been checked.
+  dispatched=$(count -E 'operation=[a-z-]+.*attempts_so_far' "$worker_md" \
+    | { count -oE 'operation=[a-z-]+' || true; } | sed 's/operation=//' | sort -u | tr '\n' ' ')
+  dispatched="${dispatched% }"
+  if [ -n "$dispatched" ] && [ "$dispatched" != "$route" ]; then
+    RETRY_OK=0
+    echo "FAIL: agent-${route} re-dispatches '${dispatched}' rather than its own route; that run would do the wrong work and still look healthy" >&2
+  fi
+
+  # The count has to survive the round trip or the park is never reached.
+  if ! grep -qE '^      attempts_so_far:' "$worker_md"; then
+    RETRY_OK=0
+    echo "FAIL: agent-${route} does not take attempts_so_far, so every retry arrives as the first and the budget never binds" >&2
+  fi
+  if [ "$(count -cF 'attempts_so_far: ${{ needs.classify.outputs.attempts }}' "$ROUTER_YML")" -eq 0 ]; then
+    RETRY_OK=0
+    echo "FAIL: the router does not pass classify's attempts to its workers" >&2
+  fi
+done
+
+# The classifier carries the count for every dispatched route. refine needs its mode *and* its
+# count: written as an if/else, a refine retry arrived as attempt zero every time.
+for op in refine implement triage; do
+  got=$(route_field attempts EVENT=workflow_dispatch OPERATION="$op" INPUT_ISSUE_NUMBER=42 INPUT_ATTEMPTS_SO_FAR=3)
+  assert "a dispatched ${op} carries its attempt count" 3 "$got"
+done
+assert "a dispatched apply-review carries its attempt count" 3 \
+  "$(route_field attempts EVENT=workflow_dispatch OPERATION=apply-review INPUT_PR_NUMBER=9 INPUT_ATTEMPTS_SO_FAR=3)"
+assert "a dispatched refine still carries its mode alongside the count" rerefine \
+  "$(route_field refine-mode EVENT=workflow_dispatch OPERATION=refine INPUT_ISSUE_NUMBER=42 INPUT_MODE=rerefine INPUT_ATTEMPTS_SO_FAR=3)"
+
+if [ "$RETRY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 echo "── Ways a run ends with nothing ──────────────────────────────────────────"
 
 # A run can end without a pull request in five ways and they need different answers. One sentence
@@ -1934,6 +2131,49 @@ if worker_installed implement; then
   fi
 
   if [ "$ENDINGS_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
+echo "── Refine size gate ──────────────────────────────────────────────────────"
+
+# The size gate added a job that skips in the happy path, and gh-aw adds every custom job to
+# the agent's needs. Three claims about that shape are asserted, because each one broke in
+# production in the same week (Pliny-Bot #320-322: sixteen runs, three parked issues, a
+# refusal loop on an issue the author was shrinking live):
+#
+#   1. the agent's gate carries !failure(), so a skipped refusal no longer poisons the
+#      implicit success() and kills the agent in 0s
+#   2. the incomplete job excludes the refusal, so a refused issue is terminal: no attempt
+#      counter, no x/5, no re-dispatch, no stalled
+#   3. the refusal itself releases bot-working, so a refused issue is not left reserved
+if worker_installed refine; then
+  SIZE_GATE_OK=1
+  REFINE_WORKER_MD="${WORKFLOWS_DIR}/agent-refine.md"
+
+  # The top-level if: starts at column 0 -- job-level ifs: are indented -- so anchor on that,
+  # not on the prose comment above it. It must end with !failure().
+  top_level_if="$(sed -n 's/^if: //p' "$REFINE_WORKER_MD" | head -1)"
+  if [[ "$top_level_if" != *'!failure()' ]]; then
+    SIZE_GATE_OK=0
+    echo "FAIL: refine gates the agent without !failure(); a skipped refuse_big_issue poisons the implicit success() and skips the agent on every under-limit issue" >&2
+  fi
+
+  # Extract the incomplete job's own block. A whole-file grep cannot make this claim: reserve,
+  # refuse_big_issue and the agent gate all read size_guard, so the exclusion clause could be
+  # deleted from incomplete while every grep still passes.
+  incomplete_block="$(awk '/^  incomplete:/{found=1; next} found && /^  [a-z_]+:/{exit} found{print}' "$REFINE_WORKER_MD")"
+  if ! printf '%s' "$incomplete_block" | grep -qE '^    needs: \[.*size_guard' \
+    || ! printf '%s' "$incomplete_block" | grep -qF "needs.size_guard.outputs.too_big != 'true'"; then
+    SIZE_GATE_OK=0
+    echo "FAIL: refine's incomplete does not exclude the refusal path; every refused issue also loops attempts" >&2
+  fi
+
+  refuse_block="$(awk '/^  refuse_big_issue:/{found=1; next} found && /^  [a-z_]+:/{exit} found{print}' "$REFINE_WORKER_MD")"
+  if ! printf '%s' "$refuse_block" | grep -qF 'WORKING_LABEL'; then
+    SIZE_GATE_OK=0
+    echo "FAIL: the refine refusal never releases bot-working; a refused issue stays reserved with no run behind it" >&2
+  fi
+
+  if [ "$SIZE_GATE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
 echo "── Runner pools ──────────────────────────────────────────────────────────"

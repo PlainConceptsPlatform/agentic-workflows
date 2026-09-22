@@ -1,0 +1,283 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agentics Error Report",
+    "locale": "en",
+    "quality_profile": "standard"
+  },
+  "components": [
+    {
+      "id": "cron",
+      "type": "external",
+      "label": "cron 11 7 * * *",
+      "pos": [
+        40,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "runs",
+      "type": "backend",
+      "label": "List runs",
+      "sublabel": "last 24h",
+      "pos": [
+        260,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "owned",
+      "type": "security",
+      "label": "Package-owned?",
+      "sublabel": "this package ships",
+      "pos": [
+        480,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "state",
+      "type": "security",
+      "label": "Failed or queued?",
+      "sublabel": "past 45 min",
+      "pos": [
+        700,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "classify",
+      "type": "backend",
+      "label": "Classify",
+      "sublabel": "match catalogue",
+      "pos": [
+        920,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "body",
+      "type": "backend",
+      "label": "Build report",
+      "sublabel": "names, conclusion, count",
+      "pos": [
+        1140,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "scan",
+      "type": "security",
+      "label": "Leak scanner?",
+      "sublabel": "repo, URL, email, path, token",
+      "pos": [
+        1360,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "token",
+      "type": "security",
+      "label": "Upstream token?",
+      "pos": [
+        1580,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "file",
+      "type": "backend",
+      "label": "One upstream issue",
+      "sublabel": "per signature",
+      "pos": [
+        1800,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "done",
+      "type": "backend",
+      "label": "Filed upstream",
+      "pos": [
+        2020,
+        130
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "withhold",
+      "type": "security",
+      "label": "Withheld",
+      "sublabel": "nothing filed, run red",
+      "pos": [
+        1360,
+        40
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "summary",
+      "type": "external",
+      "label": "Job summary only",
+      "sublabel": "warning, not red",
+      "pos": [
+        1580,
+        40
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "count",
+      "type": "backend",
+      "label": "Counted",
+      "sublabel": "never inspected",
+      "pos": [
+        480,
+        40
+      ],
+      "size": [
+        140,
+        52
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "cron-runs",
+      "from": "cron",
+      "to": "runs"
+    },
+    {
+      "id": "runs-owned",
+      "from": "runs",
+      "to": "owned"
+    },
+    {
+      "id": "owned-count",
+      "from": "owned",
+      "to": "count",
+      "label": "no",
+      "variant": "dashed"
+    },
+    {
+      "id": "owned-state",
+      "from": "owned",
+      "to": "state",
+      "label": "yes",
+      "variant": "emphasis"
+    },
+    {
+      "id": "state-count",
+      "from": "state",
+      "to": "count",
+      "label": "neither",
+      "variant": "dashed"
+    },
+    {
+      "id": "state-classify",
+      "from": "state",
+      "to": "classify",
+      "label": "yes"
+    },
+    {
+      "id": "classify-body",
+      "from": "classify",
+      "to": "body"
+    },
+    {
+      "id": "body-scan",
+      "from": "body",
+      "to": "scan"
+    },
+    {
+      "id": "scan-withhold",
+      "from": "scan",
+      "to": "withhold",
+      "label": "matches",
+      "variant": "dashed"
+    },
+    {
+      "id": "scan-token",
+      "from": "scan",
+      "to": "token",
+      "label": "clean",
+      "variant": "emphasis"
+    },
+    {
+      "id": "token-summary",
+      "from": "token",
+      "to": "summary",
+      "label": "no",
+      "variant": "dashed"
+    },
+    {
+      "id": "token-file",
+      "from": "token",
+      "to": "file",
+      "label": "yes",
+      "variant": "emphasis"
+    },
+    {
+      "id": "file-done",
+      "from": "file",
+      "to": "done",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Only package-owned facts cross the boundary",
+      "items": [
+        "File names, job and step names, a conclusion, a runner label, a count",
+        "No free text: no log line, no branch name, no issue title, no path, no URL"
+      ]
+    }
+  ]
+}

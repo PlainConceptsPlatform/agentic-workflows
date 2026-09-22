@@ -1,10 +1,11 @@
 # Workflow skills
 
-This directory contains three self-contained skills for the Agentic Workflows package.
+This directory contains four self-contained skills for the Agentic Workflows package.
 
 | Skill | Use when |
 |---|---|
-| `workflow-author` | Authoring or reviewing loops under `loops/`. Covers the router, determinism ladder, frontmatter, safe outputs, OpenCode engine, diagrams, and verification. |
+| `workflow-author` | Authoring or reviewing loops under `loops/`. Covers the router, determinism ladder, frontmatter, safe outputs, OpenCode engine, and verification. Delegates diagram work to `workflow-docs`. |
+| `workflow-docs` | Refreshing loop diagrams and the GitHub Pages site. Owns the Mermaid convention in `loops/docs/diagrams.md` and the derived archify-rendered HTML in `docs/diagrams/`. |
 | `workflow-consumer` | Installing, configuring, compiling, or updating managed workflows in a consumer repository. Covers CLI usage, templates, standalone worker customization, and compilation. |
 | `cli` | Maintaining the package installer (`cli/`). Covers commands, catalog installation, ownership headers, templates, and build and release. |
 

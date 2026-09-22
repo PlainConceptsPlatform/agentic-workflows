@@ -24,6 +24,26 @@ env:
   # re-running a decision produces the same decision. Created idempotently where it is applied.
   STALLED_LABEL: stalled
   REFINE_MARKER: "<!-- agent-refine -->"
+  # A run that died before it produced anything is worth repeating; one that worked and then
+  # failed produced an answer that was wrong, and repeating it buys the same wrong answer later.
+  # Duration is what separates them. Odyssey #190 died in three minutes on `Model 'glm-5-2' not
+  # found`, a gateway fault that clears in seconds, and waited on the janitor's six-hourly sweep
+  # because only the implement worker could do this.
+  REFINE_ATTEMPT_MARKER: "<!-- agent-refine-attempt -->"
+  MAX_ATTEMPTS: "5"
+  PARK_AT_ATTEMPT: "4"
+  # The size gate. An issue over either limit is refused before any model runs: a real
+  # one, Pliny-Bot #305 (13,398 chars, 92 work units), burned a full agent -- 17 minutes,
+  # 2.4M tokens -- and died at the provider's 32K output cap with zero outcome, twice.
+  # Both numbers are measured before the agent starts, so refusal is deterministic and
+  # costs ten seconds instead of half an hour.
+  REFINE_MAX_BODY_CHARS: "8000"
+  REFINE_MAX_WORK_UNITS: "24"
+  REFUSE_MARKER: "<!-- agent-refine-refused -->"
+  # Ten rather than six: the failure that prompted this took three minutes, and a slower one on a
+  # worse day would fall outside a six-minute window and park for a fault that clears by itself.
+  RETRY_UNDER_MINUTES: "10"
+  RETRY_COMMENT: "That is what a provider outage looks like -- the run ended before it could produce an answer -- so this is being tried again from the start. It is a fresh run rather than a continuation: nothing is carried over from the attempt that failed."
   DRAFT_MARKER: "<!-- agent-refine-draft -->"
   INITIAL_MODE: first
   RESPONSE_MODE: rerefine
@@ -72,6 +92,11 @@ imports:
 on:
   workflow_call:
     inputs:
+      attempts_so_far:
+        description: Runs already made for this work that died before producing an answer. Filled by the worker when it re-dispatches itself, not by people.
+        required: false
+        type: string
+        default: '0'
       issue-number:
         description: Issue number to refine.
         required: true
@@ -81,12 +106,12 @@ on:
         required: false
         type: string
         default: first
-  # The gate job that the top-level `if:` reads. gh-aw folds that `if:` into the generated
-  # activation job but gives activation no dependency on the job, so the reference resolves
+  # The gate jobs that the top-level `if:` reads. gh-aw folds that `if:` into the generated
+  # activation job but gives activation no dependency on the jobs, so the reference resolves
   # to '' and the clause is false -- the agent would never run. The package's own validator
   # catches it after compilation; this is the line it asks for, the same one the merge gate
   # uses for protected_changes.
-  needs: [still_open]
+  needs: [still_open, size_guard]
 
 jobs:
   # A route dispatched while the issue was open must not execute after it has been closed. The
@@ -113,9 +138,111 @@ jobs:
         with:
           token: ${{ github.token }}
           issue-number: ${{ inputs.issue-number }}
-  reserve:
+  # The size gate, rung 4. Measures the issue before any model starts, because an oversized
+  # body does not fail fast on its own: it produces an agent that explores for seventeen
+  # minutes and then dies mid-generation at the provider's response cap having written
+  # nothing, which reads as a green run with no outcome (Pliny-Bot #305, twice). Pure
+  # shell, no network beyond one issue read; over either limit it is a refusal, not a
+  # smaller attempt.
+  size_guard:
     needs: [still_open]
     if: needs.still_open.outputs.open == 'true'
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      too_big: ${{ steps.measure.outputs.too_big }}
+      reason: ${{ steps.measure.outputs.reason }}
+    steps:
+      - name: Measure the issue against the size limits
+        id: measure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+          MAX_BODY_CHARS: ${{ env.REFINE_MAX_BODY_CHARS }}
+          MAX_WORK_UNITS: ${{ env.REFINE_MAX_WORK_UNITS }}
+        run: |
+          set -euo pipefail
+          body=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json title,body --jq '.title + "\n\n" + (.body // "")')
+          chars=$(printf '%s' "$body" | wc -c)
+          # One work unit per markdown bullet, the same split the prompt's step 3 makes.
+          units=$(printf '%s' "$body" | grep -cE '^[[:space:]]*[-*] ' || true)
+          reason=""
+          too_big=false
+          if [ "$chars" -gt "$MAX_BODY_CHARS" ]; then
+            too_big=true
+            reason="body ${chars} chars > ${MAX_BODY_CHARS}"
+          fi
+          if [ "$units" -gt "$MAX_WORK_UNITS" ]; then
+            too_big=true
+            reason="${reason:+$reason; }work units ${units} > ${MAX_WORK_UNITS}"
+          fi
+          echo "too_big=$too_big" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "::notice::measured $chars chars, $units work units (limits: ${MAX_BODY_CHARS} chars, ${MAX_WORK_UNITS} units) -> $too_big"
+  # The deterministic refusal. Runs only when the size gate tripped, so it costs one
+  # comment and no model. The refine label stays: a human who shrinks the body and
+  # replies re-enters rerefine through the comment route, and the classifier ignores
+  # bot comments, so this comment cannot re-trigger the worker.
+  refuse_big_issue:
+    needs: [still_open, size_guard]
+    if: needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big == 'true'
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Refuse the oversized issue
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            ${{ env.REFUSE_MARKER }}
+            This issue is too large to refine automatically: ${{ needs.size_guard.outputs.reason }}.
+            A story this size does not fail fast; it burns a full agent run and dies mid-generation at the provider's response cap, producing nothing.
+
+            Split it into smaller issues, each describing one story, or edit this body down under the limits (at most ${{ env.REFINE_MAX_BODY_CHARS }} characters and ${{ env.REFINE_MAX_WORK_UNITS }} work-unit bullets), then reply here and refinement will run again.
+      - name: Flag the issue for a person
+        uses: ./.github/actions/add-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: review
+      - name: Clear a stale stalled flag
+        uses: ./.github/actions/remove-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: stalled
+      # A refusal must also release the reservation. authorize-bot-work adds bot-working
+      # before the router dispatches, and this job is the refused run's only terminal path:
+      # incomplete is gated off it (see there), so without this removal a refused issue
+      # stays reserved with no run behind it -- parked, invisible, not re-triggerable until
+      # the hourly reconcile sweep clears it hours later.
+      - name: Release the reservation
+        uses: ./.github/actions/remove-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: ${{ env.WORKING_LABEL }}
+  reserve:
+    needs: [still_open, size_guard]
+    if: needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big != 'true'
     runs-on: agents-arc
     permissions:
       contents: read
@@ -183,7 +310,13 @@ jobs:
           issue-number: ${{ inputs.issue-number }}
   conclude:
     needs: [activation, agent, safe_outputs, validate_output]
+    # `always()` is load-bearing: without it GitHub prepends `success()`, which returns false
+    # if any needed job was skipped. If activation was skipped (Pliny-Bot #321: refuse_big_issue
+    # skip-poisoned activation in v0.28.0), both conclude AND incomplete skipped and the refine
+    # label never transitioned. The explicit conditions below are still the guard; `always()`
+    # just prevents a skipped need from short-circuiting the whole expression.
     if: >
+      always() &&
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.validate_output.outputs.valid == 'true'
@@ -404,9 +537,17 @@ jobs:
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
   incomplete:
-    needs: [agent, safe_outputs, validate_output]
+    # activation for the artifact prefix the usage read needs; validate_output for its
+    # valid output, which decides whether the usage read should look for truncation at all.
+    # size_guard because a refusal is terminal: when too_big is true, refuse_big_issue has
+    # already spoken on the issue and no attempt, retry or park may follow. Without this
+    # clause every refused issue also looped here -- one human-label visit produced eight
+    # refusal comments and eight "Attempt N of 5" comments, none of which could succeed
+    # (Pliny-Bot #322).
+    needs: [activation, agent, safe_outputs, validate_output, size_guard]
     if: >
       always() &&
+      needs.size_guard.outputs.too_big != 'true' &&
       (
         needs.agent.result != 'success' ||
         needs.safe_outputs.result != 'success' ||
@@ -416,6 +557,8 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # the retry re-enters through the router, which is a workflow_dispatch
+      actions: write
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -425,13 +568,87 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Decide whether this failure is worth repeating
+        id: decide
+        uses: ./.github/actions/decide-agent-retry
+        with:
+          token: ${{ github.token }}
+          attempts-so-far: ${{ inputs.attempts_so_far }}
+          park-at: ${{ env.PARK_AT_ATTEMPT }}
+          under-minutes: ${{ env.RETRY_UNDER_MINUTES }}
+      # Recorded before any label moves, so a failure in the steps below leaves a run that can be
+      # counted rather than work released with nothing to show for it.
+      # The usage read distinguishes the two very different failures that end here. A provider
+      # outage consumes almost no tokens; an output-cap truncation (Pliny-Bot #305: 32,000 output
+      # tokens, zero outcomes, run green) burns a full run and emits nothing. The comment names
+      # the second so a person does not triage it as a flaky provider. Best-effort by design:
+      # on an attempt where the agent job itself died there is no artifact, and this step must
+      # never fail the incomplete job's label release.
+      - name: Read the agent's token usage
+        id: usage
+        if: needs.agent.result == 'success' && needs.safe_outputs.result == 'success' && needs.validate_output.outputs.valid != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ARTIFACT: ${{ needs.activation.outputs.artifact_prefix }}agent
+        run: |
+          set -euo pipefail
+          output_tokens=""
+          if gh run download "$RUN_ID" --repo "$REPO" --name "$ARTIFACT" --dir usage-read 2>/dev/null \
+            && [ -f usage-read/agent_usage.json ]; then
+            output_tokens=$(jq -r '.output_tokens // empty' usage-read/agent_usage.json 2>/dev/null || echo "")
+          fi
+          if [ -n "$output_tokens" ] && [ "$output_tokens" -gt 20000 ]; then
+            echo "truncated=This attempt consumed ${output_tokens} output tokens and still produced no outcome. That is what provider output truncation looks like, not an outage: the model hit the single-response cap mid-generation and every call it was writing was lost. If this repeats, split the issue or tighten its body." >> "$GITHUB_OUTPUT"
+          else
+            echo "truncated=" >> "$GITHUB_OUTPUT"
+          fi
+          echo "output_tokens=$output_tokens" >> "$GITHUB_OUTPUT"
+      - name: Report the failed attempt
+        if: steps.decide.outputs.retry == 'true'
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            ${{ env.REFINE_ATTEMPT_MARKER }}
+            Attempt ${{ steps.decide.outputs.next }} of ${{ env.MAX_ATTEMPTS }} ended after ${{ steps.decide.outputs.minutes }} minutes, before the run could produce an answer.
+            ${{ env.RETRY_COMMENT }}
+            ${{ steps.usage.outputs.truncated }}
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Release the reservation for the retry
+        if: steps.decide.outputs.retry == 'true'
+        uses: ./.github/actions/remove-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: ${{ env.WORKING_LABEL }}
+      - name: Send the work back through the router
+        if: steps.decide.outputs.retry == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch }}
+          SUBJECT: ${{ inputs.issue-number }}
+          NEXT: ${{ steps.decide.outputs.next }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          # The provider recovers in seconds, so pause before re-entering rather than dispatching
+          # back into the same outage. The router's own classify and authorize jobs add more.
+          sleep 30
+          gh workflow run work-router.yml --repo "$REPO" --ref "$REF"             -f operation=refine -f issue-number="$SUBJECT" -f mode="$MODE" -f attempts_so_far="$NEXT"
+          echo "Re-dispatched refine for $SUBJECT as attempt $NEXT."
       - name: Release the issue
+        if: steps.decide.outputs.retry != 'true'
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
       - name: Flag for human review
+        if: steps.decide.outputs.retry != 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -440,6 +657,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
       - name: Report missing refinement outcome
+        if: steps.decide.outputs.retry != 'true'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -447,9 +665,18 @@ jobs:
           body: |
             ${{ env.REFINE_MARKER }}
             ${{ env.INCOMPLETE_COMMENT }}
+            ${{ steps.usage.outputs.truncated }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true'
+# `!failure()` is load-bearing, not decoration. gh-aw adds every custom job to the agent's
+# `needs`, including refuse_big_issue -- a job that skips precisely when refinement should
+# run. Without a status function in this `if:` GitHub prepends an implicit `success()`,
+# and a skipped need fails it, so every under-limit issue skipped the agent in 0s and the
+# incomplete loop parked the issue (Pliny-Bot #320-322, 16 runs). `!failure()` suppresses
+# the implicit success(): a refused skip no longer poisons the agent, while any real
+# failure -- size_guard erroring, the refusal job erroring mid-refuse, reserve failing --
+# still blocks it and lands in incomplete.
+if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big != 'true' && !failure()
 
 runs-on: agents-arc
 runs-on-slim: agents-arc
@@ -464,9 +691,9 @@ engine:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
   args:
     - "--model"
-    - "plainconcepts/glm-5-3"
+    - "plainconcepts/glm-5-2"
 
-model: openai/glm-5-3
+model: openai/glm-5-2
 # 150 rather than 500. With a four-hour clock this is the loop guard, and the worst
 # observed run used 44 turns, so this leaves better than three times the worst case.
 max-turns: 150
@@ -544,93 +771,33 @@ timeout-minutes: 90
      temporal draft from the earlier pass: reuse what still holds, and resolve its pending
      marks with the author's answers.
 
-3. Explore before you write. Call skill("pc-plan-explore"); it owns the stance for this step.
+3. **Explore and write the story.** Split the issue into work units first. If the issue body is
+   a bullet list of distinct tasks, treat each bullet as its own work unit. Otherwise treat the
+   whole issue as a single work unit.
 
-   Split the issue into work units first. If the issue body is a bullet list of distinct tasks
-   (for example "- check the button component", "- then check the login", "- then suggest a
-   register page"), treat each bullet as its own work unit. Otherwise treat the whole issue as a
-   single work unit.
+   Call `skill("pc-plan-explore")` and pass it the work-unit list. It owns the exploration
+   stance: sequential per-unit investigation, self-answered questions from the codebase, and
+   findings held as internal working. Never write a self-asked question or its answer to the
+   issue. At most ${{ env.MAX_SELF_QUESTIONS }} self-asked questions per work unit, and stop
+   sooner once more exploring stops changing your understanding.
 
-   Create a todo entry for each work unit before you start exploring. Process them one at a
-   time, strictly sequentially: explore unit 1, self-answer its questions, mark the todo
-   complete, then move to unit 2. Do not explore multiple work units in the same pass. Do not
-   start unit N+1 until unit N is marked complete.
+   Then classify the change complexity. A change is **trivial** only if every one of these
+   holds: ${{ env.TRIVIAL_CRITERIA }}
 
-   For the current work unit, answer your own questions from the codebase and the docs, and
-   set one aside for the author only when it is a business or product decision the code cannot
-   settle. A unit's todo is complete when its findings would support acceptance criteria: if you
-   read a file but cannot say what changes for this unit, it is not.
+   **Trivial path.** Skip the story skill. Prepare the replacement issue body as valid Markdown:
+   `${{ env.TRIVIAL_MARKER }}`, a short plain-English summary (2-3 sentences max), and a simple
+   checklist of concrete steps. No "As a / I want / so that" form, no Given/When/Then, no Mermaid.
+   Load `@humanizer` and prepare the body, then go directly to step 4 (estimate).
 
-   At most ${{ env.MAX_SELF_QUESTIONS }} self-asked questions per work unit, and stop sooner
-   once more exploring stops changing your understanding. Never write a self-asked question or
-   its answer to the issue: this is internal working, and the issue is read by people.
+   **Standard path.** Call `skill("pc-plan-story")` and pass it the work units and the exploration
+   findings. `pc-plan-story` owns the story's shape: drafting, coverage gate, repo-docs application,
+   issue-form discovery and wrapping, humanizer pass, and the structured implementation plan. Do not
+   repeat any of those steps yourself. Adhere to ${{ env.REPO_RULES }}.
 
-4. **Classify the change complexity.** Based on your exploration, determine whether this is a
-   trivial change. A change is **trivial** only if every one of these holds:
-   ${{ env.TRIVIAL_CRITERIA }}
+   The story body the skill returns has its machine-readable lines at the very top, above the
+   form's first heading, so the workflow can read them whatever the form's shape.
 
-   If all hold → **trivial path** (step 4a). If any fails → **standard path** (step 5).
-
-   **4a. Trivial path.** Skip `/plan-story`. Do not write Gherkin acceptance criteria or
-   Mermaid diagrams. Instead, prepare the replacement issue body as valid Markdown:
-
-   1. `${{ env.TRIVIAL_MARKER }}`
-   2. A short plain-English summary of what needs to change and why (2-3 sentences max)
-   3. A simple checklist of concrete steps:
-      ```
-      ## Tasks
-      - [ ] Change X in file Y
-      - [ ] Verify Z
-      ```
-
-   No "As a / I want / so that" form. No Given/When/Then. No Mermaid. Just the marker,
-   the summary, and the checklist.
-
-   Load `@humanizer` and prepare the replacement issue body, then go directly to step 8
-   (estimate). Skip steps 5-7.
-
-5. Before writing the story, verify coverage: list every work unit and confirm each one has
-   exploration findings concrete enough for acceptance criteria. If any unit is missing, go back
-   and explore it now. Then call skill("pc-plan-story") and run `/plan-story` for the issue,
-   passing everything you learned while exploring as the exploration findings. Ground the story
-   in the actual codebase by reading the relevant files. Never read outside this repository root.
-   `pc-plan-story` owns the story's shape. This workflow's own requirement is coverage: several
-   work units become one story that covers all of them, with at least one acceptance scenario
-   per unit.
-
-     Apply repository documentation and established conventions before finalizing the story.
-     Adhere to ${{ env.REPO_RULES }}.
-
-6. **Wrap the story in the repository's issue form.** The body people read must follow the
-   repository's own issue template when one exists; the story is the content, the template
-   is the shape.
-
-   Find the form first:
-
-   - List the YAML and Markdown forms under `.github/ISSUE_TEMPLATE/`, plus a legacy
-     `.github/issue_template.md` or a root `template.yml`. `config.yml` there only declares
-     contact links, which are not forms: ignore it.
-   - When a form filters by labels and the issue carries one of those labels, that form
-     wins. Otherwise use the repository's default form.
-   - When the repository has no form at all, keep the free-form story shape from step 5:
-     there is nothing to wrap around.
-
-   Then fill it:
-
-   - Draw every field's content from your exploration findings. Required fields always get
-     real content; optional fields only when you genuinely have something for them.
-   - The story narrative lands in the field that asks for it — proposal, description, or
-     what-happened, depending on the form.
-   - The Given/When/Then scenarios go into the form's acceptance-criteria field when it has
-     one; otherwise they stay a section of their own. The Mermaid diagram goes where it
-     reads best inside the filled form.
-   - The machine-readable lines the later steps add — split markers in step 9, estimate
-     lines in step 10 — always sit at the very top of the body, above the form's first
-     heading, so the workflow can read them whatever the form's shape.
-
-7. Load `@humanizer` and prepare the complete replacement issue body as valid Markdown.
-
-8. **Estimate the story in points.** Use the Fibonacci scale, where one point is roughly one
+4. **Estimate the story in points.** Use the Fibonacci scale, where one point is roughly one
    human day of work for a developer who knows this codebase. Estimate the whole story: code,
    tests, and the edge cases the acceptance criteria imply.
 
@@ -643,7 +810,7 @@ timeout-minutes: 90
    Elapsed clock time is not evidence. A large change can land in minutes and a small one can
    wait days for a human, so never reason from how long anything took.
 
-9. **Split when the estimate is ${{ env.SPLIT_THRESHOLD }} or more.** An oversized story is the
+5. **Split when the estimate is ${{ env.SPLIT_THRESHOLD }} or more.** An oversized story is the
    single best predictor of a pull request that never lands.
 
    First test whether it *can* split. A story splits when it contains slices that are each
@@ -673,7 +840,7 @@ timeout-minutes: 90
    single story and say so in one sentence in the body, under the estimate. An honest 8 is more
    useful than three fake threes that each break the build.
 
-10. **Record the estimate in every body you write**, parent and children alike, immediately below
+6. **Record the estimate in every body you write**, parent and children alike, immediately below
    the title line, as exactly these two lines:
 
    ```
@@ -684,7 +851,16 @@ timeout-minutes: 90
    The visible line is for people and the marker is read by the workflow, which turns it into the
    `sp-N` label. A body without the marker gets no estimate label at all.
 
-11. Decide exactly one outcome:
+7. **One safe-output call per turn.** Never batch multiple safe-output calls into a single
+   message: `update_issue`, `create_issue` and `add_comment` each go in their own turn, with
+   nothing else in the message. The provider caps one response at a fixed size, and a batch of
+   large calls is truncated mid-JSON before any of them executes, ending the run green with
+   nothing written. On the split path, sequence `create_issue` → `create_issue` → … →
+   `update_issue` → `add_comment`, one per turn. If a single body is so large it approaches the
+   size of a very long message, tighten the body; a shorter call that lands beats a longer one
+   that is cut off.
+
+8. Decide exactly one outcome:
 
     Labels are workflow-owned state. Do not call `add_labels` or `remove_labels`.
 
@@ -692,9 +868,9 @@ timeout-minutes: 90
     could not answer. Leave the partial work visible: first call `update_issue` with a
     temporal draft, then call `add_comment` once with the questions.
 
-    The temporal draft is the replacement body your path would have written — the filled
-    issue form from step 6 on the standard path, the marker, summary and checklist from
-    step 4a on the trivial path — holding everything you already established, with every
+    The temporal draft is the replacement body your path would have written — the story
+    body from the standard path, the marker, summary and checklist from the trivial path —
+    holding everything you already established, with every
     part the questions leave open marked `_pending — see questions below_`. Its very
     first line is `${{ env.DRAFT_MARKER }}`; the next run replaces the draft wholesale
     with the final body.

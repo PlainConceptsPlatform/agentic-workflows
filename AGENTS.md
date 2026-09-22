@@ -10,6 +10,7 @@
 ## Workflow and CLI work
 
 - Before changing a workflow loop, load the intended author skill at `skills/workflow-author/SKILL.md`.
+- Before refreshing diagrams or the GitHub Pages site, load the docs skill at `skills/workflow-docs/SKILL.md`.
 - Before configuring or consuming a loop, load the intended consumer skill at `skills/workflow-consumer/SKILL.md`.
 - Before changing CLI behavior, load the intended CLI skill at `skills/cli/SKILL.md`.
 
