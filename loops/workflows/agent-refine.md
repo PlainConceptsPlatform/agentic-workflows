@@ -106,12 +106,7 @@ on:
         required: false
         type: string
         default: first
-  # The gate jobs that the top-level `if:` reads. gh-aw folds that `if:` into the generated
-  # activation job but gives activation no dependency on the jobs, so the reference resolves
-  # to '' and the clause is false -- the agent would never run. The package's own validator
-  # catches it after compilation; this is the line it asks for, the same one the merge gate
-  # uses for protected_changes.
-  needs: [still_open, size_guard]
+  needs: [still_open, size_guard, eligibility]
 
 jobs:
   # A route dispatched while the issue was open must not execute after it has been closed. The
@@ -138,6 +133,34 @@ jobs:
         with:
           token: ${{ github.token }}
           issue-number: ${{ inputs.issue-number }}
+  # A queued refine run can start long after it was dispatched. If triage concluded
+  # needs-maintainer while this run waited in a queue, the issue now carries review and
+  # the verdict must stand: the reserve step clears review blindly, so eligibility has to
+  # catch it first (Pliny-Bot #372).
+  eligibility:
+    needs: [still_open]
+    if: needs.still_open.outputs.open == 'true'
+    runs-on: agents-arc
+    permissions:
+      issues: read
+    outputs:
+      eligible: ${{ steps.check.outputs.eligible }}
+    steps:
+      - name: Check if the issue is parked for review
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+        run: |
+          set -euo pipefail
+          labels=$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels \
+            --jq '[.labels[].name]')
+          if jq -e 'index("review")' >/dev/null <<<"$labels"; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Issue #$ISSUE_NUMBER has the review label. Automated refinement skipped."
+            exit 0
+          fi
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
   # The size gate, rung 4. Measures the issue before any model starts, because an oversized
   # body does not fail fast on its own: it produces an agent that explores for seventeen
   # minutes and then dies mid-generation at the provider's response cap having written
@@ -145,8 +168,8 @@ jobs:
   # shell, no network beyond one issue read; over either limit it is a refusal, not a
   # smaller attempt.
   size_guard:
-    needs: [still_open]
-    if: needs.still_open.outputs.open == 'true'
+    needs: [still_open, eligibility]
+    if: needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true'
     runs-on: agents-arc
     timeout-minutes: 5
     permissions:
@@ -188,8 +211,8 @@ jobs:
   # replies re-enters rerefine through the comment route, and the classifier ignores
   # bot comments, so this comment cannot re-trigger the worker.
   refuse_big_issue:
-    needs: [still_open, size_guard]
-    if: needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big == 'true'
+    needs: [still_open, size_guard, eligibility]
+    if: needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true' && needs.size_guard.outputs.too_big == 'true'
     runs-on: agents-arc
     timeout-minutes: 5
     permissions:
@@ -241,8 +264,8 @@ jobs:
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
   reserve:
-    needs: [still_open, size_guard]
-    if: needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big != 'true'
+    needs: [still_open, size_guard, eligibility]
+    if: needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true' && needs.size_guard.outputs.too_big != 'true'
     runs-on: agents-arc
     permissions:
       contents: read
@@ -497,9 +520,10 @@ jobs:
     # clause every refused issue also looped here -- one human-label visit produced eight
     # refusal comments and eight "Attempt N of 5" comments, none of which could succeed
     # (Pliny-Bot #322).
-    needs: [activation, agent, safe_outputs, validate_output, size_guard]
+    needs: [activation, agent, safe_outputs, validate_output, size_guard, eligibility]
     if: >
       always() &&
+      needs.eligibility.outputs.eligible == 'true' &&
       needs.size_guard.outputs.too_big != 'true' &&
       (
         needs.agent.result != 'success' ||
@@ -629,7 +653,7 @@ jobs:
 # the implicit success(): a refused skip no longer poisons the agent, while any real
 # failure -- size_guard erroring, the refusal job erroring mid-refuse, reserve failing --
 # still blocks it and lands in incomplete.
-if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big != 'true' && !failure()
+if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true' && needs.size_guard.outputs.too_big != 'true' && !failure()
 
 runs-on: agents-arc
 runs-on-slim: agents-arc

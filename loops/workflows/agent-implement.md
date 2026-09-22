@@ -159,6 +159,16 @@ jobs:
             exit 0
           fi
 
+          # A queued implement run can start long after it was dispatched. If triage concluded
+          # needs-maintainer while this run waited in the implement-global queue, the issue now
+          # carries review and the verdict must stand: the reserve step clears review blindly,
+          # so eligibility has to catch it first (Pliny-Bot #372).
+          if jq -e 'index("review")' >/dev/null <<<"$labels"; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Issue #$ISSUE_NUMBER has the review label. Automated implementation skipped."
+            exit 0
+          fi
+
           echo "eligible=true" >> "$GITHUB_OUTPUT"
 
   reserve:

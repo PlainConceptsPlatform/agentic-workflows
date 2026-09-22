@@ -927,6 +927,21 @@ if worker_installed implement; then
   if [ "$IMPLEMENT_RETRY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+# A queued worker can start long after it was dispatched. If triage concluded
+# needs-maintainer while the run waited in a queue, the issue carries review and
+# the verdict must stand: the reserve step clears review blindly, so eligibility
+# has to catch it first (Pliny-Bot #372).
+for route in implement refine; do
+  worker_md="${WORKFLOWS_DIR}/agent-${route}.md"
+  [ -f "$worker_md" ] || continue
+  if grep -q 'index("review")' "$worker_md"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: agent-${route} eligibility does not guard against the review label; a queued worker could override a triage verdict" >&2
+  fi
+done
+
 if worker_installed merge-gate; then
   # A failed attempt must not strip `implement`: identify-gate-subject refuses an issue
   # without it, so the first crash would starve every retry at the subject check.
