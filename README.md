@@ -78,7 +78,8 @@ asserts all of that, including that it closes only two kinds of issue.
 
 The normal life of a piece of work is `refine` → `implement` → CI → `merge-gate` → merged, with
 no human in the loop unless a worker asks for one. Refine decides the size: an estimate of 8 or
-more is split into children of 5 or less, and each child walks the same path on its own. Audit
+more is split into children of 3 to 5 points, and each child walks the same path on its own. A
+slice smaller than 3 points is a fragment and is folded into a sibling. Audit
 creates work rather than consuming it, and files into `refine` rather than straight to
 `implement`, so a report of several unrelated findings becomes one properly sized issue per
 finding instead of one pull request that has to fix them all.

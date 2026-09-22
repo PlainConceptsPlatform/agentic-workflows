@@ -2173,6 +2173,16 @@ if worker_installed refine; then
     echo "FAIL: the refine refusal never releases bot-working; a refused issue stays reserved with no run behind it" >&2
   fi
 
+  # The split floor: a split child carries a whole stack's machinery (issue, feature branch,
+  # PR into the branch), so a 1- or 2-point slice is a fragment and must be folded into a
+  # sibling instead. The floor must be pinned through the env var the prompt interpolates,
+  # so a consumer cannot lower it below 3 without editing the worker.
+  if ! grep -qF 'MIN_CHILD_POINTS: "3"' "$REFINE_WORKER_MD" \
+    || ! grep -qF 'child estimated below ${{ env.MIN_CHILD_POINTS }}' "$REFINE_WORKER_MD"; then
+    SIZE_GATE_OK=0
+    echo "FAIL: refine allows split children below 3 points; the floor must stay interpolated from MIN_CHILD_POINTS" >&2
+  fi
+
   if [ "$SIZE_GATE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 

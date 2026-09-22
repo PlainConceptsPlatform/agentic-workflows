@@ -53,6 +53,7 @@ env:
   SPLIT_PARENT_PREFIX: "<!-- split-parent: "
   SPLIT_THRESHOLD: "8"
   MAX_SPLIT_CHILDREN: "6"
+  MIN_CHILD_POINTS: "3"
   INCOMPLETE_COMMENT: "Automated refinement ended without an outcome. The refine label remains for a retry."
   SAFE_OUTPUT_COMMENT_PREFIX: "Refinement update"
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
@@ -821,7 +822,9 @@ timeout-minutes: 90
    **If it splits:** write between two and ${{ env.MAX_SPLIT_CHILDREN }} children. Each child is
    a complete refined story wrapped in the same issue form, with its own
    acceptance criteria, its own tests section, and its own estimate of 5 or less. Never write a
-   child estimated at 1: that is a fragment, so fold it into a sibling. Call `create_issue` once
+   child estimated below ${{ env.MIN_CHILD_POINTS }}: that is a fragment, not a story -- the whole
+   stack exists to carry real slices, so fold anything smaller into a sibling and give the
+   sibling the honest combined estimate. Call `create_issue` once
    per child, and in each child body include:
 
    - the line `${{ env.SPLIT_PARENT_PREFIX }}N -->` naming the parent issue number

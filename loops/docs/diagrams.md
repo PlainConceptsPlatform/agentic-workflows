@@ -83,7 +83,7 @@ flowchart LR
     triage -.->|block| closed(("Closed"))
     triage -.->|needs-info| author("Author replies") --> triage
     write("Write+ user<br/>self-labels") --> refine
-    refine{"refine<br/>estimate in points"} -->|"5 or less"| implement
+    refine{"refine<br/>estimate in points"} -->|"3 to 5"| implement
     refine -->|"8 or more"| split("Split into children") --> refine
     refine -.->|questions| author
     implement("implement<br/>branch, PR, closes the issue") --> ci("CI")
@@ -201,7 +201,8 @@ flowchart TD
 ## agent-refine.md
 
 Decides the size of the work, which is the decision that determines whether it ever lands. An
-estimate of 8 or more is split into children of 5 or less, and each child walks the pipeline alone.
+estimate of 8 or more is split into children of 3 to 5 points, and each child walks the pipeline
+alone. A slice smaller than 3 points is a fragment and is folded into a sibling.
 The refined story is wrapped in the repository's own issue form, and when questions remain the
 worker leaves a temporal draft on the issue and asks everything in one batched comment.
 
@@ -224,7 +225,7 @@ flowchart TD
     refSplit -->|no| refOutcome
     refSplit -->|"yes, and it splits"| refChildren
     refSplit -->|"yes, indivisible"| refOutcome
-    refChildren(("Split<br/>2-6 children, each 5 or less<br/>parent becomes their tracker"))
+    refChildren(("Split<br/>2-6 children, each 3 to 5<br/>parent becomes their tracker"))
     refChildren -->|"children build on each other"| refStack
     refStack("Stamp stack-root-branch + stack-root-pr<br/>on the feature issue, and open the<br/>held root pull request on feat/&lt;N&gt;") --> refOutcome
     refOutcome{"Questions left<br/>for the author?"}
