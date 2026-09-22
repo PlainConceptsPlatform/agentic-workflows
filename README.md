@@ -172,9 +172,11 @@ gh workflow run work-router.yml --repo PlainConceptsPlatform/<repo> -f operation
 
 ## Publishing to npm
 
-Publishing `@plainconceptsplatform/workflows` is a manual dispatch of the `release.yml`
-workflow — from `main` for a stable release (`latest` dist-tag), from the `alpha` branch for a
-prerelease (`alpha` dist-tag). Setup, runbooks, and verification commands live in
+Publishing `@plainconceptsplatform/workflows` is triggered by a GitHub Release: a stable
+release `v<version>` on `main` publishes with the `latest` dist-tag, and a prerelease
+`v<version>-alpha.<n>` from the `alpha` branch publishes with the `alpha` dist-tag. The
+[`npm-publish.yml`](.github/workflows/npm-publish.yml) workflow runs the same gates as CI
+before publishing. Setup, runbooks, and verification commands live in
 [docs/release.md](docs/release.md).
 
 ## Scheduling across repositories
