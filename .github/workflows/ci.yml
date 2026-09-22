@@ -243,7 +243,7 @@ jobs:
           node - <<'JS'
           const { readFileSync, readdirSync } = require("node:fs");
 
-          const text = readFileSync("docs/diagrams.md", "utf8").replace(/\r\n/g, "\n");
+          const text = readFileSync("loops/docs/diagrams.md", "utf8").replace(/\r\n/g, "\n");
           const fences = (text.match(/^```/gm) || []).length;
           const blocks = [...text.matchAll(/```mermaid\n([\s\S]*?)\n```/g)].map((m) => m[1]);
           const problems = [];
@@ -280,6 +280,6 @@ jobs:
           }
 
           console.log(`${blocks.length} diagram(s), ${workers.length} worker(s)`);
-          for (const problem of problems) console.error(`::error file=docs/diagrams.md::${problem}`);
+          for (const problem of problems) console.error(`::error file=loops/docs/diagrams.md::${problem}`);
           process.exit(problems.length === 0 ? 0 : 1);
           JS
