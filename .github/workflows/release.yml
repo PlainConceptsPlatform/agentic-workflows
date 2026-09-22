@@ -1,0 +1,254 @@
+name: Release
+
+# Publishing is manual and deliberate. A maintainer dispatches this workflow, and the branch it
+# is dispatched from selects the track: `main` publishes the stable version declared in the
+# manifests with the `latest` dist-tag; `alpha` publishes a prerelease of that same version,
+# suffixed `-alpha.<n>`, with the `alpha` dist-tag, so a prerelease never moves `latest`. There
+# is no push or pull_request trigger: a merge, and a pull request, cannot publish anything.
+#
+# Both tracks publish with the NPM_TOKEN secret, which npm receives as NODE_AUTH_TOKEN; the
+# one-time setup and both runbooks are in docs/release.md. Everything is rerun-safe: npm itself
+# refuses to overwrite a published version, the stable track skips a version it finds on npm,
+# and the alpha track always derives the next unused suffix from the registry.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: npm-publish
+    # The stable track pushes an annotated tag and creates the GitHub release, which needs
+    # write access; install, verify, pack and the npm publish itself need none of it.
+    permissions:
+      contents: write
+    steps:
+      # The branch is the track selector, so it is validated before a single tool is installed.
+      # A dispatch from any other branch is a mistake, and it should be reported as such in
+      # seconds rather than fail five minutes later inside a publish step.
+      - name: Guard release branch
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF" in
+            refs/heads/main)
+              echo "track: stable (publish with the latest dist-tag)"
+              ;;
+            refs/heads/alpha)
+              echo "track: alpha (publish with the alpha dist-tag)"
+              ;;
+            *)
+              echo "::error::Release can only be dispatched from main (stable) or alpha (prerelease); got $GITHUB_REF"
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The token is only ever read into the environment and handed to npm as NODE_AUTH_TOKEN.
+      # Checking it here, before install and verify, turns a missing credential from a 401 deep
+      # inside the publish step into a two-second failure that points at the setup docs.
+      - name: Guard npm token
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN is not configured. A maintainer must add it as the NPM_TOKEN secret; see docs/release.md."
+            exit 1
+          fi
+          echo "NPM_TOKEN is configured"
+
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      # Node 24 is what the most recent real publish of this package ran on; the engines field
+      # admits anything >= 20.19, which CI keeps proving with Node 20 on every push.
+      # registry-url is what makes npm treat NODE_AUTH_TOKEN as the credential; without it the
+      # publish step runs as an anonymous client and fails.
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v5.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+
+      # --------------------------------------------------------------------- alpha track
+      # The prerelease version comes from the registry, not from a counter anyone has to
+      # maintain: npm holds every published <base>-alpha.<n>, so the next unused one is the
+      # highest existing n plus one. The rewrite happens only inside the runner, in
+      # cli/package.json alone -- nothing is committed and main's manifests are untouched, so
+      # the two manifests keep agreeing on the branch itself (CI checks that; pnpm verify does
+      # not, which is why these gates below stay green on a rewritten version).
+      - name: Prepare alpha version
+        if: github.ref == 'refs/heads/alpha'
+        run: |
+          set -euo pipefail
+          base=$(node -p "require('./cli/package.json').version")
+          candidate=$(npm view @plainconceptsplatform/workflows versions --json | node -e "
+            const versions = [].concat(JSON.parse(require('fs').readFileSync(0, 'utf8')) || []);
+            const prefix = process.argv[1] + '-alpha.';
+            let highest = 0;
+            for (const version of versions) {
+              if (version.startsWith(prefix)) {
+                const n = parseInt(version.slice(prefix.length), 10);
+                if (Number.isFinite(n) && n > highest) {
+                  highest = n;
+                }
+              }
+            }
+            console.log(process.argv[1] + '-alpha.' + (highest + 1));
+          " "$base")
+          if npm view "@plainconceptsplatform/workflows@$candidate" version > /dev/null 2>&1; then
+            echo "::error::$candidate already exists on npm; refusing to reuse a published version"
+            exit 1
+          fi
+          node -e "
+            const fs = require('fs');
+            const manifest = JSON.parse(fs.readFileSync('cli/package.json', 'utf8'));
+            manifest.version = process.argv[1];
+            fs.writeFileSync('cli/package.json', JSON.stringify(manifest, null, 2) + '\n');
+          " "$candidate"
+          echo "alpha version: $base -> $candidate (cli/package.json, in the runner only)"
+          echo "- Alpha candidate: \`$candidate\` (base version $base, never committed)." >> "$GITHUB_STEP_SUMMARY"
+
+      # --------------------------------------------------------------------- shared gates
+      # The repository's own definition of releasable: `pnpm run pack` runs the root script,
+      # which verifies (typecheck, build, tests) and then packs the cli. It has to be
+      # `pnpm run pack`: a bare `pnpm pack` invokes pnpm's builtin pack command and skips the
+      # repository script entirely. The script passes `--pack-destination ../../artifacts`,
+      # which pnpm resolves against the invocation directory -- the workspace root -- so the
+      # tarball lands two directories above the checkout, not inside it; the ls asserts it is
+      # actually there. The alpha track runs this after the version rewrite, so what is
+      # verified and packed is exactly what gets published.
+      - name: Verify and pack
+        run: |
+          set -euo pipefail
+          pnpm run pack
+          ls "$GITHUB_WORKSPACE/../../artifacts"/*.tgz
+
+      # -------------------------------------------------------------------- stable track
+      # npm refuses to republish an existing version, but that hard failure reads like an
+      # incident. Checking first turns a rerun of a completed release into a documented no-op.
+      - name: Publish stable version
+        if: github.ref == 'refs/heads/main'
+        working-directory: cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          if npm view "@plainconceptsplatform/workflows@$version" version > /dev/null 2>&1; then
+            echo "- \`@plainconceptsplatform/workflows@$version\` was already on npm; publish skipped (rerun-safe)." >> "$GITHUB_STEP_SUMMARY"
+            echo "publish skipped: $version is already on npm"
+            exit 0
+          fi
+          npm publish --access public --tag latest
+          # A registry read can hit a replica that lags the publish by a few seconds, so the
+          # dist-tag is polled rather than read once.
+          verified=""
+          for attempt in 1 2 3 4 5; do
+            latest=$(npm view @plainconceptsplatform/workflows dist-tags.latest 2>/dev/null || true)
+            if [ "$latest" = "$version" ]; then
+              verified=1
+              break
+            fi
+            echo "latest is '${latest:-<unset>}' (attempt $attempt); waiting"
+            sleep 10
+          done
+          if [ -z "$verified" ]; then
+            echo "::error::dist-tag latest did not become $version after publishing"
+            exit 1
+          fi
+          echo "published and verified: @plainconceptsplatform/workflows@$version as latest"
+          echo "- Published \`@plainconceptsplatform/workflows@$version\` with dist-tag \`latest\`." >> "$GITHUB_STEP_SUMMARY"
+
+      # persist-credentials is false, so the checkout's git cannot push; the tag goes to an
+      # explicit URL authenticated with the job token, which arrives through env and never in
+      # the script text. An annotated tag also needs a tagger identity, and a bare runner has
+      # none -- every existing release tag here is annotated, and the message matches the
+      # newest convention.
+      - name: Tag the release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./cli/package.json').version")
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          set +e
+          git ls-remote --exit-code --tags "$remote" "refs/tags/v$version" > /dev/null 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "tag v$version already exists on the remote; skipping"
+            exit 0
+          fi
+          if [ "$status" -ne 2 ]; then
+            echo "::error::could not check the remote for tag v$version (git ls-remote exited $status)"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$version" -m "chore: release v$version"
+          git push "$remote" "refs/tags/v$version"
+          echo "pushed tag v$version"
+
+      # --verify-tag makes release creation fail rather than guess if the tag push somehow did
+      # not land; --generate-notes matches the release shape already on the repo (title equals
+      # the tag, not a draft, not a prerelease).
+      - name: Create the GitHub release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./cli/package.json').version")
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "release v$version already exists; skipping"
+            exit 0
+          fi
+          gh release create "v$version" --verify-tag --generate-notes --title "v$version"
+          echo "- Tagged \`v$version\` and created the GitHub release." >> "$GITHUB_STEP_SUMMARY"
+
+      # The candidate was checked against the registry before the gates ran; npm remains the
+      # final backstop and refuses to overwrite a published version, so a late collision fails
+      # loudly instead of quietly replacing someone else's release.
+      - name: Publish alpha version
+        if: github.ref == 'refs/heads/alpha'
+        working-directory: cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          npm publish --access public --tag alpha
+          # Poll for the dist-tag, and assert that latest was not moved: a prerelease is only
+          # ever reachable through the alpha tag.
+          verified=""
+          for attempt in 1 2 3 4 5; do
+            if npm view @plainconceptsplatform/workflows dist-tags --json 2>/dev/null | node -e "
+              const tags = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+              process.exit(tags.alpha === process.argv[1] && tags.latest !== process.argv[1] ? 0 : 1);
+            " "$version"; then
+              verified=1
+              break
+            fi
+            echo "dist-tag alpha not pointing at $version yet (attempt $attempt); waiting"
+            sleep 10
+          done
+          if [ -z "$verified" ]; then
+            npm view @plainconceptsplatform/workflows dist-tags || true
+            echo "::error::expected dist-tags.alpha == $version and dist-tags.latest != $version"
+            exit 1
+          fi
+          echo "published and verified: @plainconceptsplatform/workflows@$version as alpha, latest untouched"
+          echo "- Published \`@plainconceptsplatform/workflows@$version\` with dist-tag \`alpha\`; \`latest\` was not moved." >> "$GITHUB_STEP_SUMMARY"

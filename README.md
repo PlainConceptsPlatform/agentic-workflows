@@ -170,6 +170,13 @@ gh workflow run work-router.yml --repo PlainConceptsPlatform/<repo> -f operation
 `version-bump` accepts `auto`, `patch`, `minor`, or `major`. The worker only needs
 `OPENAI_API_KEY` — it uses `github.token` for git operations and `gh release create`.
 
+## Publishing to npm
+
+Publishing `@plainconceptsplatform/workflows` is a manual dispatch of the `release.yml`
+workflow — from `main` for a stable release (`latest` dist-tag), from the `alpha` branch for a
+prerelease (`alpha` dist-tag). Setup, runbooks, and verification commands live in
+[docs/release.md](docs/release.md).
+
 ## Scheduling across repositories
 
 One worker runs on a timer and it is long: `audit` takes about 45 minutes. Every repository
