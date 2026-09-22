@@ -138,7 +138,6 @@ flowchart TD
     class splitStack,rootPr,child1,merge1,child2,announce,fixChild action
     class stacked decision
     class humanStack success
-    class merged success
 ```
 
 The stack exists only in markers on the issues — `stack-root-branch` and `stack-root-pr` on the
