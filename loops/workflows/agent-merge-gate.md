@@ -90,7 +90,9 @@ description: |
   risk assessment is clean, hand to a human when it is not, fix CI when it failed. Called by
   the Work Router; does not trigger on public events.
 
-  The router supplies the CI conclusion and run ID as facts, so there is no polling and no
+  In a stack, a child pull request (its base is the feature branch) merges into that feature
+  branch and its child issue closes with it; the root pull request is held for a person. The
+  router supplies the CI conclusion and run ID as facts, so there is no polling and no
   timeout branch. The conclusion is read from the inputs instead of filtered at the trigger.
 
 name: "Agent: Merge Gate"
@@ -153,6 +155,8 @@ jobs:
       conclusion: ${{ steps.subject.outputs.conclusion }}
       run-id: ${{ steps.subject.outputs.run-id }}
       review_blocked: ${{ steps.review.outputs.review_blocked }}
+      pr_base: ${{ steps.stack.outputs.pr_base }}
+      stack_root: ${{ steps.stack.outputs.stack_root }}
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -187,6 +191,31 @@ jobs:
             sleep 5
           done
           echo "review_blocked=$([ "$decision" = 'CHANGES_REQUESTED' ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      # A child PR in a stack has its base on the feature branch, not main. The rest of the
+      # gate needs both facts measured here, once: which branch this PR merges into, and
+      # whether this PR is the root of a stack (its linked feature issue carries this PR's
+      # number in the `<!-- stack-root-pr: N -->` marker refine stamped when it created the
+      # root PR). The base is always known; the marker only exists in stack repos, so
+      # repos without stacks see no change at all in either output ('' and 'false').
+      - name: Detect the pull request's base and its role in a stack
+        id: stack
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.subject.outputs.pr }}
+          ISSUE: ${{ steps.subject.outputs.issue }}
+        run: |
+          set -euo pipefail
+          pr_base=$(gh pr view "$PR" --repo "$REPO" --json baseRefName --jq '.baseRefName // ""')
+          stack_root=false
+          if [ -n "$ISSUE" ]; then
+            body=$(gh issue view "$ISSUE" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo "")
+            if echo "$body" | grep -q "<!-- stack-root-pr: $PR -->"; then
+              stack_root=true
+            fi
+          fi
+          echo "pr_base=$pr_base" >> "$GITHUB_OUTPUT"
+          echo "stack_root=$stack_root" >> "$GITHUB_OUTPUT"
 
   # Rung 4b. Everything the merge decision needs that a shell can establish, measured once,
   # before any model reads the diff. The job kept its name and its `requires_review` and
@@ -475,8 +504,9 @@ jobs:
       # the merge below pins the head SHA with --match-head-commit, so a screenshot run on
       # the same head describes exactly what is being merged. GITHUB_TOKEN: a dispatch
       # raises one workflow_run-free event, and the called worker re-owns its subject.
+      # A stack root never enters either branch: its screenshots wait with it.
       - name: Dispatch visual verification
-        if: needs.validate_output.outputs.outcome == 'auto-merge' && env.VISUAL_VERIFY_ENABLED == 'true'
+        if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.stack_root != 'true' && env.VISUAL_VERIFY_ENABLED == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -494,8 +524,16 @@ jobs:
       # The visual verification pass is the visual_verify dispatch above. It runs as its own
       # worker because a step cannot call a reusable workflow, and the merge below may land
       # while the capture is still running -- the head SHA pin keeps the two honest.
+      # A stack root never merges on its own. The feature issue parks with `review` (refine
+      # puts it there), so the subject job normally cannot even find the root PR — this
+      # guard is the defense in depth for a root that reaches the merge step anyway, for
+      # example because the feature issue was mislabeled `implement`. The children merge
+      # into the feature branch; the root merges into main only when a person does it, after
+      # the stack completes and validates. The hold comment lands on the linked issue (not
+      # the PR) with the App token on purpose: an App-token issue comment raises a routed
+      # event, keeping the loop event-driven.
       - name: Merge approved pull request
-        if: needs.validate_output.outputs.outcome == 'auto-merge'
+        if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.stack_root != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -504,6 +542,20 @@ jobs:
           set -euo pipefail
           head_sha=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq '.headRefOid')
           gh pr merge "$PR" --repo "$REPO" --squash --match-head-commit "$head_sha"
+      # The root's own gate run stops here: children may still be landing on the feature
+      # branch, and the merge decision for main belongs to a person. The comment says only
+      # what a reader needs: the gate held the root, children merge into the feature branch,
+      # and a human merges the root when the stack completes.
+      - name: Hold a stack root for a human merge
+        if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.stack_root == 'true'
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ needs.subject.outputs.issue }}
+          body: |
+            **Stack root held.** This pull request is the root of a stack: its children merge
+            into the feature branch, and it merges into ${{ github.event.repository.default_branch }} only when a person
+            does it, after all children have landed and the feature branch validates.
       - name: Release remediated issue
         if: needs.validate_output.outputs.outcome == 'remediated'
         uses: ./.github/actions/remove-issue-labels
@@ -553,6 +605,22 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.WORKING_LABEL }}
+      # GitHub's closing keywords never fire when a PR merges into a branch other than the
+      # default, so a child PR landing on the feature branch leaves its issue open — and
+      # "zero open children" would never be reachable. This step closes the child issue
+      # deterministically, exactly the issue this PR implements, with the App token: the
+      # close raises routed events only for issue lifecycle the router already understands,
+      # and `gh issue close` on an already-closed issue is a harmless no-op, making the
+      # step safe to re-run.
+      - name: Close the child issue when the pull request landed on a feature branch
+        if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.pr_base != '' && needs.subject.outputs.pr_base != github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ needs.subject.outputs.issue }}
+        run: |
+          set -euo pipefail
+          gh issue close "$ISSUE" --repo "$REPO" --reason completed || true
       - name: Clear merged issue labels
         if: needs.validate_output.outputs.outcome == 'auto-merge'
         uses: ./.github/actions/remove-issue-labels
@@ -878,8 +946,10 @@ timeout-minutes: 120
 4b. **Merge conflict when CI is green.** If the conclusion is `success` and
     `has_conflicts` is `true` (current value: `${{ needs.reserve.outputs.has_conflicts }}`),
     resolve the conflict before assessing risk. You are already on the PR branch.
-    Merge `origin/${{ github.event.repository.default_branch }}` into it
-    (`git merge origin/${{ github.event.repository.default_branch }}`), resolve every
+    Merge `origin/${{ needs.subject.outputs.pr_base }}` into it
+    (`git merge origin/${{ needs.subject.outputs.pr_base }}`; that is the branch this pull
+    request merges into — the default branch for a flat pull request, the feature branch
+    for a stack child), resolve every
     conflict deliberately, commit the merge, and run the verification commands below. Do not
     use `--ours`, `--theirs`, or a blanket conflict-marker deletion without reviewing the
     intended behavior from both sides, and never rebase: the push is fast-forward only.
@@ -1042,8 +1112,9 @@ timeout-minutes: 120
    must not auto-merge the PR.
 
    **If `has_conflicts` is `true` (current value: `${{ needs.reserve.outputs.has_conflicts }}`):** You are already on the PR branch. Resolve the conflict;
-   it is not a reason to hand the PR to a human. Merge `origin/${{ github.event.repository.default_branch }}`
-   into the current branch, resolve every conflict deliberately, stage the resolutions, and
+   it is not a reason to hand the PR to a human. Merge `origin/${{ needs.subject.outputs.pr_base }}`
+   (the branch this pull request merges into) into the current branch, resolve every conflict
+   deliberately, stage the resolutions, and
    commit the merge. Then run verification and push the resulting branch update. Do not use
    `--ours`, `--theirs`, or a blanket conflict-marker deletion without reviewing the intended
    behavior from both sides.

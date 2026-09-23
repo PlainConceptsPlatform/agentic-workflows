@@ -494,9 +494,111 @@ jobs:
             echo "has-open-pr=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # A stack child implements on the feature branch its parent issue names. The agent sandbox
+  # cannot resolve that branch itself -- agents have no git credentials and checkout a pinned
+  # default-branch SHA -- so the router reads the marker and resolves the dispatch ref before
+  # the worker starts. Refine stamps `<!-- stack-root-branch: feat/N -->` both on the PARENT
+  # feature issue and on every child body at hand-over, so the child is self-describing for
+  # the implement prompt, which reads only the child's context. The split-parent chain is the
+  # fallback when a child predates the stamp (retries of issues split by an earlier refine).
+  # Missing, empty or garbled markers fail closed: the child takes the flat call-implement
+  # path and lands on the default branch, exactly what a repo without stacks does today.
+  # The in-flight check exists because a dispatched agent-implement run is invisible to
+  # check-implement-pr's older-run dupe check: this router run completes as soon as
+  # `gh workflow run` returns (fire-and-forget), while a workflow_call caller stays
+  # in_progress -- and the dispatch run's title "Working (Implement)" and the App-token
+  # label events' actor "app/..." both miss the title conditions that check matches.
+  # head_branch is the discriminator: a dispatched implement's run records the dispatch ref,
+  # feat/N, while a workflow_call run's head_branch is the default branch. Filtering
+  # in_progress/queued agent-implement.lock.yml runs by head_branch therefore isolates stack
+  # implements with zero effect on flat runs.
+  check-stack-branch:
+    needs: [classify, authorize]
+    if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true'
+    runs-on: RunnerLandingZone
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+    steps:
+      - name: Resolve the feature branch from the stack markers
+        id: stack
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
+        run: |
+          set -euo pipefail
+          echo "is-stack=false" >> "$GITHUB_OUTPUT"
+          echo "stack-branch=" >> "$GITHUB_OUTPUT"
+
+          # Read failures degrade to the flat path, never to a failed job: call-implement
+          # names this job in its needs, so a failure here would block a perfectly ordinary
+          # flat implement run. A repo without stack markers must behave exactly as before.
+          body=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')
+          # Marker-first: the child may carry its own resolved marker from an earlier hop.
+          # `|| true` on both pipelines: under `set -o pipefail`, grep's exit 1 on no match
+          # (the common flat case) or head's SIGPIPE on a multi-marker body must not fail
+          # the job -- call-implement needs this job, so a failure here would block flat
+          # implements too.
+          branch=$(printf '%s' "$body" | grep -oE '<!-- stack-root-branch: [^ ]+ -->' | head -1 | sed -E 's/<!-- stack-root-branch: ([^ ]+) -->/\1/' || true)
+
+          if [ -z "$branch" ]; then
+            # No marker on the child: follow the split-parent chain to the feature issue,
+            # where refine stamps the stack root.
+            parent=$(printf '%s' "$body" \
+              | grep -oE '<!-- split-parent: [0-9]+ -->' | head -1 \
+              | grep -oE '[0-9]+' || true)
+            if [ -n "$parent" ]; then
+              parent_body=$(gh issue view "$parent" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')
+              branch=$(printf '%s' "$parent_body" \
+                | grep -oE '<!-- stack-root-branch: [^ ]+ -->' | head -1 \
+                | sed -E 's/<!-- stack-root-branch: ([^ ]+) -->/\1/' || true)
+            fi
+          fi
+
+          # Fail closed on anything unreadable or unsafe: a missing marker, a garbled
+          # split parent, or a marker naming a deleted branch all take the flat path.
+          if ! printf '%s' "$branch" | grep -qE '^[A-Za-z0-9._/-]+$'; then
+            echo "::notice::Issue #$ISSUE_NUMBER carries no readable stack-root-branch marker; taking the flat path."
+            exit 0
+          fi
+          if ! gh api "repos/$REPO/branches/$(printf '%s' "$branch" | sed 's|/|%2F|g')" --jq '.name' >/dev/null 2>&1; then
+            echo "::notice::Stack root branch $branch no longer exists on the remote; taking the flat path."
+            echo "stack-branch=$branch" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "is-stack=true" >> "$GITHUB_OUTPUT"
+          echo "stack-branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Detect an in-flight implement on the feature branch
+        id: inflight
+        if: steps.stack.outputs.is-stack == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          STACK_BRANCH: ${{ steps.stack.outputs.stack-branch }}
+        run: |
+          set -euo pipefail
+          echo "stack-in-flight=false" >> "$GITHUB_OUTPUT"
+          # Only dispatched stack implements run with head_branch = feat/N; a workflow_call
+          # (flat) implement run's head_branch is the default branch, so this filter never
+          # sees it. This closes the dupe-visibility gap left by fire-and-forget dispatch.
+          for status in in_progress queued; do
+            live=$(gh api "repos/$REPO/actions/workflows/agent-implement.lock.yml/runs?status=$status&per_page=100" \
+              --jq "[.workflow_runs[] | select(.head_branch == \"${STACK_BRANCH}\")] | length" 2>/dev/null || echo 0)
+            if [ "${live:-0}" -gt 0 ]; then
+              echo "::notice::An implement run is already in flight on $STACK_BRANCH; skipping dispatch."
+              echo "stack-in-flight=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
   call-implement:
-    needs: [classify, authorize, check-implement-pr]
-    if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true' && needs.check-implement-pr.outputs.has-open-pr != 'true'
+    needs: [classify, authorize, check-implement-pr, check-stack-branch]
+    if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true' && needs.check-implement-pr.outputs.has-open-pr != 'true' && needs.check-stack-branch.outputs.is-stack != 'true'
     uses: ./.github/workflows/agent-implement.lock.yml
     concurrency:
       group: implement-global
@@ -515,6 +617,49 @@ jobs:
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+
+  # Stack children dispatch agent-implement by `gh workflow run --ref feat/N` instead of calling
+  # it: a workflow_call would pin the callee to THIS event's SHA, which for a label event is
+  # the default branch, not the feature branch. Dispatch on the feature ref makes the callee's
+  # GITHUB_SHA the feature tip, so the agent patches exactly the tree its PR will target, and
+  # the compile-time checkout ternary keys off `workflow_dispatch` to checkout github.ref_name.
+  # The dispatch itself carries no secrets (gh workflow run cannot forward them); the
+  # dispatched run reads REPO-LEVEL OPENAI_API_KEY / CODEX_API_KEY / COPILOT_GITHUB_TOKEN, the
+  # stack-activation prerequisite documented alongside the markers. BOT_APP_ID / BOT_PRIVATE_KEY
+  # are already repo-level. dispatch-triage proves the pattern: same app-token mint, same
+  # `actions: write` scope needed for `gh workflow run`.
+  dispatch-implement:
+    needs: [classify, authorize, check-implement-pr, check-stack-branch]
+    if: >
+      needs.classify.outputs.route == 'implement' &&
+      needs.authorize.outputs.trusted == 'true' &&
+      needs.check-implement-pr.outputs.has-open-pr != 'true' &&
+      needs.check-stack-branch.outputs.is-stack == 'true' &&
+      needs.check-stack-branch.outputs.stack-in-flight != 'true'
+    runs-on: RunnerLandingZone
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch stack implement on the feature branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          STACK_BRANCH: ${{ needs.check-stack-branch.outputs.stack-branch }}
+          ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
+          ATTEMPTS: ${{ needs.classify.outputs.attempts }}
+        run: |
+          set -euo pipefail
+          gh workflow run agent-implement.lock.yml --repo "$REPO" --ref "$STACK_BRANCH" \
+            -f issue-number="$ISSUE_NUMBER" \
+            -f attempts_so_far="$ATTEMPTS"
 
   dispatch-triage:
     needs: [classify, authorize]
@@ -911,6 +1056,105 @@ jobs:
               while IFS= read -r pr; do
                 maybe_dispatch "$pr"
               done
+
+            # Stacked delivery: the merged pull request merged into a feature branch, not the
+            # default branch, so this is a child landing. If the feature branch has no open
+            # children left and its root pull request is green, the stack is complete and a
+            # comment on the root pull request tells the human it is ready for the root merge.
+            # Repos without stack markers never reach the interesting part: the event PR's base
+            # was the default branch, so the guard below fails immediately. Fully idempotent:
+            # the completion comment carries its own marker, and a run that finds it already
+            # present exits without writing anything.
+            event_base=$(gh api "repos/$REPO/pulls/$EVENT_PR" --jq '.base.ref // empty' 2>/dev/null || echo '')
+            if [ -n "$event_base" ] && [ "$event_base" != "$DEFAULT_BRANCH" ]; then
+              echo "PR #$EVENT_PR merged into a feature branch; checking the stack."
+              # The implement worker's pull request closes exactly its own child issue, so
+              # the closed issue comes from the linked closing references (the resolved form
+              # GitHub computes whatever keyword the agent wrote), with the body text as
+              # fallback for a PR created before that guarantee.
+              closed_issue=$(gh pr view "$EVENT_PR" --repo "$REPO" --json closingIssuesReferences \
+                --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)
+              [ -n "$closed_issue" ] || closed_issue=$(gh api "repos/$REPO/pulls/$EVENT_PR" --jq '.body // ""' \
+                | grep -oiE '(closes?|fixes?|resolves?) #[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+              if [ -z "$closed_issue" ]; then
+                echo "PR #$EVENT_PR closes no issue; not a stack child. Nothing to do."
+              else
+                # Refine stamps the split-parent marker on every child body it hands over, so
+                # the child's own body names the feature issue. The reverse sub-issues
+                # listing has no equivalent per-child lookup: the sub-issues API only walks
+                # downward from the parent.
+                parent=$(printf '%s' "$(gh issue view "$closed_issue" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')" \
+                  | grep -oE '<!-- split-parent: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
+                if [ -z "$parent" ]; then
+                  echo "#$closed_issue is not a stack child issue (no parent found); nothing stack-related to do."
+                else
+                  root_pr=$(printf '%s' "$(gh issue view "$parent" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')" \
+                    | grep -oE '<!-- stack-root-pr: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
+                  root_open=false
+                  [ -n "$root_pr" ] && root_open=$(gh pr view "$root_pr" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qx open && echo true || echo false)
+                  if [ "$root_open" != true ]; then
+                    echo "Stack #$parent has no open root pull request; nothing to announce."
+                  else
+                    # The same child listing refine uses to hand work out: the sub-issues
+                    # link safe_outputs writes, with the body-marker search as fallback. A
+                    # stack parent always has children, so a listing that finds none means
+                    # the lookups failed, and announcing completion of a stack we cannot
+                    # see would be wrong -- stay silent and let a rerun decide.
+                    children=$(gh api "repos/$REPO/issues/$parent/sub_issues" --jq '.[].number' 2>/dev/null || true)
+                    if [ -z "$children" ]; then
+                      children=$(gh issue list --repo "$REPO" --state open --limit 50 \
+                        --search "\"<!-- split-parent: ${parent} -->\" in:body" --json number --jq '.[].number' || true)
+                    fi
+                    if [ -z "$children" ]; then
+                      echo "Cannot list any child of stack #$parent; leaving completion undetected for a rerun."
+                    else
+                    open_children=0
+                    for child in $children; do
+                      if gh issue view "$child" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qx open; then
+                        open_children=$((open_children + 1))
+                      fi
+                    done
+                    if [ "$open_children" -gt 0 ]; then
+                      echo "$open_children child issue(s) still open on stack #$parent; the stack continues."
+                    else
+                      # The root pull request must be green and mergeable. Green: a successful
+                      # CI run on its head SHA. Mergeable: the same on-demand computation
+                      # every gate dispatch already relies on; UNKNOWN settles in the
+                      # background, so ask until it does, like mergeable_state() does.
+                      root_state=UNKNOWN
+                      for _ in 1 2 3 4 5 6; do
+                        root_state=$(gh pr view "$root_pr" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo UNKNOWN)
+                        [ "$root_state" = "UNKNOWN" ] || break
+                        sleep 5
+                      done
+                      root_sha=$(gh api "repos/$REPO/pulls/$root_pr" --jq '.head.sha')
+                      root_ci=$(gh api "repos/$REPO/actions/runs?head_sha=$root_sha&per_page=100" \
+                        --jq '[.workflow_runs[]
+                          | select(.name == env.CI_WORKFLOW_NAME and .status == "completed"
+                                   and .conclusion == "success")]
+                        | sort_by(.created_at) | last // empty')
+                      if [ -z "$root_ci" ] || [ "$root_state" != "MERGEABLE" ]; then
+                        echo "Root PR #$root_pr is not green/mergeable yet; the human will merge when it is."
+                      else
+                        completion_marker='<!-- stack-complete -->'
+                        # The announcement is a pull request comment, and pull request
+                        # comments live at the issue endpoint for the pull request number,
+                        # so the marker is looked for where the comment was posted.
+                        already=$(gh api "repos/$REPO/issues/$root_pr/comments?per_page=100" \
+                          --jq "[.[] | select(.body | contains(\"$completion_marker\"))] | length" 2>/dev/null || echo 0)
+                        if [ "${already:-0}" -gt 0 ]; then
+                          echo "Stack #$parent already has a completion announcement; staying silent."
+                        else
+                          gh pr comment "$root_pr" --repo "$REPO" --body "Stack complete: all children have merged into the feature branch and CI is green. This root pull request is ready for a human to review and merge into $DEFAULT_BRANCH. $completion_marker"
+                          echo "Stack #$parent complete: announced root PR #$root_pr."
+                        fi
+                      fi
+                    fi
+                    fi
+                  fi
+                fi
+              fi
+            fi
           else
             maybe_dispatch "$EVENT_PR"
           fi

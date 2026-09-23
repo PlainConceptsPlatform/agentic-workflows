@@ -54,7 +54,7 @@ bot: autonomy between 6% and 50%. The rest stopped somewhere and told nobody.
 
 | Job | Runs | Does |
 |---|---|---|
-| `housekeeping` | `23 */6 * * *` | retries work that **stalled** (a crash, a timeout, an empty output) after 6h, up to 3 times; drops `pr-pending` from issues no open pull request closes; closes a split parent once every child is closed; deletes branches whose pull requests are all finished and bot-authored; rewrites one issue, **Needs a human**, listing what genuinely needs a person |
+| `housekeeping` | `23 */6 * * *` | retries work that **stalled** (a crash, a timeout, an empty output) after 6h, up to 3 times; drops `pr-pending` from issues no open pull request closes; closes a split parent once every child is closed; **stacks**: closes feature and child issues whose pull requests landed but whose close was lost, and reports held, orphaned and unfinished stacks in the digest; deletes branches whose pull requests are all finished and bot-authored; rewrites one issue, **Needs a human**, listing what genuinely needs a person |
 | `audit-close` | `43 3 * * *` | closes an audit report once every issue it references is closed, and labels a report nobody actioned `stale-audit` after 14 days so it stops blocking the next audit |
 
 The rule that shapes the janitor: **retry a failure, report a decision.** `stalled` marks a park
@@ -78,10 +78,32 @@ asserts all of that, including that it closes only two kinds of issue.
 
 The normal life of a piece of work is `refine` → `implement` → CI → `merge-gate` → merged, with
 no human in the loop unless a worker asks for one. Refine decides the size: an estimate of 8 or
-more is split into children of 5 or less, and each child walks the same path on its own. Audit
+more is split into children of 3 to 5 points, and each child walks the same path on its own. A
+slice smaller than 3 points is a fragment and is folded into a sibling. Audit
 creates work rather than consuming it, and files into `refine` rather than straight to
 `implement`, so a report of several unrelated findings becomes one properly sized issue per
 finding instead of one pull request that has to fix them all.
+
+### Stacked features
+
+When a split's children build on each other rather than standing alone, refine can open a
+**stack**: one feature branch `feat/<issue>`, a root pull request on it (the spec and a failing
+acceptance journey, open from the start, based on the default branch), and each child implemented
+as an ordinary issue with `implement` whose pull request targets the feature branch. The router's
+`check-stack-branch` job reads the child's `stack-root-branch` marker and dispatches implement
+with `ref:` set to the feature branch, so the same worker that writes flat work writes stacked
+work; merge-gate auto-merges children into the feature branch with the risk assessment
+unchanged, and closes each child issue exactly as it does on the default branch.
+
+The root is never auto-merged. When the last child lands, the router's stack-completion check
+announces on the root pull request that the feature is ready; a person merges the root, which
+closes the feature issue. Housekeeping backstops the races around that: a child issue left open
+by a lost close is closed when its pull request has merged, and a finished-but-never-announced
+or held-for-days root gets one line in the digest.
+
+All of it is gated on markers, not labels: a repository whose issues carry no
+`stack-root-branch` / `stack-root-pr` markers runs the flat pipeline above, byte for byte what
+it ran before stacks existed, with no new labels and no new routes firing.
 
 A merge-gate verdict parks the **code** it was given on, not the CI run that prompted it. Both
 paths that dispatch the gate compare the standing verdict against the newest commit on the

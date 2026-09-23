@@ -262,7 +262,7 @@
       "id": "refine-impl",
       "from": "refine",
       "to": "implement",
-      "label": "5 or less",
+      "label": "3 to 5",
       "variant": "emphasis"
     },
     {
@@ -352,7 +352,7 @@
       "dot": "cyan",
       "title": "Main path",
       "items": [
-        "refine decides size (5 or less = implement, 8+ = split)",
+        "refine decides size (3 to 5 = implement, 8+ = split, anything under 3 folds into a sibling)",
         "implement opens one PR, CI runs, merge gate decides"
       ]
     },
