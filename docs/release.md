@@ -16,20 +16,31 @@ workflow itself never creates tags or releases.
 
 ## One-time setup (maintainer)
 
-The workflow authenticates with an npm access token stored as a GitHub environment secret.
+The workflow authenticates with **npm Trusted Publishing** (GitHub OIDC): GitHub mints a
+short-lived OIDC token, the npm CLI exchanges it for registry credentials, and no npm token
+is stored anywhere. GitHub must therefore be registered as a Trusted Publisher on each package.
 
-1. Create the token on npmjs.com: avatar → **Access Tokens** → **Generate New Token**. Either a
-   granular token with read-and-write rights to `@plainconceptsplatform/workflows`, or a classic
-   **Automation** token.
-2. In this repository: **Settings → Environments → New environment**, named `npm-publish`.
-3. In the `npm-publish` environment: **Add environment secret**, named `NPM_TOKEN`, with the
-   token from step 1 as its value.
+For `@plainconceptsplatform/workflows` — the only package this repository publishes:
 
-The workflow filename (`.github/workflows/npm-publish.yml`), the environment name
-(`npm-publish`), and the secret name (`NPM_TOKEN`) are fixed by the workflow. This repository
-authenticates with a token rather than npm Trusted Publishing (OIDC), by maintainer decision —
-if you ever switch, remember a Trusted Publisher connection cannot be edited after creation;
-it must be deleted and recreated.
+1. On npmjs.com, select the package **@plainconceptsplatform/workflows**.
+2. Open **Settings**.
+3. Select **Trusted Publisher**.
+4. Choose **GitHub Actions**.
+5. Set the organization to `PlainConceptsPlatform`.
+6. Set the repository to `agentic-workflows`.
+7. Set the workflow filename to `npm-publish.yml` — exactly, including case.
+8. Set the GitHub environment to `npm-publish`.
+9. Enable **Allow npm publish**.
+
+Repeat for every public package you intend to publish (this repository has just the one).
+A Trusted Publisher connection **cannot be edited after creation** — if any value is wrong,
+delete the connection and recreate it with the correct values.
+
+The workflow filename (`.github/workflows/npm-publish.yml`) and the environment name
+(`npm-publish`) are fixed by the workflow, so they must match the Trusted Publisher exactly.
+Because authentication is OIDC-based, the `npm-publish` environment holds no secrets. Optional
+hardening on npmjs.com: package **Settings → Publishing access → "Require two-factor
+authentication and disallow tokens"**.
 
 ## Starting a stable release
 
@@ -113,7 +124,17 @@ npm view @plainconceptsplatform/workflows@<version> version  # a specific versio
 The alpha publish step performs the same dist-tag check in CI and fails the run if
 `dist-tags.alpha` does not point at the version it just published.
 
-If the publish step fails with `404 Not Found` on `PUT https://registry.npmjs.org/...`,
-the `NPM_TOKEN` environment secret is missing or invalid — npm hides the scope from
-unauthenticated clients and answers with 404 instead of 401. Fix it with the one-time
-setup above, then re-run the workflow.
+If the publish step fails with an authentication error — `ENEEDAUTH`, `401`, or `404 Not
+Found` on `PUT https://registry.npmjs.org/...` — the OIDC exchange did not succeed. npm
+hides scopes from unauthenticated clients, so an E404 on publish is usually a masked auth
+failure. Check, in order:
+
+1. The Trusted Publisher on npmjs.com matches this repository exactly: organization
+   `PlainConceptsPlatform`, repository `agentic-workflows`, workflow filename `npm-publish.yml`
+   (case-sensitive), environment `npm-publish`.
+2. The workflow still has `id-token: write` in its `permissions` block.
+3. The run is a normal stable, prerelease, or manual run of this workflow (pull requests can
+   never authenticate).
+
+If the Trusted Publisher itself is misconfigured, remember it cannot be edited — delete and
+recreate it with the values in the one-time setup above, then re-run the workflow.

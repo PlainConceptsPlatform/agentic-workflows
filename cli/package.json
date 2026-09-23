@@ -9,12 +9,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/PlainConceptsPlatform/Agentic-Workflows.git"
+    "url": "git+https://github.com/PlainConceptsPlatform/agentic-workflows.git"
   },
   "bugs": {
-    "url": "https://github.com/PlainConceptsPlatform/Agentic-Workflows/issues"
+    "url": "https://github.com/PlainConceptsPlatform/agentic-workflows/issues"
   },
-  "homepage": "https://github.com/PlainConceptsPlatform/Agentic-Workflows#readme",
+  "homepage": "https://github.com/PlainConceptsPlatform/agentic-workflows#readme",
   "license": "UNLICENSED",
   "type": "module",
   "bin": {
