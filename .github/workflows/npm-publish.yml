@@ -5,6 +5,11 @@ name: Npm Publish
 # on the alpha branch) publishes with the `alpha` dist-tag. There is also a manual path:
 # "Run workflow" publishes an alpha of any branch, picking the next unused alpha number itself.
 # Pull requests cannot trigger either path.
+#
+# Authentication uses npm Trusted Publishing (GitHub OIDC): `id-token: write` lets the npm CLI
+# (>= 11.5, bundled with Node 24) exchange a short-lived OIDC token for registry credentials,
+# so no npm token is stored anywhere. The Trusted Publisher on npmjs.com must match this
+# workflow's filename and the npm-publish environment exactly.
 
 on:
   release:
@@ -18,6 +23,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   publish:
@@ -26,7 +32,6 @@ jobs:
     timeout-minutes: 15
     environment: npm-publish
     env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       TAG_NAME: ${{ github.event.release.tag_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,7 +41,7 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v5.0.0
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
