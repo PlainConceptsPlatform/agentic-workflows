@@ -174,7 +174,9 @@ gh workflow run work-router.yml --repo PlainConceptsPlatform/<repo> -f operation
 
 Publishing `@plainconceptsplatform/workflows` is triggered by a GitHub Release: a stable
 release `v<version>` on `main` publishes with the `latest` dist-tag, and a prerelease
-`v<version>-alpha.<n>` from the `alpha` branch publishes with the `alpha` dist-tag. The
+`v<version>-alpha.<n>` from the `alpha` branch publishes with the `alpha` dist-tag. An
+alpha can also be published from any branch on demand: **Actions → Npm Publish → Run
+workflow** picks the next unused alpha number itself. The
 [`npm-publish.yml`](.github/workflows/npm-publish.yml) workflow runs the same gates as CI
 before publishing. Setup, runbooks, and verification commands live in
 [docs/release.md](docs/release.md).

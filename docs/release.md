@@ -78,6 +78,31 @@ manifest version to the tag's `v<base>-alpha.<n>` for that run only (nothing is 
 runs the pack gate, publishes with `--tag alpha`, and then verifies the dist-tag. Alpha
 prereleases are never published to `latest`.
 
+### Publishing an alpha from the Actions tab
+
+For a manual alpha from any branch — no release, no tag, no changeset bookkeeping:
+
+1. Open **Actions → Npm Publish → Run workflow**.
+2. Pick the branch to publish (defaults to `alpha`). The workflow checks out that branch's code.
+3. Click **Run workflow**.
+
+The workflow reads the branch's own `cli/package.json` version as the base, picks the next
+unused `<n>` for that base from npm, stamps `<base>-alpha.<n>` into the manifest for the run
+(nothing is committed, no tag or GitHub Release is created), runs the same pack gate, and
+publishes with the `alpha` dist-tag. There is no changeset or version-bump requirement to
+satisfy — the number is chosen for you and never collides with an already-published version.
+
+Two caveats:
+
+- The **Run workflow** button only appears for workflows on the default branch, so this path
+  is usable once this change is on `main`.
+- The selected branch must contain the `npm-publish.yml` file itself (the workflow runs from
+  the code on the selected branch), so rebase or merge `main` into feature branches before
+  dispatching from them.
+
+Running the workflow manually requires write access to the repository; pull requests still
+cannot publish anything.
+
 ## Verifying a release
 
 ```bash
