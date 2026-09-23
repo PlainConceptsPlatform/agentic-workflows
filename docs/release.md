@@ -112,3 +112,8 @@ npm view @plainconceptsplatform/workflows@<version> version  # a specific versio
 
 The alpha publish step performs the same dist-tag check in CI and fails the run if
 `dist-tags.alpha` does not point at the version it just published.
+
+If the publish step fails with `404 Not Found` on `PUT https://registry.npmjs.org/...`,
+the `NPM_TOKEN` environment secret is missing or invalid — npm hides the scope from
+unauthenticated clients and answers with 404 instead of 401. Fix it with the one-time
+setup above, then re-run the workflow.
