@@ -1,0 +1,93 @@
+name: Npm Publish
+
+# Publishing rides on GitHub Releases, like GitHub's own starter workflow. A stable release
+# (vX.Y.Z on main) publishes with the `latest` dist-tag; a prerelease (vX.Y.Z-alpha.N, created
+# on the alpha branch) publishes with the `alpha` dist-tag. Pull requests cannot trigger this.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm-publish
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      TAG_NAME: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name }}
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v5.0.0
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+
+      # The alpha version is the release tag. Stamp it into the CLI manifest before the gate so
+      # the packed and published artifact carries it; nothing is committed back to the branch.
+      - name: Prepare alpha version
+        if: ${{ github.event.release.prerelease }}
+        env:
+          TARGET_BRANCH: ${{ github.event.release.target_commitish }}
+        run: |
+          set -euo pipefail
+          if [ "$TARGET_BRANCH" != "alpha" ]; then
+            echo "::error::Prereleases must be published from the alpha branch, not '$TARGET_BRANCH'."
+            exit 1
+          fi
+          version="${TAG_NAME#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
+            echo "::error::Prerelease tag must look like vX.Y.Z-alpha.N, got '$TAG_NAME'."
+            exit 1
+          fi
+          if npm view "@plainconceptsplatform/workflows@$version" version >/dev/null 2>&1; then
+            echo "::error::$version is already on npm; alpha versions are never reused."
+            exit 1
+          fi
+          node -e "const fs = require('node:fs'); const file = 'cli/package.json'; const pkg = JSON.parse(fs.readFileSync(file, 'utf8')); pkg.version = process.argv[1]; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');" "$version"
+          echo "cli/package.json staged at $version for this run (not committed)."
+
+      # The same gate CI runs: typecheck, build, test, then package (see pack in package.json).
+      - run: pnpm run pack
+
+      # Rerun-safe: a version already on npm means this release was published before, so skip.
+      - name: Publish stable
+        if: ${{ !github.event.release.prerelease }}
+        working-directory: cli
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          if [ "$version" != "${TAG_NAME#v}" ]; then
+            echo "::error::Release is $TAG_NAME but cli/package.json says $version. Bump both manifests to the release version."
+            exit 1
+          fi
+          if npm view "@plainconceptsplatform/workflows@$version" version >/dev/null 2>&1; then
+            echo "$version is already on npm; nothing to publish."
+            exit 0
+          fi
+          npm publish --access public --tag latest
+          echo "Published @plainconceptsplatform/workflows@$version with dist-tag latest."
+
+      - name: Publish alpha
+        if: ${{ github.event.release.prerelease }}
+        working-directory: cli
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          npm publish --access public --tag alpha
+          published=$(npm view "@plainconceptsplatform/workflows" dist-tags.alpha)
+          if [ "$published" != "$version" ]; then
+            echo "::error::npm dist-tag alpha points at '$published', expected '$version'. Check: npm view @plainconceptsplatform/workflows dist-tags"
+            exit 1
+          fi
+          echo "Published @plainconceptsplatform/workflows@$version with dist-tag alpha."
