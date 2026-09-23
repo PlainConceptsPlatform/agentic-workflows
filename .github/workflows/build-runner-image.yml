@@ -70,7 +70,6 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           IMG="/subscriptions/${AZ_SUBSCRIPTION_ID}/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner-gallery-01/images/agents-arc-runner/versions/${VERSION}"
           az login --service-principal -u "${{ secrets.AZ_RUNNER_IMAGE_CLIENT_ID }}" -p "${{ secrets.AZ_RUNNER_IMAGE_CLIENT_SECRET }}" --tenant "${{ secrets.AZ_TENANT_ID }}"
-          # Substitute the token so the boot test exercises the real config path
           sed "s/__VM_TOKEN__/boottest-dummy-token/" runners/cloud-init.yaml > /tmp/boottest-cloud-init.yaml
           az vm create -g agentrunner-pro-rg-01 -n "vm-boottest-${{ github.run_number }}" \
             --image "$IMG" --size Standard_D4ads_v5 --admin-username azureuser \

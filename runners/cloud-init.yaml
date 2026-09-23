@@ -1,14 +1,8 @@
 #cloud-config
-# Runtime cloud-init for pre-baked runner images.
 #
 # The heavy provisioning (apt packages, docker, gh, az, trivy, actions runner,
 # ripgrep, RTK, agentmemory, codegraph, openspec, .NET SDK, pnpm) is baked into
 # the custom gallery image by Packer (see build-image.pkr.hcl / provision-image.sh).
-#
-# This cloud-init runs only the runtime steps that cannot be baked:
-#   1. Create swap (needs the ephemeral disk mounted at boot) – logs a warning if setup fails (never silently zero)
-#   2. Drop the VM token (rotated independently)
-#   3. Start runner-job.service
 #
 # Boot time: ~30-60s (Azure cold start + minimal cloud-init) vs ~3 min before.
 # Tunables (FIRST_WAIT, IDLE_LIMIT, MAX_JOBS, DISK_LIMIT) can be overridden via /etc/runner-scaler.env.

@@ -8,7 +8,7 @@ set -eu
 # Runs once at image build time (Packer), not at every VM boot.
 # After this, cloud-init only needs to: create swap, drop the VM token, start the service.
 
-# ---- [1/9] Install system packages ----
+# Install system packages
 
 echo "=== [1/9] apt packages ==="
 install -m 0755 -d /etc/apt/keyrings
@@ -34,12 +34,11 @@ apt-get install -y -qq \
   nodejs \
   >/dev/null
 
-# ---- [2/9] Create runner user ----
 echo "=== [2/9] runner user ==="
 useradd -m -s /bin/bash runner || true
 usermod -aG docker runner
 
-# ---- [3/9] actions runner binary (pinned version) ----
+# Actions runner binary (pinned version)
 echo "=== [3/9] actions runner binary ==="
 mkdir -p /opt/actions-runner && cd /opt/actions-runner
 RUNNER_VERSION="${RUNNER_VERSION:?versions.env missing RUNNER_VERSION}"
@@ -49,12 +48,10 @@ tar xzf runner.tgz && rm runner.tgz
 ./bin/installdependencies.sh >/dev/null 2>&1 || true
 chown -R runner:runner /opt/actions-runner
 
-# ---- [4/9] trivy ----
 echo "=== [4/9] trivy ==="
 curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
   | tar -xz -C /usr/local/bin trivy
 
-# ---- [5/9] ripgrep ----
 echo "=== [5/9] ripgrep ==="
 mkdir -p /home/runner/.local/bin
 curl -sSfL "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
@@ -62,7 +59,7 @@ curl -sSfL "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VE
 
 chown -R runner:runner /home/runner/.local
 
-# ---- [6/9] Global npm tools (opencode, agentmemory, codegraph, openspec) ----
+# Global npm tools
 echo "=== [6/9] global npm tools (opencode, agentmemory, codegraph, openspec) ==="
 npm install -g --no-audit --no-fund \
   opencode-ai@${OPENCODE_VERSION} \
@@ -72,7 +69,6 @@ npm install -g --no-audit --no-fund \
 # Install opencode's postinstall (platform binary) — the global npm install with --ignore-scripts skips this, so do it explicitly here
 cd "$(npm root -g)/opencode-ai" && node postinstall.mjs || true
 
-# ---- [7/9] RTK (pinned version) ----
 echo "=== [7/9] RTK ==="
 RTK_VERSION="${RTK_VERSION:?}"
 RTK_SHA256="${RTK_SHA256:?}"
@@ -85,7 +81,7 @@ install -m 0755 /tmp/rtk /home/runner/.local/bin/rtk
 rm -f /tmp/rtk.tar.gz /tmp/rtk
 chown runner:runner /home/runner/.local/bin/rtk
 
-# ---- [8/9] .NET SDK 10.0.x ----
+# .NET SDK
 echo "=== [8/9] .NET SDK 10.0.x ==="
 DOTNET_DIR="/opt/actions-runner/_work/_tool/dotnet"
 mkdir -p "$DOTNET_DIR"
@@ -99,10 +95,9 @@ echo "export DOTNET_INSTALL_DIR=$DOTNET_DIR" >> /home/runner/.bashrc
 
 echo "export PATH=$DOTNET_DIR:\$PATH" >> /home/runner/.bashrc
 
-# ---- [9/9] pnpm via corepack ----
+# pnpm via corepack
 echo "=== [9/9] pnpm via corepack ==="
 corepack enable
-# pnpm already ships with Node.js ${NODE_MAJOR}; just verify it's on PATH
 if ! command -v pnpm > /dev/null 2>&1; then
   npm install -g pnpm@latest
 fi
