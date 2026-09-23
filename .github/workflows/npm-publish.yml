@@ -6,10 +6,10 @@ name: Npm Publish
 # "Run workflow" publishes an alpha of any branch, picking the next unused alpha number itself.
 # Pull requests cannot trigger either path.
 #
-# Authentication uses npm Trusted Publishing (GitHub OIDC): `id-token: write` lets the npm CLI
-# (>= 11.5, bundled with Node 24) exchange a short-lived OIDC token for registry credentials,
-# so no npm token is stored anywhere. The Trusted Publisher on npmjs.com must match this
-# workflow's filename and the npm-publish environment exactly.
+# Authentication uses npm Trusted Publishing (GitHub OIDC). Trusted Publishing requires Node
+# >= 22.14.0 and npm >= 11.5.1. Node 24 is used because it satisfies those requirements.
+# The Trusted Publisher on npmjs.com must match this workflow's filename and the npm-publish
+# environment exactly.
 
 on:
   release:
@@ -39,7 +39,7 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.release.tag_name }}
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v5.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -99,9 +99,15 @@ jobs:
       # Rerun-safe: a version already on npm means this release was published before, so skip.
       - name: Publish stable
         if: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
+        env:
+          TARGET_BRANCH: ${{ github.event.release.target_commitish }}
         working-directory: cli
         run: |
           set -euo pipefail
+          if [ "$TARGET_BRANCH" != "main" ]; then
+            echo "::error::Stable releases must target the main branch, not '$TARGET_BRANCH'."
+            exit 1
+          fi
           version=$(node -p "require('./package.json').version")
           if [ "$version" != "${TAG_NAME#v}" ]; then
             echo "::error::Release is $TAG_NAME but cli/package.json says $version. Bump both manifests to the release version."
