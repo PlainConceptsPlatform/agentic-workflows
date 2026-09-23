@@ -82,6 +82,103 @@ dotnet publish -c Release -o out && cd out && python -c "import shutil; shutil.m
 az webapp deploy -g agentrunner-pro-rg-01 -n agentrunner-scaler-01 --src-path ../scaler.zip --type zip
 ```
 
+## Pre-baked image (performance)
+
+Before the pre-baked image, every VM boot ran a full provisioning cycle — `apt-get
+install docker-ce gh azure-cli`, downloading the actions runner binary, trivy, and
+creating the runner user. That cost **~3 minutes per cold boot**. On 2026-08-28,
+measured across 14 VMs, roughly 78% of billed time was spent booting.
+
+The pre-baked image solves this: all system packages, the actions runner, and every
+global CLI tool from `opencode-ci.md` (ripgrep, RTK, agentmemory, codegraph,
+OpenSpec, .NET SDK, pnpm) are baked into an Azure Compute Gallery image by Packer.
+A VM booted from this image skips straight to runtime setup — swap, token, service
+start — cutting create-to-ready from **~2.5 min to ~80s** (measured, 2 runs: baseline
+136/164s vs pre-baked 83/81s).
+
+### Build the image
+
+```bash
+cd runners
+
+# 1. Create the gallery + image definition (one-time)
+az deployment group create -g agentrunner-pro-rg-01 -f gallery.bicep
+
+# 2. Authenticate Packer (service principal with Contributor on the RG)
+export PACKER_VAR_subscription_id="..."
+export PACKER_VAR_tenant_id="..."
+export PACKER_VAR_client_id="..."
+export PACKER_VAR_client_secret="..."
+export PACKER_VAR_image_version="1.0.0"   # bump for each rebuild
+
+# 3. Build and publish to the gallery
+packer init build-image.pkr.hcl
+packer build build-image.pkr.hcl
+```
+
+The CI path is the primary one: `.github/workflows/build-runner-image.yml` (this repository)
+builds on a monthly schedule (`0 2 1 * *`) or on `workflow_dispatch` with an `image_version`
+input, runs a **post-publish boot test** — a throwaway VM from the new version must reach
+`/opt/runner/.ready` and `/etc/runner-scaler.env` with a working `docker info` — and only a
+version that passes it is left in the gallery. A failed build or boot test opens an issue
+labeled `runner-platform`.
+
+### Use the pre-baked image
+
+```bash
+# Deploy with the pre-baked image (fast boot)
+az deployment group create -g agentrunner-pro-rg-01 -f main.bicep \
+  -p adminPublicKey="$(cat ~/.ssh/id_rsa.pub)" \
+  -p agentMemorySecret="$(openssl rand -hex 32)" \
+  -p customData="$(base64 -w0 cloud-init.yaml)" \
+  -p galleryImageVersion="1.0.0" \
+  ...
+
+# Marketplace-Ubuntu fallback: omit galleryImageVersion. WARNING: the repo now ships
+# only the slim cloud-init, which assumes a baked image — a marketplace boot needs
+# the legacy full cloud-init from git history (the commit before the pre-baked
+# pipeline), or the fleet comes up with no docker and no runner.
+```
+
+Deploying `main.bicep` is for a **greenfield or rebuilt** VMSS. Never `az deployment group create`
+against the live VMSS: it has drifted from the template, and a full deployment clobbers that
+drift (capacity, thresholds). Flip the **live fleet** with one `az vmss update`, image and
+customData together — the slim cloud-init assumes the baked image the way the old cloud-init
+assumed stock Ubuntu, so they are a pair:
+
+```bash
+az vmss update -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --set overprovision=false -o none
+sed "s/__VM_TOKEN__/$VM_TOKEN/" runners/cloud-init.yaml > /tmp/live-cloud-init.yaml
+IMG="/subscriptions/$AZ_SUBSCRIPTION_ID/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner-gallery-01/images/agents-arc-runner/versions/1.0.0"
+az vmss update -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 \
+  --set virtualMachineProfile.storageProfile.imageReference="{\"id\":\"$IMG\"}" \
+           virtualMachineProfile.osProfile.customData="$(base64 -w0 /tmp/live-cloud-init.yaml)" \
+  --no-wait -o none
+```
+
+`overprovision=false` first (fast boots activate the losing-instance JIT bug the slow boot hid),
+capacity is left untouched, and `upgradePolicy: Manual` means running instances keep the old
+image: new instances converge within one burst. The `flip_fleet` input on the CI workflow runs
+exactly this. **Rollback is the same command restoring BOTH the old image reference and the old
+customData** — restoring only one boots a fleet whose cloud-init and image disagree.
+
+### When to rebuild
+
+- Tool version bumps in `opencode-ci.md` (OPENCODE_VERSION, RTK_VERSION, etc.)
+- Security patches (Ubuntu packages, docker-ce, trivy)
+- Changes to `provision-image.sh` itself
+- Monthly as a routine hygiene cadence
+
+The monthly rebuild covers the routine case; a boot test gates every publish, so a broken
+provision script or a dead upstream cannot ship a broken image into the gallery.
+
+### What stays in cloud-init
+
+Only the runtime steps that cannot be baked into a generalized image:
+- **Swap creation** — needs the ephemeral disk mounted at boot
+- **VM token** — rotated independently via secrets.md
+- **runner-job.service** — carries tunable constants (MAX_JOBS, IDLE_LIMIT)
+
 ## VM lifecycle (`runners/cloud-init.yaml`)
 
 cloud-init installs docker-ce + compose, gh, az, trivy, jq and the actions runner,

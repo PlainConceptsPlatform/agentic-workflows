@@ -180,6 +180,15 @@ env:
   RTK_SHA256: "986f29704469b3d1051e2474105c6c75ab8b73651068dcd61612c1fb3938ad95"
 ```
 
+The pins have a second copy, and the two must move together. The `agents-arc` fleet boots from a
+pre-baked image built by Packer from `runners/versions.env` (see `runners/README.md`), which
+carries the same versions the shared file pins. On the fleet, the install steps are guards, not
+installs: the tool is already baked, the `command -v` or `--version` check matches, and the step
+costs ~0s. Bump a pin in the shared file without bumping `versions.env` and rebuilding the image,
+and the version-comparing guards (RTK, agentmemory, codegraph, openspec) fail their check on
+every run: the step falls through to a full download per job, the image's boot-time saving is
+spent, and nothing goes red. When you bump one copy, bump the other and rebuild the image.
+
 Checksum anything you download. A tarball fetched from a release page and installed to
 `/usr/local/bin` is the one binary in the fleet nothing else verifies:
 
@@ -335,6 +344,17 @@ which autoscales, and anything that only sleeps or calls an API goes to `ubuntu-
 `[self-hosted, linux, agents]` is dead — it was retired in `0fc7b08` and now matches no runner, so
 a job still carrying it waits forever.
 
+A fleet VM is not a stock Ubuntu that installs a toolchain at boot. It boots from a pre-baked
+Azure Compute Gallery image — built by Packer (`runners/build-image.pkr.hcl`, scheduled or
+dispatched through `.github/workflows/build-runner-image.yml`) with docker-ce, gh, az, trivy, the
+pinned actions runner binary, ripgrep, RTK, agentmemory, codegraph, openspec, the .NET SDK and
+pnpm already in it. cloud-init shrinks to what cannot be baked — swap, the VM token, starting the
+service — and a cold VM takes a job in ~80s measured instead of ~2.5 min. Every publish runs a
+boot test before the version reaches the gallery. Flipping the live fleet sets the image reference
+and the customData together in one `az vmss update` — never a deployment against the live VMSS,
+which has drifted from `main.bicep` — and rollback restores both; `upgradePolicy: Manual` means
+running instances keep the old image and new instances converge within one burst.
+
 Never on a public repository. A fork pull request would execute arbitrary code on a machine holding
 your credentials.
 
@@ -349,13 +369,15 @@ safe-outputs:
     runs-on: agents-arc
 ```
 
-A persistent machine breaks assumptions a hosted runner lets you make:
+A persistent, pre-provisioned machine breaks assumptions a hosted runner lets you make:
 
-- A step that installs something may find it already there. `gh extension install github/gh-aw` exits
-  non-zero with "there is already an installed extension". Fall back to `upgrade` and assert with
-  `gh aw version`.
-- The runner's user does not own `/usr/share`. `actions/setup-dotnet` installs there by default and
-  fails. Set `DOTNET_INSTALL_DIR` to `${{ runner.tool_cache }}/dotnet`.
+- A step that installs something will find it already there — baked, not left over. `gh extension
+  install github/gh-aw` exits non-zero with "there is already an installed extension". Guard the
+  install and assert the result (`gh aw version`), or fall back to `upgrade`.
+- The .NET SDK is baked into the runner tool cache at `/opt/actions-runner/_work/_tool/dotnet`.
+  Steps run as `bash -e` scripts, not login shells, so the image's `.bashrc` exports never reach a
+  job: use `actions/setup-dotnet` with `DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet`,
+  which resolves to the cache and skips the download — the shared CI setup step does exactly this.
 - The workspace persists between runs. A `.npmrc` written with a token stays. A build output
   directory from a previous run is still there, so a `[ -d dist ]` check can bundle stale artifacts.
   Clean what you create, and write transient state to `$RUNNER_TEMP`.

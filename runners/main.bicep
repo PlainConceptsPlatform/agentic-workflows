@@ -4,7 +4,8 @@
 //   az deployment group create -g agentrunner-pro-rg-01 -f main.bicep \
 //     -p adminPublicKey="$(cat ~/.ssh/id_rsa.pub)" \
 //     -p agentMemorySecret="$(openssl rand -hex 32)" \
-//     -p customData="$(base64 -w0 cloud-init.yaml)"
+//     -p customData="$(base64 -w0 cloud-init.yaml)" \
+//     -p galleryImageVersion="1.0.0"  # use pre-baked image; omit for Ubuntu fallback
 //
 // Not covered here, by design:
 //  - the Entra app (Platform Agents Pro): directory-level, made in the portal
@@ -22,6 +23,9 @@ param agentMemorySecret string
 
 @description('base64 of cloud-init.yaml (with __VM_TOKEN__ already substituted)')
 param customData string
+
+@description('Gallery image VERSION (e.g. 1.0.0) for the pre-baked runner image. Empty = Canonical marketplace image. WARNING: the image and customData must always move TOGETHER - the slim cloud-init assumes a baked image, the original cloud-init assumes a marketplace image.')
+param galleryImageVersion string = ''
 
 @description('Fine-grained PAT, sole grant org "Self-hosted runners: rw"')
 @secure()
@@ -63,6 +67,8 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
   }
 }
 
+// The gallery lives in gallery.bicep, deployed once and separately, so a main.bicep deployment (live VMSS, capacity drift) can never create or update it.
+
 // ---------- ephemeral runner fleet ----------
 resource vmss 'Microsoft.Compute/virtualMachineScaleSets@2024-03-01' = {
   name: 'agentrunner-vmss-01'
@@ -71,6 +77,12 @@ resource vmss 'Microsoft.Compute/virtualMachineScaleSets@2024-03-01' = {
   identity: { type: 'SystemAssigned' }
   properties: {
     orchestrationMode: 'Uniform'
+    // FIX-01: overprovision creates "losing" instances that are real VMs. They boot,
+    // pass the scaler's live-instance check, can be handed a single-use JIT registration,
+    // then get force-deleted by Azure mid-job. The slow boot used to hide this (losers
+    // died before setup finished); a fast baked-image boot activates it. Set-level,
+    // PATCHable, applies to the next scale-out only.
+    overprovision: false
     upgradePolicy: { mode: 'Manual' }
     virtualMachineProfile: {
       osProfile: {
@@ -87,11 +99,13 @@ resource vmss 'Microsoft.Compute/virtualMachineScaleSets@2024-03-01' = {
         }
       }
       storageProfile: {
-        imageReference: {
+        imageReference: galleryImageVersion == '' ? {
           publisher: 'Canonical'
           offer: 'ubuntu-24_04-lts'
           sku: 'server'
           version: 'latest'
+        } : {
+          id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner-gallery-01/images/agents-arc-runner/versions/${galleryImageVersion}'
         }
         osDisk: {
           createOption: 'FromImage'
@@ -112,8 +126,8 @@ resource vmss 'Microsoft.Compute/virtualMachineScaleSets@2024-03-01' = {
                   properties: {
                     subnet: { id: '${vnet.id}/subnets/runners' }
                     publicIPAddressConfiguration: {
-                      name: 'instance-pip'
-                      properties: { idleTimeoutInMinutes: 15 }
+                      name: 'instancepublicip'
+                      properties: { idleTimeoutInMinutes: 10 }
                     }
                   }
                 }
