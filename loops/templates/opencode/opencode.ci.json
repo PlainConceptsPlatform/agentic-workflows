@@ -43,11 +43,33 @@
       "models": {
         "glm-5-2": {
           "name": "GLM 5.3",
-          "attachment": true
+          "tool_call": true,
+          "reasoning": true,
+          "attachment": true,
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
+          "limit": {
+            "context": 1048576,
+            "input": 1048576,
+            "output": 131072
+          }
         },
         "quasar-438b": {
           "name": "GLM 5.2",
-          "attachment": true
+          "tool_call": true,
+          "reasoning": true,
+          "attachment": true,
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
+          "limit": {
+            "context": 1048576,
+            "input": 1048576,
+            "output": 131072
+          }
         }
       }
     }
