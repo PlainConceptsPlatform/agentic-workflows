@@ -60,9 +60,18 @@ write_files:
           break
         fi
 
-        JIT=$(curl -fsS -m 60 -X POST "$SCALER_URL/vm/jit" \
-          -H "Authorization: Bearer $VM_TOKEN" -H "Content-Type: application/json" \
-          -d "{\"instanceId\":\"$ID\"}" || true)
+        # Retry JIT request on transient failures (DNS, 401, 5xx) with exponential backoff.
+        # Without this, a brief network blip or scaler restart causes the VM to exhaust its
+        # idle wait and shut down — leaving a zombie instance the scaler counts as active.
+        JIT=""
+        for attempt in 1 2 3 4 5; do
+          JIT=$(curl -fsS -m 60 -X POST "$SCALER_URL/vm/jit" \
+            -H "Authorization: Bearer $VM_TOKEN" -H "Content-Type: application/json" \
+            -d "{\"instanceId\":\"$ID\"}" 2>/dev/null || true)
+          if [ -n "$JIT" ]; then break; fi
+          echo "jit attempt $attempt failed; backing off $(($attempt * 10))s"
+          sleep $(($attempt * 10))
+        done
 
         if [ -n "$JIT" ]; then
           cd /opt/actions-runner
