@@ -103,6 +103,7 @@ jobs:
   # and gate both the reservation and the agent on it.
   still_open:
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: read
@@ -123,6 +124,7 @@ jobs:
     needs: [still_open]
     if: needs.still_open.outputs.open == 'true'
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: write

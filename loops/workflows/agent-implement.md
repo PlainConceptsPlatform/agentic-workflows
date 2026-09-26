@@ -110,6 +110,7 @@ jobs:
   # and gate both the reservation and the agent on it.
   still_open:
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: read
@@ -128,6 +129,7 @@ jobs:
           issue-number: ${{ inputs.issue-number }}
   eligibility:
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       issues: read
     outputs:
@@ -175,6 +177,7 @@ jobs:
     needs: [eligibility, still_open]
     if: needs.eligibility.outputs.eligible == 'true' && needs.still_open.outputs.open == 'true'
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: write

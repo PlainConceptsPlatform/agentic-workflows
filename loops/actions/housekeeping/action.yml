@@ -66,6 +66,26 @@ runs:
           const age = (iso) => Date.now() - new Date(iso).getTime();
           const days = (ms) => Math.floor(ms / 86400000);
 
+          // 0. Cancel workflow runs stuck in "pending" for over an hour. The ARC fleet is two
+          // VMs, and when it saturates, jobs sit pending indefinitely — GitHub has no queue-time
+          // timeout. A stuck pending implement or refine run holds a fleet slot that the retry
+          // logic below can never free because the run never reaches a terminal state. This
+          // cancel runs on a GitHub-hosted runner, so it works even when the fleet is full.
+          const stuckCutoff = Date.now() - 3600 * 1000; // 1 hour ago
+          let cancelledRuns = 0;
+          for (const run of await github.paginate(github.rest.actions.listWorkflowRuns, {
+            owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'work-router.yml',
+            status: 'pending', per_page: 50,
+          })) {
+            if (new Date(run.created_at).getTime() > stuckCutoff) continue;
+            await act(`cancelling stuck pending run #${run.id} (queued ${new Date(run.created_at).toISOString()})`, async () => {
+              await github.rest.actions.cancelWorkflowRun({
+                owner: context.repo.owner, repo: context.repo.repo, run_id: run.id,
+              });
+              cancelledRuns += 1;
+            });
+          }
+
           const issues = await github.paginate(github.rest.issues.listForRepo, {
             ...context.repo, state: 'open', per_page: 100,
           });
@@ -73,6 +93,37 @@ runs:
             ...context.repo, state: 'open', per_page: 100,
           });
           const names = (issue) => issue.labels.map((l) => (typeof l === 'string' ? l : l.name));
+
+          // 0b. Clean orphaned bot-working labels. When a workflow run is cancelled (above) or
+          // dies without clearing bot-working, the issue sits with bot-working + a work label
+          // forever: no stalled marker, so the retry logic below never touches it. Find issues
+          // with bot-working, check whether the most recent run for the linked operation is
+          // still active, and if not, park the issue for retry.
+          for (const issue of issues) {
+            if (issue.pull_request) continue;
+            const labels = names(issue);
+            if (!labels.includes('bot-working')) continue;
+            // Don't touch issues that already have stalled or review — those are handled below.
+            if (labels.includes('stalled') || labels.includes('review')) continue;
+            const work = WORK_LABELS.find((l) => labels.includes(l));
+            if (!work) continue;
+
+            // An issue with bot-working should have a recent or active workflow run.
+            // If bot-working has been on for longer than the retry window, the run is dead.
+            const waited = age(issue.updated_at);
+            if (waited < retryAfterMs) continue;
+
+            await act(`#${issue.number}: releasing orphaned bot-working (parked ${Math.floor(waited / 3600000)}h with no active run)`, async () => {
+              // Park it for retry: add stalled + review, remove bot-working.
+              // The retry logic below will pick it up on the next sweep.
+              await github.rest.issues.addLabels({
+                ...context.repo, issue_number: issue.number,
+                labels: ['stalled', 'review'],
+              });
+              await github.rest.issues.removeLabel({ ...context.repo, issue_number: issue.number, name: 'bot-working' })
+                .catch((error) => { if (error.status !== 404) throw error; });
+            });
+          }
 
           const needsHuman = [];
           // Gate telemetry. Every disposition the gate has ever posted is already on a pull
@@ -337,6 +388,7 @@ runs:
           await core.summary
             .addHeading('Housekeeping', 2)
             .addList([
+              `Cancelled stuck pending runs: ${cancelledRuns}`,
               `Retried: ${retried}`,
               `Waiting on a person: ${needsHuman.length}`,
               `Stalled, retrying by itself: ${retrying.length}`,

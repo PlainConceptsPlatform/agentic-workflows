@@ -53,6 +53,7 @@ on:
 jobs:
   subject:
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: read

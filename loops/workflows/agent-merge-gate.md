@@ -141,6 +141,7 @@ on:
 jobs:
   subject:
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: read
@@ -196,6 +197,7 @@ jobs:
     needs: subject
     if: needs.subject.outputs.found == 'true'
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
@@ -242,6 +244,7 @@ jobs:
     # there are no protected files instead of skipping it and blocking remediation.
     if: always() && needs.subject.outputs.found == 'true'
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: write
@@ -301,6 +304,7 @@ jobs:
     needs: subject
     if: needs.subject.outputs.found == 'true'
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: write
