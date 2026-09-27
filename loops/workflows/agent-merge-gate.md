@@ -140,7 +140,7 @@ on:
 # values and `on.steps` outputs do not reach the agent job.
 jobs:
   subject:
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read
@@ -196,7 +196,7 @@ jobs:
   protected_changes:
     needs: subject
     if: needs.subject.outputs.found == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read
@@ -243,7 +243,7 @@ jobs:
     # gh-aw makes the agent depend on custom jobs. Keep this job successful when
     # there are no protected files instead of skipping it and blocking remediation.
     if: always() && needs.subject.outputs.found == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read
@@ -303,7 +303,7 @@ jobs:
   reserve:
     needs: subject
     if: needs.subject.outputs.found == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read
@@ -353,7 +353,7 @@ jobs:
       always() &&
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     permissions:
       contents: read
     outputs:
@@ -581,7 +581,7 @@ jobs:
          needs.safe_outputs.result != 'success' ||
          needs.validate_output.outputs.valid != 'true'
        )
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write

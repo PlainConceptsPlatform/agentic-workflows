@@ -80,7 +80,7 @@ jobs:
   # `reserve` thirteen minutes later and refined a closed issue to completion. Read now, once,
   # and gate both the reservation and the agent on it.
   still_open:
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read
@@ -99,7 +99,7 @@ jobs:
           token: ${{ github.token }}
           issue-number: ${{ inputs.issue-number }}
   subject:
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read
@@ -169,7 +169,7 @@ jobs:
   reserve:
     needs: [subject, still_open]
     if: needs.subject.outputs.found == 'true' && needs.subject.outputs.issue != '' && needs.still_open.outputs.open == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read
@@ -202,7 +202,7 @@ jobs:
   validate_output:
     needs: [activation, subject, agent, safe_outputs]
     if: always() && needs.agent.result == 'success' && needs.safe_outputs.result == 'success'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     permissions:
       contents: read
       pull-requests: read
@@ -245,7 +245,7 @@ jobs:
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.validate_output.outputs.valid == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     permissions:
       contents: write
       issues: write
@@ -301,7 +301,7 @@ jobs:
       always() &&
       needs.subject.outputs.found == 'true' &&
       (needs.agent.result != 'success' || needs.safe_outputs.result != 'success' || needs.validate_output.outputs.valid != 'true')
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write

@@ -52,7 +52,7 @@ on:
 # shell step runs agent-browser to capture screenshots outside the awf sandbox.
 jobs:
   subject:
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read

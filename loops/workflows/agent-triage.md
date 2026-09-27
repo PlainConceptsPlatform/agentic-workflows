@@ -102,7 +102,7 @@ jobs:
   # `reserve` thirteen minutes later and refined a closed issue to completion. Read now, once,
   # and gate both the reservation and the agent on it.
   still_open:
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read
@@ -123,7 +123,7 @@ jobs:
   reserve:
     needs: [still_open]
     if: needs.still_open.outputs.open == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read
@@ -170,7 +170,7 @@ jobs:
       always() &&
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     permissions:
       contents: read
     outputs:
@@ -198,7 +198,7 @@ jobs:
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.validate_output.outputs.valid == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
@@ -310,7 +310,7 @@ jobs:
         needs.safe_outputs.result != 'success' ||
         needs.validate_output.outputs.valid != 'true'
       )
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     permissions:
       contents: read
       issues: write
