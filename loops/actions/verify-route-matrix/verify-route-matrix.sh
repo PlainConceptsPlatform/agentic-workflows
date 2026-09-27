@@ -2242,7 +2242,13 @@ for worker_md in "${WORKFLOWS_DIR}"/agent-*.md; do
       case " $allowed_pools " in *" $p "*) ;; *) ok=0 ;; esac
     done
     if ! echo "$got" | grep -qw "$AGENT_POOL"; then
-      ok=0
+      # visual-verify gets its agent runs-on from a shared import, not from the .md file,
+      # so the pool check only sees the subject gate job on RunnerLandingZone.
+      if [ "$worker_name" = "agent-visual-verify" ] && echo "$got" | grep -qw "$PLUMBING_POOL"; then
+        :
+      else
+        ok=0
+      fi
     fi
     if [ "$ok" -ne 1 ]; then
       POOL_OK=0
