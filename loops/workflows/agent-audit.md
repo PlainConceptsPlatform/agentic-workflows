@@ -89,7 +89,7 @@ jobs:
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.safe_outputs.outputs.process_safe_outputs_processed_count != '0'
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     permissions:
       contents: read
       issues: write
@@ -143,7 +143,7 @@ jobs:
     if: >
       needs.agent.result == 'success' &&
       needs.safe_outputs.outputs.process_safe_outputs_processed_count == '0'
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     permissions:
       contents: read
     steps:

@@ -116,7 +116,7 @@ jobs:
   # `reserve` thirteen minutes later and refined a closed issue to completion. Read now, once,
   # and gate both the reservation and the agent on it.
   still_open:
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     timeout-minutes: 5
     permissions:
       contents: read
@@ -141,7 +141,7 @@ jobs:
   eligibility:
     needs: [still_open]
     if: needs.still_open.outputs.open == 'true'
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     permissions:
       issues: read
     outputs:
@@ -171,7 +171,7 @@ jobs:
   size_guard:
     needs: [still_open, eligibility]
     if: needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true'
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     timeout-minutes: 5
     permissions:
       contents: read
@@ -214,7 +214,7 @@ jobs:
   refuse_big_issue:
     needs: [still_open, size_guard, eligibility]
     if: needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true' && needs.size_guard.outputs.too_big == 'true'
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     timeout-minutes: 5
     permissions:
       contents: read
@@ -267,7 +267,7 @@ jobs:
   reserve:
     needs: [still_open, size_guard, eligibility]
     if: needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true' && needs.size_guard.outputs.too_big != 'true'
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     timeout-minutes: 5
     permissions:
       contents: read
@@ -308,7 +308,7 @@ jobs:
       always() &&
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success'
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     permissions:
       contents: read
     outputs:
@@ -345,7 +345,7 @@ jobs:
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
       needs.validate_output.outputs.valid == 'true'
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     permissions:
       contents: read
       issues: write
@@ -532,7 +532,7 @@ jobs:
         needs.safe_outputs.result != 'success' ||
         needs.validate_output.outputs.valid != 'true'
       )
-    runs-on: agents-arc
+    runs-on: RunnerLandingZone
     permissions:
       contents: read
       issues: write
