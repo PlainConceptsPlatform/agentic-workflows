@@ -2201,6 +2201,9 @@ echo "── Runner pools ──────────────────
 #   agent jobs of every worker except release  ->  agents-arc          (the Azure fleet in
 #                                                                       agentrunner-pro-rg-01,
 #                                                                       runner group `agentic`)
+#   gate and post-processing jobs              ->  RunnerLandingZone   (GitHub-hosted, no fleet
+#                                                                       capacity consumed by
+#                                                                       trivial checks)
 #   agent-release.md and work-router.yml       ->  RunnerLandingZone
 #   ubuntu-latest                              ->  GitHub's own runner, chosen by nobody, left
 #                                                  wherever the package already has it
@@ -2223,9 +2226,28 @@ for worker_md in "${WORKFLOWS_DIR}"/agent-*.md; do
   want="$AGENT_POOL"
   [ "$worker_name" = "agent-release" ] && want="$PLUMBING_POOL"
   got="$(pools_named "$worker_md" | tr '\n' ' ' | sed 's/ $//')"
-  if [ "$got" != "$want" ]; then
-    POOL_OK=0
-    echo "FAIL: ${worker_name} names runner pool(s) '${got}' but must name only '${want}'" >&2
+  # Gate jobs and post-processing jobs run on RunnerLandingZone (GitHub-hosted) to avoid
+  # consuming self-hosted fleet capacity for trivial checks. The agent job and safe_outputs
+  # stay on agents-arc. So a worker may name both pools.
+  allowed_pools="${want} ${PLUMBING_POOL}"
+  if [ "$worker_name" = "agent-release" ]; then
+    if [ "$got" != "$want" ]; then
+      POOL_OK=0
+      echo "FAIL: ${worker_name} names runner pool(s) '${got}' but must name only '${want}'" >&2
+    fi
+  else
+    # Every pool named must be in the allowed set; agents-arc must be present (the agent job).
+    ok=1
+    for p in $got; do
+      case " $allowed_pools " in *" $p "*) ;; *) ok=0 ;; esac
+    done
+    if ! echo "$got" | grep -qw "$AGENT_POOL"; then
+      ok=0
+    fi
+    if [ "$ok" -ne 1 ]; then
+      POOL_OK=0
+      echo "FAIL: ${worker_name} names runner pool(s) '${got}' but must name only '${AGENT_POOL}' and/or '${PLUMBING_POOL}' (with at least ${AGENT_POOL})" >&2
+    fi
   fi
 done
 
