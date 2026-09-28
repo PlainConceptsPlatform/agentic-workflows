@@ -71,7 +71,7 @@ test('rectsOverlap: clearly overlapping rects overlap', () => {
 });
 
 test('rectsOverlap: edge-touching is NOT overlap at gap 0 (<= boundary)', () => {
-  // a ends at x=10, b starts at x=10 — exactly touching.
+  // a ends at x=10, b starts at x=10 exactly touching.
   assert.equal(rectsOverlap(rect(0, 0, 10, 10), rect(10, 0, 10, 10), 0), false);
 });
 
@@ -82,7 +82,7 @@ test('rectsOverlap: positive gap flags rects within that gap as too close', () =
 });
 
 test('rectsOverlap: negative gap shrinks the hit box (label-collision convention)', () => {
-  // gap -2 means rects must overlap by MORE than 2px to count — a 1px sliver
+  // gap -2 means rects must overlap by MORE than 2px to count a 1px sliver
   // does not. This is the sign convention the label checks rely on.
   assert.equal(rectsOverlap(rect(0, 0, 10, 10), rect(9, 0, 10, 10), -2), false);
   assert.equal(rectsOverlap(rect(0, 0, 10, 10), rect(7, 0, 10, 10), -2), true);

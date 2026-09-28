@@ -130,7 +130,7 @@ if (process.argv.includes('--check')) {
     ? fs.readFileSync(outputPath, 'utf8').replace(/\r\n?/g, '\n')
     : '';
   if (current !== source) {
-    console.error('generated brand marks are stale — run npm run generate:brand-marks');
+    console.error('generated brand marks are stale run npm run generate:brand-marks');
     process.exit(1);
   }
 } else {

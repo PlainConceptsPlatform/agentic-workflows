@@ -28,7 +28,7 @@ function crashingRenderer(t, count) {
     `const diagnostics = Array.from({ length: ${count} }, (unused, index) => ({`,
     "  code: 'layout/constraint',",
     "  severity: 'error',",
-    "  message: 'transition ' + index + ' is too short — ' + 'route it through a channel. '.repeat(12),",
+    "  message: 'transition ' + index + ' is too short ' + 'route it through a channel. '.repeat(12),",
     '  subject: { transition: index },',
     "  evidence: { clearance: index, detail: 'measured segment. '.repeat(8) },",
     "  supportedFixes: ['route it through a channel or drop its label'],",

@@ -65,7 +65,7 @@ const layout = {
   defaultW: 120,
   defaultH: 60,
   margin: 40,
-  // Boundary padding — the 30/50 rule that was a hand-arithmetic footgun
+  // Boundary padding the 30/50 rule that was a hand-arithmetic footgun
   // (CHANGELOG v2.2.1): 30px on top/left/right, plus 20px extra at the bottom.
   boundaryPad: 30,
   boundaryExtraBottom: 20,
@@ -308,7 +308,7 @@ function resolveBoundaryTitles() {
   const finalViewBoxWidth = resolvedViewBoxWidth(candidateBoundaries);
   return {
     boundaries: candidateBoundaries,
-    readabilityProblem: `[composition/desktop-readability] Boundary title layout did not converge after ${maximumIterations} iterations for the final ${finalViewBoxWidth}px viewBox — shorten boundary labels, provide a wider authored viewBox, or move wrapped components closer to the left edge.`,
+    readabilityProblem: `[composition/desktop-readability] Boundary title layout did not converge after ${maximumIterations} iterations for the final ${finalViewBoxWidth}px viewBox shorten boundary labels, provide a wider authored viewBox, or move wrapped components closer to the left edge.`,
   };
 }
 
@@ -353,19 +353,19 @@ function validateArchitecture() {
 
   for (const c of components.values()) {
     if (!isFinitePoint(c.x, c.y, c.width, c.height)) {
-      problems.push(`Component "${c.id}" has non-finite pos/size — pos and size must be [number, number].`);
+      problems.push(`Component "${c.id}" has non-finite pos/size pos and size must be [number, number].`);
       continue;
     }
     if (c.width <= 0 || c.height <= 0) {
-      problems.push(`Component "${c.id}" has invalid size ${c.width}x${c.height} — width and height must be greater than 0.`);
+      problems.push(`Component "${c.id}" has invalid size ${c.width}x${c.height} width and height must be greater than 0.`);
       continue;
     }
     if (c.x < 0 || c.y < 0 || c.x + c.width > viewBox[0] || c.y + c.height > viewBox[1]) {
-      problems.push(`Component "${c.id}" falls outside the viewBox ${viewBox[0]}x${viewBox[1]} — adjust pos/size or set a larger meta.viewBox.`);
+      problems.push(`Component "${c.id}" falls outside the viewBox ${viewBox[0]}x${viewBox[1]} adjust pos/size or set a larger meta.viewBox.`);
     }
     const estLabelW = textUnits(c.label) * 6.6;
     if (estLabelW > c.width + 8) {
-      problems.push(`Label "${c.label}" (~${Math.round(estLabelW)}px) is wider than component "${c.id}" (${c.width}px) — shorten the label or widen size.`);
+      problems.push(`Label "${c.label}" (~${Math.round(estLabelW)}px) is wider than component "${c.id}" (${c.width}px) shorten the label or widen size.`);
     }
     const brandRailProblem = brandTopRailProblem(c, c.width, 8, 'Component');
     if (brandRailProblem) problems.push(brandRailProblem);
@@ -379,17 +379,17 @@ function validateArchitecture() {
       if (!value) continue;
       const minimumW = minimumNodeTextWidth(value, minimum);
       if (minimumW > availableTextW) {
-        problems.push(`${field} "${value}" needs ~${Math.ceil(minimumW)}px at the ${minimum}px legible minimum, but component "${c.id}" provides ${availableTextW}px — shorten the ${field.toLowerCase()} or widen size.`);
+        problems.push(`${field} "${value}" needs ~${Math.ceil(minimumW)}px at the ${minimum}px legible minimum, but component "${c.id}" provides ${availableTextW}px shorten the ${field.toLowerCase()} or widen size.`);
       }
     }
   }
 
-  // Component overlap — the highest-traffic hand-placement failure mode.
+  // Component overlap the highest-traffic hand-placement failure mode.
   const list = [...components.values()];
   for (let i = 0; i < list.length; i += 1) {
     for (let j = i + 1; j < list.length; j += 1) {
       if (rectsOverlap(list[i], list[j], 8)) {
-        problems.push(`Components "${list[i].id}" and "${list[j].id}" are less than 8px apart — move one or shrink its size.\n${suggestComponentSeparation(list[i], list[j], 8)}`);
+        problems.push(`Components "${list[i].id}" and "${list[j].id}" are less than 8px apart move one or shrink its size.\n${suggestComponentSeparation(list[i], list[j], 8)}`);
       }
     }
   }
@@ -406,24 +406,24 @@ function validateArchitecture() {
     if (boundary.title.minimumWidth > boundary.title.availableWidth) {
       problems.push(
         `Boundary label "${boundary.label}" needs ~${Math.ceil(boundary.title.minimumWidth)}px to fit at the `
-        + `${Number(boundary.title.minimumFontSize.toFixed(2))}px desktop-readable source minimum, but its frame provides ${Math.floor(boundary.title.availableWidth)}px — `
+        + `${Number(boundary.title.minimumFontSize.toFixed(2))}px desktop-readable source minimum, but its frame provides ${Math.floor(boundary.title.availableWidth)}px `
         + 'shorten the boundary label, increase pad, or widen the wrapped component layout.',
       );
     }
     if (!rectContains(boundary, boundary.title)) {
       problems.push(
-        `Boundary label "${boundary.label}" extends outside its final frame — shorten the label or increase boundary pad.`,
+        `Boundary label "${boundary.label}" extends outside its final frame shorten the label or increase boundary pad.`,
       );
     }
     if (!rectContains(viewBoxRect, boundary.title)) {
       problems.push(
-        `Boundary label "${boundary.label}" extends outside the viewBox — move wrapped components away from the canvas edge, shorten the label, or increase the viewBox.`,
+        `Boundary label "${boundary.label}" extends outside the viewBox move wrapped components away from the canvas edge, shorten the label, or increase the viewBox.`,
       );
     }
     for (const component of components.values()) {
       if (!rectsOverlap(boundary.title, component)) continue;
       problems.push(
-        `Boundary label "${boundary.label}" overlaps component "${component.id}" — move the component, increase boundary title space, or shorten the label.`,
+        `Boundary label "${boundary.label}" overlaps component "${component.id}" move the component, increase boundary title space, or shorten the label.`,
       );
     }
   }
@@ -434,7 +434,7 @@ function validateArchitecture() {
       const right = boundaries[rightIndex];
       if (enforcesBoundaryTitleComposition && rectsOverlap(left.title, right.title)) {
         problems.push(
-          `Boundary labels "${left.label}" and "${right.label}" overlap — shorten a label or increase boundary title space.`,
+          `Boundary labels "${left.label}" and "${right.label}" overlap shorten a label or increase boundary title space.`,
         );
       }
       // Ordinary architecture boundaries are sets, not an implied ownership
@@ -454,7 +454,7 @@ function validateArchitecture() {
           `Boundary "${left.label}" crosses boundary "${right.label}" because their memberships partially overlap `
           + `(shared: ${shared.map((id) => `"${id}"`).join(', ')}; `
           + `only in "${left.label}": ${leftOnly.map((id) => `"${id}"`).join(', ')}; `
-          + `only in "${right.label}": ${rightOnly.map((id) => `"${id}"`).join(', ')}) — `
+          + `only in "${right.label}": ${rightOnly.map((id) => `"${id}"`).join(', ')}) `
           + 'keep one boundary fully nested by removing outside members, or split the boundary.',
         );
         continue;
@@ -465,7 +465,7 @@ function validateArchitecture() {
       const rightContainsLeft = rectContains(right, left);
       if (!leftContainsRight && !rightContainsLeft) {
         problems.push(
-          `Boundary "${left.label}" and boundary "${right.label}" final frames partially overlap — `
+          `Boundary "${left.label}" and boundary "${right.label}" final frames partially overlap `
           + 'adjust wraps, pad, or component positions so the frames are disjoint or one fully contains the other.',
         );
         continue;
@@ -473,7 +473,7 @@ function validateArchitecture() {
 
       if (!shared.length) {
         problems.push(
-          `Boundary "${left.label}" and boundary "${right.label}" final frames overlap even though their memberships are disjoint — `
+          `Boundary "${left.label}" and boundary "${right.label}" final frames overlap even though their memberships are disjoint `
           + 'adjust pad or component positions so the frames are disjoint, or make wraps express the intended nesting.',
         );
         continue;
@@ -483,7 +483,7 @@ function validateArchitecture() {
         || (rightNested && leftContainsRight);
       if (!containmentMatchesMembership) {
         problems.push(
-          `Boundary "${left.label}" and boundary "${right.label}" final frame containment contradicts their wraps membership — `
+          `Boundary "${left.label}" and boundary "${right.label}" final frame containment contradicts their wraps membership `
           + 'reduce the inner boundary pad, move its components, or correct wraps so geometry and nesting agree.',
         );
       }
@@ -491,7 +491,7 @@ function validateArchitecture() {
   }
   for (const b of boundaries) {
     if (b.x < 0 || b.y < 0 || b.x + b.width > viewBox[0] || b.y + b.height > viewBox[1]) {
-      problems.push(`Boundary "${b.label}" extends outside the viewBox — its members sit too close to the canvas edge; add margin or enlarge meta.viewBox.`);
+      problems.push(`Boundary "${b.label}" extends outside the viewBox its members sit too close to the canvas edge; add margin or enlarge meta.viewBox.`);
     }
   }
 
@@ -502,7 +502,7 @@ function validateArchitecture() {
       const routed = pathFor(conn);
       const [start, end] = [routed.points[0], routed.points[routed.points.length - 1]];
       const distance = Math.hypot(end[0] - start[0], end[1] - start[1]);
-      if (distance < 24) problems.push(`Connection "${conn.label || `${conn.from}->${conn.to}`}" is too short (${Math.round(distance)}px; minimum 24px) — place its components farther apart.`);
+      if (distance < 24) problems.push(`Connection "${conn.label || `${conn.from}->${conn.to}`}" is too short (${Math.round(distance)}px; minimum 24px) place its components farther apart.`);
     }
   }
 
@@ -574,14 +574,14 @@ function validateArchitecture() {
   for (const rect of labelRects) {
     for (const c of components.values()) {
       if (rectsOverlap(rect, c, -2)) {
-        problems.push(`Label "${rect.label}" overlaps component "${c.id}" — adjust labelDx/labelDy/labelSegment or set labelAt.\n${suggestLabelObstacleFix(rect, rect.lx, rect.ly, c)}`);
+        problems.push(`Label "${rect.label}" overlaps component "${c.id}" adjust labelDx/labelDy/labelSegment or set labelAt.\n${suggestLabelObstacleFix(rect, rect.lx, rect.ly, c)}`);
       }
     }
     if (enforcesBoundaryTitleComposition) {
       for (const boundary of boundaries) {
         if (!rectsOverlap(boundary.title, rect)) continue;
         problems.push(
-          `Boundary label "${boundary.label}" overlaps connection label "${rect.label}" — move the boundary title rail by adjusting wrapped component positions, or move the connection label with labelAt/labelDx/labelDy/labelSegment.`,
+          `Boundary label "${boundary.label}" overlaps connection label "${rect.label}" move the boundary title rail by adjusting wrapped component positions, or move the connection label with labelAt/labelDx/labelDy/labelSegment.`,
         );
       }
     }
@@ -692,7 +692,7 @@ function sideAwareBridgeCandidates(start, end, fromSide, toSide) {
   // Route through a bounded outside channel so we keep both endpoint normals
   // without introducing a tiny, noisy connector between the two stubs.
   if (verticalSides.has(fromSide) && verticalSides.has(toSide)
-      && Math.abs(start[0] - end[0]) < minimumBridge) {
+    && Math.abs(start[0] - end[0]) < minimumBridge) {
     for (const channelX of [
       Math.max(start[0], end[0]) + minimumBridge,
       Math.min(start[0], end[0]) - minimumBridge,
@@ -706,7 +706,7 @@ function sideAwareBridgeCandidates(start, end, fromSide, toSide) {
     }
   }
   if (horizontalSides.has(fromSide) && horizontalSides.has(toSide)
-      && Math.abs(start[1] - end[1]) < minimumBridge) {
+    && Math.abs(start[1] - end[1]) < minimumBridge) {
     for (const channelY of [
       Math.max(start[1], end[1]) + minimumBridge,
       Math.min(start[1], end[1]) - minimumBridge,
@@ -798,10 +798,10 @@ function alignFacingPorts(conn, from, to, start, end, fromSide, toSide, ports) {
   for (const candidate of candidates) {
     const points = [candidate.start, candidate.end];
     if (portHasCornerClearance(from, fromSide, candidate.start)
-        && portHasCornerClearance(to, toSide, candidate.end)
-        && routeHonorsEndpointSides(points, fromSide, toSide)
-        && routeClearsEndpointComponents(points, from, to)
-        && routeClearsComponents(conn, points)) {
+      && portHasCornerClearance(to, toSide, candidate.end)
+      && routeHonorsEndpointSides(points, fromSide, toSide)
+      && routeClearsEndpointComponents(points, from, to)
+      && routeClearsComponents(conn, points)) {
       return candidate;
     }
   }

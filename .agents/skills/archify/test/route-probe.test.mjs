@@ -38,7 +38,7 @@ test('all typed renderers inherit one viewer-only Route Probe', () => {
     assert.match(html, /id="route-probe" hidden role="region" aria-labelledby="route-probe-title"/, mode);
     assert.match(html, /id="btn-route-probe"[^>]+aria-label="Trace a directed route"[^>]+aria-pressed="false"[^>]+aria-controls="route-probe"/, mode);
     assert.match(html, /Archify\.routeProbe = \(function \(\)/, mode);
-    assert.match(html, /Route Probe — shortest directed path over compiled semantics/, mode);
+    assert.match(html, /Route Probe shortest directed path over compiled semantics/, mode);
     assert.equal((html.match(/<svg\b/g) || []).length, 1, `${mode} keeps one static canonical SVG`);
     assert.doesNotMatch(canonicalSvg(html), /data-route-|route-probe-flow/, mode);
   }

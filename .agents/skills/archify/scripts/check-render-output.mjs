@@ -252,7 +252,7 @@ if (svgMatches.length === 1) {
     'label_route_clearance',
     !labelClearanceIsError || labelRouteClearance.length === 0,
     labelRouteClearance.map((hit) => (
-      `[composition/label-route-clearance] ${qualityProfile} label "${hit.label?.label || hit.labelRelation?.label || ''}" on ${relationshipName(hit.labelRelation)} is ${Math.round(hit.clearance * 10) / 10}px from ${relationshipName(hit.otherRelation)} segment ${hit.segmentIndex} [${formatPoint(hit.start)}] -> [${formatPoint(hit.end)}]${hit.intersectionLength > 0 ? ` with ${Math.round(hit.intersectionLength * 10) / 10}px hidden by the mask` : ''} (minimum ${hit.threshold}px) — use renderer-supported label controls (message y for sequence; otherwise labelAt, labelDx, labelDy, or labelSegment), or adjust the other relationship route/via/channel.`
+      `[composition/label-route-clearance] ${qualityProfile} label "${hit.label?.label || hit.labelRelation?.label || ''}" on ${relationshipName(hit.labelRelation)} is ${Math.round(hit.clearance * 10) / 10}px from ${relationshipName(hit.otherRelation)} segment ${hit.segmentIndex} [${formatPoint(hit.start)}] -> [${formatPoint(hit.end)}]${hit.intersectionLength > 0 ? ` with ${Math.round(hit.intersectionLength * 10) / 10}px hidden by the mask` : ''} (minimum ${hit.threshold}px) use renderer-supported label controls (message y for sequence; otherwise labelAt, labelDx, labelDy, or labelSegment), or adjust the other relationship route/via/channel.`
     )),
   );
   addCheck(

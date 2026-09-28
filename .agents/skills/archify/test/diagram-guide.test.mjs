@@ -38,7 +38,7 @@ test('all typed renderers inherit one viewer-only Diagram Guide', () => {
     assert.match(html, /id="diagram-guide" hidden role="dialog" aria-modal="false" aria-labelledby="diagram-guide-title"/, mode);
     assert.match(html, /id="btn-diagram-guide"[^>]+aria-label="Open diagram guide"[^>]+aria-haspopup="dialog"[^>]+aria-expanded="false"/, mode);
     assert.match(html, /Archify\.guide = \(function \(\)/, mode);
-    assert.match(html, /Diagram Guide — a factual command deck over existing interactions/, mode);
+    assert.match(html, /Diagram Guide a factual command deck over existing interactions/, mode);
     assert.doesNotMatch(canonicalSvg(html), /diagram-guide|Archify\.guide|Explore this system/, mode);
   }
 });

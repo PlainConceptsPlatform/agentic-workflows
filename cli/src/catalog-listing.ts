@@ -77,7 +77,7 @@ export function formatCatalog(entries: readonly CatalogEntry[]): string {
 
 function formatEntry(entry: CatalogEntry): string {
   const mark = entry.installed ? "[x]" : "[ ]";
-  return `  ${mark} ${entry.name} — ${entry.description}`;
+  return `  ${mark} ${entry.name} ${entry.description}`;
 }
 
 async function isFileInstalled(basePath: string, workerOrTemplateFile: string, explicitTarget?: string): Promise<boolean> {

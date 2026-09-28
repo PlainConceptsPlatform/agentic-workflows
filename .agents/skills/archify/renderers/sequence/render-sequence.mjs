@@ -150,13 +150,13 @@ function validateSequence() {
   if (participants.size !== asArray(sequence.participants).length) problems.push('Participant ids must be unique.');
 
   if (layout.lifelineBottom - layout.lifelineTop < 120) {
-    problems.push(`viewBox height ${viewBox[1]} leaves under 120px of timeline — set meta.viewBox[1] to at least ${layout.lifelineTop + 120 + 65}.`);
+    problems.push(`viewBox height ${viewBox[1]} leaves under 120px of timeline set meta.viewBox[1] to at least ${layout.lifelineTop + 120 + 65}.`);
   }
 
   for (const participant of participants.values()) {
     const estLabelW = textUnits(participant.label) * 6.8;
     if (estLabelW > layout.participantW + 6) {
-      problems.push(`Label "${participant.label}" (~${Math.round(estLabelW)}px) is wider than the ${layout.participantW}px participant box — shorten it.`);
+      problems.push(`Label "${participant.label}" (~${Math.round(estLabelW)}px) is wider than the ${layout.participantW}px participant box shorten it.`);
     }
     const brandRailProblem = brandTopRailProblem(participant, layout.participantW, 8, 'Participant');
     if (brandRailProblem) problems.push(brandRailProblem);
@@ -166,7 +166,7 @@ function validateSequence() {
       const availableTextW = availableNodeTextWidth(layout.participantW);
       const minimumW = minimumNodeTextWidth(participant.sublabel, participantTextFit.sublabelMinimum);
       if (minimumW > availableTextW) {
-        problems.push(`Sublabel "${participant.sublabel}" needs ~${Math.ceil(minimumW)}px at the ${participantTextFit.sublabelMinimum}px legible minimum, but participant "${participant.id}" provides ${availableTextW}px — shorten the sublabel (${participantBoxWidthNote}).`);
+        problems.push(`Sublabel "${participant.sublabel}" needs ~${Math.ceil(minimumW)}px at the ${participantTextFit.sublabelMinimum}px legible minimum, but participant "${participant.id}" provides ${availableTextW}px shorten the sublabel (${participantBoxWidthNote}).`);
       }
     }
   }
@@ -176,11 +176,11 @@ function validateSequence() {
     if (!participants.has(message.to)) problems.push(`Message "${message.label}" references unknown target "${message.to}".`);
     if (typeof message.y !== 'number') problems.push(`Message "${message.label}" must provide a numeric y.`);
     if (message.y < layout.lifelineTop + 18 || message.y > layout.lifelineBottom - 18) {
-      problems.push(`Message "${message.label}" sits outside the readable timeline — keep y between ${layout.lifelineTop + 18} and ${layout.lifelineBottom - 18}.`);
+      problems.push(`Message "${message.label}" sits outside the readable timeline keep y between ${layout.lifelineTop + 18} and ${layout.lifelineBottom - 18}.`);
     }
     if (participants.has(message.from) && participants.has(message.to)) {
       const distance = Math.abs(participants.get(message.to).cx - participants.get(message.from).cx);
-      if (distance < 60) problems.push(`Message "${message.label}" spans ${Math.round(distance)}px (minimum 60px) — give its participants more column distance.`);
+      if (distance < 60) problems.push(`Message "${message.label}" spans ${Math.round(distance)}px (minimum 60px) give its participants more column distance.`);
     }
   }
 
@@ -248,20 +248,20 @@ function validateSequence() {
   for (let i = 0; i < placed.length; i += 1) {
     for (let j = i + 1; j < placed.length && placed[j].y - placed[i].y < 28; j += 1) {
       if (placed[i].x1 < placed[j].x2 && placed[j].x1 < placed[i].x2) {
-        problems.push(`Messages "${placed[i].label}" and "${placed[j].label}" are less than 28px apart and share horizontal space — spread their y values.`);
+        problems.push(`Messages "${placed[i].label}" and "${placed[j].label}" are less than 28px apart and share horizontal space spread their y values.`);
       }
     }
   }
 
   // Label masks can extend well past the arrow span, so check the actual
-  // label rectangles too — tangent arrows with long labels still collide.
+  // label rectangles too tangent arrows with long labels still collide.
   const labelRects = asArray(sequence.messages)
     .map((m, messageIndex) => messageLabelBox(m, messageIndex))
     .filter(Boolean);
   for (let i = 0; i < labelRects.length; i += 1) {
     for (let j = i + 1; j < labelRects.length; j += 1) {
       if (rectsOverlap(labelRects[i], labelRects[j], -2)) {
-        problems.push(`Labels "${labelRects[i].label}" and "${labelRects[j].label}" overlap — spread their message y values or shorten the labels.`);
+        problems.push(`Labels "${labelRects[i].label}" and "${labelRects[j].label}" overlap spread their message y values or shorten the labels.`);
       }
     }
   }
@@ -278,28 +278,28 @@ function validateSequence() {
 
   for (const segment of asArray(sequence.segments)) {
     if (segment.to <= segment.from) {
-      problems.push(`Segment "${segment.label}" has invalid y range (from ${segment.from} to ${segment.to}) — "to" must be greater than "from".`);
+      problems.push(`Segment "${segment.label}" has invalid y range (from ${segment.from} to ${segment.to}) "to" must be greater than "from".`);
     }
     if (segment.from < layout.topY || segment.to > layout.lifelineBottom + 20) {
-      problems.push(`Segment "${segment.label}" extends outside the canvas — keep its y range between ${layout.topY} and ${layout.lifelineBottom + 20}.`);
+      problems.push(`Segment "${segment.label}" extends outside the canvas keep its y range between ${layout.topY} and ${layout.lifelineBottom + 20}.`);
     }
     const labelBox = segmentLabelBox(segment);
     const availableWidth = Math.max(0, viewBox[0] - 48 - labelBox.x);
     if (labelBox.x + labelBox.width > viewBox[0] - 48) {
       const requiredWidth = Math.ceil(labelBox.x + labelBox.width + 48);
-      problems.push(`Segment "${segment.label}" label (~${Math.round(labelBox.width)}px) exceeds the segment frame's available width (${availableWidth}px) — shorten the label or increase meta.viewBox[0] to at least ${requiredWidth}.`);
+      problems.push(`Segment "${segment.label}" label (~${Math.round(labelBox.width)}px) exceeds the segment frame's available width (${availableWidth}px) shorten the label or increase meta.viewBox[0] to at least ${requiredWidth}.`);
     }
   }
 
   for (const activation of asArray(sequence.activations)) {
     if (!participants.has(activation.participant)) problems.push(`Activation references unknown participant "${activation.participant}".`);
-    if (activation.to <= activation.from) problems.push(`Activation for "${activation.participant}" has invalid time range — "to" must be greater than "from".`);
+    if (activation.to <= activation.from) problems.push(`Activation for "${activation.participant}" has invalid time range "to" must be greater than "from".`);
   }
 
   const lastParticipant = asArray(sequence.participants)[asArray(sequence.participants).length - 1];
   if (lastParticipant && participants.get(lastParticipant.id).cx + layout.participantW / 2 > viewBox[0] - 40) {
     const requiredWidth = Math.ceil(participants.get(lastParticipant.id).cx + layout.participantW / 2 + 40);
-    problems.push(`Participants exceed viewBox width — set meta.viewBox[0] to at least ${requiredWidth} or remove a participant.`);
+    problems.push(`Participants exceed viewBox width set meta.viewBox[0] to at least ${requiredWidth} or remove a participant.`);
   }
 
   if (problems.length) {

@@ -9,7 +9,7 @@ import { runInteractive } from "./tui.js";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const HELP_TEXT = `Workflows CLI — install and update Plain Concepts Platform agentic workflows.
+const HELP_TEXT = `Workflows CLI install and update Plain Concepts Platform agentic workflows.
 
 Run with no arguments to launch the interactive TUI, the primary way to select and install
 workflows and templates:

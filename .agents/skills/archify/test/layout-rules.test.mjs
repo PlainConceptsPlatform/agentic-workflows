@@ -1,7 +1,7 @@
 // Per-rule coverage for the renderers' layout validators. The golden suite's
 // negative cases mostly trip ajv SCHEMA rules; this file targets the hand-
-// written LAYOUT rules (the `problems.push(...)` checks) — the layer that has
-// regressed before — by mutating a valid example into exactly one violation
+// written LAYOUT rules (the `problems.push(...)` checks) the layer that has
+// regressed before by mutating a valid example into exactly one violation
 // and asserting the renderer exits non-zero with the expected message.
 //
 // It also locks the error-message CONTRACT: representative messages must carry
@@ -182,7 +182,7 @@ function assertWorkflowEdgesAvoidAllNodeBorders(html, doc) {
   assertRelationshipsAvoidAllNodeBorders(html, doc.edges, doc.nodes);
 }
 
-// [name, mode, mutate(doc), expectedSubstrings[]] — every mutation introduces
+// [name, mode, mutate(doc), expectedSubstrings[]] every mutation introduces
 // exactly one layout violation. Each expected substring must appear in stderr.
 const CASES = [
   // ---- workflow layout rules ----
@@ -553,7 +553,7 @@ test('architecture: boundary title masks cannot obscure connection labels', () =
 // ---- sublabel/tag shrink-to-fit: the render half of the same rule ----
 // Validation only rejects text that cannot fit even at its legible minimum.
 // Everything between "fits at the preferred size" and that floor must shrink,
-// not overflow — otherwise the common case still paints over its neighbours.
+// not overflow otherwise the common case still paints over its neighbours.
 const SHRINK_CASES = [
   // [mode, mutate(doc), preferredFontSize, selector for the sublabel <text>]
   ['architecture', (d) => { d.components[0].sublabel = 'Browser and mobile apps'; }, 9],
@@ -1460,7 +1460,7 @@ test('sequence: segment label exceeding segment frame available width fails layo
 
   const { code, stderr } = render('sequence', d);
   assert.equal(code, 1);
-  assert.match(stderr, /Segment "Phase 1: Dual-Certificate mTLS Handshake & Distributed Token Verification Protocol NegotiationPhase 1: Dual-Certificate mTLS Handshake & Distributed Token Verification Protocol Negotiation" label \(~992px\) exceeds the segment frame's available width \(716px\) — shorten the label or increase meta\.viewBox\[0\] to at least 1096\./);
+  assert.match(stderr, /Segment "Phase 1: Dual-Certificate mTLS Handshake & Distributed Token Verification Protocol NegotiationPhase 1: Dual-Certificate mTLS Handshake & Distributed Token Verification Protocol Negotiation" label \(~992px\) exceeds the segment frame's available width \(716px\) shorten the label or increase meta\.viewBox\[0\] to at least 1096\./);
 
   // Remediating by increasing viewBox[0] to the suggested minimum allows it to pass cleanly
   d.meta.viewBox[0] = 1096;
@@ -1484,7 +1484,7 @@ test('sequence: segment label boundary containment within canvas vs segment fram
   dExceed.segments[0].label = 'A'.repeat(136);
   const resExceed = render('sequence', dExceed);
   assert.equal(resExceed.code, 1, 'label exceeding segment frame must fail even if within canvas');
-  assert.match(resExceed.stderr, /label \(~721px\) exceeds the segment frame's available width \(716px\) — shorten the label or increase meta\.viewBox\[0\] to at least 826\./);
+  assert.match(resExceed.stderr, /label \(~721px\) exceeds the segment frame's available width \(716px\) shorten the label or increase meta\.viewBox\[0\] to at least 826\./);
 
   // 2. Exact-fit case at the frame's right edge (56 + 716 = 772 === 820 - 48)
   const dExact = load('sequence');

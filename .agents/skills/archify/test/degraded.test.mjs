@@ -3,7 +3,7 @@
 // standalone validators are committed and included in the distribution.
 //
 // A malformed-but-JSON-legal document must EXIT
-// NON-ZERO with a friendly message — never crash (TypeError / is not a
+// NON-ZERO with a friendly message never crash (TypeError / is not a
 // function) and never write NaN/undefined into the HTML. A random VALID
 // perturbation of an example must still render (exit 0, no NaN).
 //
@@ -107,7 +107,7 @@ test('lifecycle: state missing col never writes NaN', () => {
 });
 
 // ---- property test: deterministic VALID perturbations always render ----
-// Seeded PRNG (no Math.random — keeps the test reproducible across runs).
+// Seeded PRNG (no Math.random keeps the test reproducible across runs).
 function mulberry32(seed) {
   return function next() {
     seed |= 0; seed = (seed + 0x6D2B79F5) | 0;

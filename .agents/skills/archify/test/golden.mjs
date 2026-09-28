@@ -23,7 +23,7 @@ function check(name, ok, detail) {
     console.log(`  ok    ${name}`);
   } else {
     failures += 1;
-    console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`);
+    console.error(`  FAIL  ${name}${detail ? ` ${detail}` : ''}`);
   }
 }
 
@@ -160,7 +160,7 @@ for (const tag of ['style', 'script']) {
   const w = blocks(webApp, tag).filter((b) => !b.includes('Sample Web App') && isTemplateOwned(b));
   check(`web-app.html ${tag} blocks match template`,
     JSON.stringify(t) === JSON.stringify(w),
-    'examples/web-app.html was generated from a stale template — re-derive it');
+    'examples/web-app.html was generated from a stale template re-derive it');
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +174,7 @@ check('template generator meta matches package.json version',
 const lock = JSON.parse(fs.readFileSync(path.join(skillRoot, 'package-lock.json'), 'utf8'));
 check('package-lock.json version matches package.json',
   lock.version === pkg.version && lock.packages?.['']?.version === pkg.version,
-  `lockfile says ${lock.version} — run npm install and rebuild the zip`);
+  `lockfile says ${lock.version} run npm install and rebuild the zip`);
 
 const skillMd = fs.readFileSync(path.join(skillRoot, 'SKILL.md'), 'utf8');
 const skillVersion = (skillMd.match(/^\s*version:\s*"([^"]+)"/m) || [])[1];

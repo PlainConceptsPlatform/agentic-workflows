@@ -546,17 +546,17 @@ function validateActionManifests(updates: readonly ContentUpdate[]): void {
     try {
       manifest = parseYaml(content) as ActionManifest;
     } catch {
-      throw new Error(`${target}: invalid YAML — failed to parse action manifest`);
+      throw new Error(`${target}: invalid YAML failed to parse action manifest`);
     }
     if (manifest?.runs?.using !== "composite") continue;
     const steps = manifest.runs?.steps;
     if (!Array.isArray(steps) || steps.length === 0) {
-      throw new Error(`${target}: composite action has no steps — file may be truncated`);
+      throw new Error(`${target}: composite action has no steps file may be truncated`);
     }
     for (const [index, step] of steps.entries()) {
       const label = step.name ?? step.id ?? `step ${index}`;
       if (step.shell !== undefined && (typeof step.run !== "string" || step.run.trim() === "")) {
-        throw new Error(`${target}: step "${label}" has shell: but no run: — manifest is invalid or truncated`);
+        throw new Error(`${target}: step "${label}" has shell: but no run: manifest is invalid or truncated`);
       }
     }
   }

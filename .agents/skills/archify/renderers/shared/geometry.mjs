@@ -307,7 +307,7 @@ export function cleanEndpointSideProblems({
       const segmentRole = issue.endpoint === 'source' ? 'first' : 'final';
       const from = issue.start.map((value) => Math.round(value * 10) / 10).join(', ');
       const to = issue.end.map((value) => Math.round(value * 10) / 10).join(', ');
-      const message = `[clean-flow/endpoint-side-direction] ${diagramType} ${relationCollection}[${relationIndex}]${relationId} "${relation.from}" -> "${relation.to}" ${segmentRole} segment ${issue.segmentIndex} [${from}] -> [${to}] does not honor ${sideField} "${issue.side}" — it must run ${issue.expectedAxis} ${issue.expectedDirection}; ${routeHint}.`;
+      const message = `[clean-flow/endpoint-side-direction] ${diagramType} ${relationCollection}[${relationIndex}]${relationId} "${relation.from}" -> "${relation.to}" ${segmentRole} segment ${issue.segmentIndex} [${from}] -> [${to}] does not honor ${sideField} "${issue.side}" it must run ${issue.expectedAxis} ${issue.expectedDirection}; ${routeHint}.`;
       recordDiagnostic({
         code: 'clean-flow/endpoint-side-direction',
         severity: 'error',
@@ -376,7 +376,7 @@ export function cleanFlowProblems({
       const from = points[hitSegment].map(Math.round).join(', ');
       const to = points[hitSegment + 1].map(Math.round).join(', ');
       const relationId = relation.id ? ` id "${relation.id}"` : '';
-      const message = `[clean-flow/edge-through-node] ${diagramType} ${relationCollection}[${relationIndex}]${relationId} "${relation.from}" -> "${relation.to}" crosses ${obstacleKind} "${obstacle.id}" (unrelated to this relationship) on segment ${hitSegment} [${from}] -> [${to}] (${clearance}px clearance) — ${routeHint}.`;
+      const message = `[clean-flow/edge-through-node] ${diagramType} ${relationCollection}[${relationIndex}]${relationId} "${relation.from}" -> "${relation.to}" crosses ${obstacleKind} "${obstacle.id}" (unrelated to this relationship) on segment ${hitSegment} [${from}] -> [${to}] (${clearance}px clearance) ${routeHint}.`;
       recordDiagnostic({
         code: 'clean-flow/edge-through-node',
         severity: 'error',
@@ -542,7 +542,7 @@ export function cleanCrossingProblems({
         return `${relationCollection}[${index}]${id} "${relation.from}" -> "${relation.to}"`;
       };
       const point = hit.point.map((value) => Math.round(value * 10) / 10).join(', ');
-      const message = `[composition/proper-crossing] showcase ${diagramType} ${describe(left)} crosses ${describe(right)} at [${point}] (segments ${hit.leftSegment} and ${hit.rightSegment}) — ${routeHint}.`;
+      const message = `[composition/proper-crossing] showcase ${diagramType} ${describe(left)} crosses ${describe(right)} at [${point}] (segments ${hit.leftSegment} and ${hit.rightSegment}) ${routeHint}.`;
       recordDiagnostic({
         code: 'composition/proper-crossing',
         severity: 'error',
@@ -641,7 +641,7 @@ export function cleanAmbiguousCorridorProblems({
     const length = Math.round(hit.overlapLength * 10) / 10;
     const from = hit.overlapStart.map((value) => Math.round(value * 10) / 10).join(', ');
     const to = hit.overlapEnd.map((value) => Math.round(value * 10) / 10).join(', ');
-    const message = `[composition/ambiguous-corridor] showcase ${diagramType} ${describe(hit.left)} shares a ${length}px corridor with ${describe(hit.right)} at [${from}] -> [${to}] (segments ${hit.leftSegment} and ${hit.rightSegment}; minimum ${minOverlapPx}px) — ${routeHint}.`;
+    const message = `[composition/ambiguous-corridor] showcase ${diagramType} ${describe(hit.left)} shares a ${length}px corridor with ${describe(hit.right)} at [${from}] -> [${to}] (segments ${hit.leftSegment} and ${hit.rightSegment}; minimum ${minOverlapPx}px) ${routeHint}.`;
     recordDiagnostic({
       code: 'composition/ambiguous-corridor',
       severity: 'error',
@@ -733,7 +733,7 @@ export function cleanBorderRunProblems({
     const length = Math.round(hit.overlapLength * 10) / 10;
     const from = hit.overlapStart.map((value) => Math.round(value * 10) / 10).join(', ');
     const to = hit.overlapEnd.map((value) => Math.round(value * 10) / 10).join(', ');
-    const message = `[composition/container-border-run] ${diagramType} ${relationCollection}[${hit.relationIndex}]${relationId} "${relation.from}" -> "${relation.to}" follows ${frameKind} "${frameIdentity}" ${hit.side} border for ${length}px on segment ${hit.segmentIndex} [${from}] -> [${to}] — ${routeHint}.`;
+    const message = `[composition/container-border-run] ${diagramType} ${relationCollection}[${hit.relationIndex}]${relationId} "${relation.from}" -> "${relation.to}" follows ${frameKind} "${frameIdentity}" ${hit.side} border for ${length}px on segment ${hit.segmentIndex} [${from}] -> [${to}] ${routeHint}.`;
     recordDiagnostic({
       code: 'composition/container-border-run',
       severity: 'error',
@@ -878,7 +878,7 @@ export function cleanRouteRhythmProblems({
     const rule = hit.code === 'composition/micro-segment'
       ? `is below the ${microSegmentPx}px micro-segment floor`
       : `is below the ${interiorSegmentPx}px interior-segment floor`;
-    const message = `[${hit.code}] showcase ${diagramType} ${relationCollection}[${hit.relationIndex}]${relationId} "${relation.from}" -> "${relation.to}" has a ${length}px ${hit.position} segment ${hit.segmentIndex} [${from}] -> [${to}] that ${rule} — ${routeHint}.`;
+    const message = `[${hit.code}] showcase ${diagramType} ${relationCollection}[${hit.relationIndex}]${relationId} "${relation.from}" -> "${relation.to}" has a ${length}px ${hit.position} segment ${hit.segmentIndex} [${from}] -> [${to}] that ${rule} ${routeHint}.`;
     recordDiagnostic({
       code: hit.code,
       severity: 'error',
@@ -921,7 +921,7 @@ export function cleanLabelRouteClearanceProblems({
     const clearance = Math.round(hit.clearance * 10) / 10;
     const from = hit.start.map((value) => Math.round(value * 10) / 10).join(', ');
     const to = hit.end.map((value) => Math.round(value * 10) / 10).join(', ');
-    const message = `[composition/label-route-clearance] showcase ${diagramType} label "${hit.label?.label || hit.labelRelation?.label || ''}" on ${describe(hit.labelRelation, hit.labelRelationIndex)} is ${clearance}px from ${describe(hit.otherRelation, hit.otherRelationIndex)} segment ${hit.segmentIndex} [${from}] -> [${to}] (label rect ${formatRect(hit.rect)}; minimum ${threshold}px) — ${routeHint}.`;
+    const message = `[composition/label-route-clearance] showcase ${diagramType} label "${hit.label?.label || hit.labelRelation?.label || ''}" on ${describe(hit.labelRelation, hit.labelRelationIndex)} is ${clearance}px from ${describe(hit.otherRelation, hit.otherRelationIndex)} segment ${hit.segmentIndex} [${from}] -> [${to}] (label rect ${formatRect(hit.rect)}; minimum ${threshold}px) ${routeHint}.`;
     recordDiagnostic({
       code: 'composition/label-route-clearance',
       severity: 'error',
@@ -1148,8 +1148,8 @@ export function automaticPortRhythmBridge(
   { endpointStubPx = 24, interiorSegmentPx = 16, accept } = {},
 ) {
   if (!Array.isArray(start) || !Array.isArray(end)
-      || start.length !== 2 || end.length !== 2
-      || !isFinitePoint(...start, ...end)) return null;
+    || start.length !== 2 || end.length !== 2
+    || !isFinitePoint(...start, ...end)) return null;
   const fromVector = PORT_OUTWARD_VECTOR[fromSide];
   const toVector = PORT_OUTWARD_VECTOR[toSide];
   if (!fromVector || !toVector) return null;
@@ -1167,7 +1167,7 @@ export function automaticPortRhythmBridge(
   const horizontalSides = new Set(['left', 'right']);
 
   if (verticalSides.has(fromSide) && verticalSides.has(toSide)
-      && Math.abs(start[0] - end[0]) < interiorSegmentPx) {
+    && Math.abs(start[0] - end[0]) < interiorSegmentPx) {
     for (const channelX of [
       Math.max(start[0], end[0]) + interiorSegmentPx,
       Math.min(start[0], end[0]) - interiorSegmentPx,
@@ -1183,7 +1183,7 @@ export function automaticPortRhythmBridge(
     }
   }
   if (horizontalSides.has(fromSide) && horizontalSides.has(toSide)
-      && Math.abs(start[1] - end[1]) < interiorSegmentPx) {
+    && Math.abs(start[1] - end[1]) < interiorSegmentPx) {
     for (const channelY of [
       Math.max(start[1], end[1]) + interiorSegmentPx,
       Math.min(start[1], end[1]) - interiorSegmentPx,

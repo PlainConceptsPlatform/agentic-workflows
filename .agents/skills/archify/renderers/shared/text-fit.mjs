@@ -3,7 +3,7 @@
 // Node text (`label`, `sublabel`, `tag`) renders as one <text> element with
 // text-anchor="middle" and is never wrapped. Left unmeasured, an over-long
 // value silently spills across its neighbours while validation still reports
-// a clean receipt — the failure mode this module exists to close.
+// a clean receipt the failure mode this module exists to close.
 //
 // Two halves, always used together:
 //   - fittedNodeFontSize shrinks the text toward a legible minimum at render
@@ -27,7 +27,7 @@ export const nodeTextFit = {
 };
 
 // Largest font size at or below `preferred` that fits `text` inside `width`,
-// floored at `minimum` — below that the text is no longer legible and the
+// floored at `minimum` below that the text is no longer legible and the
 // caller should be reporting a problem instead.
 export function fittedNodeFontSize(text, width, preferred, minimum) {
   const units = Math.max(1, textUnits(text));
