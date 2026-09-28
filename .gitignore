@@ -3,8 +3,6 @@ dist/
 coverage/
 *.lock.yml
 .github/aw/actions-lock.json
-runners/.env
-runners/packer-variables.pkrvars.hcl
 
 # Generated from /loops by cli/scripts/copy-loops.mjs on prepare and prepack.
 # Committing it duplicates every change and the two trees drift.

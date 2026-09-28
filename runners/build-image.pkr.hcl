@@ -53,12 +53,6 @@ variable "client_secret" {
   default = "dummy"
 }
 
-variable "use_oidc" {
-  type        = bool
-  default     = false
-  description = "Authenticate via OIDC federation (GitHub Actions / azure/login). Skips client_secret."
-}
-
 variable "resource_group" {
   type = string
   default = "agentrunner-pro-rg-01"
@@ -106,10 +100,6 @@ source "azure-arm" "runner-image" {
   client_secret      = var.client_secret
   tenant_id          = var.tenant_id
   subscription_id    = var.subscription_id
-
-  # OIDC federation (GitHub Actions): the token comes from ARM_OIDC_TOKEN, the
-  # identity from ARM_TENANT_ID / ARM_CLIENT_ID / ARM_SUBSCRIPTION_ID env vars.
-  use_oidc = var.use_oidc
 
   build_resource_group_name = var.resource_group
   vm_size                  = var.vm_size

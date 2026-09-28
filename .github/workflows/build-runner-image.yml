@@ -17,42 +17,12 @@ on:
 
 permissions:
   contents: read
-  id-token: write
-
-# The Azure SP authenticates via OIDC federation - no client secret in GitHub.
-# Register the fed credential once (from a logged-in az session):
-#   az ad app federated-credential create --id <CLIENT_ID> \
-#     --name gh-actions-runner-image \
-#     --issuer https://token.actions.githubusercontent.com \
-#     --subject "PlainConceptsPlatform/Agentic-Workflows:refs/heads/main:workflow:build-runner-image.yml"
-# The SP needs Contributor on agentrunner-pro-rg-01 (build VM, gallery, boot test).
-env:
-  AZ_SUBSCRIPTION_ID: c63519b4-84a6-448c-b0e6-4ebef696b8ff
-  AZ_TENANT_ID: 5c384fed-84cc-44a6-b34a-b060bf102a6e
-  AZ_CLIENT_ID: 80ddf1bd-53d5-4279-8392-5bd3eb26ece5
-  AZ_RG: agentrunner-pro-rg-01
 
 jobs:
   build-image:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Azure login (OIDC, for az CLI steps)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ env.AZ_CLIENT_ID }}
-          tenant-id: ${{ env.AZ_TENANT_ID }}
-          subscription-id: ${{ env.AZ_SUBSCRIPTION_ID }}
-
-      - name: OIDC env for Packer
-        run: |
-          set -euo pipefail
-          token_response=$(curl -sS -H "Authorization: Bearer $OIDC_REQUEST_TOKEN" "$OIDC_TOKEN_URL")
-          echo "ARM_OIDC_TOKEN=$(echo "${token_response}" | jq -r .value)" >> "$GITHUB_ENV"
-          echo "ARM_TENANT_ID=${{ env.AZ_TENANT_ID }}" >> "$GITHUB_ENV"
-          echo "ARM_CLIENT_ID=${{ env.AZ_CLIENT_ID }}" >> "$GITHUB_ENV"
-          echo "ARM_SUBSCRIPTION_ID=${{ env.AZ_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
 
       - name: Install Packer
         uses: hashicorp/setup-packer@v3
@@ -62,6 +32,15 @@ jobs:
       - name: Init plugins
         working-directory: runners
         run: packer init build-image.pkr.hcl
+
+      - name: Validate template
+        working-directory: runners
+        env:
+          PACKER_VAR_subscription_id: ${{ secrets.AZ_SUBSCRIPTION_ID }}
+          PACKER_VAR_tenant_id: ${{ secrets.AZ_TENANT_ID }}
+          PACKER_VAR_client_id: ${{ secrets.AZ_RUNNER_IMAGE_CLIENT_ID }}
+          PACKER_VAR_client_secret: ${{ secrets.AZ_RUNNER_IMAGE_CLIENT_SECRET }}
+        run: packer validate build-image.pkr.hcl
 
       - name: Determine image version
         id: version
@@ -75,16 +54,22 @@ jobs:
       - name: Build and publish image
         working-directory: runners
         env:
+          PACKER_VAR_subscription_id: ${{ secrets.AZ_SUBSCRIPTION_ID }}
+          PACKER_VAR_tenant_id: ${{ secrets.AZ_TENANT_ID }}
+          PACKER_VAR_client_id: ${{ secrets.AZ_RUNNER_IMAGE_CLIENT_ID }}
+          PACKER_VAR_client_secret: ${{ secrets.AZ_RUNNER_IMAGE_CLIENT_SECRET }}
           PACKER_VAR_image_version: ${{ steps.version.outputs.version }}
-          PACKER_VAR_use_oidc: "true"
         run: packer build build-image.pkr.hcl
 
       - name: Post-publish boot test (CUT-04)
         id: boottest
+        env:
+          AZ_SUBSCRIPTION_ID: ${{ secrets.AZ_SUBSCRIPTION_ID }}
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
           IMG="/subscriptions/${AZ_SUBSCRIPTION_ID}/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner_gallery_01/images/agents-arc-runner/versions/${VERSION}"
+          az login --service-principal -u "${{ secrets.AZ_RUNNER_IMAGE_CLIENT_ID }}" -p "${{ secrets.AZ_RUNNER_IMAGE_CLIENT_SECRET }}" --tenant "${{ secrets.AZ_TENANT_ID }}"
           sed "s/__VM_TOKEN__/boottest-dummy-token/" runners/cloud-init.yaml > /tmp/boottest-cloud-init.yaml
           az vm create -g agentrunner-pro-rg-01 -n "vm-boottest-${{ github.run_number }}" \
             --image "$IMG" --size Standard_D4ads_v5 --admin-username azureuser \
@@ -108,6 +93,7 @@ jobs:
       - name: Flip live VMSS to the new image
         if: ${{ inputs.flip_fleet == true }}
         env:
+          AZ_SUBSCRIPTION_ID: ${{ secrets.AZ_SUBSCRIPTION_ID }}
           VM_TOKEN: ${{ secrets.VM_TOKEN }}
         run: |
           set -euo pipefail
@@ -123,13 +109,7 @@ jobs:
             --set virtualMachineProfile.storageProfile.imageReference="{\"id\":\"${IMG}\"}" \
             --set virtualMachineProfile.osProfile.customData="$(base64 -w0 /tmp/live-cloud-init.yaml)" \
             --no-wait -o none
-          # Manual upgrade policy: running instances keep the old image until they
-          # are deleted. Re-provision each live instance in place so the fleet is
-          # 1.0.2 immediately; future scale-outs boot the new model anyway.
-          for id in $(az vmss list-instances -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --query "[?provisioningState != 'Deleting'].instanceId" -o tsv); do
-            az vmss upgrade -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --instance-ids "$id" --no-wait -o none
-          done
-          echo "VMSS model updated (image + customData together). Fleet upgraded in place."
+          echo "VMSS model updated. Running instances keep the old image (upgradePolicy: Manual). New instances boot the baked image."
 
       - name: Notify on failure
         if: failure()
