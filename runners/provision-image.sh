@@ -126,7 +126,10 @@ tar -xzf /tmp/dotnet.tar.gz -C "$DOTNET_DIR"
 
 rm -f /tmp/dotnet.tar.gz
 
-chown -R runner:runner /opt/actions-runner/_work/_tool
+# _work itself was created by the extraction above, running as root, so it is
+# root:755 and the runner user cannot create _work/_temp at job time. Own the
+# whole tree, not just _tool.
+chown -R runner:runner /opt/actions-runner/_work
 
 echo "export DOTNET_INSTALL_DIR=$DOTNET_DIR" >> /home/runner/.bashrc
 echo "export PATH=$DOTNET_DIR:\$PATH" >> /home/runner/.bashrc
@@ -186,6 +189,14 @@ id -nG runner | grep -qw docker || {
   echo "ASSERT FAIL: dotnet in toolcache missing"
   fail=1
 }
+
+mkdir -p /opt/actions-runner/_work/_temp && \
+  su -s /bin/bash runner -c "touch /opt/actions-runner/_work/_temp/.write-test" 2>/dev/null || {
+  echo "ASSERT FAIL: runner user cannot write /opt/actions-runner/_work (ownership wrong)"
+  fail=1
+}
+rm -rf /opt/actions-runner/_work/_temp
+chown runner:runner /opt/actions-runner/_work
 
 if grep -rq "VM_TOKEN" /etc /opt 2>/dev/null; then
   echo "ASSERT FAIL: VM_TOKEN found on disk"
