@@ -190,12 +190,14 @@ id -nG runner | grep -qw docker || {
   fail=1
 }
 
-mkdir -p /opt/actions-runner/_work/_temp && \
-  su -s /bin/bash runner -c "touch /opt/actions-runner/_work/_temp/.write-test" 2>/dev/null || {
+# Write _work directly (not a pre-made subdir: that one would be root-owned and
+# the test would measure the subdir, not _work). At job time run.sh creates
+# _work/_temp itself, so the requirement is exactly "runner can create entries here".
+su -s /bin/bash runner -c "touch /opt/actions-runner/_work/.write-test" 2>/dev/null || {
   echo "ASSERT FAIL: runner user cannot write /opt/actions-runner/_work (ownership wrong)"
   fail=1
 }
-rm -rf /opt/actions-runner/_work/_temp
+rm -f /opt/actions-runner/_work/.write-test
 chown runner:runner /opt/actions-runner/_work
 
 if grep -rq "VM_TOKEN" /etc /opt 2>/dev/null; then
