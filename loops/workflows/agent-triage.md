@@ -11,7 +11,7 @@ env:
   TRIAGE_LABEL: triage
   WORKING_LABEL: bot-working
   REVIEW_LABEL: review
-  # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
+  # Marks a park the machine caused a crash, a timeout, an empty output as opposed to one it
   # decided on. The janitor retries these after a while and never touches a decision park, because
   # re-running a decision produces the same decision. Created idempotently where it is applied.
   STALLED_LABEL: stalled
@@ -56,7 +56,7 @@ description: |
 
   The gate is organisation membership, not permission level. The authorize job sets
   is_outside_collaborator for read permission, and also for write or better when the
-  author association is COLLABORATOR — repository access without being one of the
+  author association is COLLABORATOR repository access without being one of the
   organisation's own. An org member with write skips triage; an outside collaborator
   with write does not.
 
@@ -463,7 +463,7 @@ timeout-minutes: 45
 
    - On a **first** pass, triage from scratch.
    - On a **retriage** pass, incorporate the author's latest replies from comments. Previous
-     triage comments are your own past work — read them to understand what was already asked
+     triage comments are your own past work read them to understand what was already asked
      and what the author addressed.
 
 3. Read `${{ env.OPEN_ISSUES_PATH }}`. It contains all open issues for duplicate detection.
@@ -479,45 +479,45 @@ timeout-minutes: 45
 
 5. Run each of these 10 checks. For each, emit a status and a short detail line.
 
-   **Check 1 — Template completeness.** Does the issue body have the required fields from
+   **Check 1 Template completeness.** Does the issue body have the required fields from
    the bug report or feature request template? Are placeholder texts still present? Is the
    title clear and descriptive? Flag missing or incomplete fields.
 
-   **Check 2 — Security risk scan.** Does the issue mention secrets, credentials, tokens,
+   **Check 2 Security risk scan.** Does the issue mention secrets, credentials, tokens,
    production data, PII, or destructive operations? Flag any mention of keys, passwords,
    connection strings, customer data, or `DROP`/`DELETE`/`TRUNCATE` statements. These need
    security review before any work begins.
 
-   **Check 3 — Change size assessment.** Is the request appropriately scoped for a single
+   **Check 3 Change size assessment.** Is the request appropriately scoped for a single
    issue? Check the scope dropdown if present. Does the description imply changes across
    multiple components, modules, or services? Flag if it is too large for single-issue
    implementation.
 
-   **Check 4 — Danger level.** Does the request touch authentication, authorization, IAM,
+   **Check 4 Danger level.** Does the request touch authentication, authorization, IAM,
    infrastructure, migrations, data model changes, or other high-risk areas? These need
    maintainer eyes before the pipeline starts.
 
-   **Check 5 — Duplicate detection.** Compare the issue title and body against the open
-   issues in `${{ env.OPEN_ISSUES_PATH }}`. Flag any that are semantically similar — same
+   **Check 5 Duplicate detection.** Compare the issue title and body against the open
+   issues in `${{ env.OPEN_ISSUES_PATH }}`. Flag any that are semantically similar same
    problem described differently, or the same feature requested with different wording.
 
-   **Check 6 — Clarity / actionability.** Is the issue clear enough to act on? A vague
+   **Check 6 Clarity / actionability.** Is the issue clear enough to act on? A vague
    request like "make it better" or "it doesn't work" needs clarification. At least one
    concrete, actionable item must be identifiable.
 
-   **Check 7 — Reproducibility (bugs).** If this is a bug report, are the reproduction steps
+   **Check 7 Reproducibility (bugs).** If this is a bug report, are the reproduction steps
    detailed enough? Specific inputs, expected vs actual outputs, or just "it broke"? If not
    a bug report, mark as N/A.
 
-   **Check 8 — Acceptance criteria quality.** Are the acceptance criteria concrete and
+   **Check 8 Acceptance criteria quality.** Are the acceptance criteria concrete and
    testable, or just "it should work"? At least one verifiable checkbox or
    Given/When/Then scenario should be present.
 
-   **Check 9 — Cross-cutting impact.** Does the request imply changes to shared libraries,
+   **Check 9 Cross-cutting impact.** Does the request imply changes to shared libraries,
    API contracts, database schemas, or other repositories? Flag any mention of shared
    dependencies, contracts, or schemas that multiple teams depend on.
 
-    **Check 10 — Product-owner eligibility.** Judge the issue against this repository's
+    **Check 10 Product-owner eligibility.** Judge the issue against this repository's
     intake scope: ${{ env.PRODUCT_SCOPE }}
 
     An out-of-scope request is **not** a block. Out of scope means the wrong door, not a bad
@@ -543,7 +543,7 @@ timeout-minutes: 45
     **block.** The issue cannot be done, is a security risk, is too dangerous to automate, or
     is still too ambiguous after ${{ env.MAX_TRIAGE_ROUNDS }} rounds of triage. State the
     reason clearly. The issue will be closed. Do not use this for work that is merely outside
-    product-owner scope — that is `needs-maintainer`.
+    product-owner scope that is `needs-maintainer`.
 
 7. Emit exactly one `add_comment` targeting issue `${{ inputs.issue-number }}` with:
    1. `${{ env.TRIAGE_MARKER }}`

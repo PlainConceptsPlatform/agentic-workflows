@@ -62,7 +62,7 @@ write_files:
 
         # Retry JIT request on transient failures (DNS, 401, 5xx) with exponential backoff.
         # Without this, a brief network blip or scaler restart causes the VM to exhaust its
-        # idle wait and shut down — leaving a zombie instance the scaler counts as active.
+        # idle wait and shut down leaving a zombie instance the scaler counts as active.
         JIT=""
         for attempt in 1 2 3 4 5; do
           JIT=$(curl -fsS -m 60 -X POST "$SCALER_URL/vm/jit" \

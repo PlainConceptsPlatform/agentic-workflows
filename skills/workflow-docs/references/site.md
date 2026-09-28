@@ -48,7 +48,7 @@ present, lowercased.
 
 Hand-authored. No JavaScript framework, no build step. Structure:
 
-- `<title>Agentic Workflows — diagrams</title>`
+- `<title>Agentic Workflows diagrams</title>`
 - One `<section>` per logical group:
   - **Router**: links to `diagrams/router.html` and `diagrams/route-chain.html`
   - **Workers**: one `<li>` per `agent-*.html`, in the same order as `diagrams.md`
@@ -115,5 +115,5 @@ the generated HTML, not extra authoring work (`.agents/skills/archify/SKILL.md:1
 
 `.github/workflows/pages.yml` deploys `docs/` to GitHub Pages on push to `main` when
 `loops/docs/diagrams.md`, `docs/**`, `skills/workflow-docs/**`, or the workflow file itself
-changes. No build step runs in CI — the committed HTML is the published artifact. `workflow_dispatch`
+changes. No build step runs in CI the committed HTML is the published artifact. `workflow_dispatch`
 is available for manual redeploy.

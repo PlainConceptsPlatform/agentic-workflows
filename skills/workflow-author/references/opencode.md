@@ -341,18 +341,18 @@ The agent workers target `agents-arc`, an ephemeral VM Scale Set hard-capped at 
 (`runners/README.md`). Because that cap is a budget rather than a queue to grow into, nothing that
 does not invoke the model belongs there: CI, infra and release work go to `RunnerLandingZone`,
 which autoscales, and anything that only sleeps or calls an API goes to `ubuntu-latest`. The label
-`[self-hosted, linux, agents]` is dead — it was retired in `0fc7b08` and now matches no runner, so
+`[self-hosted, linux, agents]` is dead it was retired in `0fc7b08` and now matches no runner, so
 a job still carrying it waits forever.
 
 A fleet VM is not a stock Ubuntu that installs a toolchain at boot. It boots from a pre-baked
-Azure Compute Gallery image — built by Packer (`runners/build-image.pkr.hcl`, scheduled or
+Azure Compute Gallery image built by Packer (`runners/build-image.pkr.hcl`, scheduled or
 dispatched through `.github/workflows/build-runner-image.yml`) with docker-ce, gh, az, trivy, the
 pinned actions runner binary, ripgrep, RTK, agentmemory, codegraph, openspec, the .NET SDK and
-pnpm already in it. cloud-init shrinks to what cannot be baked — swap, the VM token, starting the
-service — and a cold VM takes a job in ~80s measured instead of ~2.5 min. Every publish runs a
+pnpm already in it. cloud-init shrinks to what cannot be baked swap, the VM token, starting the
+service and a cold VM takes a job in ~80s measured instead of ~2.5 min. Every publish runs a
 boot test before the version reaches the gallery. Flipping the live fleet sets the image reference
-and the customData together in one `az vmss update` — never a deployment against the live VMSS,
-which has drifted from `main.bicep` — and rollback restores both; `upgradePolicy: Manual` means
+and the customData together in one `az vmss update` never a deployment against the live VMSS,
+which has drifted from `main.bicep` and rollback restores both; `upgradePolicy: Manual` means
 running instances keep the old image and new instances converge within one burst.
 
 Never on a public repository. A fork pull request would execute arbitrary code on a machine holding
@@ -371,13 +371,13 @@ safe-outputs:
 
 A persistent, pre-provisioned machine breaks assumptions a hosted runner lets you make:
 
-- A step that installs something will find it already there — baked, not left over. `gh extension
+- A step that installs something will find it already there baked, not left over. `gh extension
   install github/gh-aw` exits non-zero with "there is already an installed extension". Guard the
   install and assert the result (`gh aw version`), or fall back to `upgrade`.
 - The .NET SDK is baked into the runner tool cache at `/opt/actions-runner/_work/_tool/dotnet`.
   Steps run as `bash -e` scripts, not login shells, so the image's `.bashrc` exports never reach a
   job: use `actions/setup-dotnet` with `DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet`,
-  which resolves to the cache and skips the download — the shared CI setup step does exactly this.
+  which resolves to the cache and skips the download the shared CI setup step does exactly this.
 - The workspace persists between runs. A `.npmrc` written with a token stays. A build output
   directory from a previous run is still there, so a `[ -d dist ]` check can bundle stale artifacts.
   Clean what you create, and write transient state to `$RUNNER_TEMP`.

@@ -6,9 +6,9 @@ publishes. Publishing is triggered by a GitHub Release: the
 `release: published` event, replays the same gates CI runs (typecheck, build, test, pack), and
 then publishes to npm.
 
-- **Stable release** — a release tagged `v<version>` targeting `main` publishes with the
+- **Stable release** a release tagged `v<version>` targeting `main` publishes with the
   `latest` dist-tag.
-- **Alpha release** — a prerelease tagged `v<version>-alpha.<n>` targeting the `alpha` branch
+- **Alpha release** a prerelease tagged `v<version>-alpha.<n>` targeting the `alpha` branch
   publishes with the `alpha` dist-tag.
 
 Pull requests can never publish: only a published GitHub Release starts the workflow, and the
@@ -20,7 +20,7 @@ The workflow authenticates with **npm Trusted Publishing** (GitHub OIDC): GitHub
 short-lived OIDC token, the npm CLI exchanges it for registry credentials, and no npm token
 is stored anywhere. GitHub must therefore be registered as a Trusted Publisher on each package.
 
-For `@plainconceptsplatform/workflows` — the only package this repository publishes:
+For `@plainconceptsplatform/workflows` the only package this repository publishes:
 
 1. On npmjs.com, select the package **@plainconceptsplatform/workflows**.
 2. Open **Settings**.
@@ -28,12 +28,12 @@ For `@plainconceptsplatform/workflows` — the only package this repository publ
 4. Choose **GitHub Actions**.
 5. Set the organization to `PlainConceptsPlatform`.
 6. Set the repository to `agentic-workflows`.
-7. Set the workflow filename to `npm-publish.yml` — exactly, including case.
+7. Set the workflow filename to `npm-publish.yml` exactly, including case.
 8. Set the GitHub environment to `npm-publish`.
 9. Enable **Allow npm publish**.
 
 Repeat for every public package you intend to publish (this repository has just the one).
-A Trusted Publisher connection **cannot be edited after creation** — if any value is wrong,
+A Trusted Publisher connection **cannot be edited after creation** if any value is wrong,
 delete the connection and recreate it with the correct values.
 
 The workflow filename (`.github/workflows/npm-publish.yml`) and the environment name
@@ -44,7 +44,7 @@ authentication and disallow tokens"**.
 
 ## Starting a stable release
 
-Preferred — the release loop does the bumping, tagging, and release creation:
+Preferred the release loop does the bumping, tagging, and release creation:
 
 ```bash
 gh workflow run work-router.yml --repo PlainConceptsPlatform/agentic-workflows -f operation=release -f version-bump=auto
@@ -57,7 +57,7 @@ By hand:
 
 1. Bump `version` in both `package.json` and `cli/package.json` (they must agree).
 2. Merge to `main`.
-3. Create a release tagged `v<version>` targeting `main` — draft then publish, or
+3. Create a release tagged `v<version>` targeting `main` draft then publish, or
    `gh release create "v<version>" --target main --title "v<version>" --notes "..."`.
 
 The workflow checks out the tag, fails if the tag and `cli/package.json` disagree, runs the
@@ -81,7 +81,7 @@ gh release create "v<base>-alpha.<n>" --target alpha --prerelease \
 ```
 
 - `<base>` is the version currently in `cli/package.json` (for example `0.28.11`).
-- `<n>` is the next unused alpha number — the prerelease version is derived from the tag, and
+- `<n>` is the next unused alpha number the prerelease version is derived from the tag, and
   the workflow refuses to publish a prerelease version that already exists on npm.
 
 The workflow checks that the release targets `alpha` (any other branch fails), rewrites the CLI
@@ -91,7 +91,7 @@ prereleases are never published to `latest`.
 
 ### Publishing an alpha from the Actions tab
 
-For a manual alpha from any branch — no release, no tag, no changeset bookkeeping:
+For a manual alpha from any branch no release, no tag, no changeset bookkeeping:
 
 1. Open **Actions → Npm Publish → Run workflow**.
 2. Pick the branch to publish (defaults to `alpha`). The workflow checks out that branch's code.
@@ -101,7 +101,7 @@ The workflow reads the branch's own `cli/package.json` version as the base, pick
 unused `<n>` for that base from npm, stamps `<base>-alpha.<n>` into the manifest for the run
 (nothing is committed, no tag or GitHub Release is created), runs the same pack gate, and
 publishes with the `alpha` dist-tag. There is no changeset or version-bump requirement to
-satisfy — the number is chosen for you and never collides with an already-published version.
+satisfy the number is chosen for you and never collides with an already-published version.
 
 Two caveats:
 
@@ -124,8 +124,8 @@ npm view @plainconceptsplatform/workflows@<version> version  # a specific versio
 The alpha publish step performs the same dist-tag check in CI and fails the run if
 `dist-tags.alpha` does not point at the version it just published.
 
-If the publish step fails with an authentication error — `ENEEDAUTH`, `401`, or `404 Not
-Found` on `PUT https://registry.npmjs.org/...` — the OIDC exchange did not succeed. npm
+If the publish step fails with an authentication error `ENEEDAUTH`, `401`, or `404 Not
+Found` on `PUT https://registry.npmjs.org/...` the OIDC exchange did not succeed. npm
 hides scopes from unauthenticated clients, so an E404 on publish is usually a masked auth
 failure. Check, in order:
 
@@ -136,5 +136,5 @@ failure. Check, in order:
 3. The run is a normal stable, prerelease, or manual run of this workflow (pull requests can
    never authenticate).
 
-If the Trusted Publisher itself is misconfigured, remember it cannot be edited — delete and
+If the Trusted Publisher itself is misconfigured, remember it cannot be edited delete and
 recreate it with the values in the one-time setup above, then re-run the workflow.

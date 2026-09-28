@@ -177,6 +177,6 @@ lives on as the app's `GH_PAT` (same underlying token).
 - `WEBHOOK_SECRET` / `VM_TOKEN`: random hex; on rotation update the app settings
   plus, respectively, the org webhook config and the VMSS custom data. `VM_TOKEN` now has
   three copies: scaler app setting, VMSS custom data, and this repo's `VM_TOKEN` secret
-  (used by the image-build flip step) — rotate all three together.
+  (used by the image-build flip step) rotate all three together.
 - `Platform Agents Pro` client secret transited chat during setup: still worth
   rotating in the app registration; nothing in the runner platform uses it anymore.

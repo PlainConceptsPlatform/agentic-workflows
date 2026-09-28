@@ -6,7 +6,7 @@ env:
   REPO_RULES: "Apply only actionable outstanding reviewer feedback to the selected bot pull request. Make minimal changes that address each comment. Preserve architecture and do not weaken tests. Run full verification after changes."
   WORKING_LABEL: bot-working
   REVIEW_LABEL: review
-  # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
+  # Marks a park the machine caused a crash, a timeout, an empty output as opposed to one it
   # decided on. The janitor retries these after a while and never touches a decision park, because
   # re-running a decision produces the same decision. Created idempotently where it is applied.
   STALLED_LABEL: stalled
@@ -286,7 +286,7 @@ jobs:
       # Only the reservation comes off. pr-pending says a pull request for this issue is open and
       # waiting, which is still true on both outcomes that reach here: already-satisfied and
       # needs-human both leave the pull request open. Stripping it made the board show issues
-      # with open pull requests as having none — the exact bug the merge gate's own comment warns
+      # with open pull requests as having none the exact bug the merge gate's own comment warns
       # about, in the one file the route matrix was not checking.
       - name: Release review outcome
         if: needs.validate_output.outputs.outcome != 'implemented'

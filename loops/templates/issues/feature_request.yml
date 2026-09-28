@@ -5,21 +5,21 @@ body:
   - type: markdown
     attributes:
       value: |
-        This template is for small, well-scoped improvements — a focused
+        This template is for small, well-scoped improvements a focused
         enhancement, a missing convenience, a quality-of-life fix.
 
         For large features, architecture changes, or cross-cutting work,
         open a planning issue or an ADR instead.
 
-        Do **not** include real secrets or production data — use placeholders.
+        Do **not** include real secrets or production data use placeholders.
   - type: dropdown
     id: scope
     attributes:
       label: Scope
       description: How big is this change? If it doesn't fit Small or Medium, use a planning issue instead.
       options:
-        - Small — a single file or component, no refactoring
-        - Medium — touches a few files or a feature area, may need minor refactoring
+        - Small a single file or component, no refactoring
+        - Medium touches a few files or a feature area, may need minor refactoring
     validations:
       required: true
   - type: textarea

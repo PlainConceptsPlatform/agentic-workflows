@@ -91,7 +91,7 @@ model-related settings, and verification commands.
 The CLI generates stack-aware defaults for `VERIFY_COMMANDS` and base `REPO_RULES` by detecting the
 repository's technology stack at install time. It inspects for `.slnx` ( .NET solutions) and
 `pnpm-lock.yaml`, then injects appropriate verify commands and architecture rules into each worker's
-`env:` block. `shared/platform-defaults.md` no longer carries `VERIFY_COMMANDS` — that value is now
+`env:` block. `shared/platform-defaults.md` no longer carries `VERIFY_COMMANDS` that value is now
 generated per-worker during installation and can be overridden in each worker. This keeps the shared
 file to network allowlists and safe-output defaults only.
 

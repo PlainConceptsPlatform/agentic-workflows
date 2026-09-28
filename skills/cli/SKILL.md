@@ -182,6 +182,6 @@ Bump `version` in both `package.json` and `cli/package.json` before publishing: 
 consumers' headers record, and a release that reuses a version gives the next update the wrong
 baseline. The published package includes `dist/` and `loops/` only. The `prepack` script must run
 before publishing so `cli/loops/` is fresh. Publishing a GitHub Release triggers
-the `npm-publish.yml` workflow, which runs these gates before publishing — see
+the `npm-publish.yml` workflow, which runs these gates before publishing see
 `docs/release.md` for the stable and alpha release process, including the manual
 "Run workflow" alpha path from the Actions tab.

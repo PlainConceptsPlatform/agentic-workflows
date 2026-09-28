@@ -304,7 +304,7 @@ max-ai-credits: 5000
    directory with a journey of agent-browser waypoints (open/find/wait/capture/expect). Each
    waypoint names a URL, a selector to wait for, and what to observe.
 
-   If the plan says `not-applicable` (no UI surface is reachable for this change — a backend-
+   If the plan says `not-applicable` (no UI surface is reachable for this change a backend-
    only change to an API or a migration, for example), that is a valid, expected outcome. Write
    a summary comment saying the change has no UI surface and stop. Do not attempt to start a
    browser.

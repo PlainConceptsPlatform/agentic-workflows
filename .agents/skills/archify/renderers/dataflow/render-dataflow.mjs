@@ -122,24 +122,24 @@ function validateDataflow() {
   const stageCount = asArray(dataflow.stages).length;
   for (const node of nodes.values()) {
     if (typeof node.stage !== 'number' || node.stage < 0 || node.stage >= stageCount) {
-      problems.push(`Node "${node.id}" uses invalid stage ${node.stage} — valid stages are 0..${stageCount - 1}.`);
+      problems.push(`Node "${node.id}" uses invalid stage ${node.stage} valid stages are 0..${stageCount - 1}.`);
     }
     if (typeof node.row !== 'number' || node.row < 0 || node.row >= layout.rowYs.length) {
-      problems.push(`Node "${node.id}" uses invalid row ${node.row} — valid rows are 0..${layout.rowYs.length - 1}.`);
+      problems.push(`Node "${node.id}" uses invalid row ${node.row} valid rows are 0..${layout.rowYs.length - 1}.`);
     }
     if (!isFinitePoint(node.x, node.y, node.cx, node.cy)) {
-      problems.push(`Node "${node.id}" produced non-finite coordinates — check stage, row, width, height, and yOffset are numbers.`);
+      problems.push(`Node "${node.id}" produced non-finite coordinates check stage, row, width, height, and yOffset are numbers.`);
       continue;
     }
     if (node.x < 24 || node.x + node.width > viewBox[0] - 24) {
-      problems.push(`Node "${node.id}" exceeds the horizontal bounds of the viewBox — reduce node.width or increase meta.viewBox[0].`);
+      problems.push(`Node "${node.id}" exceeds the horizontal bounds of the viewBox reduce node.width or increase meta.viewBox[0].`);
     }
     if (node.y < layout.stageY + layout.stageH + 22 || node.y + node.height > viewBox[1] - layout.stageBottomPad) {
-      problems.push(`Node "${node.id}" exceeds the readable diagram area — keep y between ${layout.stageY + layout.stageH + 22} and ${viewBox[1] - layout.stageBottomPad} (adjust row/yOffset or increase meta.viewBox[1]).`);
+      problems.push(`Node "${node.id}" exceeds the readable diagram area keep y between ${layout.stageY + layout.stageH + 22} and ${viewBox[1] - layout.stageBottomPad} (adjust row/yOffset or increase meta.viewBox[1]).`);
     }
     const estLabelW = textUnits(node.label) * 6.2;
     if (estLabelW > node.width + 6) {
-      problems.push(`Label "${node.label}" (~${Math.round(estLabelW)}px) is wider than node "${node.id}" (${node.width}px) — shorten the label or increase node.width.`);
+      problems.push(`Label "${node.label}" (~${Math.round(estLabelW)}px) is wider than node "${node.id}" (${node.width}px) shorten the label or increase node.width.`);
     }
     const brandRailProblem = brandTopRailProblem(node, node.width, 8);
     if (brandRailProblem) problems.push(brandRailProblem);
@@ -153,7 +153,7 @@ function validateDataflow() {
       if (!value) continue;
       const minimumW = minimumNodeTextWidth(value, minimum);
       if (minimumW > availableTextW) {
-        problems.push(`${field} "${value}" needs ~${Math.ceil(minimumW)}px at the ${minimum}px legible minimum, but node "${node.id}" provides ${availableTextW}px — shorten the ${field.toLowerCase()} or increase node.width.`);
+        problems.push(`${field} "${value}" needs ~${Math.ceil(minimumW)}px at the ${minimum}px legible minimum, but node "${node.id}" provides ${availableTextW}px shorten the ${field.toLowerCase()} or increase node.width.`);
       }
     }
   }
@@ -164,7 +164,7 @@ function validateDataflow() {
       const a = nodes.get(nodeList[i].id);
       const b = nodes.get(nodeList[j].id);
       if (rectsOverlap(a, b, 10)) {
-        problems.push(`Nodes "${a.id}" and "${b.id}" are less than 10px apart — move one to another stage/row or adjust yOffset.`);
+        problems.push(`Nodes "${a.id}" and "${b.id}" are less than 10px apart move one to another stage/row or adjust yOffset.`);
       }
     }
   }
@@ -177,7 +177,7 @@ function validateDataflow() {
       const routed = pathFor(flow);
       const [start, end] = [routed.points[0], routed.points[routed.points.length - 1]];
       const distance = Math.hypot(end[0] - start[0], end[1] - start[1]);
-      if (distance < 34) problems.push(`Flow "${flow.label}" is too short (${Math.round(distance)}px; minimum 34px) — route it through a channel or spread its nodes.`);
+      if (distance < 34) problems.push(`Flow "${flow.label}" is too short (${Math.round(distance)}px; minimum 34px) route it through a channel or spread its nodes.`);
       if (Array.isArray(flow.via)) {
         for (let segmentIndex = 0; segmentIndex < routed.points.length - 1; segmentIndex += 1) {
           const segmentStart = routed.points[segmentIndex];
@@ -186,7 +186,7 @@ function validateDataflow() {
             && Math.abs(segmentStart[1] - segmentEnd[1]) > 0.01;
           if (!isDiagonal) continue;
           const viaIndex = Math.min(segmentIndex, flow.via.length - 1);
-          problems.push(`Flow "${flow.label}" has a diagonal segment from (${segmentStart.join(', ')}) to (${segmentEnd.join(', ')}) — align via[${viaIndex}] with its adjacent point by sharing the same x or y coordinate.`);
+          problems.push(`Flow "${flow.label}" has a diagonal segment from (${segmentStart.join(', ')}) to (${segmentEnd.join(', ')}) align via[${viaIndex}] with its adjacent point by sharing the same x or y coordinate.`);
         }
       }
     }
@@ -259,14 +259,14 @@ function validateDataflow() {
   for (const rect of labelRects) {
     for (const node of nodes.values()) {
       if (rectsOverlap(rect, node, -2)) {
-        problems.push(`Label "${rect.label}" overlaps node "${node.id}" — adjust labelDx/labelDy/labelSegment or set labelAt.\n${suggestLabelObstacleFix(rect, rect.lx, rect.ly, node, 'node')}`);
+        problems.push(`Label "${rect.label}" overlaps node "${node.id}" adjust labelDx/labelDy/labelSegment or set labelAt.\n${suggestLabelObstacleFix(rect, rect.lx, rect.ly, node, 'node')}`);
       }
     }
   }
   for (let i = 0; i < labelRects.length; i += 1) {
     for (let j = i + 1; j < labelRects.length; j += 1) {
       if (rectsOverlap(labelRects[i], labelRects[j], -2)) {
-        problems.push(`Labels "${labelRects[i].label}" and "${labelRects[j].label}" overlap — adjust labelDx/labelDy.\n${suggestLabelPairFix(labelRects[i], labelRects[j])}`);
+        problems.push(`Labels "${labelRects[i].label}" and "${labelRects[j].label}" overlap adjust labelDx/labelDy.\n${suggestLabelPairFix(labelRects[i], labelRects[j])}`);
       }
     }
   }
@@ -283,7 +283,7 @@ function validateDataflow() {
 
   const lastStageX = stageX(asArray(dataflow.stages).length - 1);
   if (lastStageX + layout.stageW / 2 > viewBox[0] - 24) {
-    problems.push(`Stages exceed viewBox width — set meta.viewBox[0] to at least ${Math.ceil(lastStageX + layout.stageW / 2 + 24)}.`);
+    problems.push(`Stages exceed viewBox width set meta.viewBox[0] to at least ${Math.ceil(lastStageX + layout.stageW / 2 + 24)}.`);
   }
 
   if (problems.length) {
@@ -343,7 +343,7 @@ function pathFor(flow) {
   const start = ports?.from || anchor(from, fromSide);
   const end = ports?.to || anchor(to, toSide);
   // Drop consecutive duplicate points so a purely vertical (or horizontal)
-  // auto-route never emits a zero-length final segment — SVG derives
+  // auto-route never emits a zero-length final segment SVG derives
   // marker-end orientation from the last segment, and a degenerate segment
   // leaves the arrowhead angle undefined (see #169).
   const rawPoints = [start, ...routeVia(flow, from, to, start, end), end];

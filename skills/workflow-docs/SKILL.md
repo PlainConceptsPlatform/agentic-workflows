@@ -27,7 +27,7 @@ disagree, Mermaid wins.
 - **Directly**: when only the Pages site needs a refresh (no worker change), load this skill and
   follow Path B only.
 
-## Path A — Mermaid refresh
+## Path A Mermaid refresh
 
 Every worker has a corresponding section in `docs/diagrams.md` (installed from
 `loops/docs/diagrams.md`). Node roles, class definitions, the Mermaid convention, and the
@@ -45,11 +45,11 @@ When updating a worker's diagram:
    agent-<name>.md` section per worker, `flowchart TD`, all six `classDef` lines present, every
    styled node used in the body.
 
-## Path B — archify HTML refresh (Pages site)
+## Path B archify HTML refresh (Pages site)
 
 For each `## agent-<name>.md` section in `loops/docs/diagrams.md` (plus the router and the
 route-chain), re-author the diagram as fresh archify JSON IR using the `archify` skill's bounded
-authoring path. Do **not** mechanically translate Mermaid — read it for topology and meaning,
+authoring path. Do **not** mechanically translate Mermaid read it for topology and meaning,
 then author fresh IR with new stable IDs, domain wording, and layout.
 
 ### Choosing the archify diagram type
@@ -124,7 +124,7 @@ The `<worker-stem>` is the section header minus `.md` (if present), lowercased.
   | Idle terminal (`idle`) | `backend` | `default` |
 
   The archify author chooses precise component types per worker. These mappings are a starting
-  point, not a mechanical rule — adjust if the worker's domain suggests a better type (e.g.
+  point, not a mechanical rule adjust if the worker's domain suggests a better type (e.g.
   `database` for a storage step, `messagebus` for a queue, `cloud` for an infrastructure node).
 
 - Leave archify's default export menu intact (PNG/JPEG/WebP/SVG/WebM are reader capabilities, not

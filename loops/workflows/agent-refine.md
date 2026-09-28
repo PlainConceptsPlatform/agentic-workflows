@@ -19,7 +19,7 @@ env:
   WORKING_LABEL: bot-working
   IMPLEMENT_LABEL: implement
   REVIEW_LABEL: review
-  # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
+  # Marks a park the machine caused a crash, a timeout, an empty output as opposed to one it
   # decided on. The janitor retries these after a while and never touches a decision park, because
   # re-running a decision produces the same decision. Created idempotently where it is applied.
   STALLED_LABEL: stalled
@@ -832,10 +832,10 @@ timeout-minutes: 90
     could not answer. Leave the partial work visible: first call `update_issue` with a
     temporal draft, then call `add_comment` once with the questions.
 
-    The temporal draft is the replacement body your path would have written — the story
+    The temporal draft is the replacement body your path would have written the story
     body from the standard path, the marker, summary and checklist from the trivial path —
     holding everything you already established, with every
-    part the questions leave open marked `_pending — see questions below_`. Its very
+    part the questions leave open marked `_pending see questions below_`. Its very
     first line is `${{ env.DRAFT_MARKER }}`; the next run replaces the draft wholesale
     with the final body.
 

@@ -369,7 +369,7 @@ app.MapPost("/vm/done", async (HttpRequest r) =>
 
 // reconcile sweep: prune forgotten ledger entries, clean failed instances, kill zombie VMs,
 // and re-evaluate. A zombie is a VM that is "Succeeded" in Azure but has no runner registered
-// on GitHub — job.sh crashed or the runner process died, and /vm/done was never called, so the
+// on GitHub job.sh crashed or the runner process died, and /vm/done was never called, so the
 // scaler counts it as active capacity while nothing can serve jobs.
 var lastZombieCheck = DateTimeOffset.UtcNow;
 _ = Task.Run(async () =>
@@ -407,7 +407,7 @@ _ = Task.Run(async () =>
                         foreach (var inst in active)
                             await DeleteInstance(inst.Id);
                         fruitlessCycles = 0;
-                        // Clear stale queued entries — the jobs will need to be re-queued by GitHub.
+                        // Clear stale queued entries the jobs will need to be re-queued by GitHub.
                         foreach (var kv in ledger.Where(kv => kv.Value.Status == "queued").ToList())
                             ledger.TryRemove(kv.Key, out _);
                         SaveLedger();

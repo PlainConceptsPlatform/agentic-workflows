@@ -530,7 +530,7 @@ if [ "$BOUNDARY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); f
 
 # `review` must not be a one-way door. It used to be: authorize-bot-work refused to fire on an
 # issue carrying it, and the classifier refuses to route while it is set, so a person adding
-# `refine` to a parked issue got nothing at all — no run, no comment, no error. Triage's own
+# `refine` to a parked issue got nothing at all no run, no comment, no error. Triage's own
 # needs-maintainer verdict tells the maintainer to do exactly that, so the bot was giving an
 # instruction the machine ignored. authorize-bot-work now clears `review` before handing over,
 # which is what makes the human's decision stick.
@@ -843,7 +843,7 @@ if worker_installed merge-gate; then
     { PENDING_OK=0; echo "FAIL: the only pr-pending removal must sit under the auto-merge disposition" >&2; }
 
   # The invariant only ever looked at the merge gate, so apply-review quietly stripped the label
-  # on its already-satisfied and needs-human paths — both of which leave the pull request open.
+  # on its already-satisfied and needs-human paths both of which leave the pull request open.
   # The one file the check ignored was the one breaking it. Look at every worker: implement adds
   # the label, merge-gate removes it on merge, nobody else may touch it.
   for worker in "${WORKFLOWS_DIR}"/agent-*.md; do

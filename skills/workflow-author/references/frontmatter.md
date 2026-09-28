@@ -274,7 +274,7 @@ name the trigger but never the route the classifier picks. Allowed contexts are 
 
 ### Timeouts
 
-`timeout-minutes:` compiles to a `timeout-minutes` on the **`Execute OpenCode CLI` step** — the wall
+`timeout-minutes:` compiles to a `timeout-minutes` on the **`Execute OpenCode CLI` step** the wall
 clock the agent has to read, think and call its safe-output tools. gh-aw separately puts 45 minutes on
 the deterministic jobs it generates around the agent; that is not read from frontmatter and there is
 nothing to tune. A lock file showing 45 beside a number you did not write is that.
@@ -294,7 +294,7 @@ produced something the validator rejected. Unrelated problems, identical comment
 The binding constraint is usually the model's pace rather than the size of the work. Refine sat at 40
 minutes and went to 60 on the evidence of a run that died having done the job: 36 model turns, most
 returning under 110 output tokens and still taking over a minute each, with turn 32 producing 6,479
-tokens — the finished story — and the clock running out in the short turns that would have submitted
+tokens the finished story and the clock running out in the short turns that would have submitted
 it. Forty minutes bought about thirty-six turns whatever it was asked to refine.
 
 The token table at the end of every agent job log is where to look: turns, output tokens, duration

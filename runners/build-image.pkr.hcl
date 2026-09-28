@@ -109,7 +109,7 @@ source "azure-arm" "runner-image" {
   image_sku       = "server"
   image_version   = "latest"
 
-  # os_disk_size_gb = 30 — must stay at or below the VMSS diskSizeGB of 64
+  # os_disk_size_gb = 30 must stay at or below the VMSS diskSizeGB of 64
   # smaller = less copied to local NVMe at VM create.
   os_type           = "Linux"
   os_disk_size_gb   = 30

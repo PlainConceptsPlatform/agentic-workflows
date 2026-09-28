@@ -67,7 +67,7 @@ runs:
           const days = (ms) => Math.floor(ms / 86400000);
 
           // 0. Cancel workflow runs stuck in "pending" for over an hour. The ARC fleet is two
-          // VMs, and when it saturates, jobs sit pending indefinitely — GitHub has no queue-time
+          // VMs, and when it saturates, jobs sit pending indefinitely GitHub has no queue-time
           // timeout. A stuck pending implement or refine run holds a fleet slot that the retry
           // logic below can never free because the run never reaches a terminal state. This
           // cancel runs on a GitHub-hosted runner, so it works even when the fleet is full.
@@ -103,7 +103,7 @@ runs:
             if (issue.pull_request) continue;
             const labels = names(issue);
             if (!labels.includes('bot-working')) continue;
-            // Don't touch issues that already have stalled or review — those are handled below.
+            // Don't touch issues that already have stalled or review those are handled below.
             if (labels.includes('stalled') || labels.includes('review')) continue;
             const work = WORK_LABELS.find((l) => labels.includes(l));
             if (!work) continue;

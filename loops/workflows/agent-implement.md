@@ -11,7 +11,7 @@ env:
   IMPLEMENT_LABEL: implement
   WORKING_LABEL: bot-working
   REVIEW_LABEL: review
-  # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
+  # Marks a park the machine caused a crash, a timeout, an empty output as opposed to one it
   # decided on. The janitor retries these after a while and never touches a decision park, because
   # re-running a decision produces the same decision. Created idempotently where it is applied.
   STALLED_LABEL: stalled
@@ -292,7 +292,7 @@ jobs:
       # finish successfully without producing one: safeoutputs/noop, or an output the validator
       # would have rejected if this worker had one. The old behaviour was to remove bot-working
       # and stop, leaving the issue carrying `implement` with no `review`, no `pr-pending`, no
-      # comment, and no bot-working — which also hid it from the hourly stale-reservation sweep.
+      # comment, and no bot-working which also hid it from the hourly stale-reservation sweep.
       # Comments do not re-trigger implement, so nothing on any path would ever look at it again.
       # It was the only failure in the fleet that signalled nobody at all.
       #
@@ -694,7 +694,7 @@ timeout-minutes: 180
    a. Create a todo entry for each checklist item (`- [ ]`) found in the issue body.
 
    b. Implement each change one at a time, marking each todo complete before moving to the
-      next. Keep changes minimal — touch only what the checklist describes. Never read outside
+      next. Keep changes minimal touch only what the checklist describes. Never read outside
       this repository root. Adhere to ${{ env.REPO_RULES }},
       ${{ env.ARCHITECTURE_RULES }} and ${{ env.TESTING_RULES }}.
 
@@ -728,7 +728,7 @@ timeout-minutes: 180
 
    **DECISIVE IMPLEMENTATION**, on both paths. When a design choice is ambiguous, pick the most
    standard interpretation and implement it immediately. Do not deliberate between options for
-   more than one turn. Do not ask clarifying questions — the issue author expects you to use good
+   more than one turn. Do not ask clarifying questions the issue author expects you to use good
    judgment. If two approaches are equally valid, pick one and proceed. You can always iterate
    based on pull request feedback.
 

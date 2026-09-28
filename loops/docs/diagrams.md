@@ -449,7 +449,7 @@ a file on disk, so a confused model cannot publish a release.
 Not a worker: a deterministic job in the router, on its own six-hourly cron, with no model. It is
 the answer to a specific measured problem. Across the four consumers, 58 of 237 issues closed since
 1 August were closed by the bot; autonomy ran between 6% and 50%. The gap was not bad decisions, it
-was silence — work that stopped and told nobody, and state that nothing ever cleaned up.
+was silence work that stopped and told nobody, and state that nothing ever cleaned up.
 
 The one rule that shapes it: **retry a failure, report a decision.** A crash, a timeout or an empty
 output is a machine failure, and the worker marks it `stalled`; those are worth running again. A
@@ -490,7 +490,7 @@ Three things make it safe to leave running unattended. It uses the App token, be
 no workflow run from an event raised with `GITHUB_TOKEN`, so with the default token every retry
 would be a green no-op. Every write goes through one `act()` wrapper, which is the only place
 `dry-run` is read, so there is no second path that forgets to check it. And it closes exactly two
-kinds of issue — a split parent whose children are all done, and its own digest — which the route
+kinds of issue a split parent whose children are all done, and its own digest which the route
 matrix asserts by counting.
 
 ---
@@ -571,7 +571,7 @@ the repository it runs in. Every consumer is private, so that is the whole desig
 What crosses the boundary is a fixed, enumerable set of facts about workflows **this package ships**:
 their file names, their job and step names, a conclusion, a runner label, a count, and the id of a
 matched entry from a catalogue of sixteen known failure shapes. What never crosses it is free text
-of any kind — no log line, no branch name, no issue title, no path, no URL, no number that could be
+of any kind no log line, no branch name, no issue title, no path, no URL, no number that could be
 looked up. Hence no model: a model asked to summarise a failure paraphrases whatever the log held.
 
 ```mermaid
@@ -618,7 +618,7 @@ earlier versions of them passed against a deliberately broken guard and were rew
 Runs after merge-gate decides to auto-merge, before the actual merge, and produces **evidence, not
 code changes**: it writes a verification plan, drives a real browser through the app, and attaches
 screenshots to the linked issue. It is called directly by merge-gate's `conclude` job, so it is not
-a router route. Failures never block the merge — a browser that will not start or an app that never
+a router route. Failures never block the merge a browser that will not start or an app that never
 comes up emits a warning comment and the merge proceeds.
 
 ```mermaid

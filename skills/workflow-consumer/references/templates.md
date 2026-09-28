@@ -84,7 +84,7 @@ than failing. Change the tag pattern if the repository uses a different version 
 
 A GitHub issue template for reporting defects. Installs to `.github/ISSUE_TEMPLATE/bug_report.yml`.
 Includes structured fields: what happened, steps to reproduce, expected behavior, where it occurs,
-acceptance criteria, open questions, environment, and logs. Bugs can be any size — no scope gate.
+acceptance criteria, open questions, environment, and logs. Bugs can be any size no scope gate.
 
 ### `feature-request`
 
@@ -97,7 +97,7 @@ motivation, proposed solution, alternatives, acceptance criteria, and open quest
 
 A standalone OpenCode CI configuration for consumer repositories running agentic workflows in
 GitHub Actions. It is always installed to the repository root as `opencode.ci.json` during catalog
-install — it is mandatory, not optional. The `--template opencode.ci.json` command is an advanced
+install it is mandatory, not optional. The `--template opencode.ci.json` command is an advanced
 option for installing it in isolation. Includes:
 
 - OpenAI-compatible `forge` provider with endpoint and key supplied by runtime environment variables
