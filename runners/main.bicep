@@ -105,7 +105,7 @@ resource vmss 'Microsoft.Compute/virtualMachineScaleSets@2024-03-01' = {
           sku: 'server'
           version: 'latest'
         } : {
-          id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner-gallery-01/images/agents-arc-runner/versions/${galleryImageVersion}'
+          id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner_gallery_01/images/agents-arc-runner/versions/${galleryImageVersion}'
         }
         osDisk: {
           createOption: 'FromImage'

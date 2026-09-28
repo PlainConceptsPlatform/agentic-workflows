@@ -149,7 +149,7 @@ assumed stock Ubuntu, so they are a pair:
 ```bash
 az vmss update -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --set overprovision=false -o none
 sed "s/__VM_TOKEN__/$VM_TOKEN/" runners/cloud-init.yaml > /tmp/live-cloud-init.yaml
-IMG="/subscriptions/$AZ_SUBSCRIPTION_ID/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner-gallery-01/images/agents-arc-runner/versions/1.0.0"
+IMG="/subscriptions/$AZ_SUBSCRIPTION_ID/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner_gallery_01/images/agents-arc-runner/versions/1.0.0"
 az vmss update -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 \
   --set virtualMachineProfile.storageProfile.imageReference="{\"id\":\"$IMG\"}" \
            virtualMachineProfile.osProfile.customData="$(base64 -w0 /tmp/live-cloud-init.yaml)" \

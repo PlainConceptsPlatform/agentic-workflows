@@ -15,7 +15,7 @@ param imageDefinitionName string = 'agents-arc-runner'
 
 // ---------- Compute Gallery ----------
 resource gallery 'Microsoft.Compute/galleries@2023-11-01' = {
-  name: 'agentrunner-gallery-01'
+  name: 'agentrunner_gallery_01'
   location: location
   properties: {
     description: 'Pre-baked runner images for the agents-arc VMSS fleet'

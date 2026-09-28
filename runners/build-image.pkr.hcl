@@ -61,7 +61,7 @@ variable "resource_group" {
 
 variable "gallery_name" {
   type = string
-  default = "agentrunner-gallery-01"
+  default = "agentrunner_gallery_01"
   description = "Gallery name for the resulting image"
 }
 

@@ -68,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
-          IMG="/subscriptions/${AZ_SUBSCRIPTION_ID}/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner-gallery-01/images/agents-arc-runner/versions/${VERSION}"
+          IMG="/subscriptions/${AZ_SUBSCRIPTION_ID}/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner_gallery_01/images/agents-arc-runner/versions/${VERSION}"
           az login --service-principal -u "${{ secrets.AZ_RUNNER_IMAGE_CLIENT_ID }}" -p "${{ secrets.AZ_RUNNER_IMAGE_CLIENT_SECRET }}" --tenant "${{ secrets.AZ_TENANT_ID }}"
           sed "s/__VM_TOKEN__/boottest-dummy-token/" runners/cloud-init.yaml > /tmp/boottest-cloud-init.yaml
           az vm create -g agentrunner-pro-rg-01 -n "vm-boottest-${{ github.run_number }}" \
@@ -98,7 +98,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
-          IMG="/subscriptions/${AZ_SUBSCRIPTION_ID}/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner-gallery-01/images/agents-arc-runner/versions/${VERSION}"
+          IMG="/subscriptions/${AZ_SUBSCRIPTION_ID}/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner_gallery_01/images/agents-arc-runner/versions/${VERSION}"
           # Overprovision must be off before fast boots ship (FIX-01)
           az vmss update -g agentrunner-pro-rg-01 -n agentrunner-vmss-01 --set overprovision=false -o none
           # Image and customData MUST move together (CUT-02)
