@@ -30,7 +30,7 @@ apt-get update -qq
 apt-get install -y -qq \
   docker-ce docker-ce-cli containerd.io docker-compose-plugin \
   gh azure-cli \
-  git jq curl unzip \
+  git jq curl unzip zip \
   apt-transport-https ca-certificates gnupg \
   nodejs \
   >/dev/null
@@ -159,7 +159,7 @@ echo "=== Asserts (IMG-06) ==="
 
 fail=0
 
-for bin in docker gh az trivy node pnpm opencode agentmemory codegraph openspec; do
+for bin in docker gh az trivy node pnpm opencode agentmemory codegraph openspec zip; do
   command -v "$bin" >/dev/null 2>&1 || {
     echo "ASSERT FAIL: $bin not on PATH"
     fail=1
