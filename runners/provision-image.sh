@@ -149,6 +149,12 @@ echo "pnpm: $(pnpm --version)"
 
 # ==== IMG-06: In-build asserts ====
 
+# az CLI first-run (above, as root) creates /home/runner/.azure root-owned.
+# The runner user (who runs all GitHub Actions jobs) then can't write the
+# MSAL token cache, and azure/login@v3 fails with Permission denied.
+mkdir -p /home/runner/.azure
+chown -R runner:runner /home/runner/.azure
+
 echo "=== Asserts (IMG-06) ==="
 
 fail=0

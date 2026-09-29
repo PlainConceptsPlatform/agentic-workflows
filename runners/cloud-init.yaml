@@ -47,6 +47,7 @@ write_files:
         docker volume prune -f >/dev/null 2>&1
         docker network prune -f >/dev/null 2>&1
         rm -rf /tmp/gh-aw-* /tmp/gh-aw /tmp/opencode-data-* 2>/dev/null
+        rm -rf /home/runner/.azure 2>/dev/null
         # A later job must find a pristine workspace: a half-cleaned checkout from the
         # previous job made actions/checkout die with exit 128. The toolcache survives,
         # because reinstalling dotnet and node per job is the boot cost all over again.
