@@ -28,7 +28,7 @@ name: "Agent: Visual Verify"
 
 # Standalone worker called directly from merge-gate's conclude job. Not a router route.
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.90.0
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 

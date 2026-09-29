@@ -59,7 +59,7 @@ jobs:
   report:
     # Fork of a consumer: the fleet is not theirs and neither is the report.
     if: "!github.event.repository.fork"
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     timeout-minutes: 20
     concurrency:
       group: agentics-error-report

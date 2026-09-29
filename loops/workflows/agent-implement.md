@@ -79,7 +79,7 @@ name: "Agent: Implement Issue"
 # Shared: network policy only. This workflow owns its Safe Outputs and OpenCode configuration.
 # permissions, engine, model and runs-on cannot be shared , see shared/platform-defaults.md.
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.90.0
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
@@ -558,7 +558,7 @@ jobs:
     # which makes agent -> await_landing -> conclude -> agent a cycle and fails compilation.
     needs: [agent, safe_outputs, conclude]
     if: always() && needs.conclude.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     timeout-minutes: 95
     permissions:
       contents: read

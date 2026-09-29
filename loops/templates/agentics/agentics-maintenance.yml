@@ -1,5 +1,5 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/templates/agentics/agentics-maintenance.yml. Update with `workflows update --force`; consumer edits may be overwritten.
-# Derived from the gh-aw v0.83.4 maintenance workflow.
+# Derived from the gh-aw v0.90.0 maintenance workflow.
 # Copy provenance is documented in docs/ownership.md.
 name: Agentic Maintenance
 
@@ -48,12 +48,12 @@ permissions: {}
 jobs:
   close-expired-discussions:
     if: ${{ !(github.event.repository.fork) && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call' || inputs.operation == '') }}
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       discussions: write
     steps:
       - name: Setup Scripts
-        uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
+        uses: github/gh-aw-actions/setup@a65c3ae1e11016c37f426bb3847a6f5e1a7d58df # v0.90.0
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
       - name: Close expired discussions
@@ -66,12 +66,12 @@ jobs:
             await main();
   close-expired-issues:
     if: ${{ !(github.event.repository.fork) && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call' || inputs.operation == '') }}
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       issues: write
     steps:
       - name: Setup Scripts
-        uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
+        uses: github/gh-aw-actions/setup@a65c3ae1e11016c37f426bb3847a6f5e1a7d58df # v0.90.0
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
       - name: Close expired issues
@@ -84,12 +84,12 @@ jobs:
             await main();
   close-expired-pull-requests:
     if: ${{ !(github.event.repository.fork) && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call' || inputs.operation == '') }}
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       pull-requests: write
     steps:
       - name: Setup Scripts
-        uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
+        uses: github/gh-aw-actions/setup@a65c3ae1e11016c37f426bb3847a6f5e1a7d58df # v0.90.0
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
       - name: Close expired pull requests
@@ -102,12 +102,12 @@ jobs:
             await main();
   cleanup-cache-memory:
     if: ${{ !(github.event.repository.fork) && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call' || inputs.operation == '' || inputs.operation == 'clean_cache_memories') }}
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     permissions:
       actions: write
     steps:
       - name: Setup Scripts
-        uses: github/gh-aw-actions/setup@e89c65e17eb281bbd5ff2ff9e9199a03e96654c7 # v0.83.4
+        uses: github/gh-aw-actions/setup@a65c3ae1e11016c37f426bb3847a6f5e1a7d58df # v0.90.0
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
       - name: Cleanup outdated cache-memory entries

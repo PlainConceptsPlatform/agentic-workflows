@@ -66,7 +66,7 @@ description: |
 name: "Agent: Triage Issue"
 
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.90.0
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 

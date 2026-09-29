@@ -87,7 +87,7 @@ jobs:
   collect:
     # Fork of a consumer: not their Azure, not their issues.
     if: "!github.event.repository.fork"
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     timeout-minutes: 20
     # Load bearing, not decoration. The federated credential on the deploy identity trusts the
     # subject `repo:<org>/<repo>:environment:<name>`, so without this the OIDC token is issued

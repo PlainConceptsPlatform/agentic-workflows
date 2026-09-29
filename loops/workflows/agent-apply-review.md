@@ -43,7 +43,7 @@ name: "Agent: Apply Review"
 # Router-only worker. The Work Router owns triggers, classification, and rung 1-2 checks.
 # This workflow receives the classified inputs and runs rung 3+.
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.90.0
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 

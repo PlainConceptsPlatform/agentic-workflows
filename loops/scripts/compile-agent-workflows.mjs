@@ -147,7 +147,7 @@ for (const file of readdirSync(workflowDirectory)) {
     //
     // Install only when the pinned version is missing, and take a lock so two jobs starting at
     // once cannot both write the global prefix.
-    // gh-aw pins opencode-ai 1.2.14 at every release checked, up to v0.87.5. That version is
+    // gh-aw pins opencode-ai 1.2.14 at every release checked, up to v0.90.0. That version is
     // from 2026-02-25. The harness expects 1.18.9 and this is the current release, so a gh-aw
     // upgrade does not move it and the pin is ours to choose.
     // gh-aw defaults NPM_CONFIG_MIN_RELEASE_AGE to 3 days, which blocks any package
@@ -224,7 +224,7 @@ for (const file of readdirSync(workflowDirectory)) {
       /^([ \t]+)- name: Report failed jobs\n([ \t]*)id: report_failed_jobs\n[ \t]*if: always\(\)\n/m,
       '$1- name: Report failed jobs\n$2id: report_failed_jobs\n$2if: false # never: failures surface in the run and the retry belt\n')
 
-    // v0.87.5's arc-dind mode stages the engine CLI to a daemon-visible path but assumes the
+    // v0.90.0's arc-dind mode stages the engine CLI to a daemon-visible path but assumes the
     // Copilot engine: command -v copilot is empty under engine: opencode and cp "" fails the
     // job before the agent starts. OpenCode needs no staging, because npm -g installs it under
     // the tool-cache prefix inside _work, which the dind daemon shares.

@@ -25,7 +25,7 @@ env:
   # Must match the version the locks were compiled with (first line of every .lock.yml) and the
   # `github/gh-aw/...@vX` import pin in every worker. A different compiler regenerates every lock
   # and the freshness diff measures the version, not the change under review.
-  GH_AW_VERSION: v0.87.5
+  GH_AW_VERSION: v0.90.0
   ACTIONLINT_VERSION: 1.7.7
   ACTIONLINT_SHA256: 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
   SHELLCHECK_VERSION: 0.10.0
@@ -45,7 +45,7 @@ concurrency:
 jobs:
   verify-lockfiles:
     name: Verify generated agent lockfiles
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     timeout-minutes: 10
     env:
       # gh-aw resolves the `github/gh-aw/...` imports through the GitHub API on every compile,
@@ -126,7 +126,7 @@ jobs:
 
   lint-workflows:
     name: Lint authored workflows and shell
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     timeout-minutes: 10
     steps:
       - name: Checkout repository
