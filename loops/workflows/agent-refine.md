@@ -824,6 +824,15 @@ timeout-minutes: 90
    size of a very long message, tighten the body; a shorter call that lands beats a longer one
    that is cut off.
 
+   **Pipe JSON via stdin and always pass `.` as the trailing argument.** The safeoutputs bridge
+   reads the JSON payload from stdin only when the final argument is `.`. Quote the issue-number
+   flags on the same line, never in place of the dot. Correct:
+   `printf '%s' "$JSON" | safeoutputs create_issue .`
+   `printf '%s' "$JSON" | safeoutputs update_issue --issue_number 685 .`
+   `printf '%s' "$JSON" | safeoutputs add_comment --item_number 685 .`
+   Wrong (stdin never read, body silently empty, bridge returns success):
+   `printf '%s' "$JSON" | safeoutputs update_issue --issue_number 685`
+
 8. Decide exactly one outcome:
 
     Labels are workflow-owned state. Do not call `add_labels` or `remove_labels`.
