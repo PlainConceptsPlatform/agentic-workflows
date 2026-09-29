@@ -1,7 +1,7 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-triage.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
-  REPO_RULES: "Triage issues opened by outside collaborators. Assess template completeness, security risk, change size, danger level, duplicates, clarity, reproducibility, acceptance criteria, and cross-cutting impact. Do not implement code. Do not modify the issue body."
+  REPO_RULES: "Triage issues opened by outside collaborators. Assess template completeness, security risk, change size, danger level, duplicates, clarity, reproducibility, acceptance criteria, and cross-cutting impact. When the request names specific people, email addresses, or business entities as the thing the code acts on, judge where that data is meant to live: business data that belongs in the database or a settings page is a design decision, not a wording detail, and it must not be left for the implementer to decide by hardcoding it. Do not implement code. Do not modify the issue body."
   # What a product owner may ask for, and what has to become a maintainer-owned technical
   # proposal instead. This is business policy, so it belongs to the repository rather than to
   # the package: it is also the check that closes somebody's issue, which is the last place a
@@ -493,9 +493,13 @@ timeout-minutes: 45
    multiple components, modules, or services? Flag if it is too large for single-issue
    implementation.
 
-   **Check 4 Danger level.** Does the request touch authentication, authorization, IAM,
-   infrastructure, migrations, data model changes, or other high-risk areas? These need
-   maintainer eyes before the pipeline starts.
+    **Check 4 Danger level.** Does the request touch authentication, authorization, IAM,
+    infrastructure, migrations, data model changes, or other high-risk areas? These need
+    maintainer eyes before the pipeline starts. Also flag the data-placement case: the
+    request hardcodes business data in code (a named reviewer's email, a person the code
+    acts on, a fixed address) that belongs in the database or a settings page. That is the
+    difference between modelling a role and hardcoding a person, and it is a design decision
+    the implementer must not be left to make.
 
    **Check 5 Duplicate detection.** Compare the issue title and body against the open
    issues in `${{ env.OPEN_ISSUES_PATH }}`. Flag any that are semantically similar same
@@ -529,7 +533,13 @@ timeout-minutes: 45
 
     **pass.** All checks pass, including Product-owner eligibility. The issue is a clear,
     appropriately scoped product request and ready for refinement. The refine label will
-    be added by the workflow to enter the normal pipeline.
+    be added by the workflow to enter the normal pipeline. A `pass` must not silently
+    resolve an open question whose answer decides where business data lives (named
+    individual vs managed role, address in code vs in the database or settings). When such
+    a question is a pure design call, state in the assessment which way it must go --
+    model the data in the database or a settings page rather than in code -- as an
+    explicit requirement the refine stage must satisfy in the story and its acceptance
+    criteria.
 
    **needs-info.** One or more checks need clarification from the author. State exactly
    what information is missing and what the author should provide. The review label will be
