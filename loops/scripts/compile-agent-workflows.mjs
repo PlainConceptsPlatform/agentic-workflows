@@ -250,11 +250,17 @@ for (const file of readdirSync(workflowDirectory)) {
     // reporter, but gh-aw hardcodes a second one (report_failed_jobs) that files an
     // "[aw] Failed jobs" issue per red run. Same philosophy, same off switch.
     .replaceAll('GH_AW_REPORT_FAILED_JOBS: "true"', 'GH_AW_REPORT_FAILED_JOBS: "false"')
-    // gh-aw sees a custom step calling dotnet and injects its own setup-dotnet, which carries
-    // no DOTNET_INSTALL_DIR and so tries to write /usr/share/dotnet. The runner user has no
-    // sudo, so the job dies with "Permission denied" before the agent starts. The shared
-    // baseline step already redirects to the tool cache; this gives every other one the same
-    // env, including ones a future gh-aw release injects.
+    // gh-aw injects this "Restore .NET dependencies" step whenever a consumer's
+    // frontend (e.g. VERIFY_COMMANDS) references dotnet. An AI agent can create a
+    // .claude/worktrees/agent-XXX/ worktree at restore time — the first .slnx find
+    // matches that scratch dir, and the hardcoded path lands in the lock, breaking
+    // every agent run with MSB1009. Replace with dynamic discovery that excludes
+    // agent scratch directories so a stale worktree never poisons the restore.
+    .replace(
+      /^( +)- name: Restore \.NET dependencies\n\1  run: dotnet restore .*$/m,
+      (_m, indent) =>
+        indent + '- name: Restore .NET dependencies\n' + indent +
+        '  run: dotnet restore "$(find . -maxdepth 2 -name *.slnx -not -path "./.claude/*" -not -path "./.opencode/*" | head -1)"')
     .replace(
       /^( +)- name: Setup \.NET\n\1  uses: actions\/setup-dotnet@[^\n]*\n\1  with:\n((?:\1    [^\n]*\n)+)(?!\1  env:)/gm,
       (_m, indent, withBody) =>
