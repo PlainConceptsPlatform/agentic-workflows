@@ -147,7 +147,7 @@ for (const file of readdirSync(workflowDirectory)) {
     //
     // Install only when the pinned version is missing, and take a lock so two jobs starting at
     // once cannot both write the global prefix.
-    // gh-aw pins opencode-ai 1.2.14 at every release checked, up to v0.87.5. That version is
+    // gh-aw pins opencode-ai 1.2.14 at every release checked, up to v0.90.0. That version is
     // from 2026-02-25. The harness expects 1.18.9 and this is the current release, so a gh-aw
     // upgrade does not move it and the pin is ours to choose.
     // gh-aw defaults NPM_CONFIG_MIN_RELEASE_AGE to 3 days, which blocks any package
@@ -224,7 +224,7 @@ for (const file of readdirSync(workflowDirectory)) {
       /^([ \t]+)- name: Report failed jobs\n([ \t]*)id: report_failed_jobs\n[ \t]*if: always\(\)\n/m,
       '$1- name: Report failed jobs\n$2id: report_failed_jobs\n$2if: false # never: failures surface in the run and the retry belt\n')
 
-    // v0.87.5's arc-dind mode stages the engine CLI to a daemon-visible path but assumes the
+    // v0.90.0's arc-dind mode stages the engine CLI to a daemon-visible path but assumes the
     // Copilot engine: command -v copilot is empty under engine: opencode and cp "" fails the
     // job before the agent starts. OpenCode needs no staging, because npm -g installs it under
     // the tool-cache prefix inside _work, which the dind daemon shares.
@@ -250,11 +250,17 @@ for (const file of readdirSync(workflowDirectory)) {
     // reporter, but gh-aw hardcodes a second one (report_failed_jobs) that files an
     // "[aw] Failed jobs" issue per red run. Same philosophy, same off switch.
     .replaceAll('GH_AW_REPORT_FAILED_JOBS: "true"', 'GH_AW_REPORT_FAILED_JOBS: "false"')
-    // gh-aw sees a custom step calling dotnet and injects its own setup-dotnet, which carries
-    // no DOTNET_INSTALL_DIR and so tries to write /usr/share/dotnet. The runner user has no
-    // sudo, so the job dies with "Permission denied" before the agent starts. The shared
-    // baseline step already redirects to the tool cache; this gives every other one the same
-    // env, including ones a future gh-aw release injects.
+    // gh-aw injects this "Restore .NET dependencies" step whenever a consumer's
+    // frontend (e.g. VERIFY_COMMANDS) references dotnet. An AI agent can create a
+    // .claude/worktrees/agent-XXX/ worktree at restore time — the first .slnx find
+    // matches that scratch dir, and the hardcoded path lands in the lock, breaking
+    // every agent run with MSB1009. Replace with dynamic discovery that excludes
+    // agent scratch directories so a stale worktree never poisons the restore.
+    .replace(
+      /^( +)- name: Restore \.NET dependencies\n\1  run: dotnet restore .*$/m,
+      (_m, indent) =>
+        indent + '- name: Restore .NET dependencies\n' + indent +
+        '  run: dotnet restore "$(find . -maxdepth 2 -name *.slnx -not -path "./.claude/*" -not -path "./.opencode/*" | head -1)"')
     .replace(
       /^( +)- name: Setup \.NET\n\1  uses: actions\/setup-dotnet@[^\n]*\n\1  with:\n((?:\1    [^\n]*\n)+)(?!\1  env:)/gm,
       (_m, indent, withBody) =>

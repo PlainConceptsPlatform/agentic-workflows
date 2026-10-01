@@ -4,16 +4,16 @@ Ephemeral one-VM-per-job runners keep nothing between runs, so the two stateful 
 get their state elsewhere. Everything here degrades gracefully: with the org secrets absent
 (a fork, a local checkout), both fall back to their local behaviour.
 
-## AgentMemory — one shared server
+## AgentMemory one shared server
 
-`https://agentmemory-pro-01.azurewebsites.net` — an App Service (plan `agentmemory-plan-01`, B1,
+`https://agentmemory-pro-01.azurewebsites.net` an App Service (plan `agentmemory-plan-01`, B1,
 always-on, ~$13/month, the platform's only fixed cost). The public `node:22-bookworm` image
-runs `bash /home/start.sh` — [`agentmemory-start.sh`](agentmemory-start.sh), uploaded once to
+runs `bash /home/start.sh` [`agentmemory-start.sh`](agentmemory-start.sh), uploaded once to
 the persistent `/home` via Kudu VFS. It installs the `iii` engine and
 `@agentmemory/agentmemory@0.9.28` on first boot, self-repairs interrupted installs, and later
 boots reuse everything; the store lives in `/home/data`. The command must stay quote-free:
 App Service's container CMD parsing shreds nested quotes, silently killing the container in
-under a second with no log line — that cost three attempts to see.
+under a second with no log line that cost three attempts to see.
 
 The `@agentmemory/mcp` shim inside every agent proxies to that server when `AGENTMEMORY_URL`
 is set, authenticating with `AGENTMEMORY_SECRET` (org secret, mirrored in the app settings).
@@ -40,7 +40,7 @@ To stop paying the $13: `az webapp delete` + `az appservice plan delete`, remove
 `AGENTMEMORY_*` injection from the compile wrapper, recompile. Agents then keep per-run
 local memory only.
 
-## CodeGraph — per-repository index on actions/cache
+## CodeGraph per-repository index on actions/cache
 
 The index (`.codegraph/` in the checkout plus the `~/.codegraph` registry) is restored before
 `codegraph init` and saved by the cache action's post step under an immutable key:
@@ -50,7 +50,7 @@ key:          codegraph-<repository_id>-<run_id>
 restore-keys: codegraph-<repository_id>-
 ```
 
-- **Isolation**: actions/cache is repository-scoped by design — one consumer can never read another's
+- **Isolation**: actions/cache is repository-scoped by design one consumer can never read another's
   graph, no configuration needed.
 - **Concurrency**: every run saves its own key; two parallel runs never write one database.
   The newest snapshot wins the next restore, and GitHub's 10 GB per-repo cache evicts old ones.

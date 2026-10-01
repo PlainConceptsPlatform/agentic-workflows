@@ -132,7 +132,7 @@ describe("workflows CLI", () => {
     const output = log.mock.calls[0]![0] as string;
     expect(output).toContain("audit");
     expect(output).not.toContain("Templates:");
-    // Only the audit route should be returned — no other route name should appear.
+    // Only the audit route should be returned no other route name should appear.
     const visibleRoutes = ["refine", "implement", "triage", "apply-review", "merge-gate"];
     for (const route of visibleRoutes) {
       expect(output).not.toContain(`${route} —`);

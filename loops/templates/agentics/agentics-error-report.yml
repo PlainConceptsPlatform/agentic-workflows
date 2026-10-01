@@ -6,8 +6,8 @@ name: "Agentics: Error Report"
 # same bug on its own.
 #
 # THIS REPOSITORY IS PRIVATE AND THE REPORT LEAVES IT. That is the whole design constraint. The
-# job is deterministic — no model runs, because a model summarising a log would paraphrase
-# whatever the log happened to contain — and it sends only:
+# job is deterministic no model runs, because a model summarising a log would paraphrase
+# whatever the log happened to contain and it sends only:
 #
 #   * the names this package gives its own workflows, jobs and steps
 #   * a conclusion, a runner label and a count
@@ -59,7 +59,7 @@ jobs:
   report:
     # Fork of a consumer: the fleet is not theirs and neither is the report.
     if: "!github.event.repository.fork"
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     timeout-minutes: 20
     concurrency:
       group: agentics-error-report

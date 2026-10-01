@@ -530,7 +530,7 @@ if [ "$BOUNDARY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); f
 
 # `review` must not be a one-way door. It used to be: authorize-bot-work refused to fire on an
 # issue carrying it, and the classifier refuses to route while it is set, so a person adding
-# `refine` to a parked issue got nothing at all — no run, no comment, no error. Triage's own
+# `refine` to a parked issue got nothing at all no run, no comment, no error. Triage's own
 # needs-maintainer verdict tells the maintainer to do exactly that, so the bot was giving an
 # instruction the machine ignored. authorize-bot-work now clears `review` before handing over,
 # which is what makes the human's decision stick.
@@ -843,7 +843,7 @@ if worker_installed merge-gate; then
     { PENDING_OK=0; echo "FAIL: the only pr-pending removal must sit under the auto-merge disposition" >&2; }
 
   # The invariant only ever looked at the merge gate, so apply-review quietly stripped the label
-  # on its already-satisfied and needs-human paths — both of which leave the pull request open.
+  # on its already-satisfied and needs-human paths both of which leave the pull request open.
   # The one file the check ignored was the one breaking it. Look at every worker: implement adds
   # the label, merge-gate removes it on merge, nobody else may touch it.
   for worker in "${WORKFLOWS_DIR}"/agent-*.md; do
@@ -926,6 +926,21 @@ if worker_installed implement; then
     }
   if [ "$IMPLEMENT_RETRY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
+
+# A queued worker can start long after it was dispatched. If triage concluded
+# needs-maintainer while the run waited in a queue, the issue carries review and
+# the verdict must stand: the reserve step clears review blindly, so eligibility
+# has to catch it first (Pliny-Bot #372).
+for route in implement refine; do
+  worker_md="${WORKFLOWS_DIR}/agent-${route}.md"
+  [ -f "$worker_md" ] || continue
+  if grep -q 'index("review")' "$worker_md"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: agent-${route} eligibility does not guard against the review label; a queued worker could override a triage verdict" >&2
+  fi
+done
 
 if worker_installed merge-gate; then
   # A failed attempt must not strip `implement`: identify-gate-subject refuses an issue
@@ -2198,6 +2213,9 @@ echo "── Runner pools ──────────────────
 #   agent jobs of every worker except release  ->  agents-arc          (the Azure fleet in
 #                                                                       agentrunner-pro-rg-01,
 #                                                                       runner group `agentic`)
+#   gate and post-processing jobs              ->  RunnerLandingZone   (GitHub-hosted, no fleet
+#                                                                       capacity consumed by
+#                                                                       trivial checks)
 #   agent-release.md and work-router.yml       ->  RunnerLandingZone
 #   ubuntu-latest                              ->  GitHub's own runner, chosen by nobody, left
 #                                                  wherever the package already has it
@@ -2220,9 +2238,34 @@ for worker_md in "${WORKFLOWS_DIR}"/agent-*.md; do
   want="$AGENT_POOL"
   [ "$worker_name" = "agent-release" ] && want="$PLUMBING_POOL"
   got="$(pools_named "$worker_md" | tr '\n' ' ' | sed 's/ $//')"
-  if [ "$got" != "$want" ]; then
-    POOL_OK=0
-    echo "FAIL: ${worker_name} names runner pool(s) '${got}' but must name only '${want}'" >&2
+  # Gate jobs and post-processing jobs run on RunnerLandingZone (GitHub-hosted) to avoid
+  # consuming self-hosted fleet capacity for trivial checks. The agent job and safe_outputs
+  # stay on agents-arc. So a worker may name both pools.
+  allowed_pools="${want} ${PLUMBING_POOL}"
+  if [ "$worker_name" = "agent-release" ]; then
+    if [ "$got" != "$want" ]; then
+      POOL_OK=0
+      echo "FAIL: ${worker_name} names runner pool(s) '${got}' but must name only '${want}'" >&2
+    fi
+  else
+    # Every pool named must be in the allowed set; agents-arc must be present (the agent job).
+    ok=1
+    for p in $got; do
+      case " $allowed_pools " in *" $p "*) ;; *) ok=0 ;; esac
+    done
+    if ! echo "$got" | grep -qw "$AGENT_POOL"; then
+      # visual-verify gets its agent runs-on from a shared import, not from the .md file,
+      # so the pool check only sees the subject gate job on RunnerLandingZone.
+      if [ "$worker_name" = "agent-visual-verify" ] && echo "$got" | grep -qw "$PLUMBING_POOL"; then
+        :
+      else
+        ok=0
+      fi
+    fi
+    if [ "$ok" -ne 1 ]; then
+      POOL_OK=0
+      echo "FAIL: ${worker_name} names runner pool(s) '${got}' but must name only '${AGENT_POOL}' and/or '${PLUMBING_POOL}' (with at least ${AGENT_POOL})" >&2
+    fi
   fi
 done
 

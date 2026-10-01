@@ -125,19 +125,19 @@ function renderEntry(entry: CatalogEntry, highlighted: boolean, checked: boolean
   if (checked) {
     const checkbox = `${ANSI.green}[x]${ANSI.reset}`;
     const name = highlighted ? `${ANSI.white}${ANSI.bold}${entry.name}${ANSI.reset}` : entry.name;
-    const desc = `${ANSI.dim} — ${entry.description}${ANSI.reset}`;
+    const desc = `${ANSI.dim} ${entry.description}${ANSI.reset}`;
     return `${indicator} ${checkbox} ${name}${desc}`;
   }
   const checkbox = `${ANSI.grey}[ ]${ANSI.reset}`;
   const name = highlighted ? `${ANSI.white}${ANSI.bold}${entry.name}${ANSI.reset}` : entry.name;
-  const desc = `${ANSI.dim} — ${entry.description}${ANSI.reset}`;
+  const desc = `${ANSI.dim} ${entry.description}${ANSI.reset}`;
   return `${indicator} ${checkbox} ${name}${desc}`;
 }
 
 function render(state: SelectionState): void {
   const lines: string[] = [];
 
-  lines.push(`${ANSI.cyan}${ANSI.bold}Plain Concepts Platform — Agentic Workflows${ANSI.reset}`);
+  lines.push(`${ANSI.cyan}${ANSI.bold}Plain Concepts Platform Agentic Workflows${ANSI.reset}`);
   lines.push(`${ANSI.dim}Select items to install. Already-installed items are pre-checked.${ANSI.reset}`);
   lines.push("");
 

@@ -28,7 +28,7 @@ name: "Agent: Visual Verify"
 
 # Standalone worker called directly from merge-gate's conclude job. Not a router route.
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.90.0
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
@@ -53,6 +53,7 @@ on:
 jobs:
   subject:
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: read
@@ -303,7 +304,7 @@ max-ai-credits: 5000
    directory with a journey of agent-browser waypoints (open/find/wait/capture/expect). Each
    waypoint names a URL, a selector to wait for, and what to observe.
 
-   If the plan says `not-applicable` (no UI surface is reachable for this change — a backend-
+   If the plan says `not-applicable` (no UI surface is reachable for this change a backend-
    only change to an API or a migration, for example), that is a valid, expected outcome. Write
    a summary comment saying the change has no UI surface and stop. Do not attempt to start a
    browser.

@@ -1,7 +1,7 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-refine.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
-  REPO_RULES: "Refine only the selected issue into a grounded, implementation-ready user story. Read repository documentation for domain context. Write acceptance criteria that match existing patterns. Do not implement code."
+  REPO_RULES: "Refine only the selected issue into a grounded, implementation-ready user story. Read repository documentation for domain context. Write acceptance criteria that match existing patterns. Where a story or its open questions decide how business data (named people, roles, addresses) is stored, resolve it toward the repository's convention for that data -- a database entity or a settings entry -- and record that choice in the acceptance criteria; do not carry a person's name or email address into the story as something the code reads from a constant. Do not implement code."
   # The estimate decides whether a story gets split, and the prompt tells the agent these bands
   # come from this repository's own merged pull requests. They have to actually come from it, or
   # the claim is false and every repository sizes work on another one's diffs.
@@ -19,7 +19,7 @@ env:
   WORKING_LABEL: bot-working
   IMPLEMENT_LABEL: implement
   REVIEW_LABEL: review
-  # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
+  # Marks a park the machine caused a crash, a timeout, an empty output as opposed to one it
   # decided on. The janitor retries these after a while and never touches a decision park, because
   # re-running a decision produces the same decision. Created idempotently where it is applied.
   STALLED_LABEL: stalled
@@ -86,7 +86,7 @@ description: |
 name: "Agent: Refine Issue"
 
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.90.0
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
@@ -107,12 +107,7 @@ on:
         required: false
         type: string
         default: first
-  # The gate jobs that the top-level `if:` reads. gh-aw folds that `if:` into the generated
-  # activation job but gives activation no dependency on the jobs, so the reference resolves
-  # to '' and the clause is false -- the agent would never run. The package's own validator
-  # catches it after compilation; this is the line it asks for, the same one the merge gate
-  # uses for protected_changes.
-  needs: [still_open, size_guard]
+  needs: [still_open, size_guard, eligibility]
 
 jobs:
   # A route dispatched while the issue was open must not execute after it has been closed. The
@@ -123,6 +118,7 @@ jobs:
   # and gate both the reservation and the agent on it.
   still_open:
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: read
@@ -139,6 +135,34 @@ jobs:
         with:
           token: ${{ github.token }}
           issue-number: ${{ inputs.issue-number }}
+  # A queued refine run can start long after it was dispatched. If triage concluded
+  # needs-maintainer while this run waited in a queue, the issue now carries review and
+  # the verdict must stand: the reserve step clears review blindly, so eligibility has to
+  # catch it first (Pliny-Bot #372).
+  eligibility:
+    needs: [still_open]
+    if: needs.still_open.outputs.open == 'true'
+    runs-on: agents-arc
+    permissions:
+      issues: read
+    outputs:
+      eligible: ${{ steps.check.outputs.eligible }}
+    steps:
+      - name: Check if the issue is parked for review
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+        run: |
+          set -euo pipefail
+          labels=$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels \
+            --jq '[.labels[].name]')
+          if jq -e 'index("review")' >/dev/null <<<"$labels"; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Issue #$ISSUE_NUMBER has the review label. Automated refinement skipped."
+            exit 0
+          fi
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
   # The size gate, rung 4. Measures the issue before any model starts, because an oversized
   # body does not fail fast on its own: it produces an agent that explores for seventeen
   # minutes and then dies mid-generation at the provider's response cap having written
@@ -146,8 +170,8 @@ jobs:
   # shell, no network beyond one issue read; over either limit it is a refusal, not a
   # smaller attempt.
   size_guard:
-    needs: [still_open]
-    if: needs.still_open.outputs.open == 'true'
+    needs: [still_open, eligibility]
+    if: needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true'
     runs-on: agents-arc
     timeout-minutes: 5
     permissions:
@@ -189,8 +213,8 @@ jobs:
   # replies re-enters rerefine through the comment route, and the classifier ignores
   # bot comments, so this comment cannot re-trigger the worker.
   refuse_big_issue:
-    needs: [still_open, size_guard]
-    if: needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big == 'true'
+    needs: [still_open, size_guard, eligibility]
+    if: needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true' && needs.size_guard.outputs.too_big == 'true'
     runs-on: agents-arc
     timeout-minutes: 5
     permissions:
@@ -242,9 +266,10 @@ jobs:
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
   reserve:
-    needs: [still_open, size_guard]
-    if: needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big != 'true'
+    needs: [still_open, size_guard, eligibility]
+    if: needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true' && needs.size_guard.outputs.too_big != 'true'
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: write
@@ -545,9 +570,10 @@ jobs:
     # clause every refused issue also looped here -- one human-label visit produced eight
     # refusal comments and eight "Attempt N of 5" comments, none of which could succeed
     # (Pliny-Bot #322).
-    needs: [activation, agent, safe_outputs, validate_output, size_guard]
+    needs: [activation, agent, safe_outputs, validate_output, size_guard, eligibility]
     if: >
       always() &&
+      needs.eligibility.outputs.eligible == 'true' &&
       needs.size_guard.outputs.too_big != 'true' &&
       (
         needs.agent.result != 'success' ||
@@ -677,7 +703,7 @@ jobs:
 # the implicit success(): a refused skip no longer poisons the agent, while any real
 # failure -- size_guard erroring, the refusal job erroring mid-refuse, reserve failing --
 # still blocks it and lands in incomplete.
-if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true' && needs.size_guard.outputs.too_big != 'true' && !failure()
+if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true' && needs.size_guard.outputs.too_big != 'true' && !failure()
 
 runs-on: agents-arc
 runs-on-slim: agents-arc
@@ -716,6 +742,11 @@ safe-outputs:
   # under noise nobody closes.
   report-failure-as-issue: false
   threat-detection: false
+  # Stage the comment so it is only published after validate_output confirms the
+  # refined story is valid. Without staging, the agent's add_comment ("refinement
+  # complete") lands before validation, and a malformed output leaves the issue
+  # with a success comment and an incomplete status simultaneously (Pliny-Bot #383).
+  staged: true
   # The refined story replaces the issue body, which is one call carrying the whole
   # thing. The allowance is three rather than one because a single malformed call the
   # bridge accepts as spent would otherwise end the run with the body unwritten and a
@@ -863,6 +894,15 @@ timeout-minutes: 90
    size of a very long message, tighten the body; a shorter call that lands beats a longer one
    that is cut off.
 
+   **Pipe JSON via stdin and always pass `.` as the trailing argument.** The safeoutputs bridge
+   reads the JSON payload from stdin only when the final argument is `.`. Quote the issue-number
+   flags on the same line, never in place of the dot. Correct:
+   `printf '%s' "$JSON" | safeoutputs create_issue .`
+   `printf '%s' "$JSON" | safeoutputs update_issue --issue_number 685 .`
+   `printf '%s' "$JSON" | safeoutputs add_comment --item_number 685 .`
+   Wrong (stdin never read, body silently empty, bridge returns success):
+   `printf '%s' "$JSON" | safeoutputs update_issue --issue_number 685`
+
 8. Decide exactly one outcome:
 
     Labels are workflow-owned state. Do not call `add_labels` or `remove_labels`.
@@ -871,10 +911,10 @@ timeout-minutes: 90
     could not answer. Leave the partial work visible: first call `update_issue` with a
     temporal draft, then call `add_comment` once with the questions.
 
-    The temporal draft is the replacement body your path would have written — the story
+    The temporal draft is the replacement body your path would have written the story
     body from the standard path, the marker, summary and checklist from the trivial path —
     holding everything you already established, with every
-    part the questions leave open marked `_pending — see questions below_`. Its very
+    part the questions leave open marked `_pending see questions below_`. Its very
     first line is `${{ env.DRAFT_MARKER }}`; the next run replaces the draft wholesale
     with the final body.
 

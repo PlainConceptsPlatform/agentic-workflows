@@ -18,7 +18,7 @@ fi
 
 # The agent emits exactly one add_comment on the source issue. The comment body
 # must contain a verdict line matching **Verdict:** pass|needs-info|needs-maintainer|block.
-# capture() returns an object — use a named group (?<v>...) to extract the value.
+# capture() returns an object use a named group (?<v>...) to extract the value.
 # test() before capture() avoids jq errors on non-matching bodies.
 jq -r --arg issue "$issue_number" '
   def extract_verdict:

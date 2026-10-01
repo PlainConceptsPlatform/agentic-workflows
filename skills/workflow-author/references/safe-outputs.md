@@ -314,7 +314,7 @@ Two rules come out of that:
   `update-issue` is `max: 3`. One bad call should not end a run that has done the work.
 - **Do not give a creating operation headroom.** `create-pull-request` stays at 1: a second
   allowance lets a confused run open a duplicate pull request, which is worse than the run failing.
-  Those workers get the prompt half instead — send it complete, first time, and never probe the tool
+  Those workers get the prompt half instead send it complete, first time, and never probe the tool
   with a partial payload to see what it accepts.
 
 And whatever the allowance, order the prompt so the announcement depends on the work: ask for the

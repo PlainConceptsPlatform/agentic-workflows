@@ -55,7 +55,7 @@ env:
   # than chose not to. The belt does not retry a blocked pull request.
   OWNER_REVIEW_LABEL: owner-review
   BLOCKED_LABEL: blocked
-  # Marks a park the machine caused — a crash, a timeout, an empty output — as opposed to one it
+  # Marks a park the machine caused a crash, a timeout, an empty output as opposed to one it
   # decided on. The janitor retries these after a while and never touches a decision park, because
   # re-running a decision produces the same decision. Created idempotently where it is applied.
   STALLED_LABEL: stalled
@@ -100,7 +100,7 @@ name: "Agent: Merge Gate"
 # Router-only worker. The Work Router owns triggers, classification, and rung 1-2 checks.
 # This workflow receives the classified inputs and runs rung 3+.
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.90.0
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
@@ -143,6 +143,7 @@ on:
 jobs:
   subject:
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: read
@@ -225,6 +226,7 @@ jobs:
     needs: subject
     if: needs.subject.outputs.found == 'true'
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
@@ -271,6 +273,7 @@ jobs:
     # there are no protected files instead of skipping it and blocking remediation.
     if: always() && needs.subject.outputs.found == 'true'
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: write
@@ -330,6 +333,7 @@ jobs:
     needs: subject
     if: needs.subject.outputs.found == 'true'
     runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: write
@@ -941,7 +945,7 @@ timeout-minutes: 120
    `/tmp/gh-aw/agent/pr.json` for the shape of the change. If CI failed, also read
    `/tmp/gh-aw/agent/failed-jobs.json` and `/tmp/gh-aw/agent/failed-logs.txt`.
 
-    These files are the factual basis for everything below. Do not guess — cite what you read.
+    These files are the factual basis for everything below. Do not guess cite what you read.
 
 4b. **Merge conflict when CI is green.** If the conclusion is `success` and
     `has_conflicts` is `true` (current value: `${{ needs.reserve.outputs.has_conflicts }}`),
@@ -965,7 +969,7 @@ timeout-minutes: 120
     Push the merged branch using `push_to_pull_request_branch` (pr_number: ${{ needs.subject.outputs.pr }},
     branch: the current PR branch), then emit the `add_comment` with
     **Verdict:** remediated. CI will re-run on the updated branch and the merge gate
-    will be triggered again — the next cycle will see a clean, conflict-free PR and can
+    will be triggered again the next cycle will see a clean, conflict-free PR and can
     reach a real disposition.
 
     If the merge cannot be completed or the conflicts are genuinely ambiguous, do not push.
@@ -1025,7 +1029,7 @@ timeout-minutes: 120
    per gap, with `category: correctness`, the file and line, and a `suggestedFix`.
 
    **Correctness remediation.** When `acceptanceCriteriaMet` is `false`, you may fix the
-   gap and push the fix the same way you fix a failed CI run — this is the same
+   gap and push the fix the same way you fix a failed CI run this is the same
    `remediated` verdict the merge-conflict and CI-failure paths use, and it re-runs CI and
    the gate on the new head. To do it:
 
@@ -1039,8 +1043,8 @@ timeout-minutes: 120
      cycle validates the fix.
    - Do not rebase, reset, amend or otherwise rewrite history: the push is fast-forward only.
 
-   If you cannot fix a criterion in one pass — it needs a decision, a question, or a code path
-   you cannot trace — do not push. Report `assessed` with `acceptanceCriteriaMet: false` and no
+   If you cannot fix a criterion in one pass it needs a decision, a question, or a code path
+   you cannot trace do not push. Report `assessed` with `acceptanceCriteriaMet: false` and no
    push. The workflow sends the pull request to a human, which is the correct action when the
    gap is beyond a focused repair.
 
@@ -1065,13 +1069,13 @@ timeout-minutes: 120
    the pull request for a person, so it is the one judgement of yours that can hold up a merge on
    its own, and the same rule applies to it as to a finding: unevidenced, it does not count. A
    `low` with an empty `recoverabilitySignals` is read as `medium`. This is not an invitation to
-   pad the list — it is the difference between "this rewrites the plan rows in place" and a
+   pad the list it is the difference between "this rewrites the plan rows in place" and a
    reflex.
 
    **5e. Raise the blast radius if the paths missed something.** The measured level came from
-   file paths and diff shape. If the change introduces something those rules cannot see — a new
+   file paths and diff shape. If the change introduces something those rules cannot see a new
    authorization decision point, a new trust boundary, a write to shared state from a path that
-   never wrote before — set `blastRadiusRaise` with the level and the reason. You can only raise
+   never wrote before set `blastRadiusRaise` with the level and the reason. You can only raise
    it. A lower value is ignored.
 
    **5f. State your confidence.** A number between 0 and 1, for the whole assessment, not for
@@ -1134,10 +1138,10 @@ timeout-minutes: 120
 
 7. Say which of two things you did, and nothing more.
 
-   - **`remediated`** — something was wrong (CI failed, the branch conflicted, or the diff did
+   - **`remediated`** something was wrong (CI failed, the branch conflicted, or the diff did
      not satisfy the acceptance criteria), you fixed it, you verified the fix, and you are
      pushing it. Exactly one `push_to_pull_request_branch` goes with this word.
-   - **`assessed`** — you reviewed the change and are reporting what you found. No push.
+   - **`assessed`** you reviewed the change and are reporting what you found. No push.
 
    These are the only two words the workflow accepts. You do not write `merge`, `review`,
    `auto-merge`, `blocked`, or any other outcome: the workflow computes the disposition from
@@ -1187,7 +1191,7 @@ timeout-minutes: 120
 
    When `acceptanceCriteriaMet` is `false` and you are pushing a fix, the verdict must be
    `remediated`, not `assessed`: the validator refuses an `assessed` verdict that carries a
-   push. Set `acceptanceCriteriaMet` to `false` in the report you push with the fix — it
+   push. Set `acceptanceCriteriaMet` to `false` in the report you push with the fix it
    describes the code you reviewed, not the fix you just produced. The next gate cycle
    re-evaluates the updated diff and sets it to `true` (or finds another gap).
 

@@ -504,59 +504,12 @@ a file on disk, so a confused model cannot publish a release.
 
 ---
 
-## agent-visual-verify.md
-
-Runs after the merge gate decides auto-merge and before the merge itself. The agent reads the
-change, writes a verification plan as JSON waypoints, and a post-agent shell step drives
-agent-browser to capture screenshots at each waypoint. A final step attaches the screenshots
-to the linked issue as a comment. Failures never block the merge.
-
-```mermaid
-flowchart TD
-    vvStart("Merge Gate<br/>auto-merge verdict") --> vvSubject
-    vvSubject{"subject (rung 4)<br/>PR open? Visual<br/>verify enabled?"}
-    vvSubject -.->|"no"| vvIdle
-    vvSubject -->|"yes"| vvActivation
-    vvActivation("Activation (rung 3)<br/>Checkout, load issue context,<br/>build the prompt") --> vvAgent
-    vvAgent("Agent (rung 5)<br/>Explore the change, write<br/>plan.json with waypoints<br/>(url + selector per step)") --> vvBuild
-    vvBuild("Build and start app<br/>VISUAL_VERIFY_BUILD_COMMAND,<br/>then VISUAL_VERIFY_START_COMMAND<br/>on the configured port") --> vvAppUp{"App up on<br/>the port?"}
-    vvAppUp -.->|"no"| vvWarn
-    vvAppUp -->|"yes"| vvCapture
-    vvCapture["Capture screenshots<br/>agent-browser opens each waypoint,<br/>waits for selectors,<br/>screenshot --full --no-sandbox"] --> vvGotShots{"Any captured?"}
-    vvGotShots -->|"yes"| vvAttach
-    vvGotShots -.->|"no, all failed"| vvWarn
-    vvAttach("Attach to issue<br/>post plan + screenshots<br/>as a single comment") --> vvDone
-    vvDone(("Screenshots posted<br/>visual evidence on the issue"))
-    vvWarn(("Warning posted<br/>no screenshots, merge proceeds"))
-    vvIdle(("Idle<br/>not enabled or not our PR"))
-
-    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
-    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
-    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
-    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-    class vvStart start
-    class vvActivation,vvAgent,vvBuild,vvCapture,vvAttach action
-    class vvSubject,vvAppUp,vvGotShots decision
-    class vvIdle idle
-    class vvWarn failure
-    class vvDone success
-```
-
-The agent does not take screenshots itself. It writes a plan; a shell step runs agent-browser
-against the running app. Chromium needs --no-sandbox on CI runners (set via
-AGENT_BROWSER_ARGS), and the explicit apt-get install covers libraries gent-browser
-install --with-deps misses on ubuntu-24.04.
-
----
-
 ## housekeeping
 
 Not a worker: a deterministic job in the router, on its own six-hourly cron, with no model. It is
 the answer to a specific measured problem. Across the four consumers, 58 of 237 issues closed since
 1 August were closed by the bot; autonomy ran between 6% and 50%. The gap was not bad decisions, it
-was silence — work that stopped and told nobody, and state that nothing ever cleaned up.
+was silence work that stopped and told nobody, and state that nothing ever cleaned up.
 
 The one rule that shapes it: **retry a failure, report a decision.** A crash, a timeout or an empty
 output is a machine failure, and the worker marks it `stalled`; those are worth running again. A
@@ -606,7 +559,7 @@ Three things make it safe to leave running unattended. It uses the App token, be
 no workflow run from an event raised with `GITHUB_TOKEN`, so with the default token every retry
 would be a green no-op. Every write goes through one `act()` wrapper, which is the only place
 `dry-run` is read, so there is no second path that forgets to check it. And it closes exactly two
-kinds of issue — a split parent whose children are all done, and its own digest — which the route
+kinds of issue a split parent whose children are all done, and its own digest which the route
 matrix asserts by counting.
 
 The stack section extends the same two rules to stacked features without adding a third closed
@@ -696,7 +649,7 @@ the repository it runs in. Every consumer is private, so that is the whole desig
 What crosses the boundary is a fixed, enumerable set of facts about workflows **this package ships**:
 their file names, their job and step names, a conclusion, a runner label, a count, and the id of a
 matched entry from a catalogue of sixteen known failure shapes. What never crosses it is free text
-of any kind — no log line, no branch name, no issue title, no path, no URL, no number that could be
+of any kind no log line, no branch name, no issue title, no path, no URL, no number that could be
 looked up. Hence no model: a model asked to summarise a failure paraphrases whatever the log held.
 
 ```mermaid
@@ -735,3 +688,52 @@ The route matrix asserts the scanner exists, that both exit paths call `setFaile
 at least as many scans as upstream writes, that each individual check is still present, and that no
 model or `OPENAI_API_KEY` has appeared in the action. Every one of those was mutation-tested; three
 earlier versions of them passed against a deliberately broken guard and were rewritten.
+
+---
+
+## agent-visual-verify.md
+
+Runs after merge-gate decides to auto-merge, before the actual merge, and produces **evidence, not
+code changes**: it writes a verification plan, drives a real browser through the app, and attaches
+screenshots to the linked issue. It is called directly by merge-gate's `conclude` job, so it is not
+a router route. Failures never block the merge a browser that will not start or an app that never
+comes up emits a warning comment and the merge proceeds.
+
+```mermaid
+flowchart TD
+    vvStart("merge-gate conclude<br/>calls agent-visual-verify") --> vvSubject
+    vvSubject["subject (rung 4)<br/>PR open? linked issue found?"] --> vvConfig
+    vvConfig{"config (rung 4)<br/>VISUAL_VERIFY_ENABLED and<br/>START_COMMAND set?"}
+    vvConfig -.->|"no"| vvIdle
+    vvConfig -->|"yes"| vvFacts
+    vvFacts["Facts (rung 3)<br/>PR branch checked out,<br/>issue context loaded"] --> vvPlan
+    vvPlan{"/repo-verify (rung 5)<br/>reachable UI surface?"}
+    vvPlan -.->|"not-applicable"| vvNoUi
+    vvPlan -->|"yes"| vvStartCmd
+    vvStartCmd{"start command set?<br/>VISUAL_VERIFY_START_COMMAND"}
+    vvStartCmd -.->|"empty"| vvNoStart
+    vvStartCmd -->|"yes"| vvAgent
+    vvAgent["Agent (rung 5)<br/>parse waypoints into plan.json,<br/>one add_comment on the issue"] --> vvCapture
+    vvCapture["post-agent (rung 6)<br/>build + start the app,<br/>agent-browser captures per waypoint"] --> vvAttach
+    vvAttach["attach-screenshots (rung 6)<br/>always(), subject found + enabled"] --> vvShutdown
+    vvShutdown["shut down the app"] --> vvDone
+    vvCapture -.->|"app never started,<br/>no plan, or all waypoints failed"| vvPartial
+    vvDone(("Verified<br/>screenshots attached,<br/>merge proceeds"))
+    vvPartial(("Attach what exists<br/>no-capture explanation,<br/>run stays green"))
+    vvNoUi(("No UI surface<br/>summary comment, stop"))
+    vvNoStart(("Not configured<br/>warning comment, stop"))
+    vvIdle(("Idle<br/>unconfigured or PR not open"))
+
+    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
+    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
+    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
+    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
+    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
+    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
+    class vvStart start
+    class vvSubject,vvFacts,vvCapture,vvAttach,vvShutdown action
+    class vvConfig,vvPlan,vvStartCmd decision
+    class vvIdle idle
+    class vvNoUi,vvNoStart,vvPartial failure
+    class vvDone success
+```

@@ -34,7 +34,7 @@ jobs:
        github.event.label.name == 'refine') &&
       !contains(github.event.issue.labels.*.name, 'bot-working') &&
       !endsWith(github.actor, '[bot]')
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     timeout-minutes: 5
     concurrency:
       group: authorize-${{ github.event.issue.number }}

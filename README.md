@@ -116,7 +116,7 @@ gate runs at the same time. One pull request sat parked for six days while that 
 
 Two labels are the controls a person has: `review` parks anything for a human, and `future`
 holds a refined issue back from implementation until it is removed. A third label, `pr-pending`,
-marks issues whose bot PR is open and awaiting merge-gate — it is informational only and does
+marks issues whose bot PR is open and awaiting merge-gate it is informational only and does
 not route or block anything.
 
 ### Timeouts
@@ -144,8 +144,8 @@ number you did not write, that is what it is.
 
 #### What a timeout looks like
 
-Not like a timeout. The issue gets the worker's ordinary incomplete comment — *"ended
-without an outcome"*, with the label left in place for a retry — which reads as though the
+Not like a timeout. The issue gets the worker's ordinary incomplete comment *"ended
+without an outcome"*, with the label left in place for a retry which reads as though the
 agent had nothing to say. The real cause is one line in the agent job's log:
 
 ```
@@ -162,7 +162,7 @@ something the validator rejected. Those are unrelated problems.
 The binding constraint is usually the model's pace rather than the size of the work. Refine
 sat at 40 minutes and was raised to 60 on the evidence of a run that died having done the
 job: 36 model turns, most of them returning under 110 output tokens and still taking over a
-minute each, with turn 32 producing 6,479 tokens — the finished story — and the clock running
+minute each, with turn 32 producing 6,479 tokens the finished story and the clock running
 out in the few short turns that would have submitted it. Forty minutes bought about
 thirty-six turns whatever it was asked to refine.
 
@@ -173,7 +173,7 @@ large one; an agent that ran out of clock shows the large one near the end.
 #### A run keeps the timeout it was dispatched with
 
 A workflow run reads its lock when it starts. Raising a timeout and pushing does nothing for
-runs already in flight — they finish, or die, on the old number. Re-trigger after the push if
+runs already in flight they finish, or die, on the old number. Re-trigger after the push if
 you want the new one.
 
 ## Releasing
@@ -190,7 +190,18 @@ gh workflow run work-router.yml --repo PlainConceptsPlatform/<repo> -f operation
 ```
 
 `version-bump` accepts `auto`, `patch`, `minor`, or `major`. The worker only needs
-`OPENAI_API_KEY` — it uses `github.token` for git operations and `gh release create`.
+`OPENAI_API_KEY` it uses `github.token` for git operations and `gh release create`.
+
+## Publishing to npm
+
+Publishing `@plainconceptsplatform/workflows` is triggered by a GitHub Release: a stable
+release `v<version>` on `main` publishes with the `latest` dist-tag, and a prerelease
+`v<version>-alpha.<n>` from the `alpha` branch publishes with the `alpha` dist-tag. An
+alpha can also be published from any branch on demand: **Actions → Npm Publish → Run
+workflow** picks the next unused alpha number itself. The
+[`npm-publish.yml`](.github/workflows/npm-publish.yml) workflow runs the same gates as CI
+before publishing. Setup, runbooks, and verification commands live in
+[docs/release.md](docs/release.md).
 
 ## Scheduling across repositories
 
@@ -333,7 +344,7 @@ package versions.
 The `triage` route gates issues opened from outside the organisation. **The gate is organisation
 membership, not permission level.** The `authorize` job marks an actor an outside collaborator when they
 have Read permission, and also when they have Write or better but their author association is
-`COLLABORATOR` — repository access without being one of the organisation's own. So an org member with
+`COLLABORATOR` repository access without being one of the organisation's own. So an org member with
 write skips triage; an outside collaborator with write does not.
 
 When such an issue is opened, the triage agent runs 10 checks (template completeness, security risk, change
@@ -350,7 +361,7 @@ Only `block` closes. Out-of-scope work used to close too, which lost it: a repro
 defect that passed nine of the ten checks was closed as `not_planned` with every label stripped, and
 nothing distinguished it from junk somebody rejected. That is what `needs-maintainer` exists for.
 
-At round 3, `needs-info` is no longer valid — the agent must `pass`, `needs-maintainer` or `block`.
+At round 3, `needs-info` is no longer valid the agent must `pass`, `needs-maintainer` or `block`.
 
 Install the triage route alongside other routes:
 
@@ -368,7 +379,7 @@ npx @plainconceptsplatform/workflows@latest add audit
 - `github-release` publishes a GitHub Release with generated notes when a `v*` tag is pushed.
 - `agentics-maintenance` is the `gh aw` generated maintenance workflow. It is supplied for repositories that want to commit the generated workflow before their first compilation.
 - `bug-report` installs a bug report issue template to `.github/ISSUE_TEMPLATE/bug_report.yml`. Bugs can be any size.
-- `feature-request` installs a feature request issue template to `.github/ISSUE_TEMPLATE/feature_request.yml`. Scoped to small, well-scoped improvements — a Small/Medium dropdown gate steers large work to a planning issue.
+- `feature-request` installs a feature request issue template to `.github/ISSUE_TEMPLATE/feature_request.yml`. Scoped to small, well-scoped improvements a Small/Medium dropdown gate steers large work to a planning issue.
 
 Templates are standalone copies placed in `.github/workflows/`. `app-ci-dotnet-next` provides .NET, SQL Server integration testing, Next.js, and security checks. `app-ci-node-monorepo` provides Node monorepo, web, Electron, Capacitor, E2E, and security checks. `github-release` publishes generated GitHub release notes when a `v*` tag is pushed. `bug-report` and `feature-request` install to `.github/ISSUE_TEMPLATE/` instead of `.github/workflows/`. `opencode.ci.json` is always installed as a mandatory file during catalog install; the `--template opencode.ci.json` command is an advanced option for installing it in isolation. Edit their top-level `env:` defaults or JSON properties after copying.
 

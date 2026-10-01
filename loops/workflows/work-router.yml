@@ -10,38 +10,38 @@ name: "# Main Work Router"
 run-name: >-
   ${{ github.event_name == 'issues'
   && github.event.action == 'opened'
-  && format('Event: Issue opened — #{0} {1} by {2}', github.event.issue.number, github.event.issue.title, github.actor)
+  && format('Event: Issue opened - #{0} {1} by {2}', github.event.issue.number, github.event.issue.title, github.actor)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
   && contains(github.event.issue.labels.*.name, 'implement')
-  && format('Agent: Implement — #{0} {1}', github.event.issue.number, github.event.issue.title)
+  && format('Agent: Implement - #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
   && contains(github.event.issue.labels.*.name, 'refine')
-  && format('Agent: Refine — #{0} {1}', github.event.issue.number, github.event.issue.title)
+  && format('Agent: Refine - #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
   && contains(github.event.issue.labels.*.name, 'direct')
-  && format('Working: Direct — #{0} {1}', github.event.issue.number, github.event.issue.title)
+  && format('Working: Direct - #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
   && contains(github.event.issue.labels.*.name, 'triage')
-  && format('Agent: Triage — #{0} {1}', github.event.issue.number, github.event.issue.title)
+  && format('Agent: Triage - #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'bot-working'
   && format('Working: #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'implement'
   && endsWith(github.actor, '[bot]')
-  && format('Agent: Implement — #{0} {1}', github.event.issue.number, github.event.issue.title)
+  && format('Agent: Implement - #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'refine'
   && endsWith(github.actor, '[bot]')
-  && format('Agent: Refine — #{0} {1}', github.event.issue.number, github.event.issue.title)
+  && format('Agent: Refine - #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && github.event.label.name == 'direct'
   && endsWith(github.actor, '[bot]')
-  && format('Working: Direct — #{0} {1}', github.event.issue.number, github.event.issue.title)
+  && format('Working: Direct - #{0} {1}', github.event.issue.number, github.event.issue.title)
   || github.event_name == 'issues'
   && format('Event: {0} on #{1} by {2}', github.event.label.name, github.event.issue.number, github.actor)
   || github.event_name == 'issue_comment'
@@ -56,25 +56,25 @@ run-name: >-
   && format('Event: CI {0} on {1}', github.event.workflow_run.conclusion, github.event.workflow_run.head_branch)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'triage'
-  && format('Agent: Triage — #{0}', inputs.issue-number)
+  && format('Agent: Triage - #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'refine'
-  && format('Agent: Refine — #{0}', inputs.issue-number)
+  && format('Agent: Refine - #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'implement'
-  && format('Agent: Implement — #{0}', inputs.issue-number)
+  && format('Agent: Implement - #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'merge-gate'
-  && format('Agent: Merge Gate — PR #{0}', inputs.pr-number)
+  && format('Agent: Merge Gate - PR #{0}', inputs.pr-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'visual-verify'
-  && format('Agent: Visual Verify — PR #{0}', inputs.pr-number)
+  && format('Agent: Visual Verify - PR #{0}', inputs.pr-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'batch'
-  && format('Working: Batch — #{0}', inputs.issue-number)
+  && format('Working: Batch - #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'audit'
-  && format('Agent: Audit — manual{0}', '')
+  && format('Agent: Audit - manual{0}', '')
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'release'
   && format('Agent: Release{0}', '')
@@ -82,19 +82,19 @@ run-name: >-
   && format('dispatch: {0}', inputs.operation)
   || github.event_name == 'schedule'
   && github.event.schedule == '17 1 * * 1'
-  && format('Agent: Audit — weekly{0}', '')
+  && format('Agent: Audit - weekly{0}', '')
   || github.event_name == 'schedule'
   && github.event.schedule == '43 3 * * *'
-  && format('Agentics: Audit Close — daily{0}', '')
+  && format('Agentics: Audit Close - daily{0}', '')
   || github.event_name == 'schedule'
   && github.event.schedule == '0 6 * * *'
-  && format('Agentics: Cleanup — daily{0}', '')
+  && format('Agentics: Cleanup - daily{0}', '')
   || github.event_name == 'schedule'
   && github.event.schedule == '17 * * * *'
-  && format('Agentics: Reconcile — hourly{0}', '')
+  && format('Agentics: Reconcile - hourly{0}', '')
   || github.event_name == 'schedule'
   && github.event.schedule == '23 */6 * * *'
-  && format('Agentics: Maintenance — 6h{0}', '')
+  && format('Agentics: Maintenance - 6h{0}', '')
   || github.event_name == 'schedule'
   && format('schedule {0}', github.event.schedule)
   || github.event_name }}
@@ -267,7 +267,7 @@ permissions:
 jobs:
   # Public repositories must check repository permission before an event can start a model.
   authorize:
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read
@@ -346,7 +346,7 @@ jobs:
               # "unknown" counts as inside. Somebody with write or better whose membership
               # cannot be established is far more likely to be a colleague than an outside
               # collaborator, and treating them as outside starts a triage agent nobody asked
-              # for — which, with a four-hour timeout, holds a runner for the afternoon.
+              # for - which, with a four-hour timeout, holds a runner for the afternoon.
               if [ "$is_member" != "false" ]; then
                 echo "trusted=true" >> "$GITHUB_OUTPUT"
                 echo "is_outside_collaborator=false" >> "$GITHUB_OUTPUT"
@@ -370,7 +370,7 @@ jobs:
           esac
 
   classify:
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read
@@ -423,12 +423,12 @@ jobs:
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
 
   # Checks whether an open bot PR already exists for the issue. If it does, implement is
-  # skipped — the merge-gate will handle fixing the existing PR. This prevents duplicate
+  # skipped - the merge-gate will handle fixing the existing PR. This prevents duplicate
   # PRs when retries are triggered after a merge-gate failure.
   check-implement-pr:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 3
     permissions:
       contents: read
@@ -664,7 +664,7 @@ jobs:
   dispatch-triage:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.is_outside_collaborator == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       actions: write
@@ -693,7 +693,7 @@ jobs:
   call-triage:
     needs: [classify, authorize]
     # Triage on issue open is for outside collaborators only (handled by dispatch-triage).
-    # A trusted actor who opens an issue should not start triage — they can add refine/implement/direct
+    # A trusted actor who opens an issue should not start triage - they can add refine/implement/direct
     # labels or manually dispatch triage. All other triage routes (labeled, comment, dispatch) are trusted.
     if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.trusted == 'true' && !(github.event_name == 'issues' && github.event.action == 'opened')
     uses: ./.github/workflows/agent-triage.lock.yml
@@ -814,7 +814,7 @@ jobs:
     if: >
       needs.classify.outputs.route == 'bot-approve' &&
         (github.actor == 'app/github-actions' || github.actor == 'platform-devbox[bot]')
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       actions: write
@@ -845,8 +845,8 @@ jobs:
   # Conflict watcher for bot pull requests. Merge-conflict state is only available from the
   # mergeability API, which the pure classifier cannot read, so this is an event-gated
   # deterministic dispatcher rather than a classify route (it runs alongside bot-approve on
-  # the same pull_request_target event). It NEVER checks out or runs pull request code — it
-  # reads mergeability through the API and dispatches the Merge Gate — so it is safe on
+  # the same pull_request_target event). It NEVER checks out or runs pull request code - it
+  # reads mergeability through the API and dispatches the Merge Gate - so it is safe on
   # pull_request_target. Two entry points:
   #   opened / reopened / synchronize → check the pull request that changed. Gated to this
   #     repository's own branches so a fork PR never starts this App-token job.
@@ -871,7 +871,7 @@ jobs:
           github.event.pull_request.head.repo.full_name == github.repository
         )
       )
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 10
     permissions:
       contents: read
@@ -899,7 +899,7 @@ jobs:
           set -euo pipefail
 
           # Dispatch the Merge Gate for one pull request when it is a red-CI open, non-draft
-          # pull request on this repository whose CI has concluded — the
+          # pull request on this repository whose CI has concluded - the
           # conflict case is one arm of that, because a conflicting PR never gets a fresh
           # CI run of its own; a merge conflict with red or concluded CI is the same
           # "needs the gate" signal. A green non-conflicting PR is left for the merge belt
@@ -1162,7 +1162,7 @@ jobs:
   reconcile-bot-pr-runs:
     needs: classify
     if: needs.classify.outputs.route == 'reconcile-bot-pr-runs'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read
@@ -1389,7 +1389,7 @@ jobs:
   audit-close:
     needs: classify
     if: needs.classify.outputs.route == 'audit-close'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 15
     concurrency:
       group: audit-close
@@ -1414,7 +1414,7 @@ jobs:
   cleanup-artifacts:
     needs: classify
     if: needs.classify.outputs.route == 'cleanup-artifacts' && !github.event.repository.fork
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 15
     concurrency:
       group: cleanup-artifacts
@@ -1438,7 +1438,7 @@ jobs:
   housekeeping:
     needs: classify
     if: needs.classify.outputs.route == 'housekeeping' && !github.event.repository.fork
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 15
     concurrency:
       group: housekeeping
@@ -1448,6 +1448,8 @@ jobs:
       contents: write
       issues: write
       pull-requests: read
+      # actions: write cancels workflow runs stuck pending in the fleet queue.
+      actions: write
     env:
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
@@ -1477,7 +1479,7 @@ jobs:
   validate:
     needs: classify
     if: needs.classify.outputs.route == 'validate'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 10
     permissions:
       contents: read

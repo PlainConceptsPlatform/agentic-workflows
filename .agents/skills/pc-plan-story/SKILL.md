@@ -23,7 +23,7 @@ The caller may pass exploration findings from a prior `/plan-explore` session. T
 - Every `Given`, `When` and `Then` names something real, and every `Then` is testable: a file, endpoint, model or field somebody can point at.
 - Never read outside this repository root. The entire inventory and plan must come from files inside this repo.
 - Adhere to `${{ env.REPO_RULES }}` and repository documentation (AGENTS.md, ARCHITECTURE.md, DESIGN.md, existing patterns) before finalizing the story.
-- Reserve the very top of the body — above the form's first heading — for machine-readable lines that later workflow steps add (split markers, estimate lines). Never place story or plan content there; the workflow reads those lines regardless of the form's shape.
+- Reserve the very top of the body above the form's first heading for machine-readable lines that later workflow steps add (split markers, estimate lines). Never place story or plan content there; the workflow reads those lines regardless of the form's shape.
 
 ## Flow
 
@@ -47,7 +47,7 @@ The caller may pass exploration findings from a prior `/plan-explore` session. T
 
    *Select:* When a form filters by labels and the issue carries one of those labels, that form wins. Otherwise use the repository's default form. When the repository has no form at all, keep the free-form story shape from step 4: there is nothing to wrap around.
 
-   *Fill:* Draw every field's content from your exploration findings. Required fields always get real content; optional fields only when you genuinely have something for them. The story narrative lands in the field that asks for it — proposal, description, or what-happened, depending on the form. The Given/When/Then scenarios go into the form's acceptance-criteria field when it has one; otherwise they stay a section of their own. The Mermaid diagram goes where it reads best inside the filled form.
+   *Fill:* Draw every field's content from your exploration findings. Required fields always get real content; optional fields only when you genuinely have something for them. The story narrative lands in the field that asks for it proposal, description, or what-happened, depending on the form. The Given/When/Then scenarios go into the form's acceptance-criteria field when it has one; otherwise they stay a section of their own. The Mermaid diagram goes where it reads best inside the filled form.
 
 9. **Plan section.** Using the codebase investigation from step 3, produce a structured implementation plan that goes after the story inside the issue form body. Format it as follows:
 
@@ -55,10 +55,10 @@ The caller may pass exploration findings from a prior `/plan-explore` session. T
 
    Then break the feature into numbered changes. Each change:
 
-   - **Title** — what the change does.
-   - **Problem** — what is wrong or what needs to change and why. Name the file, method, or endpoint.
-   - **Fix** — bullet steps describing the implementation approach. Each step names a concrete file, method, or field.
-   - **Affected files** — a bullet list of paths with a short note on what changes in each.
+   - **Title** what the change does.
+   - **Problem** what is wrong or what needs to change and why. Name the file, method, or endpoint.
+   - **Fix** bullet steps describing the implementation approach. Each step names a concrete file, method, or field.
+   - **Affected files** a bullet list of paths with a short note on what changes in each.
 
    After all changes, add a summary table:
 
@@ -68,11 +68,11 @@ The caller may pass exploration findings from a prior `/plan-explore` session. T
    | 1. <title> | <file list> | <Backend | Frontend | Fullstack | Infra | Tests> |
    ```
 
-   Then list exclusions — what is explicitly out of scope and why.
+   Then list exclusions what is explicitly out of scope and why.
 
    Do not write any files. The plan is part of the story output, read-only. It tells the implementer what to touch and why, so they can start without re-investigating.
 
-10. Show the story with the issue form wrapping, the plan, and the artefacts it is grounded in, then ask what is next. If the plan has an open clarification — a wording choice, a missing constraint, an unknown API — ask it before the contracts question.
+10. Show the story with the issue form wrapping, the plan, and the artefacts it is grounded in, then ask what is next. If the plan has an open clarification a wording choice, a missing constraint, an unknown API ask it before the contracts question.
 
 ## Contracts
 

@@ -173,6 +173,31 @@ async Task<string?> MintJit(string name)
     return JsonNode.Parse(await resp.Content.ReadAsStringAsync())!["encoded_jit_config"]!.GetValue<string>();
 }
 
+async Task<int> GitHubRunnerCount()
+{
+    try
+    {
+        var total = 0;
+        var url = $"https://api.github.com/orgs/{ghOrg}/actions/runners?per_page=100";
+        while (url is not null)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Authorization = new("Bearer", ghPat);
+            req.Headers.Accept.ParseAdd("application/vnd.github+json");
+            req.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+            var resp = await http.SendAsync(req);
+            if (!resp.IsSuccessStatusCode) { log.LogWarning("runner count failed: {s}", resp.StatusCode); return -1; }
+            var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync())!;
+            total += (node["runners"] as JsonArray ?? []).Count(r => r?["status"]?.GetValue<string>() == "online");
+            var link = resp.Headers.GetValues("Link").FirstOrDefault() ?? "";
+            var match = System.Text.RegularExpressions.Regex.Match(link, "<([^>]+)>; rel=\"next\"");
+            url = match.Success ? match.Groups[1].Value : null;
+        }
+        return total;
+    }
+    catch (Exception e) { log.LogWarning("runner count error: {m}", e.Message); return -1; }
+}
+
 // ---- policy ----
 int Demand() => ledger.Count;
 int DesiredVms(int demand) => demand switch { <= 0 => 0, <= 4 => 1, _ => 2 };
@@ -342,7 +367,11 @@ app.MapPost("/vm/done", async (HttpRequest r) =>
     return Results.Ok("bye");
 });
 
-// reconcile sweep: prune forgotten ledger entries, clean failed instances, re-evaluate
+// reconcile sweep: prune forgotten ledger entries, clean failed instances, kill zombie VMs,
+// and re-evaluate. A zombie is a VM that is "Succeeded" in Azure but has no runner registered
+// on GitHub job.sh crashed or the runner process died, and /vm/done was never called, so the
+// scaler counts it as active capacity while nothing can serve jobs.
+var lastZombieCheck = DateTimeOffset.UtcNow;
 _ = Task.Run(async () =>
 {
     while (true)
@@ -359,6 +388,72 @@ _ = Task.Run(async () =>
                 if (stale) { ledger.TryRemove(kv.Key, out _); changed = true; log.LogWarning("pruned stale job {id}", kv.Key); }
             }
             if (changed) SaveLedger();
+
+            // Zombie detection: if we have active VMs but no runner is registered on GitHub,
+            // those VMs are dead. Delete them so the evaluate pass can boot fresh ones.
+            // Check at most every 10 minutes to avoid burning API quota on every sweep.
+            if (DateTimeOffset.UtcNow - lastZombieCheck > TimeSpan.FromMinutes(10))
+            {
+                lastZombieCheck = DateTimeOffset.UtcNow;
+                var instances = await Instances();
+                var active = instances.Where(i => i.State is not "Deleting" and not "Failed").ToList();
+                if (active.Count > 0)
+                {
+                    var ghRunners = await GitHubRunnerCount();
+                    if (ghRunners == 0)
+                    {
+                        log.LogWarning("zombie detection: {n} active VM(s) but 0 runners on GitHub; deleting all instances",
+                            active.Count);
+                        foreach (var inst in active)
+                            await DeleteInstance(inst.Id);
+                        fruitlessCycles = 0;
+                        // Clear stale queued entries the jobs will need to be re-queued by GitHub.
+                        foreach (var kv in ledger.Where(kv => kv.Value.Status == "queued").ToList())
+                            ledger.TryRemove(kv.Key, out _);
+                        SaveLedger();
+                    }
+                    else
+                    {
+                        // Dead VMs may also show as "Succeeded" for days; check each instance's
+                        // registration individually against GitHub's runner list.
+                        var runnerNames = new HashSet<string>();
+                        try
+                        {
+                            var url = $"https://api.github.com/orgs/{ghOrg}/actions/runners?per_page=100";
+                            while (url is not null)
+                            {
+                                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                                req.Headers.Authorization = new("Bearer", ghPat);
+                                req.Headers.Accept.ParseAdd("application/vnd.github+json");
+                                req.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+                                var resp = await http.SendAsync(req);
+                                resp.EnsureSuccessStatusCode();
+                                var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync())!;
+                                foreach (var r in node["runners"] as JsonArray ?? [])
+                                    if (r?["name"]?.GetValue<string>() is string n)
+                                        runnerNames.Add(n);
+                                var link = resp.Headers.GetValues("Link").FirstOrDefault() ?? "";
+                                var match = System.Text.RegularExpressions.Regex.Match(link, "<([^>]+)>; rel=\"next\"");
+                                url = match.Success ? match.Groups[1].Value : null;
+                            }
+                        }
+                        catch (Exception e) { log.LogWarning("runner name list error: {m}", e.Message); }
+
+                        foreach (var inst in active)
+                        {
+                            // Runner names are "i{instanceId}-{timestamp}". Match by prefix.
+                            var registered = runnerNames.Any(n => n.StartsWith($"i{inst.Id}-"));
+                            if (!registered)
+                            {
+                                // Give freshly-booted VMs time to register before declaring them zombies.
+                                // A VM that was just created by Evaluate() needs ~60s to boot + register.
+                                log.LogInformation("instance {id} not yet registered on GitHub", inst.Id);
+                            }
+                        }
+                    }
+                }
+            }
+
             await Evaluate("timer");
         }
         catch (Exception e) { log.LogError("reconcile loop: {m}", e.Message); }

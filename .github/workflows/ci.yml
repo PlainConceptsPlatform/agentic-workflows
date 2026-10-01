@@ -1,7 +1,7 @@
 name: CI
 
-# The package had no CI at all. Every check it ships to consumers — the route matrix, the
-# composite-action manifests, the prompt-hygiene rules, shellcheck — was only ever run by hand
+# The package had no CI at all. Every check it ships to consumers the route matrix, the
+# composite-action manifests, the prompt-hygiene rules, shellcheck was only ever run by hand
 # on somebody's machine, in a repository whose whole purpose is enforcing those checks elsewhere.
 
 on:

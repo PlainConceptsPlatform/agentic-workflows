@@ -76,7 +76,7 @@ describe("action.yml manifest validation", () => {
   it("every action.yml has at least one step in runs.steps", async () => {
     for (const { file, manifest } of await loadManifests()) {
       expect(manifest.runs?.steps, `${file}: runs.steps is undefined`).toBeDefined();
-      expect(manifest.runs!.steps!.length, `${file}: runs.steps is empty — file may be truncated`).toBeGreaterThanOrEqual(1);
+      expect(manifest.runs!.steps!.length, `${file}: runs.steps is empty file may be truncated`).toBeGreaterThanOrEqual(1);
     }
   });
 
@@ -112,7 +112,7 @@ describe("action.yml manifest validation", () => {
   it("no action.yml is truncated (last step has run: or uses: with non-empty value)", async () => {
     for (const { file, manifest } of await loadManifests()) {
       const steps = manifest.runs?.steps ?? [];
-      expect(steps.length, `${file}: no steps found — file may be truncated`).toBeGreaterThanOrEqual(1);
+      expect(steps.length, `${file}: no steps found file may be truncated`).toBeGreaterThanOrEqual(1);
       const lastStep = steps[steps.length - 1]!;
       const hasTerminal = (lastStep.run !== undefined && lastStep.run.trim().length > 0) ||
         (lastStep.uses !== undefined && lastStep.uses.trim().length > 0) ||

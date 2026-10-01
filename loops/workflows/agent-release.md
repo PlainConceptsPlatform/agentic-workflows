@@ -16,7 +16,7 @@ description: |
 name: "Agent: Release"
 
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.90.0
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
@@ -29,8 +29,8 @@ on:
         type: string
         default: "auto"
 
-runs-on: RunnerLandingZone
-runs-on-slim: RunnerLandingZone
+runs-on: agents-arc
+runs-on-slim: agents-arc
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -98,7 +98,7 @@ jobs:
       always() &&
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     permissions:
       contents: write
     steps:
@@ -205,7 +205,7 @@ jobs:
     if: >
       always() &&
       (needs.agent.result != 'success' || needs.safe_outputs.result != 'success')
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     permissions:
       contents: read
     steps:
