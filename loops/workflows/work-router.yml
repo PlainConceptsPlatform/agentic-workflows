@@ -521,6 +521,10 @@ jobs:
       contents: read
       issues: read
       actions: read
+    outputs:
+      is-stack: ${{ steps.stack.outputs.is-stack }}
+      stack-branch: ${{ steps.stack.outputs.stack-branch }}
+      stack-in-flight: ${{ steps.inflight.outputs.stack-in-flight }}
     steps:
       - name: Resolve the feature branch from the stack markers
         id: stack
