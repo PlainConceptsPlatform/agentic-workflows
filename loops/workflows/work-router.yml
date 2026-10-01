@@ -515,7 +515,7 @@ jobs:
   check-stack-branch:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 3
     permissions:
       contents: read
@@ -636,7 +636,7 @@ jobs:
       needs.check-implement-pr.outputs.has-open-pr != 'true' &&
       needs.check-stack-branch.outputs.is-stack == 'true' &&
       needs.check-stack-branch.outputs.stack-in-flight != 'true'
-    runs-on: RunnerLandingZone
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       actions: write
