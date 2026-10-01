@@ -260,7 +260,9 @@ for (const file of readdirSync(workflowDirectory)) {
       /^( +)- name: Restore \.NET dependencies\n\1  run: dotnet restore .*$/m,
       (_m, indent) =>
         indent + '- name: Restore .NET dependencies\n' + indent +
-        '  run: dotnet restore "$(find . -maxdepth 2 -name *.slnx -not -path "./.claude/*" -not -path "./.opencode/*" | head -1)"')
+        '  run: |-\n' + indent +
+        '    SLNX=$(find . -maxdepth 5 -name "*.slnx" -not -path "./.claude/*" -not -path "./.opencode/*" | head -1)\n' + indent +
+        '    [ -n "$SLNX" ] && dotnet restore "$SLNX" || echo "No .slnx found, skipping restore"')
     .replace(
       /^( +)- name: Setup \.NET\n\1  uses: actions\/setup-dotnet@[^\n]*\n\1  with:\n((?:\1    [^\n]*\n)+)(?!\1  env:)/gm,
       (_m, indent, withBody) =>
