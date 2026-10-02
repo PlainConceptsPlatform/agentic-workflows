@@ -16,7 +16,7 @@ description: |
 name: "Agent: Release"
 
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.90.0
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
