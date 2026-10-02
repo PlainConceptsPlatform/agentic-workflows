@@ -202,5 +202,5 @@ pre-agent-steps:
       # `$existing * $base`. Base wins on conflicting keys, but it defines neither `model`
       # nor this provider, so both survive and `awf-proxy` is added alongside.
       echo "Wrote $CONFIG from $FRAGMENT:"
-      jq -r '"  model: \(.model // "unset")", "  plugins: \(.plugin // [] | join(", "))", "  providers: \(.provider // {} | keys | join(", "))"' "$CONFIG"
+      jq -r '"  model: \(.model // "unset")", "  plugins: \(.plugins // [] | join(", "))", "  providers: \(.providers // {} | keys | join(", "))"' "$CONFIG"
 ---

@@ -19,7 +19,7 @@ the router down with zero-job runs that carry no annotation.
 
 | Rewrite | Why | On ephemeral VMs |
 |---|---|---|
-| `opencode-ai` pinned to 1.18.23 + explicit postinstall | gh-aw pins a Feb-2026 build at every release; `--ignore-scripts` blocks the postinstall that downloads the binary | required |
+| `@opencode/cli` pinned to 2.0.22, scripts enabled | gh-aw's engine manifest still names `opencode-ai` (a V1 build) and installs it with `--ignore-scripts`, which blocks the postinstall that selects the platform binary | required |
 | `NPM_CONFIG_MIN_RELEASE_AGE` 3 to 1 | the 3-day cooldown rejects fresh releases with a misleading ETARGET | required |
 | copilot-staging guard | gh-aw's arc-dind step assumes the Copilot engine and fails under `engine: opencode` | inert without the topology, kept for safety |
 | `GH_AW_MODELS_JSON_PATH` at workflow level | the writer defaulted to a path outside the uploaded directory, so the artifact lost models.json | required |

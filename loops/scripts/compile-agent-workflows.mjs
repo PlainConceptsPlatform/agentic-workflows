@@ -1,6 +1,7 @@
 // Managed by @plainconceptsplatform/workflows. Source: loops/scripts/compile-agent-workflows.mjs. Update with `workflows update --force`; consumer edits may be overwritten.
 
-const OPENCODE_VERSION = '1.18.23'
+const OPENCODE_VERSION = '2.0.22'
+const OPENCODE_PACKAGE = '@opencode/cli'
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -275,17 +276,19 @@ for (const file of readdirSync(workflowDirectory)) {
         indent + '- name: Setup .NET\n' + indent + '  uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0\n' +
         indent + '  with:\n' + withBody +
         indent + '  env:\n' + indent + '    DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet\n')
-    .replace(/opencode-ai@[0-9][0-9.]*/g, 'opencode-ai@' + OPENCODE_VERSION)
-    // gh-aw installs with --ignore-scripts, which blocks opencode's own postinstall. That
-    // script downloads the platform binary, so 1.18 fails at first use with "opencode-ai's
-    // postinstall script was not run". 1.2.14 did not need it. Run only opencode's postinstall
-    // explicitly, so every other package's scripts stay blocked.
+    // OpenCode 2 ships as @opencode/cli, not opencode-ai. gh-aw's engine manifest
+    // still names opencode-ai and installs it with --ignore-scripts, which blocks
+    // the postinstall that selects the platform binary. Rewrite the install to the
+    // V2 package with scripts enabled, then rename every remaining reference,
+    // versioned or bare (a path, a comment).
     .replace(
       /npm install --ignore-scripts -g opencode-ai@([0-9][0-9.]*)/g,
-      (_m, v) =>
-        "opencode --version 2>/dev/null | grep -qF '" + v + "' || " +
-        "flock /tmp/opencode-install.lock sh -c 'npm install --ignore-scripts -g opencode-ai@" + v +
-        " && cd \"$(npm root -g)/opencode-ai\" && node postinstall.mjs' # opencode-ai@" + v)
+      () =>
+        "opencode --version 2>/dev/null | grep -qF '" + OPENCODE_VERSION + "' || " +
+        "flock /tmp/opencode-install.lock npm install -g " + OPENCODE_PACKAGE + "@" + OPENCODE_VERSION +
+        " # " + OPENCODE_PACKAGE + "@" + OPENCODE_VERSION)
+    .replace(/opencode-ai@[0-9][0-9.]*/g, OPENCODE_PACKAGE + '@' + OPENCODE_VERSION)
+    .replace(/opencode-ai\b/g, OPENCODE_PACKAGE)
     // One warm server per runner, on its own port, with its own data directory. Keyed on the
     // runner rather than the run so a runner keeps its server warm between its own jobs.
     // No double quotes here: the enclosing run: is a double-quoted YAML scalar, so a quote

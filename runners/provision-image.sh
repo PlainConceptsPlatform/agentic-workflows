@@ -80,14 +80,14 @@ chmod +x /usr/local/bin/rg
 echo "=== [6/9] global npm tools (opencode, agentmemory, codegraph, openspec) ==="
 
 npm install -g --no-audit --no-fund \
-  opencode-ai@${OPENCODE_VERSION} \
+  @opencode/cli@${OPENCODE_VERSION} \
   @agentmemory/agentmemory@${AGENTMEMORY_VERSION} \
   @colbymchenry/codegraph@${CODEGRAPH_VERSION} \
   @fission-ai/openspec@${OPENSPEC_VERSION}
 
-# Install opencode's platform binary explicitly
-cd "$(npm root -g)/opencode-ai"
-node postinstall.mjs || true
+# OpenCode 2 ships as @opencode/cli, and its postinstall selects the platform
+# binary. npm runs postinstall for a global install by default, so no explicit
+# postinstall step is needed here.
 
 # RTK
 

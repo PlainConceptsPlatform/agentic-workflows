@@ -233,33 +233,22 @@ describe("generateOpencodeCi", () => {
 const OPENCODE_CI_JSON = `{
   "$schema": "https://opencode.ai/config.json",
   "model": "plainconcepts/glm-5-2",
-  "plugin": [],
   "default_agent": "ci-workflow-agent",
-  "agent": {
+  "agents": {
     "ci-workflow-agent": {
       "description": "Executes GitHub Agentic Workflow tasks in CI.",
       "mode": "primary",
-      "prompt": "You execute the GitHub Agentic Workflow task in the user prompt."
+      "system": "You execute the GitHub Agentic Workflow task in the user prompt."
     }
   },
-  "permission": {
-    "read": "allow"
-  },
-  "lsp": {
-    "csharp": {
-      "disabled": true
-    },
-    "fsharp": {
-      "disabled": true
-    },
-    "razor": {
-      "disabled": true
-    }
-  },
-  "provider": {
+  "permissions": [
+    { "action": "read", "resource": "*", "effect": "allow" }
+  ],
+  "providers": {
     "plainconcepts": {
-      "api": "http://172.30.0.30:10000",
-      "options": {
+      "package": "aisdk:@ai-sdk/openai-compatible",
+      "settings": {
+        "baseURL": "http://172.30.0.30:10000",
         "apiKey": "awf-openai-proxy"
       },
       "models": {
@@ -276,65 +265,49 @@ const OPENCODE_CI_JSON = `{
 `;
 
 describe("generateOpencodeConfig", () => {
-  it("keeps LSP section when .slnx is present", () => {
-    const result = generateOpencodeConfig(OPENCODE_CI_JSON, makeInspection({
+  // OpenCode 2 does not run language servers, so the config carries no lsp
+  // block for either stack.
+  it("never emits an lsp block", () => {
+    const dotnet = JSON.parse(generateOpencodeConfig(OPENCODE_CI_JSON, makeInspection({ solutionFiles: ["app.slnx"] })));
+    const node = JSON.parse(generateOpencodeConfig(OPENCODE_CI_JSON, makeInspection({ pnpmLockfile: true })));
+    expect(dotnet.lsp).toBeUndefined();
+    expect(node.lsp).toBeUndefined();
+  });
+
+  it("adds .NET guardrails to the agent system prompt when .slnx is present", () => {
+    const parsed = JSON.parse(generateOpencodeConfig(OPENCODE_CI_JSON, makeInspection({
       solutionFiles: ["app.slnx"],
-    }));
+    })));
 
-    const parsed = JSON.parse(result);
-    expect(parsed.lsp).toBeDefined();
-    expect(parsed.lsp.csharp.disabled).toBe(true);
-    expect(parsed.lsp.fsharp.disabled).toBe(true);
-    expect(parsed.lsp.razor.disabled).toBe(true);
+    expect(parsed.agents["ci-workflow-agent"].system).toContain(".NET guardrails");
+    expect(parsed.agents["ci-workflow-agent"].system).toContain("Clean Architecture");
   });
 
-  it("removes LSP section when no .slnx is present", () => {
-    const result = generateOpencodeConfig(OPENCODE_CI_JSON, makeInspection({
+  it("adds Node/React rules to the agent system prompt when no .slnx", () => {
+    const parsed = JSON.parse(generateOpencodeConfig(OPENCODE_CI_JSON, makeInspection({
       pnpmLockfile: true,
-    }));
+    })));
 
-    const parsed = JSON.parse(result);
-    expect(parsed.lsp).toBeUndefined();
-  });
-
-  it("adds .NET guardrails to agent prompt when .slnx is present and prompt lacks them", () => {
-    const result = generateOpencodeConfig(OPENCODE_CI_JSON, makeInspection({
-      solutionFiles: ["app.slnx"],
-    }));
-
-    const parsed = JSON.parse(result);
-    expect(parsed.agent["ci-workflow-agent"].prompt).toContain(".NET guardrails");
-    expect(parsed.agent["ci-workflow-agent"].prompt).toContain("Clean Architecture");
-  });
-
-  it("adds Node/React rules to agent prompt when no .slnx", () => {
-    const result = generateOpencodeConfig(OPENCODE_CI_JSON, makeInspection({
-      pnpmLockfile: true,
-    }));
-
-    const parsed = JSON.parse(result);
-    expect(parsed.agent["ci-workflow-agent"].prompt).toContain("Node/React rules");
-    expect(parsed.agent["ci-workflow-agent"].prompt).toContain("Feature-Sliced Design");
+    expect(parsed.agents["ci-workflow-agent"].system).toContain("Node/React rules");
+    expect(parsed.agents["ci-workflow-agent"].system).toContain("Feature-Sliced Design");
   });
 
   it("preserves both models in the provider", () => {
-    const result = generateOpencodeConfig(OPENCODE_CI_JSON, makeInspection({
+    const parsed = JSON.parse(generateOpencodeConfig(OPENCODE_CI_JSON, makeInspection({
       solutionFiles: ["app.slnx"],
-    }));
+    })));
 
-    const parsed = JSON.parse(result);
-    expect(parsed.provider.plainconcepts.models["glm-5-2"]).toBeDefined();
-    expect(parsed.provider.plainconcepts.models["quasar-438b"]).toBeDefined();
+    expect(parsed.providers.plainconcepts.models["glm-5-2"]).toBeDefined();
+    expect(parsed.providers.plainconcepts.models["quasar-438b"]).toBeDefined();
   });
 
-  it("preserves the plainconcepts provider and its API URL", () => {
-    const result = generateOpencodeConfig(OPENCODE_CI_JSON, makeInspection({
+  it("preserves the provider settings and its base URL", () => {
+    const parsed = JSON.parse(generateOpencodeConfig(OPENCODE_CI_JSON, makeInspection({
       solutionFiles: ["app.slnx"],
-    }));
+    })));
 
-    const parsed = JSON.parse(result);
-    expect(parsed.provider.plainconcepts.api).toBe("http://172.30.0.30:10000");
-    expect(parsed.provider.plainconcepts.options.apiKey).toBe("awf-openai-proxy");
+    expect(parsed.providers.plainconcepts.settings.baseURL).toBe("http://172.30.0.30:10000");
+    expect(parsed.providers.plainconcepts.settings.apiKey).toBe("awf-openai-proxy");
   });
 
   it("does not add .NET guardrails twice when already present", () => {
@@ -342,12 +315,11 @@ describe("generateOpencodeConfig", () => {
       '"You execute the GitHub Agentic Workflow task in the user prompt."',
       '"You execute the GitHub Agentic Workflow task in the user prompt.\\n\\n# .NET guardrails\\nFollow Clean Architecture."',
     );
-    const result = generateOpencodeConfig(withGuardrails, makeInspection({
+    const parsed = JSON.parse(generateOpencodeConfig(withGuardrails, makeInspection({
       solutionFiles: ["app.slnx"],
-    }));
+    })));
 
-    const parsed = JSON.parse(result);
-    const guardrailsCount = (parsed.agent["ci-workflow-agent"].prompt.match(/\.NET guardrails/g) ?? []).length;
+    const guardrailsCount = (parsed.agents["ci-workflow-agent"].system.match(/\.NET guardrails/g) ?? []).length;
     expect(guardrailsCount).toBe(1);
   });
 });

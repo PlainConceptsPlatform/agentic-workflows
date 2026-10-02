@@ -106,33 +106,25 @@ export function generateOpencodeConfig(
     const config = JSON.parse(baseContent) as Record<string, unknown>;
     const hasDotnet = inspection.stackHints.solutionFiles.length > 0;
 
-    if (!hasDotnet && config.lsp !== undefined) {
-      delete config.lsp;
-    } else if (hasDotnet && config.lsp === undefined) {
-      (config as Record<string, unknown>).lsp = {
-        csharp: { disabled: true },
-        fsharp: { disabled: true },
-        razor: { disabled: true },
-      };
-    }
-
-    const agent = config.agent as Record<string, unknown> | undefined;
-    if (agent !== undefined) {
-      const agentEntry = agent["ci-workflow-agent"] as Record<string, unknown> | undefined;
+    // OpenCode 2 names the agent map `agents` and the prompt `system`. V2 does
+    // not run language servers, so there is no lsp block to add or remove.
+    const agents = config.agents as Record<string, unknown> | undefined;
+    if (agents !== undefined) {
+      const agentEntry = agents["ci-workflow-agent"] as Record<string, unknown> | undefined;
       if (agentEntry !== undefined) {
-        let prompt = (agentEntry.prompt as string) ?? "";
+        let system = (agentEntry.system as string) ?? "";
 
         if (hasDotnet) {
-          if (!prompt.includes(".NET guardrails")) {
-            prompt += "\n\n# .NET guardrails\nFollow Clean Architecture layering: API → Application → Domain. Infrastructure implements Application ports. Application must not reference EF Core or ASP.NET. Use Central Package Management (Directory.Packages.props). Build in Release mode for CI.";
+          if (!system.includes(".NET guardrails")) {
+            system += "\n\n# .NET guardrails\nFollow Clean Architecture layering: API → Application → Domain. Infrastructure implements Application ports. Application must not reference EF Core or ASP.NET. Use Central Package Management (Directory.Packages.props). Build in Release mode for CI.";
           }
         } else {
-          if (!prompt.includes("Node/React rules")) {
-            prompt += "\n\n# Node/React rules\nFollow Feature-Sliced Design import boundaries. Use pnpm, never npm or yarn. All user-facing text must be i18n messages. TypeScript strict mode.";
+          if (!system.includes("Node/React rules")) {
+            system += "\n\n# Node/React rules\nFollow Feature-Sliced Design import boundaries. Use pnpm, never npm or yarn. All user-facing text must be i18n messages. TypeScript strict mode.";
           }
         }
 
-        (agentEntry as Record<string, unknown>).prompt = prompt;
+        agentEntry.system = system;
       }
     }
 
