@@ -409,9 +409,6 @@ engine:
   version: "1.2.14"
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
-  args:
-    - "--model"
-    - "plainconcepts/glm-5-2"
 
 model: openai/glm-5-2
 max-turns: 120
