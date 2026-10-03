@@ -2220,6 +2220,7 @@ echo "── Runner pools ──────────────────
 # Since 0.28.17 every job runs on agents-arc, release and router included; the rule below
 # still accepts RunnerLandingZone for a stray gate job but requires agents-arc to be named.
 AGENT_POOL="agents-arc"
+PLUMBING_POOL="RunnerLandingZone"
 POOL_OK=1
 
 # `|| true` on both greps: a file naming no pool at all, or only ubuntu-latest, makes grep exit 1,
