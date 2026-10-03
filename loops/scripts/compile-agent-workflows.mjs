@@ -330,6 +330,31 @@ for (const file of readdirSync(workflowDirectory)) {
     }
   }
 
+  // update_issue declares no required field, so the safe-outputs MCP server accepts a call
+  // carrying only issue_number and answers success. An agent that drops the body - the
+  // documented way is omitting the trailing `.` so the bridge never reads stdin - loses its
+  // whole story, is told nothing, and goes on to claim completion. add_comment declares body
+  // required and rejects the identical mistake, which is how the agent recovers from it on
+  // the next turn. Measured on Lyceum before this: one refine run in five wrote its story,
+  // the other four ended green with the issue untouched (#44, #59 twice, #62), and Numa #698
+  // reached `refined, implement` still carrying its original form body.
+  //
+  // Only agent-refine calls update_issue, and always to replace the body; labels and status
+  // are workflow-owned and the prompt forbids the agent from touching them, so requiring the
+  // body costs no legitimate call. The check below fails the compile if this stops matching.
+  {
+    const toolStart = rewritten.indexOf('"update_issue": {');
+    if (toolStart !== -1) {
+      const bodyField = rewritten.indexOf('"body": {', toolStart);
+      if (bodyField !== -1) {
+        const insertAt = bodyField + '"body": {'.length;
+        if (!rewritten.slice(insertAt, insertAt + 80).includes('"required": true')) {
+          rewritten = rewritten.slice(0, insertAt) + '\n' + ' '.repeat(20) + '"required": true,' + rewritten.slice(insertAt);
+        }
+      }
+    }
+  }
+
   // Guard the two rewrites the compiled agent jobs cannot work without. The anchors are
   // upstream template text: when a gh-aw upgrade reshapes either step, the silent
   // failure mode returns (an artifact with no bundle, a skipped push, a green gate on
@@ -338,8 +363,16 @@ for (const file of readdirSync(workflowDirectory)) {
     { name: "bundle upload glob", ok: /\n( +)- name: Upload agent artifacts\n\1  if: always\(\)\n\1  continue-on-error: true\n\1  uses: actions\/upload-artifact@[^\n]*\n\1  with:\n\1    name: \$\{\{ needs\.activation\.outputs\.artifact_prefix \}\}agent\n\1    path: \|\n(?:\1      [^\n]*\n)*\1      \/tmp\/gh-aw\/aw-\*\.bundle\n/ },
     { name: "placeholder step intact", ok: /\n( +)- name: Write agent output placeholder if missing\n\1  if: always\(\)\n\1  run: \|\n\1    if \[ ! -f \/tmp\/gh-aw\/agent_output\.json \]; then\n\1      echo '\{"items":\[\]\}' > \/tmp\/gh-aw\/agent_output\.json\n\1    fi\n/ },
     { name: "failed-jobs reporter disabled", ok: /- name: Report failed jobs\n[ \t]*id: report_failed_jobs\n[ \t]*if: false[^\n]*\n/ },
+    // Only agent-refine declares update_issue; the other workers never carry the tool.
+    {
+      name: "update_issue requires a body",
+      ok: lock =>
+        !lock.includes('"update_issue": {') ||
+        /"update_issue": \{[\s\S]{0,3000}?"body": \{\s*\n\s*"required": true,/.test(lock),
+    },
   ]) {
-    if (!check.ok.test(rewritten)) {
+    const passed = typeof check.ok === "function" ? check.ok(rewritten) : check.ok.test(rewritten);
+    if (!passed) {
       process.stderr.write(
         `compile patch "${check.name}" no longer matches in ${file}: the gh-aw template changed. ` +
         `Re-anchor the rewrite in loops/scripts/compile-agent-workflows.mjs, or agent pushes are silently dropped.\n`,
