@@ -155,8 +155,9 @@ for (const file of readdirSync(workflowDirectory)) {
     // Install only when the pinned version is missing, and take a lock so two jobs starting at
     // once cannot both write the global prefix.
     // gh-aw pins opencode-ai 1.2.14 at every release checked, up to v0.90.0. That version is
-    // from 2026-02-25. The harness expects 1.18.9 and this is the current release, so a gh-aw
-    // upgrade does not move it and the pin is ours to choose.
+    // from 2026-02-25, and it was the pin the guard used until the OpenCode 2 migration: the
+    // harness now ships @opencode/cli at OPENCODE_VERSION above, and the pin is ours to choose
+    // because a gh-aw upgrade does not move it.
     // gh-aw defaults NPM_CONFIG_MIN_RELEASE_AGE to 3 days, which blocks any package
     // published in the last three days with ETARGET "No matching version found ... with a
     // date before". Lowered to 1 so a fix released yesterday is usable. This is a
@@ -278,9 +279,21 @@ for (const file of readdirSync(workflowDirectory)) {
         indent + '  env:\n' + indent + '    DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet\n')
     // OpenCode 2 ships as @opencode/cli, not opencode-ai. gh-aw's engine manifest
     // still names opencode-ai and installs it with --ignore-scripts, which blocks
-    // the postinstall that selects the platform binary. Rewrite the install to the
-    // V2 package with scripts enabled, then rename every remaining reference,
-    // versioned or bare (a path, a comment).
+    // the postinstall that selects the platform binary.
+    //
+    // The whole guard is replaced, not just the install inside it. gh-aw emits
+    //   opencode --version | grep -qF '<gh-aw pin>' || sh -c 'npm install … opencode-ai@<pin>'
+    // and rewriting only the inner install left the outer grep on gh-aw's pin while
+    // the image carries ours: the grep never matched, so the guard re-ran the install
+    // on every job, and a lock already wearing the sentinel was never revisited. The
+    // first pattern below collapses that shape — outer guard, wrapper and all — to a
+    // single clean guard; the second handles a bare install the outer guard is absent from.
+    .replace(
+      /opencode --version[^\n]*grep -qF '[0-9][0-9.]*' \|\|[^\n]*?npm install --ignore-scripts -g opencode-ai@[0-9][0-9.]*[^\n]*/g,
+      () =>
+        "opencode --version 2>/dev/null | grep -qF '" + OPENCODE_VERSION + "' || " +
+        "flock /tmp/opencode-install.lock npm install -g " + OPENCODE_PACKAGE + "@" + OPENCODE_VERSION +
+        " # " + OPENCODE_PACKAGE + "@" + OPENCODE_VERSION)
     .replace(
       /npm install --ignore-scripts -g opencode-ai@([0-9][0-9.]*)/g,
       () =>

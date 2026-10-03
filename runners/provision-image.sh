@@ -89,6 +89,35 @@ npm install -g --no-audit --no-fund \
 # binary. npm runs postinstall for a global install by default, so no explicit
 # postinstall step is needed here.
 
+# Terminal client defaults, baked in so an operator who opens a session on a VM
+# gets a quiet transcript: tools and reasoning are collapsed instead of printed,
+# and token throughput stays visible because that is the number worth watching on
+# a shared VM. The CLI schema is https://opencode.ai/v2/cli.json.
+#
+# This is the *terminal client* config, read by `opencode` and `opencode mini`.
+# It has no effect on `opencode run`, which is what CI drives, because there is no
+# transcript to render there. It exists purely for the human on the box.
+#
+# Written as the runner user: OpenCode reads it from <home>/.config/opencode/cli.json,
+# and jobs and interactive sessions both run as runner.
+install -d -o runner -g runner /home/runner/.config/opencode
+cat > /home/runner/.config/opencode/cli.json <<'CLI_JSON'
+{
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "session": {
+    "verbosity": "low",
+    "grouping": "auto",
+    "thinking": "hide",
+    "sidebar": "auto",
+    "scrollbar": false,
+    "image_preview": false,
+    "markdown": "rendered",
+    "tps": true
+  }
+}
+CLI_JSON
+chown runner:runner /home/runner/.config/opencode/cli.json
+
 # RTK
 
 echo "=== [7/9] RTK ==="
