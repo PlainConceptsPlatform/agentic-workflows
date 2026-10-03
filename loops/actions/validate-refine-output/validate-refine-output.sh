@@ -77,10 +77,18 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
   # complete refinement. A body carrying the draft marker is a temporal draft, not a
   # finished refinement: it only counts as the questions outcome when the matching
   # batched-questions comment is also there.
+  #
+  # Questions require the draft as well as the comment, which is the contract the worker
+  # states: it leaves a template-wrapped temporal draft AND asks in one batched comment.
+  # Accepting a comment with no body at all let a run that wrote nothing be read as a
+  # question, so the issue parked at `review` waiting for an answer to something nobody
+  # asked, with the run green. Lyceum #44 and #59, Numa #698: the agent lost the story,
+  # posted "Refinement complete", and the loop believed it. Without a draft it is not a
+  # question, it is a run that produced nothing, and invalid is what makes it retry.
   if child_count >= 2 and has_replacement_body and has_only_source_items then "split"
   elif child_count > 0 then "invalid"
   elif has_replacement_body and (has_draft_body | not) and has_only_source_items then "complete"
-  elif has_clarification and ((has_update | not) or has_draft_body) and has_only_source_items
+  elif has_clarification and has_draft_body and has_only_source_items
     and (reported_incomplete | not) then "questions"
   else "invalid"
   end
