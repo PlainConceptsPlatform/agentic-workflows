@@ -2,6 +2,28 @@
 
 const OPENCODE_VERSION = '2.0.22'
 const OPENCODE_PACKAGE = '@opencode/cli'
+
+// The install the compiled locks carry, shared so both rewrite sites emit exactly
+// the same command.
+//
+// `--allow-scripts` is the part that matters. npm now blocks a dependency's
+// install scripts unless the package is explicitly allowed, and @opencode/cli
+// downloads its platform binary from its own postinstall. Without the flag the
+// install "succeeds" (exit 0, `added N packages`) while the postinstall is
+// skipped with a warning, leaving a stub bin and the previous version in place,
+// so the job runs OpenCode 1 against OpenCode 2 config and the gateway rejects
+// every model. `NPM_CONFIG_ALLOW_SCRIPTS` is the spelling npm accepts for a
+// global install; the CLI form is refused for project-scoped installs.
+//
+// The trailing check turns a silent bad install into a loud failure: if the
+// version still is not there after installing, the step exits non-zero rather
+// than letting the agent run on the wrong binary.
+const OPENCODE_INSTALL_GUARD =
+  "opencode --version 2>/dev/null | grep -qF '" + OPENCODE_VERSION + "' || " +
+  "flock /tmp/opencode-install.lock sh -c " +
+  "'NPM_CONFIG_ALLOW_SCRIPTS=" + OPENCODE_PACKAGE + " npm install -g " + OPENCODE_PACKAGE + "@" + OPENCODE_VERSION + "' ; " +
+  "opencode --version 2>/dev/null | grep -qF '" + OPENCODE_VERSION + "' || " +
+  "{ echo \"::error::opencode " + OPENCODE_VERSION + " is not installed after the install step\"; exit 1; }"
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -291,15 +313,10 @@ for (const file of readdirSync(workflowDirectory)) {
     .replace(
       /opencode --version[^\n]*grep -qF '[0-9][0-9.]*' \|\|[^\n]*?npm install --ignore-scripts -g opencode-ai@[0-9][0-9.]*[^\n]*/g,
       () =>
-        "opencode --version 2>/dev/null | grep -qF '" + OPENCODE_VERSION + "' || " +
-        "flock /tmp/opencode-install.lock npm install -g " + OPENCODE_PACKAGE + "@" + OPENCODE_VERSION +
-        " # " + OPENCODE_PACKAGE + "@" + OPENCODE_VERSION)
+        OPENCODE_INSTALL_GUARD)
     .replace(
       /npm install --ignore-scripts -g opencode-ai@([0-9][0-9.]*)/g,
-      () =>
-        "opencode --version 2>/dev/null | grep -qF '" + OPENCODE_VERSION + "' || " +
-        "flock /tmp/opencode-install.lock npm install -g " + OPENCODE_PACKAGE + "@" + OPENCODE_VERSION +
-        " # " + OPENCODE_PACKAGE + "@" + OPENCODE_VERSION)
+      () => OPENCODE_INSTALL_GUARD)
     .replace(/opencode-ai@[0-9][0-9.]*/g, OPENCODE_PACKAGE + '@' + OPENCODE_VERSION)
     .replace(/opencode-ai\b/g, OPENCODE_PACKAGE)
     // One warm server per runner, on its own port, with its own data directory. Keyed on the
