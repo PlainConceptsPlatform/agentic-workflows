@@ -2,6 +2,28 @@
 
 const OPENCODE_VERSION = '2.0.22'
 const OPENCODE_PACKAGE = '@opencode/cli'
+
+// The install the compiled locks carry, shared so both rewrite sites emit exactly
+// the same command.
+//
+// `--allow-scripts` is the part that matters. npm now blocks a dependency's
+// install scripts unless the package is explicitly allowed, and @opencode/cli
+// downloads its platform binary from its own postinstall. Without the flag the
+// install "succeeds" (exit 0, `added N packages`) while the postinstall is
+// skipped with a warning, leaving a stub bin and the previous version in place,
+// so the job runs OpenCode 1 against OpenCode 2 config and the gateway rejects
+// every model. `NPM_CONFIG_ALLOW_SCRIPTS` is the spelling npm accepts for a
+// global install; the CLI form is refused for project-scoped installs.
+//
+// The trailing check turns a silent bad install into a loud failure: if the
+// version still is not there after installing, the step exits non-zero rather
+// than letting the agent run on the wrong binary.
+const OPENCODE_INSTALL_GUARD =
+  "opencode --version 2>/dev/null | grep -qF '" + OPENCODE_VERSION + "' || " +
+  "flock /tmp/opencode-install.lock sh -c " +
+  "'NPM_CONFIG_ALLOW_SCRIPTS=" + OPENCODE_PACKAGE + " npm install -g " + OPENCODE_PACKAGE + "@" + OPENCODE_VERSION + "' ; " +
+  "opencode --version 2>/dev/null | grep -qF '" + OPENCODE_VERSION + "' || " +
+  "{ echo \"::error::opencode " + OPENCODE_VERSION + " is not installed after the install step\"; exit 1; }"
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -122,7 +144,10 @@ for (const file of readdirSync(workflowDirectory)) {
     //     explicitly, so the remote registry is not needed here.
     //   - --print-logs + a non-silent level: stripping --print-logs and forcing
     //     ERROR hid every engine log, so a stalled bootstrap looked like silence.
-    .replace(/opencode run(?: --print-logs)? --log-level (?:DEBUG|ERROR|INFO)/g, "OPENCODE_DISABLE_MODELS_FETCH=1 opencode run --print-logs --log-level info")
+    //     The level must be lower case: OpenCode 2 rejects `INFO` with
+    //     "Invalid value for flag --log-level", aborting before the agent runs.
+    //     The old upper-case spelling was valid in v1 and is not in v2.
+    .replace(/opencode run(?: --print-logs)? --log-level (?:DEBUG|ERROR|INFO|debug|error|info)/g, "OPENCODE_DISABLE_MODELS_FETCH=1 opencode run --print-logs --log-level info")
     .replace(/GH_AW_INFO_MODEL: "[^"]*"/g, 'GH_AW_INFO_MODEL: "per-agent"')
     .replace(/OPENCODE_MODEL: [^\n]+/g, "OPENCODE_MODEL: ''")
     .replace(/GH_AW_INFO_MODEL_COSTS: '[^']*'/g, 'GH_AW_INFO_MODEL_COSTS: \'{"providers":{}}\'')
@@ -155,8 +180,9 @@ for (const file of readdirSync(workflowDirectory)) {
     // Install only when the pinned version is missing, and take a lock so two jobs starting at
     // once cannot both write the global prefix.
     // gh-aw pins opencode-ai 1.2.14 at every release checked, up to v0.90.0. That version is
-    // from 2026-02-25. The harness expects 1.18.9 and this is the current release, so a gh-aw
-    // upgrade does not move it and the pin is ours to choose.
+    // from 2026-02-25, and it was the pin the guard used until the OpenCode 2 migration: the
+    // harness now ships @opencode/cli at OPENCODE_VERSION above, and the pin is ours to choose
+    // because a gh-aw upgrade does not move it.
     // gh-aw defaults NPM_CONFIG_MIN_RELEASE_AGE to 3 days, which blocks any package
     // published in the last three days with ETARGET "No matching version found ... with a
     // date before". Lowered to 1 so a fix released yesterday is usable. This is a
@@ -278,15 +304,22 @@ for (const file of readdirSync(workflowDirectory)) {
         indent + '  env:\n' + indent + '    DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet\n')
     // OpenCode 2 ships as @opencode/cli, not opencode-ai. gh-aw's engine manifest
     // still names opencode-ai and installs it with --ignore-scripts, which blocks
-    // the postinstall that selects the platform binary. Rewrite the install to the
-    // V2 package with scripts enabled, then rename every remaining reference,
-    // versioned or bare (a path, a comment).
+    // the postinstall that selects the platform binary.
+    //
+    // The whole guard is replaced, not just the install inside it. gh-aw emits
+    //   opencode --version | grep -qF '<gh-aw pin>' || sh -c 'npm install … opencode-ai@<pin>'
+    // and rewriting only the inner install left the outer grep on gh-aw's pin while
+    // the image carries ours: the grep never matched, so the guard re-ran the install
+    // on every job, and a lock already wearing the sentinel was never revisited. The
+    // first pattern below collapses that shape — outer guard, wrapper and all — to a
+    // single clean guard; the second handles a bare install the outer guard is absent from.
+    .replace(
+      /opencode --version[^\n]*grep -qF '[0-9][0-9.]*' \|\|[^\n]*?npm install --ignore-scripts -g opencode-ai@[0-9][0-9.]*[^\n]*/g,
+      () =>
+        OPENCODE_INSTALL_GUARD)
     .replace(
       /npm install --ignore-scripts -g opencode-ai@([0-9][0-9.]*)/g,
-      () =>
-        "opencode --version 2>/dev/null | grep -qF '" + OPENCODE_VERSION + "' || " +
-        "flock /tmp/opencode-install.lock npm install -g " + OPENCODE_PACKAGE + "@" + OPENCODE_VERSION +
-        " # " + OPENCODE_PACKAGE + "@" + OPENCODE_VERSION)
+      () => OPENCODE_INSTALL_GUARD)
     .replace(/opencode-ai@[0-9][0-9.]*/g, OPENCODE_PACKAGE + '@' + OPENCODE_VERSION)
     .replace(/opencode-ai\b/g, OPENCODE_PACKAGE)
     // One warm server per runner, on its own port, with its own data directory. Keyed on the

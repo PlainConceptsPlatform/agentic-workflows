@@ -12,9 +12,6 @@ on:
         required: false
         type: boolean
         default: false
-  schedule:
-    - cron: "0 2 1 * *"  # monthly rebuild, no fleet flip
-
 permissions:
   contents: read
 

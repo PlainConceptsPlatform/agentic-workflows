@@ -79,15 +79,48 @@ chmod +x /usr/local/bin/rg
 
 echo "=== [6/9] global npm tools (opencode, agentmemory, codegraph, openspec) ==="
 
-npm install -g --no-audit --no-fund \
+# npm no longer runs a dependency's install scripts by default; @opencode/cli
+# downloads its platform binary from postinstall, so it must be allowed
+# explicitly or the install leaves a stub bin and no working binary.
+NPM_CONFIG_ALLOW_SCRIPTS=@opencode/cli npm install -g --no-audit --no-fund \
   @opencode/cli@${OPENCODE_VERSION} \
   @agentmemory/agentmemory@${AGENTMEMORY_VERSION} \
   @colbymchenry/codegraph@${CODEGRAPH_VERSION} \
   @fission-ai/openspec@${OPENSPEC_VERSION}
 
 # OpenCode 2 ships as @opencode/cli, and its postinstall selects the platform
-# binary. npm runs postinstall for a global install by default, so no explicit
-# postinstall step is needed here.
+# binary. That postinstall is now opt-in (NPM_CONFIG_ALLOW_SCRIPTS above); without
+# it npm installs the package but no runnable binary, and the version check further
+# down this script is what catches that.
+
+# Terminal client defaults, baked in so an operator who opens a session on a VM
+# gets a quiet transcript: tools and reasoning are collapsed instead of printed,
+# and token throughput stays visible because that is the number worth watching on
+# a shared VM. The CLI schema is https://opencode.ai/v2/cli.json.
+#
+# This is the *terminal client* config, read by `opencode` and `opencode mini`.
+# It has no effect on `opencode run`, which is what CI drives, because there is no
+# transcript to render there. It exists purely for the human on the box.
+#
+# Written as the runner user: OpenCode reads it from <home>/.config/opencode/cli.json,
+# and jobs and interactive sessions both run as runner.
+install -d -o runner -g runner /home/runner/.config/opencode
+cat > /home/runner/.config/opencode/cli.json <<'CLI_JSON'
+{
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "session": {
+    "verbosity": "low",
+    "grouping": "auto",
+    "thinking": "hide",
+    "sidebar": "auto",
+    "scrollbar": false,
+    "image_preview": false,
+    "markdown": "rendered",
+    "tps": true
+  }
+}
+CLI_JSON
+chown runner:runner /home/runner/.config/opencode/cli.json
 
 # RTK
 
