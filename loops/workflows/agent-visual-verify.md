@@ -133,8 +133,11 @@ steps:
       output-path: ${{ env.ISSUE_CONTEXT_PATH }}
 
 safe-outputs:
-  # Never staged: staged mode only previews writes ("Would add comment"), so the run goes
-  # green and the issue never hears anything. The audit worker learned this the same way.
+  # Path A: the framework writes, so this worker does not stage and has no apply step in
+  # conclude. Staged here would mean the framework writes nothing and conclude would have to
+  # apply the comment, and conclude does not: the run would go green and the issue would
+  # never hear anything. That is staged-without-apply, the failure refine shipped once, not a
+  # property of staged itself. This worker stays on Path A and lets safe_outputs write.
   report-failure-as-issue: false
   threat-detection: false
   add-comment:
