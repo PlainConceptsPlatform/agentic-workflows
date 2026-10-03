@@ -52,6 +52,14 @@ safe-outputs:
 job then applies the items with a GitHub App installation token, so every comment and label change is
 attributed to the Platform App rather than `github-actions[bot]`.
 
+`staged: true` is not a test mode and not a dry run you turn on to check a payload. It is the
+production path every worker except `agent-implement` runs on, and the framework writes nothing on it
+by design. The consequence is stark: **a staged worker whose `conclude` has no `apply-agent-output`
+step publishes nothing, and every job still reports success.** The agent's comment, the rewritten
+issue body and any split children stay inside the artifact; `conclude` goes green; the issue keeps its
+`refine`/`triage` label forever. This is the failure that shipped once in `agent-refine`: `staged: true`
+with no apply, green runs, untouched issues. If a worker stages, its `conclude` must apply.
+
 `agent-implement` uses path A, because it opens pull requests. The other workers use path B.
 
 Path B costs you the write path: you own `apply-agent-output` and the actions under it. It buys
