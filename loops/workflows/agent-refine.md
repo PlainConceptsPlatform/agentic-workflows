@@ -360,9 +360,25 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      # No apply-agent-output here. safe_outputs already creates the split children, links
-      # them as sub-issues of the parent and rewrites the parent body; running the action too
-      # filed a second unlinked, unlabelled copy of every child.
+      # Path B needs this step, exactly as triage and merge-gate have it. `staged: true` above
+      # means the framework writes nothing, so without an apply the run validates everything and
+      # publishes nothing: the agent's comment and the refined body stay in the artifact, conclude
+      # reports success, and the issue keeps `refine` forever. That is how a refine came back green
+      # and untouched.
+      #
+      # It is not redundant with safe_outputs: staged, safe_outputs never writes. The comment that
+      # used to sit here said this action filed a duplicate of every split child, which is what
+      # happens when it runs *without* staging. Staged, the children exist only in the artifact
+      # and this step is the only thing that creates them.
+      - name: Apply agent output
+        uses: ./.github/actions/apply-agent-output
+        with:
+          artifact-name: ${{ needs.activation.outputs.artifact_prefix }}agent
+          token: ${{ steps.app-token.outputs.token }}
+          apply-labels: 'false'
+          update-issues: 'true'
+          create-issues: 'true'
+          fallback-issue-number: ${{ inputs.issue-number }}
       - name: Apply complete refinement labels
         if: needs.validate_output.outputs.outcome == 'complete'
         uses: ./.github/actions/add-issue-labels
