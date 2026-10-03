@@ -144,7 +144,10 @@ for (const file of readdirSync(workflowDirectory)) {
     //     explicitly, so the remote registry is not needed here.
     //   - --print-logs + a non-silent level: stripping --print-logs and forcing
     //     ERROR hid every engine log, so a stalled bootstrap looked like silence.
-    .replace(/opencode run(?: --print-logs)? --log-level (?:DEBUG|ERROR|INFO)/g, "OPENCODE_DISABLE_MODELS_FETCH=1 opencode run --print-logs --log-level INFO")
+    //     The level must be lower case: OpenCode 2 rejects `INFO` with
+    //     "Invalid value for flag --log-level", aborting before the agent runs.
+    //     The old upper-case spelling was valid in v1 and is not in v2.
+    .replace(/opencode run(?: --print-logs)? --log-level (?:DEBUG|ERROR|INFO|debug|error|info)/g, "OPENCODE_DISABLE_MODELS_FETCH=1 opencode run --print-logs --log-level info")
     .replace(/GH_AW_INFO_MODEL: "[^"]*"/g, 'GH_AW_INFO_MODEL: "per-agent"')
     .replace(/OPENCODE_MODEL: [^\n]+/g, "OPENCODE_MODEL: ''")
     .replace(/GH_AW_INFO_MODEL_COSTS: '[^']*'/g, 'GH_AW_INFO_MODEL_COSTS: \'{"providers":{}}\'')
