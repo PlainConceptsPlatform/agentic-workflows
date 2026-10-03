@@ -122,7 +122,7 @@ for (const file of readdirSync(workflowDirectory)) {
     //     explicitly, so the remote registry is not needed here.
     //   - --print-logs + a non-silent level: stripping --print-logs and forcing
     //     ERROR hid every engine log, so a stalled bootstrap looked like silence.
-    .replace(/opencode run(?: --print-logs)? --log-level (?:DEBUG|ERROR|INFO)/g, "OPENCODE_DISABLE_MODELS_FETCH=1 opencode run --print-logs --log-level INFO")
+    .replace(/opencode run(?: --print-logs)? --log-level (?:DEBUG|ERROR|INFO)/g, "OPENCODE_DISABLE_MODELS_FETCH=1 opencode run --print-logs --log-level info")
     .replace(/GH_AW_INFO_MODEL: "[^"]*"/g, 'GH_AW_INFO_MODEL: "per-agent"')
     .replace(/OPENCODE_MODEL: [^\n]+/g, "OPENCODE_MODEL: ''")
     .replace(/GH_AW_INFO_MODEL_COSTS: '[^']*'/g, 'GH_AW_INFO_MODEL_COSTS: \'{"providers":{}}\'')
