@@ -6,6 +6,10 @@ network:
   allowed:
     - defaults
     - forge.plainconcepts.com
+    # opencode fetches its model registry from models.opencode.ai at startup; without
+    # this host on the allowlist the fetch blocks bootstrap and the run stalls after
+    # "init" until the runner kills it. The apex "opencode.ai" is not enough.
+    - models.opencode.ai
     - node
     - github
     - dotnet

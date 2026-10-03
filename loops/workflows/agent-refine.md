@@ -86,7 +86,7 @@ description: |
 name: "Agent: Refine Issue"
 
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.90.0
+  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
@@ -716,9 +716,6 @@ engine:
   version: "1.2.14"
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
-  args:
-    - "--model"
-    - "plainconcepts/glm-5-2"
 
 model: openai/glm-5-2
 # 150 rather than 500. With a four-hour clock this is the loop guard, and the worst

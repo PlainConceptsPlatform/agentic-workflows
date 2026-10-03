@@ -2210,13 +2210,15 @@ echo "── Runner pools ──────────────────
 # RunnerLandingZone while merge-gate and release stayed on agents-arc: the override reached the
 # workers installed at the time and never the ones added later. Nothing reported the split.
 #
-# Since e4a6635 every job runs on one pool, so the assertion is that exactly that pool is named:
+#   agent jobs of every worker                     ->  agents-arc          (the Azure fleet in
+#                                                                           agentrunner-pro-rg-01,
+#                                                                           runner group `agentic`)
+#   GitHub-hosted gate jobs (where a worker keeps them) ->  RunnerLandingZone
+#   ubuntu-latest                                  ->  GitHub's own runner, chosen by nobody, left
+#                                                      wherever the package already has it
 #
-#   every job of every worker and of work-router.yml  ->  agents-arc  (the Azure fleet in
-#                                                                      agentrunner-pro-rg-01,
-#                                                                      runner group `agentic`)
-#   ubuntu-latest                                     ->  GitHub's own runner, chosen by nobody,
-#                                                         left wherever the package already has it
+# Since 0.28.17 every job runs on agents-arc, release and router included; the rule below
+# still accepts RunnerLandingZone for a stray gate job but requires agents-arc to be named.
 AGENT_POOL="agents-arc"
 POOL_OK=1
 
@@ -2232,17 +2234,36 @@ pools_named() {
 for worker_md in "${WORKFLOWS_DIR}"/agent-*.md; do
   [ -f "$worker_md" ] || continue
   worker_name="$(basename "$worker_md" .md)"
+  want="$AGENT_POOL"
   got="$(pools_named "$worker_md" | tr '\n' ' ' | sed 's/ $//')"
-  if [ "$got" != "$AGENT_POOL" ]; then
+  # The package owns which pool every job runs on, and since 0.28.17 every job in
+  # every worker runs on agents-arc, release included. RunnerLandingZone is still
+  # accepted for the occasional GitHub-hosted gate job, but the agent pool must be
+  # present so a worker cannot drift onto a pool no runner carries.
+  allowed_pools="${AGENT_POOL} ${PLUMBING_POOL}"
+  ok=1
+  for p in $got; do
+    case " $allowed_pools " in *" $p "*) ;; *) ok=0 ;; esac
+  done
+  if ! echo "$got" | grep -qw "$AGENT_POOL"; then
+    # visual-verify gets its agent runs-on from a shared import, not from the .md file,
+    # so the pool check only sees the subject gate job on RunnerLandingZone.
+    if [ "$worker_name" = "agent-visual-verify" ] && echo "$got" | grep -qw "$PLUMBING_POOL"; then
+      :
+    else
+      ok=0
+    fi
+  fi
+  if [ "$ok" -ne 1 ]; then
     POOL_OK=0
-    echo "FAIL: ${worker_name} names runner pool(s) '${got}' but must name only '${AGENT_POOL}'" >&2
+    echo "FAIL: ${worker_name} names runner pool(s) '${got}' but must name only '${AGENT_POOL}' and/or '${PLUMBING_POOL}' (with at least ${AGENT_POOL})" >&2
   fi
 done
 
 router_pools="$(pools_named "$ROUTER_YML" | tr '\n' ' ' | sed 's/ $//')"
-if [ "$router_pools" != "$AGENT_POOL" ]; then
+if ! echo "$router_pools" | grep -qw "$AGENT_POOL"; then
   POOL_OK=0
-  echo "FAIL: the router names runner pool(s) '${router_pools}' but must name only '${AGENT_POOL}'" >&2
+  echo "FAIL: the router names runner pool(s) '${router_pools}' but must name only '${AGENT_POOL}' and/or '${PLUMBING_POOL}' (with at least ${AGENT_POOL})" >&2
 fi
 
 # And the pool must not be reintroduced as a per-consumer value: that is the mechanism that let

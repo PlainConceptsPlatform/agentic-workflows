@@ -46,6 +46,13 @@ write_files:
         docker container prune -f >/dev/null 2>&1
         docker volume prune -f >/dev/null 2>&1
         docker network prune -f >/dev/null 2>&1
+        # The agent runs opencode on the host (awf chroot mode), not inside the job's
+        # cgroup, so a job killed mid-run can leave a hung opencode and its awf/`flock`
+        # siblings alive. Those hold /tmp/agentic-awf.lock and block every later job on
+        # this VM at `flock` forever. Kill them before the next job starts.
+        pkill -9 -u runner -f 'awf-bundle' 2>/dev/null
+        pkill -9 -u runner -f 'opencode run' 2>/dev/null
+        rm -f /tmp/agentic-awf.lock 2>/dev/null
         rm -rf /tmp/gh-aw-* /tmp/gh-aw /tmp/opencode-data-* 2>/dev/null
         rm -rf /home/runner/.azure 2>/dev/null
         # A later job must find a pristine workspace: a half-cleaned checkout from the
