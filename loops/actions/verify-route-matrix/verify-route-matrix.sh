@@ -2189,6 +2189,22 @@ if worker_installed refine; then
   if [ "$SIZE_GATE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+# The safeoutputs bridge reads its JSON from stdin only for `tool .`. Any --flag on the line makes
+# it skip stdin and send just the flags (seen on Odyssey #200: 20 bytes, no body, "success", the
+# update_issue allowance spent three times). The refine prompt must therefore show the correct
+# calls with every parameter inside the JSON and no flags, and may name a flagged call only as
+# the wrong one.
+if worker_installed refine; then
+  REFINE_WORKER_MD="${WORKFLOWS_DIR}/agent-refine.md"
+  correct_calls="$(awk '/Correct:$/{found=1; next} /Wrong \(stdin never read/{found=0} found' "$REFINE_WORKER_MD")"
+  if [ -z "$correct_calls" ] \
+    || printf '%s' "$correct_calls" | grep -qE 'safeoutputs [a-z_]+ +--'; then
+    FAIL=$((FAIL + 1))
+    echo "FAIL: refine's correct safeoutputs examples are missing or pass a --flag, which makes the bridge skip stdin and drop the body" >&2
+  else
+    PASS=$((PASS + 1))
+  fi
+fi
 echo "── Runner pools ──────────────────────────────────────────────────────────"
 
 # Where every job runs, stated once and asserted, because GitHub gives a wrong pool no error: a

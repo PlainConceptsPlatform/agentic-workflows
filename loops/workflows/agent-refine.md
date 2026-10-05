@@ -837,14 +837,22 @@ timeout-minutes: 90
    size of a very long message, tighten the body; a shorter call that lands beats a longer one
    that is cut off.
 
-   **Pipe JSON via stdin and always pass `.` as the trailing argument.** The safeoutputs bridge
-   reads the JSON payload from stdin only when the final argument is `.`. Quote the issue-number
-   flags on the same line, never in place of the dot. Correct:
+   **Pipe JSON via stdin, put every parameter inside the JSON, and pass no flags.** The
+   safeoutputs bridge reads the JSON payload from stdin only when the command line is the tool
+   name followed by a lone `.`. Any `--flag` on the line, `--issue_number` and `--item_number`
+   included, makes it skip stdin: it sends just the flags (for example the 20 bytes
+   `{"issue_number":685}`), drops the body, and still returns success, which spends the call
+   allowance on nothing. Put the target number in the JSON as `issue_number` (`update_issue`) or
+   `item_number` (`add_comment`). Correct:
    `printf '%s' "$JSON" | safeoutputs create_issue .`
+   `printf '%s' "$JSON" | safeoutputs update_issue .` with `{"issue_number":685,"body":"..."}`
+   `printf '%s' "$JSON" | safeoutputs add_comment .` with `{"item_number":685,"body":"..."}`
+   Wrong (stdin never read, body silently empty, bridge returns success):
    `printf '%s' "$JSON" | safeoutputs update_issue --issue_number 685 .`
    `printf '%s' "$JSON" | safeoutputs add_comment --item_number 685 .`
-   Wrong (stdin never read, body silently empty, bridge returns success):
    `printf '%s' "$JSON" | safeoutputs update_issue --issue_number 685`
+   A call that reports only about 20 argument bytes for a body of thousands did not carry the body.
+   Do not repeat it in the same form: resend the whole payload with the number inside the JSON.
 
 8. Decide exactly one outcome:
 
