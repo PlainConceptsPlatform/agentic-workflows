@@ -2205,6 +2205,30 @@ if worker_installed refine; then
     PASS=$((PASS + 1))
   fi
 fi
+# The implement prompt tells the agent it is already on its branch and to skip the pc-plan-goal
+# branching phase. That is only true if a step before the agent made the branch, and nothing in the
+# sandbox can do it later: no git credentials, and the prompt forbids the commands. Without the
+# step the skill is blocked in its first phase and the agent improvises the rest of the pipeline
+# (Odyssey #200, run 2334). So the worker must create the branch in a step, from the env prefix,
+# and the prompt must name that same branch.
+if worker_installed implement; then
+  IMPLEMENT_WORKER_MD="${WORKFLOWS_DIR}/agent-implement.md"
+  branch_ok=1
+  if ! grep -qE '^  IMPLEMENT_BRANCH_PREFIX: ' "$IMPLEMENT_WORKER_MD"; then
+    branch_ok=0
+    echo "FAIL: implement defines no IMPLEMENT_BRANCH_PREFIX, so the branch name has no single source" >&2
+  fi
+  branch_step="$(awk '/^  - name: Create the feature branch/{found=1; print; next} found && /^  - name:/{exit} found{print}' "$IMPLEMENT_WORKER_MD")"
+  if ! printf '%s' "$branch_step" | grep -qF 'git switch -c'; then
+    branch_ok=0
+    echo "FAIL: implement has no step that creates the feature branch before the agent; the prompt's claim that the agent is already on its branch is false and pc-plan-goal is blocked in its first phase" >&2
+  fi
+  if ! grep -qF 'IMPLEMENT_BRANCH_PREFIX }}${{ inputs.issue-number }}' "$IMPLEMENT_WORKER_MD"; then
+    branch_ok=0
+    echo "FAIL: the implement prompt does not name the branch the step created" >&2
+  fi
+  if [ "$branch_ok" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
 echo "── Runner pools ──────────────────────────────────────────────────────────"
 
 # Where every job runs, stated once and asserted, because GitHub gives a wrong pool no error: a
