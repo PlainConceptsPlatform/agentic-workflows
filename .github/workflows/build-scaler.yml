@@ -1,0 +1,79 @@
+name: Build scaler
+
+# The runner scaler app (agentrunner-scaler-01) had no CI: it was built by hand on
+# someone's machine, the published DLL committed to runners/scaler-app/publish/ drifted
+# from the committed source, and production ran a build that was in no branch. This
+# workflow is the single source of truth for that binary. Every push to main that touches
+# the scaler builds it from source and deploys it to the App Service, so the repo and
+# production can never diverge again.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'runners/scaler-app/**'
+      - '.github/workflows/build-scaler.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-scaler
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: runner-platform
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        working-directory: runners/scaler-app
+        run: dotnet publish -c Release -o publish --nologo
+
+      - name: Build deployment zip
+        working-directory: runners/scaler-app/publish
+        run: zip -r "${{ github.workspace }}/scaler-deploy.zip" .
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.CLIENT_ID }}",
+              "clientSecret": "${{ secrets.SECRET_ID }}",
+              "subscriptionId": "${{ secrets.SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.TENANT_ID }}"
+            }
+
+      - name: Deploy to App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: agentrunner-scaler-01
+          package: ${{ github.workspace }}/scaler-deploy.zip
+
+      - name: Health check
+        env:
+          VM_TOKEN: ${{ secrets.VM_TOKEN }}
+        run: |
+          set -euo pipefail
+          sleep 25
+          code=$(curl -s -o /dev/null -w "%{http_code}" https://agentrunner-scaler-01.azurewebsites.net/healthz)
+          echo "healthz: $code"
+          [ "$code" = "200" ] || { echo "::error::/healthz did not return 200 after deploy"; exit 1; }
+          # /status confirms the scaler can read Azure and is tracking demand.
+          status=$(curl -s -H "Authorization: Bearer $VM_TOKEN" https://agentrunner-scaler-01.azurewebsites.net/status)
+          echo "$status" | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'capacity={d[\"azure\"][\"capacity\"]} demand={d[\"demand\"]} desired={d[\"desired\"]}')"
+
+      - name: Azure logout
+        if: always()
+        run: az logout
