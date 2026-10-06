@@ -48,7 +48,7 @@ let thrown =
     AppExceptions
     | where TimeGenerated > window
     | extend Problem = ProblemId, Kind = ExceptionType, Stack = Details,
-             Msg = outerMessage, Category = "";
+             Msg = OuterMessage, Category = "";
 let logged =
     AppTraces
     | where TimeGenerated > window
