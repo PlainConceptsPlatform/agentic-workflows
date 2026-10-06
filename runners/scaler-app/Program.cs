@@ -139,6 +139,8 @@ async Task SetCapacity(int target)
         new { sku = new { capacity = target } });
     if (!resp.IsSuccessStatusCode)
         log.LogError("capacity patch to {t} failed: {s} {b}", target, resp.StatusCode, await resp.Content.ReadAsStringAsync());
+    else
+        log.LogInformation("capacity patch -> {t}", target);
 }
 
 async Task DeleteInstance(string id)
@@ -263,7 +265,10 @@ async Task Evaluate(string reason)
         var demand = Demand();
         var desired = Math.Min(DesiredVms(demand), MaxVms);
         var instances = await Instances();
-        var active = instances.Count(i => i.State is not "Deleting" and not "Failed");
+        // A VM counts as active capacity only when it can serve jobs: Creating/Updating
+        // instances cannot accept JIT requests yet, so counting them inflates capacity
+        // and hides the gap between "Azure says it exists" and "GitHub can hand it work".
+        var active = instances.Count(i => i.State is not "Deleting" and not "Failed" and not "Creating" and not "Updating");
         log.LogInformation("evaluate({r}): demand={d} desired={want} active={a} states=[{s}]",
             reason, demand, desired, active,
             string.Join(",", instances.Select(i => $"{i.Id}:{i.State}")));
@@ -276,6 +281,25 @@ async Task Evaluate(string reason)
 
         if (active < desired)
             await SetCapacity(Math.Min(active + (desired - active), MaxVms));
+        else if (active > desired)
+        {
+            // Scale down by lowering VMSS capacity — but only when no job is in flight.
+            // In Uniform orchestration Azure chooses which instance to delete when capacity
+            // drops, and that choice is not aware of which VM is serving an in_progress job.
+            // Killing the serving VM mid-run is the silent-never-fires failure this scaler
+            // exists to prevent, so when jobs are in flight we trust /vm/done self-retirement
+            // (cloud-init idle loop) to retire the surplus idle VM instead.
+            var inProgress = ledger.Count(kv => kv.Value.Status == "in_progress");
+            if (inProgress == 0)
+            {
+                log.LogInformation("scale-down: active={a} > desired={d} with no jobs in flight; capacity -> {d}", active, desired, desired);
+                await SetCapacity(desired);
+            }
+            else
+            {
+                log.LogInformation("scale-down deferred: {n} job(s) in flight; waiting for /vm/done self-retirement", inProgress);
+            }
+        }
 
         // hard-cap watchdog: whatever went wrong above or elsewhere, never allow >2
         var cap = await Capacity();
@@ -381,7 +405,13 @@ app.MapPost("/vm/jit", async (HttpRequest r) =>
     var instanceId = node["instanceId"]!.GetValue<string>();
     var known = (await Instances()).Any(i => i.Id == instanceId);
     if (!known) { log.LogWarning("jit request from unknown instance {id}", instanceId); return Results.Unauthorized(); }
-    if (Demand() <= 0) { log.LogInformation("instance {id} asked for work; none queued", instanceId); return Results.NoContent(); }
+    // A VM is asking for work. Only hand out a JIT config when there is a job that is
+    // actually waiting to be claimed — a job already "in_progress" already has a runner.
+    // Counting in_progress here is the root cause of "2 VMs for 1 task": the second VM
+    // sees demand=1 (the in_progress job), mints a JIT, registers as a runner nobody will
+    // hire, and spins in job.sh minting a fresh JIT every few seconds until idle timeout.
+    var queued = ledger.Count(kv => kv.Value.Status == "queued");
+    if (queued <= 0) { log.LogInformation("instance {id} asked for work; none queued (in_progress jobs already have runners)", instanceId); return Results.NoContent(); }
     var jit = await MintJit($"i{instanceId}-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}");
     if (jit is null) return Results.StatusCode(502);
     log.LogInformation("jit issued to instance {id}", instanceId);
@@ -455,15 +485,30 @@ _ = Task.Run(async () =>
                     var ghRunners = await GitHubRunnerCount();
                     if (ghRunners == 0)
                     {
-                        log.LogWarning("zombie detection: {n} active VM(s) but 0 runners on GitHub; deleting all instances",
-                            active.Count);
-                        foreach (var inst in active)
-                            await DeleteInstance(inst.Id);
-                        fruitlessCycles = 0;
-                        // Clear stale queued entries the jobs will need to be re-queued by GitHub.
-                        foreach (var kv in ledger.Where(kv => kv.Value.Status == "queued").ToList())
-                            ledger.TryRemove(kv.Key, out _);
-                        SaveLedger();
+                        // Guard: when VMs are legitimately between jobs (JIT is single-use —
+                        // run.sh exits after each job, and the runner record is "offline"
+                        // until job.sh mints the next JIT), we briefly have 0 online runners
+                        // with active VMs. That is normal, not zombies. Only nuke after a
+                        // sustained silence: no job activity for 5 minutes.
+                        var sinceActivity = DateTimeOffset.UtcNow - lastJobActivity;
+                        if (sinceActivity < TimeSpan.FromMinutes(5))
+                        {
+                            log.LogInformation("zombie detection: {n} VM(s) but 0 online runners; {s:F0}s since last job activity < 5min grace, skipping nuke",
+                                active.Count, sinceActivity.TotalSeconds);
+                        }
+                        else
+                        {
+                            log.LogWarning("zombie detection: {n} active VM(s) but 0 runners on GitHub for {s:F0}s; deleting all instances",
+                                active.Count, sinceActivity.TotalSeconds);
+                            foreach (var inst in active)
+                                await DeleteInstance(inst.Id);
+                            fruitlessCycles = 0;
+                            // Do NOT clear the queued ledger. Those entries came from real
+                            // GitHub webhooks for jobs that are genuinely waiting. Deleting
+                            // them here makes the scaler forget demand that still exists on
+                            // GitHub, so the queued jobs sit unassigned until the next webhook.
+                            // GitHub re-issues webhooks and a fresh VM will pick them up.
+                        }
                     }
                     else
                     {

@@ -27,7 +27,7 @@ write_files:
 
         FIRST_WAIT=${FIRST_WAIT:-120}   # a VM that boots into no work at all dies quickly
         IDLE_LIMIT=${IDLE_LIMIT:-300}   # after real work, stay warm this long for the next stage
-        MAX_JOBS=${MAX_JOBS:-20}        # bound state and disk growth on a long-lived instance
+        MAX_JOBS=${MAX_JOBS:-100}       # bound state and disk growth on a long-lived instance.
         DISK_LIMIT=${DISK_LIMIT:-85}    # percent used on / before refusing more work
 
       # The image bakes /opt/actions-runner/.ready during provisioning, but a
