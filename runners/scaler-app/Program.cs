@@ -3,8 +3,12 @@
 // Cost-first policy, fixed by design:
 //   demand 0      -> 0 VMs
 //   demand 1..4   -> at most 1 VM
-//   demand 5+     -> at most 2 VMs
-//   MAX_VMS = 2 is a hard ceiling enforced at every write and re-checked after.
+//   demand 5..8   -> at most 2 VMs
+//   demand 9..12  -> at most 3 VMs
+//   demand 13..16 -> at most 4 VMs
+//   demand 17..20 -> at most 5 VMs
+//   demand 21+    -> at most 6 VMs
+//   MAX_VMS = 6 is a hard ceiling enforced at every write and re-checked after.
 // Demand is queued+in_progress workflow jobs labeled agents-arc on private repos,
 // learned from an org webhook. Jobs beyond capacity wait in GitHub on purpose.
 //
@@ -39,7 +43,7 @@ var runnerLabel   = Environment.GetEnvironmentVariable("RUNNER_LABEL") ?? "agent
 var runnerGroupId = int.Parse(Environment.GetEnvironmentVariable("RUNNER_GROUP_ID") ?? "6");
 
 // The one number a bug must never exceed. Post-write verification scales back down.
-const int MaxVms = 2;
+const int MaxVms = 6;
 
 var vmssUrl = $"https://management.azure.com/subscriptions/{subscription}/resourceGroups/{resourceGroup}" +
               $"/providers/Microsoft.Compute/virtualMachineScaleSets/{vmssName}";
@@ -254,7 +258,7 @@ async Task<int> GitHubRunnerCount()
 
 // ---- policy ----
 int Demand() => ledger.Count;
-int DesiredVms(int demand) => demand switch { <= 0 => 0, <= 4 => 1, _ => 2 };
+int DesiredVms(int demand) => demand switch { <= 0 => 0, <= 4 => 1, <= 8 => 2, <= 12 => 3, <= 16 => 4, <= 20 => 5, _ => 6 };
 
 var evalLock = new SemaphoreSlim(1, 1);
 async Task Evaluate(string reason)
