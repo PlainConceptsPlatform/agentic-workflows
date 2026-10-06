@@ -173,6 +173,52 @@ async Task<string?> MintJit(string name)
     return JsonNode.Parse(await resp.Content.ReadAsStringAsync())!["encoded_jit_config"]!.GetValue<string>();
 }
 
+// Unregister any runner whose name starts with i{instanceId}- from the GitHub org.
+// /vm/done calls DeleteInstance on the Azure side but without this the runner record
+// stays on GitHub forever as "offline", inflating the org's runner list and confusing
+// the zombie-checker's runnerNames comparison. Safe to be best-effort: if it fails the
+// next reconcile sweep will just see one extra offline entry.
+async Task DeleteGhostRunner(string instanceId)
+{
+    try
+    {
+        var prefix = $"i{instanceId}-";
+        var url = $"https://api.github.com/orgs/{ghOrg}/actions/runners?per_page=100";
+        while (url is not null)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Authorization = new("Bearer", ghPat);
+            req.Headers.Accept.ParseAdd("application/vnd.github+json");
+            req.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+            var resp = await http.SendAsync(req);
+            if (!resp.IsSuccessStatusCode) { log.LogWarning("ghost runner cleanup: list failed {s}", resp.StatusCode); return; }
+            var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync())!;
+            foreach (var r in node["runners"] as JsonArray ?? [])
+            {
+                var name = r?["name"]?.GetValue<string>();
+                var id = r?["id"]?.GetValue<int>();
+                if (name is not null && name.StartsWith(prefix) && id is int rid)
+                {
+                    using var del = new HttpRequestMessage(HttpMethod.Delete,
+                        $"https://api.github.com/orgs/{ghOrg}/actions/runners/{rid}");
+                    del.Headers.Authorization = new("Bearer", ghPat);
+                    del.Headers.Accept.ParseAdd("application/vnd.github+json");
+                    del.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+                    var delResp = await http.SendAsync(del);
+                    log.LogInformation("ghost runner cleanup: {name} (id={id}) -> {s}", name, rid, delResp.StatusCode);
+                }
+            }
+            // Same safe Link-header pagination as GitHubRunnerCount.
+            IEnumerable<string>? linkHeaders = null;
+            resp.Headers.TryGetValues("Link", out linkHeaders);
+            var link = linkHeaders?.FirstOrDefault() ?? "";
+            var match = System.Text.RegularExpressions.Regex.Match(link, "<([^>]+)>; rel=\"next\"");
+            url = match.Success ? match.Groups[1].Value : null;
+        }
+    }
+    catch (Exception e) { log.LogWarning("ghost runner cleanup error: {m}", e.Message); }
+}
+
 async Task<int> GitHubRunnerCount()
 {
     try
@@ -189,7 +235,13 @@ async Task<int> GitHubRunnerCount()
             if (!resp.IsSuccessStatusCode) { log.LogWarning("runner count failed: {s}", resp.StatusCode); return -1; }
             var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync())!;
             total += (node["runners"] as JsonArray ?? []).Count(r => r?["status"]?.GetValue<string>() == "online");
-            var link = resp.Headers.GetValues("Link").FirstOrDefault() ?? "";
+            // GitHub omits the Link header when there is a single page (≤100 runners).
+            // GetValues throws on absent headers, which made the zombie-checker fall into
+            // its catch and return -1 every 10 minutes — disabling zombie detection
+            // entirely on small orgs. TryGetValues is the safe form.
+            IEnumerable<string>? linkHeaders = null;
+            resp.Headers.TryGetValues("Link", out linkHeaders);
+            var link = linkHeaders?.FirstOrDefault() ?? "";
             var match = System.Text.RegularExpressions.Regex.Match(link, "<([^>]+)>; rel=\"next\"");
             url = match.Success ? match.Groups[1].Value : null;
         }
@@ -363,6 +415,7 @@ app.MapPost("/vm/done", async (HttpRequest r) =>
         }
     }
     await DeleteInstance(instanceId);
+    _ = Task.Run(() => DeleteGhostRunner(instanceId));  // fire-and-forget: Azure delete already in flight
     _ = Task.Run(async () => { await Task.Delay(TimeSpan.FromSeconds(30)); await Evaluate("vm-done"); });
     return Results.Ok("bye");
 });
@@ -429,10 +482,15 @@ _ = Task.Run(async () =>
                                 var resp = await http.SendAsync(req);
                                 resp.EnsureSuccessStatusCode();
                                 var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync())!;
+                                var count = (node["runners"] as JsonArray ?? []).Count;
                                 foreach (var r in node["runners"] as JsonArray ?? [])
                                     if (r?["name"]?.GetValue<string>() is string n)
                                         runnerNames.Add(n);
-                                var link = resp.Headers.GetValues("Link").FirstOrDefault() ?? "";
+                                // Same Link-header fix as GitHubRunnerCount: avoid throwing
+                                // on the common single-page case.
+                                IEnumerable<string>? linkHeaders = null;
+                                resp.Headers.TryGetValues("Link", out linkHeaders);
+                                var link = linkHeaders?.FirstOrDefault() ?? "";
                                 var match = System.Text.RegularExpressions.Regex.Match(link, "<([^>]+)>; rel=\"next\"");
                                 url = match.Success ? match.Groups[1].Value : null;
                             }
