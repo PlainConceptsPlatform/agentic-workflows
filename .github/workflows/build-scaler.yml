@@ -66,14 +66,26 @@ jobs:
         env:
           VM_TOKEN: ${{ secrets.VM_TOKEN }}
         run: |
-          set -euo pipefail
-          sleep 25
-          code=$(curl -s -o /dev/null -w "%{http_code}" https://agentrunner-scaler-01.azurewebsites.net/healthz)
-          echo "healthz: $code"
+          # Wait for the app to finish cold-starting after the zip deploy.
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" https://agentrunner-scaler-01.azurewebsites.net/healthz || true)
+            echo "[$i] healthz: $code"
+            [ "$code" = "200" ] && break
+            sleep 5
+          done
           [ "$code" = "200" ] || { echo "::error::/healthz did not return 200 after deploy"; exit 1; }
-          # /status confirms the scaler can read Azure and is tracking demand.
-          status=$(curl -s -H "Authorization: Bearer $VM_TOKEN" https://agentrunner-scaler-01.azurewebsites.net/status)
-          echo "$status" | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'capacity={d[\"azure\"][\"capacity\"]} demand={d[\"demand\"]} desired={d[\"desired\"]}')"
+          # /status confirms the scaler can read Azure and is tracking demand. It makes
+          # an ARM call, so allow a retry while the managed identity token cache warms up.
+          status=""
+          for i in $(seq 1 6); do
+            status=$(curl -s -H "Authorization: Bearer $VM_TOKEN" https://agentrunner-scaler-01.azurewebsites.net/status || true)
+            if echo "$status" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
+              break
+            fi
+            echo "[$i] /status not ready yet, retrying..."
+            sleep 5
+          done
+          echo "$status" | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'capacity={d[\"azure\"].get(\"capacity\",\"?\")} demand={d[\"demand\"]} desired={d[\"desired\"]}')"
 
       - name: Azure logout
         if: always()
