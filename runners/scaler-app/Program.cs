@@ -3,9 +3,8 @@
 // Cost-first policy, fixed by design:
 //   demand 0      -> 0 VMs
 //   demand 1..4   -> at most 1 VM
-//   demand 5..8   -> at most 2 VMs
-//   demand 9+     -> at most 3 VMs
-//   MAX_VMS = 3 is a hard ceiling enforced at every write and re-checked after.
+//   demand 5+     -> at most 2 VMs
+//   MAX_VMS = 2 is a hard ceiling enforced at every write and re-checked after.
 // Demand is queued+in_progress workflow jobs labeled agents-arc on private repos,
 // learned from an org webhook. Jobs beyond capacity wait in GitHub on purpose.
 //
@@ -24,7 +23,6 @@ var builder = WebApplication.CreateBuilder(args);
 var port = Environment.GetEnvironmentVariable("PORT");
 if (!string.IsNullOrEmpty(port)) builder.WebHost.UseUrls($"http://*:{port}");
 var app = builder.Build();
-app.UseStaticFiles();
 var log = app.Logger;
 
 string Req(string name) => Environment.GetEnvironmentVariable(name)
@@ -41,7 +39,7 @@ var runnerLabel   = Environment.GetEnvironmentVariable("RUNNER_LABEL") ?? "agent
 var runnerGroupId = int.Parse(Environment.GetEnvironmentVariable("RUNNER_GROUP_ID") ?? "6");
 
 // The one number a bug must never exceed. Post-write verification scales back down.
-const int MaxVms = 3;
+const int MaxVms = 2;
 
 var vmssUrl = $"https://management.azure.com/subscriptions/{subscription}/resourceGroups/{resourceGroup}" +
               $"/providers/Microsoft.Compute/virtualMachineScaleSets/{vmssName}";
@@ -256,7 +254,7 @@ async Task<int> GitHubRunnerCount()
 
 // ---- policy ----
 int Demand() => ledger.Count;
-int DesiredVms(int demand) => demand switch { <= 0 => 0, <= 4 => 1, <= 8 => 2, _ => 3 };
+int DesiredVms(int demand) => demand switch { <= 0 => 0, <= 4 => 1, _ => 2 };
 
 var evalLock = new SemaphoreSlim(1, 1);
 async Task Evaluate(string reason)
@@ -352,17 +350,7 @@ app.MapGet("/status", async (HttpRequest r) =>
         desired = DesiredVms(Demand()),
         maxVms = MaxVms,
         azure,
-        jobs = ledger.Select(kv => new
-        {
-            id = kv.Key,
-            kv.Value.Status,
-            kv.Value.UpdatedUtc,
-            kv.Value.Repo,
-            jobName = kv.Value.JobName,
-            branch = kv.Value.Branch,
-            htmlUrl = kv.Value.HtmlUrl,
-            runId = kv.Value.RunId,
-        }),
+        jobs = ledger.Select(kv => new { id = kv.Key, kv.Value.Status, kv.Value.UpdatedUtc }),
         fruitlessCycles,
         reuse = new
         {
@@ -371,106 +359,6 @@ app.MapGet("/status", async (HttpRequest r) =>
             jobsPerVm = totalVmsRetired == 0 ? 0 : Math.Round((double)totalJobsServed / totalVmsRetired, 2),
         },
     });
-});
-
-// ---- fleet panel endpoints (protected by Easy Auth/Entra ID) ----
-// Easy Auth injects headers like X-MS-CLIENT-PRINCIPAL-NAME for authenticated users.
-// The routes /api/fleet and /api/cancel are protected (Require auth, but see excludedPaths
-// in authsettingsV2). In dev (no Easy Auth), fall back to allowing all.
-
-bool IsAuthenticated(HttpContext ctx)
-{
-    // Easy Auth sets X-MS-CLIENT-PRINCIPAL-NAME when a user is logged in.
-    var name = ctx.Request.Headers["X-MS-CLIENT-PRINCIPAL-NAME"].ToString();
-    if (!string.IsNullOrEmpty(name)) return true;
-    // In local dev without Easy Auth, allow through so the panel works.
-    var isDev = string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WEBSITE_SITE_NAME"));
-    return isDev;
-}
-
-app.MapGet("/api/fleet", async (HttpContext ctx) =>
-{
-    if (!IsAuthenticated(ctx)) return Results.Unauthorized();
-    try
-    {
-        object azure;
-        try
-        {
-            var instances = await Instances();
-            azure = new { capacity = await Capacity(), instances = instances.Select(i => new { i.Id, i.State }) };
-        }
-        catch (Exception e) { azure = new { error = e.Message }; }
-
-        var jobs = ledger.Select(kv => new
-        {
-            id = kv.Key,
-            kv.Value.Status,
-            kv.Value.UpdatedUtc,
-            kv.Value.Repo,
-            jobName = kv.Value.JobName,
-            branch = kv.Value.Branch,
-            htmlUrl = kv.Value.HtmlUrl,
-            runId = kv.Value.RunId,
-            ageSeconds = (DateTimeOffset.UtcNow - kv.Value.UpdatedUtc).TotalSeconds,
-        }).ToList();
-
-        return Results.Json(new
-        {
-            demand = Demand(),
-            queued = ledger.Count(kv => kv.Value.Status == "queued"),
-            inProgress = ledger.Count(kv => kv.Value.Status == "in_progress"),
-            desired = DesiredVms(Demand()),
-            maxVms = MaxVms,
-            azure,
-            jobs,
-            fruitlessCycles,
-            reuse = new
-            {
-                vmsRetired = totalVmsRetired,
-                jobsServed = totalJobsServed,
-                jobsPerVm = totalVmsRetired == 0 ? 0 : Math.Round((double)totalJobsServed / totalVmsRetired, 2),
-            },
-            timestamp = DateTimeOffset.UtcNow,
-            user = ctx.Request.Headers["X-MS-CLIENT-PRINCIPAL-NAME"].ToString() is var u && !string.IsNullOrEmpty(u) ? u : "local",
-        });
-    }
-    catch (Exception e) { return Results.Json(new { error = e.Message }, statusCode: 500); }
-});
-
-app.MapPost("/api/cancel/{id}", async (HttpContext ctx, long id) =>
-{
-    if (!IsAuthenticated(ctx)) return Results.Unauthorized();
-    var user = ctx.Request.Headers["X-MS-CLIENT-PRINCIPAL-NAME"].ToString();
-    user = string.IsNullOrEmpty(user) ? "panel" : user;
-
-    // Find the job in the ledger to get repo + runId for cancellation.
-    if (!ledger.TryGetValue(id, out var entry))
-        return Results.Json(new { error = $"job {id} not found in ledger" }, statusCode: 404);
-
-    if (entry.Status != "queued" && entry.Status != "in_progress")
-        return Results.Json(new { error = $"job {id} is {entry.Status}, cannot cancel" }, statusCode: 409);
-
-    // Cancel via GitHub API: POST /repos/{owner}/{repo}/actions/jobs/{job_id}/cancel
-    var repo = entry.Repo ?? $"{ghOrg}/unknown";
-    using var req = new HttpRequestMessage(HttpMethod.Post,
-        $"https://api.github.com/repos/{repo}/actions/jobs/{id}/cancel");
-    req.Headers.Authorization = new("Bearer", ghPat);
-    req.Headers.Accept.ParseAdd("application/vnd.github+json");
-    req.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
-    var resp = await http.SendAsync(req);
-    if (!resp.IsSuccessStatusCode)
-    {
-        var body = await resp.Content.ReadAsStringAsync();
-        log.LogWarning("cancel job {id} by {u} failed: {s} {b}", id, user, resp.StatusCode, body);
-        return Results.Json(new { error = $"GitHub returned {resp.StatusCode}", detail = body }, statusCode: 502);
-    }
-
-    log.LogInformation("job {id} cancelled by {u} (repo={repo})", id, user, repo);
-    // Remove from ledger optimistically; GitHub will send a completed webhook too.
-    ledger.TryRemove(id, out _);
-    SaveLedger();
-    _ = Task.Run(() => Evaluate($"cancel:{id}"));
-    return Results.Json(new { ok = true, id, cancelledBy = user });
 });
 
 app.MapPost("/github", async (HttpRequest r) =>
@@ -489,23 +377,13 @@ app.MapPost("/github", async (HttpRequest r) =>
 
     var id = job["id"]!.GetValue<long>();
     var action = node["action"]!.GetValue<string>();
-    var repo = node["repository"]?["full_name"]?.GetValue<string>();
-    var jobName = job["name"]?.GetValue<string>();
-    var branch = job["head_branch"]?.GetValue<string>();
-    var htmlUrl = job["html_url"]?.GetValue<string>();
-    var runId = job["run_id"]?.GetValue<long>();
     switch (action)
     {
         case "queued":
-            ledger[id] = new("queued", DateTimeOffset.UtcNow, repo, jobName, branch, htmlUrl, runId);
+            ledger[id] = new("queued", DateTimeOffset.UtcNow);
             break;
         case "in_progress":
-            // Preserve the metadata from the queued webhook in case the in_progress event
-            // arrives without it (GitHub sometimes omits fields on later actions).
-            var prev = ledger.TryGetValue(id, out var existing) ? existing : null;
-            ledger[id] = new("in_progress", DateTimeOffset.UtcNow,
-                repo ?? prev?.Repo, jobName ?? prev?.JobName,
-                branch ?? prev?.Branch, htmlUrl ?? prev?.HtmlUrl, runId ?? prev?.RunId);
+            ledger[id] = new("in_progress", DateTimeOffset.UtcNow);
             fruitlessCycles = 0;
             lastJobActivity = DateTimeOffset.UtcNow;
             break;
@@ -687,4 +565,4 @@ _ = Task.Run(async () =>
 
 app.Run();
 
-record JobEntry(string Status, DateTimeOffset UpdatedUtc, string? Repo = null, string? JobName = null, string? Branch = null, string? HtmlUrl = null, long? RunId = null);
+record JobEntry(string Status, DateTimeOffset UpdatedUtc);
