@@ -314,11 +314,16 @@ jobs:
       # The signal is the item counter, not `code_push_failure_count`. gh-aw treats the fallback
       # as a *successful* outcome for the item -- the dogfood run logged `Status: success`,
       # `Successful: 1` and a resolved `GH_AW_CODE_PUSH_FAILURE_COUNT: 0` while filing #11 -- so
-      # gating on that count posted the wrong message. `create_pull_request` is the only safe
-      # output this worker permits, so one succeeded item with no pull request number can only
-      # mean the push fell back to an issue. Nothing produced at all leaves the counter at 0.
+      # gating on that count posted the wrong message.
+      #
+      # The counter alone is not enough, though: a `noop` also counts as one succeeded item, so
+      # "items_succeeded != 0 with no PR number" is true for a run that produced nothing to do as
+      # well as for a run whose push fell back to an issue. Telling a person their patch was filed
+      # as a separate issue when the agent actually said "already fixed on main" is the bug this
+      # comment exists to prevent (Odyssey #226). Distinguish them the same way the steps below
+      # do: gate on whether the agent actually asked for a pull request.
       - name: Flag a patch that could not be pushed
-        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != ''
+        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '' && contains(needs.agent.outputs.output_types, 'create_pull_request')
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -327,7 +332,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
       - name: Say where the patch went
-        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != ''
+        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '' && contains(needs.agent.outputs.output_types, 'create_pull_request')
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -368,7 +373,7 @@ jobs:
             ${{ env.OUTPUT_NOT_APPLIED_COMMENT }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Release an issue the agent found nothing to do on
-        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && contains(needs.agent.outputs.output_types, 'noop')
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && contains(needs.agent.outputs.output_types, 'noop')
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -376,14 +381,14 @@ jobs:
           labels: |-
             ${{ env.REVIEW_LABEL }}
       - name: Take the implement label off a decided issue
-        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && contains(needs.agent.outputs.output_types, 'noop')
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && contains(needs.agent.outputs.output_types, 'noop')
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.IMPLEMENT_LABEL }}
       - name: Say there was nothing to do
-        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && contains(needs.agent.outputs.output_types, 'noop')
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && contains(needs.agent.outputs.output_types, 'noop')
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -393,7 +398,7 @@ jobs:
             ${{ env.NOOP_COMMENT }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Flag a patch nobody asked to publish
-        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch == 'true'
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch == 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -402,7 +407,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
       - name: Say the patch was never asked for
-        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch == 'true'
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch == 'true'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -412,7 +417,7 @@ jobs:
             ${{ env.PATCH_WITHOUT_REQUEST_COMMENT }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Flag a run that produced nothing
-        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true'
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -421,7 +426,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
       - name: Say the run produced nothing
-        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true'
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
