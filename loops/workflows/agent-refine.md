@@ -138,12 +138,19 @@ jobs:
   # needs-maintainer while this run waited in a queue, the issue now carries review and
   # the verdict must stand: the reserve step clears review blindly, so eligibility has to
   # catch it first (Pliny-Bot #372).
+  #
+  # BUT: when mode is rerefine, the trigger was a human comment answering a question the
+  # bot asked and then parked for review. That comment IS the human review the label was
+  # waiting for, so refusing to run would silence exactly the feedback the bot asked for
+  # (Odyssey #226: the bot asked a question, the user answered, and the review label
+  # made the router skip the answer). In rerefine mode the label is cleared and the
+  # refine proceeds; in first mode the triage verdict still stands.
   eligibility:
     needs: [still_open]
     if: needs.still_open.outputs.open == 'true'
     runs-on: agents-arc
     permissions:
-      issues: read
+      issues: write
     outputs:
       eligible: ${{ steps.check.outputs.eligible }}
     steps:
@@ -152,11 +159,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ inputs.issue-number }}
+          MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
           labels=$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels \
             --jq '[.labels[].name]')
           if jq -e 'index("review")' >/dev/null <<<"$labels"; then
+            if [ "$MODE" = "rerefine" ]; then
+              # A rerefine is triggered by a human comment on an issue the bot parked for
+              # review. The comment is the review: clear the label and proceed.
+              gh issue edit "$ISSUE_NUMBER" --remove-label "review" 2>/dev/null ||
+                echo "::notice::review label already gone on #$ISSUE_NUMBER"
+              echo "eligible=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::Issue #$ISSUE_NUMBER had review label; cleared it for rerefine (user answered the bot)."
+              exit 0
+            fi
             echo "eligible=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Issue #$ISSUE_NUMBER has the review label. Automated refinement skipped."
             exit 0
