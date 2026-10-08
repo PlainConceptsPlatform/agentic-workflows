@@ -841,11 +841,23 @@ _ = Task.Run(async () =>
             {
                 var alive = (await Instances()).Select(i => i.Id).ToHashSet();
                 foreach (var (vm, lease) in leasesByVm.ToList())
-                    if (!alive.Contains(vm) || DateTimeOffset.UtcNow - lease.LastActivity > TimeSpan.FromHours(2))
+                {
+                    var gone = !alive.Contains(vm);
+                    var expired = DateTimeOffset.UtcNow - lease.LastActivity > TimeSpan.FromHours(2);
+                    // A VM that stopped polling /vm/jit with no job of its run queued or running is
+                    // dead or no longer serving. A live VM polls every 15s; a VM busy on a long job
+                    // still has an in_progress ledger entry for its label, so this never frees a
+                    // lease mid-run. Without it a zombie VM holds its lease for the full 2h TTL,
+                    // which pins `sessions` high and blocks scale-down.
+                    var idle = DateTimeOffset.UtcNow - lease.LastActivity > LeaseGrace
+                               && !ledger.Any(kv => kv.Value.AffinityLabel == lease.AffinityLabel
+                                                    && kv.Value.Status is "queued" or "in_progress");
+                    if (gone || expired || idle)
                     {
-                        log.LogWarning("releasing orphan lease {l} from {vm} (alive={a})", lease.AffinityLabel, vm, alive.Contains(vm));
+                        log.LogWarning("releasing lease {l} from {vm} (gone={g} expired={e} idle={i})", lease.AffinityLabel, vm, gone, expired, idle);
                         lock (leaseLock) ReleaseLocked(lease);
                     }
+                }
             }
             catch (Exception e) { log.LogWarning("lease orphan sweep failed: {m}", e.Message); }
 
