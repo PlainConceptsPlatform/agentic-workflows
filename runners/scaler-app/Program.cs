@@ -379,6 +379,8 @@ app.MapGet("/status", async (HttpRequest r) =>
             branch = kv.Value.Branch,
             htmlUrl = kv.Value.HtmlUrl,
             runId = kv.Value.RunId,
+            workflowName = kv.Value.WorkflowName,
+            runTitle = kv.Value.RunTitle,
         }),
         fruitlessCycles,
         reuse = new
@@ -428,6 +430,8 @@ app.MapGet("/api/fleet", async (HttpContext ctx) =>
             branch = kv.Value.Branch,
             htmlUrl = kv.Value.HtmlUrl,
             runId = kv.Value.RunId,
+            workflowName = kv.Value.WorkflowName,
+            runTitle = kv.Value.RunTitle,
             ageSeconds = (DateTimeOffset.UtcNow - kv.Value.UpdatedUtc).TotalSeconds,
         }).ToList();
 
@@ -490,6 +494,53 @@ app.MapPost("/api/cancel/{id}", async (HttpContext ctx, long id) =>
     return Results.Json(new { ok = true, id, cancelledBy = user });
 });
 
+// Fetch a workflow run's display title (the commit message shown on GitHub's Actions UI)
+// and merge it into every job in the ledger that shares that run_id. Cached per run_id so
+// we never hit the API more than once per run, even if the webhook fires for several jobs.
+var runTitleCache = new ConcurrentDictionary<long, string>();
+async Task TryEnrichRunTitle(long jobId, string? repo, long? runId)
+{
+    if (runId is not long rid || string.IsNullOrEmpty(repo)) return;
+    // Already have a title for this run? Just stamp it onto this job and bail.
+    if (runTitleCache.TryGetValue(rid, out var cached))
+    {
+        if (ledger.TryGetValue(jobId, out var j) && j.RunTitle != cached)
+        {
+            ledger[jobId] = j with { RunTitle = cached };
+            SaveLedger();
+        }
+        return;
+    }
+    try
+    {
+        // run_id's are global across the org, so /repos/{repo}/actions/runs/{run_id} works
+        // even if repo here is the webhook's repo (which it is). Use the full_name.
+        using var req = new HttpRequestMessage(HttpMethod.Get,
+            $"https://api.github.com/repos/{repo}/actions/runs/{rid}");
+        req.Headers.Authorization = new("Bearer", ghPat);
+        req.Headers.Accept.ParseAdd("application/vnd.github+json");
+        req.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+        var resp = await http.SendAsync(req);
+        if (!resp.IsSuccessStatusCode) { return; }
+        var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync())!;
+        var title = node["display_title"]?.GetValue<string>();
+        if (string.IsNullOrEmpty(title)) return;
+        runTitleCache[rid] = title;
+        // Stamp onto every ledger entry that shares this run (queued + in_progress).
+        var changed = false;
+        foreach (var kv in ledger)
+        {
+            if (kv.Value.RunId == rid && kv.Value.RunTitle != title)
+            {
+                ledger[kv.Key] = kv.Value with { RunTitle = title };
+                changed = true;
+            }
+        }
+        if (changed) SaveLedger();
+    }
+    catch (Exception e) { log.LogWarning("enrich run title for job {id} run {rid} failed: {m}", jobId, rid, e.Message); }
+}
+
 app.MapPost("/github", async (HttpRequest r) =>
 {
     string body;
@@ -511,10 +562,12 @@ app.MapPost("/github", async (HttpRequest r) =>
     var branch = job["head_branch"]?.GetValue<string>();
     var htmlUrl = job["html_url"]?.GetValue<string>();
     var runId = job["run_id"]?.GetValue<long>();
+    var workflowName = job["workflow_name"]?.GetValue<string>();
     switch (action)
     {
         case "queued":
-            ledger[id] = new("queued", DateTimeOffset.UtcNow, repo, jobName, branch, htmlUrl, runId);
+            ledger[id] = new("queued", DateTimeOffset.UtcNow, repo, jobName, branch, htmlUrl, runId, workflowName);
+            _ = TryEnrichRunTitle(id, repo, runId);
             break;
         case "in_progress":
             // Preserve the metadata from the queued webhook in case the in_progress event
@@ -522,9 +575,13 @@ app.MapPost("/github", async (HttpRequest r) =>
             var prev = ledger.TryGetValue(id, out var existing) ? existing : null;
             ledger[id] = new("in_progress", DateTimeOffset.UtcNow,
                 repo ?? prev?.Repo, jobName ?? prev?.JobName,
-                branch ?? prev?.Branch, htmlUrl ?? prev?.HtmlUrl, runId ?? prev?.RunId);
+                branch ?? prev?.Branch, htmlUrl ?? prev?.HtmlUrl, runId ?? prev?.RunId,
+                workflowName ?? prev?.WorkflowName, prev?.RunTitle);
             fruitlessCycles = 0;
             lastJobActivity = DateTimeOffset.UtcNow;
+            // Backfill the title if the queued step didn't manage to yet.
+            if (string.IsNullOrEmpty(ledger[id].RunTitle))
+                _ = TryEnrichRunTitle(id, repo ?? prev?.Repo, runId ?? prev?.RunId);
             break;
         case "completed":
             ledger.TryRemove(id, out _);
@@ -610,6 +667,22 @@ _ = Task.Run(async () =>
                 if (stale) { ledger.TryRemove(kv.Key, out _); changed = true; log.LogWarning("pruned stale job {id}", kv.Key); }
             }
             if (changed) SaveLedger();
+
+            // Title backfill: jobs that entered the ledger before the webhook enrich was
+            // available (or that missed their webhook) never got a run display_title. Re-try
+            // those here so the panel fills in on the next sweep instead of waiting forever.
+            // Serialized with a small gap and capped per sweep to keep API calls gentle.
+            var pending = 0;
+            foreach (var kv in ledger)
+            {
+                if (string.IsNullOrEmpty(kv.Value.RunTitle) && kv.Value.RunId is long rid2
+                    && !string.IsNullOrEmpty(kv.Value.Repo) && pending < 4)
+                {
+                    pending++;
+                    _ = TryEnrichRunTitle(kv.Key, kv.Value.Repo, rid2);
+                    await Task.Delay(TimeSpan.FromSeconds(1));
+                }
+            }
 
             // Zombie detection: if we have active VMs but no runner is registered on GitHub,
             // those VMs are dead. Delete them so the evaluate pass can boot fresh ones.
@@ -704,4 +777,4 @@ _ = Task.Run(async () =>
 
 app.Run();
 
-record JobEntry(string Status, DateTimeOffset UpdatedUtc, string? Repo = null, string? JobName = null, string? Branch = null, string? HtmlUrl = null, long? RunId = null);
+record JobEntry(string Status, DateTimeOffset UpdatedUtc, string? Repo = null, string? JobName = null, string? Branch = null, string? HtmlUrl = null, long? RunId = null, string? WorkflowName = null, string? RunTitle = null);

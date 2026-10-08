@@ -158,7 +158,7 @@
       const inst = document.getElementById('instances');
       if (data.azure?.instances) {
         inst.innerHTML = 'Instances: ' + data.azure.instances.map(i =>
-          `<span class="repo-pill" title="${i.State}">${i.Id}: ${i.State}</span>`
+          `<span class="repo-pill" title="${i.state}">${i.id}: ${i.state}</span>`
         ).join(' ');
       } else if (data.azure?.error) {
         inst.innerHTML = `<span style="color:var(--red)">Azure: ${data.azure.error}</span>`;
@@ -177,7 +177,13 @@
         body.innerHTML = sorted.map(j => {
           const repoShort = j.repo ? j.repo.split('/')[1] : '—';
           const repoLink = j.repo ? `<a href="https://github.com/${j.repo}" target="_blank">${repoShort}</a>` : repoShort;
-          const jobLink = j.htmlUrl ? `<a href="${j.htmlUrl}" target="_blank">${j.jobName || 'job'}</a>` : (j.jobName || j.id);
+          // Show the workflow run's display title (the commit message GitHub shows on the Actions UI)
+          // when we have it, with the workflow name as a lighter subline. Fall back to jobName then id.
+          const title = j.runTitle || j.jobName || '';
+          const subline = j.workflowName ? `<span class="muted" style="font-size:11px"> ${j.workflowName}</span>` : '';
+          const jobLink = j.htmlUrl
+            ? `<a href="${j.htmlUrl}" target="_blank">${title}</a>${subline ? '<br>' + subline : ''}`
+            : (title || j.id);
           const canCancel = j.status === 'queued' || j.status === 'in_progress';
           return `<tr>
             <td><span class="badge badge-${j.status}">${j.status}</span></td>

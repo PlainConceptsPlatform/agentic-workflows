@@ -14,3 +14,4 @@ cli/loops/
 # already: a hand-built DLL was committed, later source fixes were not rebuilt into it,
 # and the deployed app ran code that existed in no branch.
 runners/scaler-app/publish/
+runners/scaler-app/publish.zip
