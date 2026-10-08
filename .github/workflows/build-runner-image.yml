@@ -14,6 +14,9 @@ on:
         default: false
 permissions:
   contents: read
+  # "Notify on failure" opens an issue. With contents: read alone it failed with
+  # "Resource not accessible by integration", so a broken build reported nothing.
+  issues: write
 
 jobs:
   build-image:
@@ -68,6 +71,15 @@ jobs:
           IMG="/subscriptions/${AZ_SUBSCRIPTION_ID}/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner_gallery_01/images/agents-arc-runner/versions/${VERSION}"
           az login --service-principal -u "${{ secrets.AZ_RUNNER_IMAGE_CLIENT_ID }}" -p "${{ secrets.AZ_RUNNER_IMAGE_CLIENT_SECRET }}" --tenant "${{ secrets.AZ_TENANT_ID }}"
           sed "s/__VM_TOKEN__/boottest-dummy-token/" runners/cloud-init.yaml > /tmp/boottest-cloud-init.yaml
+          # The pre-pulled images must survive generalization and be there on a fresh VM, and
+          # the bake must leave the root disk well under job.sh's DISK_LIMIT of 85%.
+          . runners/versions.env
+          checks='test -f /opt/runner/.ready && test -f /etc/runner-scaler.env && docker info >/dev/null 2>&1'
+          for image in $GH_AW_IMAGES "$MSSQL_IMAGE" "mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-noble"; do
+            checks="$checks && docker image inspect $image >/dev/null 2>&1"
+          done
+          checks="$checks && [ \$(df --output=pcent / | tail -n 1 | tr -dc 0-9) -lt 60 ]"
+          script="if $checks; then echo BOOTTEST_PASS; else echo BOOTTEST_WAIT; fi; df -h / | tail -n 1"
           az vm create -g agentrunner-pro-rg-01 -n "vm-boottest-${{ github.run_number }}" \
             --image "$IMG" --size Standard_D4ads_v5 --admin-username azureuser \
             --ssh-key-values ~/.ssh/id_rsa.pub --os-disk-size-gb 64 \
@@ -78,7 +90,7 @@ jobs:
             sleep 15
             out=$(az vm run-command invoke -g agentrunner-pro-rg-01 -n "vm-boottest-${{ github.run_number }}" \
               --command-id RunShellScript \
-              --scripts 'test -f /opt/runner/.ready && test -f /etc/runner-scaler.env && docker info >/dev/null 2>&1 && echo BOOTTEST_PASS || echo BOOTTEST_WAIT' \
+              --scripts "$script" \
               --query "value[0].message" -o tsv 2>/dev/null || true)
             echo "[${i}] $out"
             if echo "$out" | grep -q BOOTTEST_PASS; then ok=1; break; fi
@@ -113,10 +125,23 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            github.rest.issues.create({
+            // The label did not exist in this repository, so issues.create failed even once
+            // the permission was there. Create it on first use.
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'runner-platform',
+                color: 'd93f0b',
+                description: 'Runner image and fleet',
+              });
+            } catch (error) {
+              if (error.status !== 422) throw error;
+            }
+            await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: `Runner image build failed: v${{ steps.version.outputs.version }}`,
-              body: `The scheduled runner image rebuild failed. Check [the run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).`,
-              labels: ['runner-platform', 'urgent']
+              body: `The runner image build failed. Check [the run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).`,
+              labels: ['runner-platform']
             });
