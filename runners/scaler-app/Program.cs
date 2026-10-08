@@ -45,11 +45,22 @@ var vmToken       = Req("VM_TOKEN");
 var subscription  = Req("AZ_SUBSCRIPTION");
 var resourceGroup = Req("AZ_RG");
 var vmssName      = Req("AZ_VMSS");
-var runnerLabel   = Environment.GetEnvironmentVariable("RUNNER_LABEL") ?? "agents-arc";
+// CI/Deploy keep RUNNER_LABEL (agents-arc); agent workflows move to a dedicated base label
+// so the VM leased to a workflow run cannot be stolen by an unrelated CI job that only asks
+// for agents-arc (GitHub matches on "runner has every label the job asks for", so extra
+// labels on the runner do not exclude it from a CI-only job). Both labels count as demand;
+// only the agent label is ever paired with an affinity label.
+var ciLabel       = Environment.GetEnvironmentVariable("RUNNER_LABEL") ?? "agents-arc";
+var agentLabel    = Environment.GetEnvironmentVariable("AGENT_RUNNER_LABEL") ?? "agents-aw";
 var runnerGroupId = int.Parse(Environment.GetEnvironmentVariable("RUNNER_GROUP_ID") ?? "6");
+bool IsOurs(string label) => label == ciLabel || label == agentLabel;
 
 // The one number a bug must never exceed. Post-write verification scales back down.
 const int MaxVms = 6;
+// How long a leased VM waits, between two sequential jobs of the same run, before it
+// decides the run is over and releases the lease. Must exceed the gap GitHub leaves
+// between a job completing and the next job of the run becoming runnable.
+var LeaseGrace = TimeSpan.FromMinutes(10);
 
 var vmssUrl = $"https://management.azure.com/subscriptions/{subscription}/resourceGroups/{resourceGroup}" +
               $"/providers/Microsoft.Compute/virtualMachineScaleSets/{vmssName}";
@@ -87,6 +98,35 @@ var lastJobActivity = DateTimeOffset.UtcNow;
 // Reuse telemetry, in-memory: jobs per retired VM. 1.0 means no reuse is happening.
 var totalVmsRetired = 0;
 var totalJobsServed = 0;
+
+// ---- workflow leases (affinity) ----
+// One workflow run (repository_id + run_id + run_attempt) is served by one VM. The affinity
+// label is minted onto the runner, so GitHub cannot hand that run's jobs to any other VM.
+// The mutex is a real mutex only because the scaler runs a single instance (verified: B1
+// App Service plan, maxElasticWorkerCount=1). Leases are persisted so a restart re-reads them.
+var leasesByVm  = new ConcurrentDictionary<string, WorkflowLease>();
+var leasesByKey = new ConcurrentDictionary<WorkflowKey, WorkflowLease>();
+var leaseLock   = new object();
+var leasesPath  = Path.Combine(dataDir, "leases.json");
+try
+{
+    if (File.Exists(leasesPath))
+        foreach (var l in JsonSerializer.Deserialize<List<WorkflowLease>>(File.ReadAllText(leasesPath)) ?? [])
+            if (l is not null) { leasesByVm[l.VmInstanceId] = l; leasesByKey[l.Key] = l; }
+}
+catch (Exception e) { log.LogWarning("leases load failed: {m}", e.Message); }
+
+void SaveLeases()
+{
+    lock (leaseLock)
+        File.WriteAllText(leasesPath, JsonSerializer.Serialize(leasesByKey.Values.ToList()));
+}
+void ReleaseLocked(WorkflowLease l)
+{
+    leasesByVm.TryRemove(l.VmInstanceId, out _);
+    leasesByKey.TryRemove(l.Key, out _);
+    SaveLeases();
+}
 
 // ---- Azure (managed identity, no SDK) ----
 string? armToken = null;
@@ -162,7 +202,7 @@ async Task DeleteInstance(string id)
 }
 
 // ---- GitHub ----
-async Task<string?> MintJit(string name)
+async Task<string?> MintJit(string name, IReadOnlyCollection<string> labels)
 {
     using var req = new HttpRequestMessage(HttpMethod.Post,
         $"https://api.github.com/orgs/{ghOrg}/actions/runners/generate-jitconfig");
@@ -173,7 +213,7 @@ async Task<string?> MintJit(string name)
     {
         name,
         runner_group_id = runnerGroupId,
-        labels = new[] { runnerLabel },
+        labels = labels.ToArray(),
         work_folder = "_work",
     }), Encoding.UTF8, "application/json");
     var resp = await http.SendAsync(req);
@@ -263,8 +303,22 @@ async Task<int> GitHubRunnerCount()
 }
 
 // ---- policy ----
-int Demand() => ledger.Count;
-int DesiredVms(int demand) => demand switch { <= 0 => 0, <= 4 => 1, <= 8 => 2, <= 12 => 3, <= 16 => 4, <= 20 => 5, _ => 6 };
+// Demand is workflow sessions, not raw jobs: a run with 13 sequential jobs needs one VM,
+// not thirteen. Sessions = active leases + labelled workflows still unclaimed. Unlabelled
+// jobs (CI/Deploy) keep a per-job shape so a CI burst still scales.
+int Sessions() =>
+    leasesByKey.Values.Count(l => l.Status == "Active") +
+    ledger.Where(kv => kv.Value.Status == "queued" && kv.Value.AffinityLabel is not null
+                       && kv.Value.RepositoryId is not null && kv.Value.RunAttempt is not null)
+          .Select(kv => new WorkflowKey(kv.Value.RepositoryId!.Value, kv.Value.RunId!.Value, kv.Value.RunAttempt!.Value))
+          .Distinct()
+          .Count(k => !leasesByKey.ContainsKey(k));
+int CiDemand() => ledger.Count(kv => kv.Value.Status == "queued" && kv.Value.AffinityLabel is null);
+int Demand() => Sessions() + CiDemand();
+// Unlabelled jobs (CI/Deploy) keep the historical per-4 tiering so this deploy changes
+// nothing until affinity labels exist; each workflow session then adds one dedicated VM.
+int CiTier(int n) => n switch { <= 0 => 0, <= 4 => 1, <= 8 => 2, <= 12 => 3, <= 16 => 4, <= 20 => 5, _ => 6 };
+int DesiredVms() => Math.Min(Sessions() + CiTier(CiDemand()), MaxVms);
 
 var evalLock = new SemaphoreSlim(1, 1);
 async Task Evaluate(string reason)
@@ -273,7 +327,7 @@ async Task Evaluate(string reason)
     try
     {
         var demand = Demand();
-        var desired = Math.Min(DesiredVms(demand), MaxVms);
+        var desired = DesiredVms();
         var instances = await Instances();
         // A VM counts as active capacity only when it can serve jobs: Creating/Updating
         // instances cannot accept JIT requests yet, so counting them inflates capacity
@@ -300,14 +354,18 @@ async Task Evaluate(string reason)
             // exists to prevent, so when jobs are in flight we trust /vm/done self-retirement
             // (cloud-init idle loop) to retire the surplus idle VM instead.
             var inProgress = ledger.Count(kv => kv.Value.Status == "in_progress");
-            if (inProgress == 0)
+            var leased = leasesByKey.Count;
+            if (inProgress == 0 && leased == 0)
             {
-                log.LogInformation("scale-down: active={a} > desired={d} with no jobs in flight; capacity -> {d}", active, desired, desired);
+                log.LogInformation("scale-down: active={a} > desired={d} with no jobs in flight and no leases; capacity -> {d}", active, desired, desired);
                 await SetCapacity(desired);
             }
             else
             {
-                log.LogInformation("scale-down deferred: {n} job(s) in flight; waiting for /vm/done self-retirement", inProgress);
+                // A leased VM is the only one that can serve its run's next job, and Uniform
+                // VMSS picks which instance to delete on capacity drop without knowing that.
+                // Trust /vm/done self-retirement instead of risking a mid-run kill.
+                log.LogInformation("scale-down deferred: {n} job(s) in flight, {l} lease(s); waiting for /vm/done self-retirement", inProgress, leased);
             }
         }
 
@@ -366,7 +424,9 @@ app.MapGet("/status", async (HttpRequest r) =>
     return Results.Json(new
     {
         demand = Demand(),
-        desired = DesiredVms(Demand()),
+        sessions = Sessions(),
+        ciDemand = CiDemand(),
+        desired = DesiredVms(),
         maxVms = MaxVms,
         azure,
         jobs = ledger.Select(kv => new
@@ -381,6 +441,17 @@ app.MapGet("/status", async (HttpRequest r) =>
             runId = kv.Value.RunId,
             workflowName = kv.Value.WorkflowName,
             runTitle = kv.Value.RunTitle,
+        }),
+        leases = leasesByKey.Values.Select(l => new
+        {
+            l.Key.RepositoryId,
+            l.Key.RunId,
+            l.Key.RunAttempt,
+            l.AffinityLabel,
+            l.VmInstanceId,
+            l.Status,
+            l.JobsCompleted,
+            l.LastActivity,
         }),
         fruitlessCycles,
         reuse = new
@@ -440,10 +511,23 @@ app.MapGet("/api/fleet", async (HttpContext ctx) =>
             demand = Demand(),
             queued = ledger.Count(kv => kv.Value.Status == "queued"),
             inProgress = ledger.Count(kv => kv.Value.Status == "in_progress"),
-            desired = DesiredVms(Demand()),
+            sessions = Sessions(),
+            ciDemand = CiDemand(),
+            desired = DesiredVms(),
             maxVms = MaxVms,
             azure,
             jobs,
+            leases = leasesByKey.Values.Select(l => new
+            {
+                l.Key.RepositoryId,
+                l.Key.RunId,
+                l.Key.RunAttempt,
+                l.AffinityLabel,
+                l.VmInstanceId,
+                l.Status,
+                l.JobsCompleted,
+                l.LastActivity,
+            }),
             fruitlessCycles,
             reuse = new
             {
@@ -547,13 +631,33 @@ app.MapPost("/github", async (HttpRequest r) =>
     using (var sr = new StreamReader(r.Body)) body = await sr.ReadToEndAsync();
     if (!SignatureValid(body, r.Headers["X-Hub-Signature-256"]))
         return Results.Unauthorized();
-    if (r.Headers["X-GitHub-Event"] != "workflow_job") return Results.Ok("ignored event");
-
     var node = JsonNode.Parse(body)!;
+    var evt = r.Headers["X-GitHub-Event"].ToString();
+
+    // workflow_run's "completed" is the only clean signal that a run is over: a
+    // workflow_job "completed" never tells us whether it was the last job of the run.
+    // Releasing here lets the next run claim the VM without waiting out the lease TTL.
+    if (evt == "workflow_run")
+    {
+        if (node["action"]?.GetValue<string>() == "completed"
+            && node["repository"]?["id"]?.GetValue<long>() is long rrid
+            && node["workflow_run"]?["id"]?.GetValue<long>() is long wrid)
+        {
+            var key = new WorkflowKey(rrid, wrid, node["workflow_run"]?["run_attempt"]?.GetValue<int>() ?? 1);
+            lock (leaseLock)
+                if (leasesByKey.TryGetValue(key, out var done)) ReleaseLocked(done);
+            _ = Task.Run(() => Evaluate("workflow_run:completed"));
+        }
+        return Results.Ok("ok");
+    }
+    if (evt != "workflow_job") return Results.Ok("ignored event");
+
     var job = node["workflow_job"]!;
-    var labels = (job["labels"] as JsonArray ?? []).Select(l => l!.GetValue<string>());
+    var labels = (job["labels"] as JsonArray ?? []).Select(l => l!.GetValue<string>()).ToList();
     var isPrivate = node["repository"]?["private"]?.GetValue<bool>() ?? false;
-    if (!labels.Contains(runnerLabel) || !isPrivate) return Results.Ok("not ours");
+    if (!labels.Any(IsOurs) || !isPrivate) return Results.Ok("not ours");
+    // The affinity label (when the run carries one) names the workflow run's dedicated VM.
+    var affinity = labels.FirstOrDefault(l => l.StartsWith("affinity-", StringComparison.Ordinal));
 
     var id = job["id"]!.GetValue<long>();
     var action = node["action"]!.GetValue<string>();
@@ -563,10 +667,13 @@ app.MapPost("/github", async (HttpRequest r) =>
     var htmlUrl = job["html_url"]?.GetValue<string>();
     var runId = job["run_id"]?.GetValue<long>();
     var workflowName = job["workflow_name"]?.GetValue<string>();
+    var repoId = node["repository"]?["id"]?.GetValue<long>();
+    var runAttempt = job["run_attempt"]?.GetValue<int>();
     switch (action)
     {
         case "queued":
-            ledger[id] = new("queued", DateTimeOffset.UtcNow, repo, jobName, branch, htmlUrl, runId, workflowName);
+            ledger[id] = new("queued", DateTimeOffset.UtcNow, repo, jobName, branch, htmlUrl, runId, workflowName,
+                RepositoryId: repoId, RunAttempt: runAttempt, AffinityLabel: affinity);
             _ = TryEnrichRunTitle(id, repo, runId);
             break;
         case "in_progress":
@@ -576,7 +683,8 @@ app.MapPost("/github", async (HttpRequest r) =>
             ledger[id] = new("in_progress", DateTimeOffset.UtcNow,
                 repo ?? prev?.Repo, jobName ?? prev?.JobName,
                 branch ?? prev?.Branch, htmlUrl ?? prev?.HtmlUrl, runId ?? prev?.RunId,
-                workflowName ?? prev?.WorkflowName, prev?.RunTitle);
+                workflowName ?? prev?.WorkflowName, prev?.RunTitle,
+                repoId ?? prev?.RepositoryId, runAttempt ?? prev?.RunAttempt, affinity ?? prev?.AffinityLabel);
             fruitlessCycles = 0;
             lastJobActivity = DateTimeOffset.UtcNow;
             // Backfill the title if the queued step didn't manage to yet.
@@ -601,16 +709,72 @@ app.MapPost("/vm/jit", async (HttpRequest r) =>
     var instanceId = node["instanceId"]!.GetValue<string>();
     var known = (await Instances()).Any(i => i.Id == instanceId);
     if (!known) { log.LogWarning("jit request from unknown instance {id}", instanceId); return Results.Unauthorized(); }
-    // A VM is asking for work. Only hand out a JIT config when there is a job that is
-    // actually waiting to be claimed — a job already "in_progress" already has a runner.
-    // Counting in_progress here is the root cause of "2 VMs for 1 task": the second VM
-    // sees demand=1 (the in_progress job), mints a JIT, registers as a runner nobody will
-    // hire, and spins in job.sh minting a fresh JIT every few seconds until idle timeout.
-    var queued = ledger.Count(kv => kv.Value.Status == "queued");
-    if (queued <= 0) { log.LogInformation("instance {id} asked for work; none queued (in_progress jobs already have runners)", instanceId); return Results.NoContent(); }
-    var jit = await MintJit($"i{instanceId}-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}");
+
+    // A VM asks for work. Under the lease lock we decide: serve this VM's own run (or hold
+    // for it), claim an unowned run, or serve an unlabelled CI job. Return codes drive
+    // job.sh: 200 = JIT follows, 202 = hold (lease active, nothing queued yet, do NOT
+    // retire), 204 = nothing to do (job.sh applies FIRST_WAIT/IDLE_LIMIT).
+    WorkflowLease? lease = null;
+    var serveCi = false;
+    lock (leaseLock)
+    {
+        if (leasesByVm.TryGetValue(instanceId, out var held))
+        {
+            if (ledger.Any(kv => kv.Value.Status == "queued" && kv.Value.AffinityLabel == held.AffinityLabel))
+            {
+                lease = held with { LastActivity = DateTimeOffset.UtcNow, JobsCompleted = held.JobsCompleted + 1 };
+                leasesByVm[instanceId] = lease;
+                leasesByKey[held.Key] = lease;
+                SaveLeases();
+            }
+            else if (ledger.Any(kv => kv.Value.Status == "in_progress" && kv.Value.AffinityLabel == held.AffinityLabel)
+                     || DateTimeOffset.UtcNow - held.LastActivity < LeaseGrace)
+            {
+                leasesByVm[instanceId] = held with { LastActivity = DateTimeOffset.UtcNow };
+                SaveLeases();
+                log.LogInformation("instance {id} holds lease {l}; nothing queued yet, holding", instanceId, held.AffinityLabel);
+                return Results.StatusCode(202);
+            }
+            else
+            {
+                log.LogInformation("instance {id} releasing finished lease {l}", instanceId, held.AffinityLabel);
+                ReleaseLocked(held);
+            }
+        }
+
+        if (lease is null && !serveCi)
+        {
+            var claim = ledger
+                .Where(kv => kv.Value.Status == "queued" && kv.Value.AffinityLabel is not null
+                             && kv.Value.RepositoryId is not null && kv.Value.RunAttempt is not null)
+                .GroupBy(kv => new WorkflowKey(kv.Value.RepositoryId!.Value, kv.Value.RunId!.Value, kv.Value.RunAttempt!.Value))
+                .FirstOrDefault(g => !leasesByKey.ContainsKey(g.Key));
+            if (claim is not null)
+            {
+                var lbl = claim.First().Value.AffinityLabel!;
+                lease = new WorkflowLease(claim.Key, lbl, instanceId, "Active", DateTimeOffset.UtcNow, 1);
+                leasesByKey[lease.Key] = lease;
+                leasesByVm[instanceId] = lease;
+                SaveLeases();
+                log.LogInformation("instance {id} claimed lease {l}", instanceId, lbl);
+            }
+            else if (ledger.Any(kv => kv.Value.Status == "queued" && kv.Value.AffinityLabel is null))
+            {
+                serveCi = true;
+            }
+        }
+    }
+
+    if (lease is null && !serveCi)
+    {
+        log.LogInformation("instance {id} asked for work; none queued and no unlabelled job waiting", instanceId);
+        return Results.NoContent();
+    }
+
+    var jitLabels = lease is null ? new[] { ciLabel } : new[] { agentLabel, lease.AffinityLabel };
+    var jit = await MintJit($"i{instanceId}-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}", jitLabels);
     if (jit is null) return Results.StatusCode(502);
-    log.LogInformation("jit issued to instance {id}", instanceId);
+    log.LogInformation("jit issued to instance {id} (labels={l})", instanceId, string.Join(",", jitLabels));
     return Results.Text(jit);
 });
 
@@ -619,6 +783,9 @@ app.MapPost("/vm/done", async (HttpRequest r) =>
     if (!VmAuthorized(r)) return Results.Unauthorized();
     var node = JsonNode.Parse(await new StreamReader(r.Body).ReadToEndAsync())!;
     var instanceId = node["instanceId"]!.GetValue<string>();
+    // A retiring VM gives up whatever run it held, so a fresh VM can claim it immediately.
+    lock (leaseLock)
+        if (leasesByVm.TryGetValue(instanceId, out var retiring)) ReleaseLocked(retiring);
     var gotJob = node["ranJob"]?.GetValue<bool>() ?? false;
     // jobsRun is how we measure reuse: 1 means the VM paid a full boot for a single job,
     // which is the waste the reuse loop exists to remove.
@@ -667,6 +834,20 @@ _ = Task.Run(async () =>
                 if (stale) { ledger.TryRemove(kv.Key, out _); changed = true; log.LogWarning("pruned stale job {id}", kv.Key); }
             }
             if (changed) SaveLedger();
+
+            // Leases whose VM is gone (deleted out from under us) or that have gone silent
+            // for hours must be released, or the run can never be re-claimed by a fresh VM.
+            try
+            {
+                var alive = (await Instances()).Select(i => i.Id).ToHashSet();
+                foreach (var (vm, lease) in leasesByVm.ToList())
+                    if (!alive.Contains(vm) || DateTimeOffset.UtcNow - lease.LastActivity > TimeSpan.FromHours(2))
+                    {
+                        log.LogWarning("releasing orphan lease {l} from {vm} (alive={a})", lease.AffinityLabel, vm, alive.Contains(vm));
+                        lock (leaseLock) ReleaseLocked(lease);
+                    }
+            }
+            catch (Exception e) { log.LogWarning("lease orphan sweep failed: {m}", e.Message); }
 
             // Title backfill: jobs that entered the ledger before the webhook enrich was
             // available (or that missed their webhook) never got a run display_title. Re-try
@@ -777,4 +958,11 @@ _ = Task.Run(async () =>
 
 app.Run();
 
-record JobEntry(string Status, DateTimeOffset UpdatedUtc, string? Repo = null, string? JobName = null, string? Branch = null, string? HtmlUrl = null, long? RunId = null, string? WorkflowName = null, string? RunTitle = null);
+record JobEntry(string Status, DateTimeOffset UpdatedUtc, string? Repo = null, string? JobName = null, string? Branch = null, string? HtmlUrl = null, long? RunId = null, string? WorkflowName = null, string? RunTitle = null,
+    long? RepositoryId = null, int? RunAttempt = null, string? AffinityLabel = null);
+
+// Workflow-run identity for the affinity lease. run_attempt is part of the key so a rerun
+// (same run_id, new attempt) gets its own lease and its own VM instead of colliding.
+record WorkflowKey(long RepositoryId, long RunId, int RunAttempt);
+record WorkflowLease(WorkflowKey Key, string AffinityLabel, string VmInstanceId,
+                     string Status, DateTimeOffset LastActivity, int JobsCompleted);

@@ -190,6 +190,7 @@ resource scaler 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'AZ_RG', value: resourceGroup().name }
         { name: 'AZ_VMSS', value: vmss.name }
         { name: 'RUNNER_LABEL', value: 'agents-arc' }
+        { name: 'AGENT_RUNNER_LABEL', value: 'agents-aw' }
         { name: 'RUNNER_GROUP_ID', value: '6' }
       ]
     }

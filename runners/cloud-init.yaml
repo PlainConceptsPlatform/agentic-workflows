@@ -68,22 +68,30 @@ write_files:
           break
         fi
 
-        # Retry JIT request on transient failures (DNS, 401, 5xx) with exponential backoff.
-        # Without this, a brief network blip or scaler restart causes the VM to exhaust its
-        # idle wait and shut down leaving a zombie instance the scaler counts as active.
-        JIT=""
+        # Ask for work. The scaler answers 200 (a JIT follows), 202 (this VM holds a
+        # workflow lease but the run's next job is not runnable yet — hold WITHOUT counting
+        # it as idle, or a leased VM retires in the gap between two sequential jobs), or
+        # 204 (nothing to do; fall through to the idle/retire logic). Retry only on
+        # transport failure or 5xx; a 2xx is a decision, not an error.
+        CODE=000
         for attempt in 1 2 3 4 5; do
-          JIT=$(curl -fsS -m 60 -X POST "$SCALER_URL/vm/jit" \
+          CODE=$(curl -sS -m 60 -o /tmp/jit.out -w "%{http_code}" -X POST "$SCALER_URL/vm/jit" \
             -H "Authorization: Bearer $VM_TOKEN" -H "Content-Type: application/json" \
-            -d "{\"instanceId\":\"$ID\"}" 2>/dev/null || true)
-          if [ -n "$JIT" ]; then break; fi
-          echo "jit attempt $attempt failed; backing off $(($attempt * 10))s"
+            -d "{\"instanceId\":\"$ID\"}" 2>/dev/null || echo 000)
+          case "$CODE" in 200|202|204) break ;; esac
+          echo "jit attempt $attempt got http $CODE; backing off $(($attempt * 10))s"
           sleep $(($attempt * 10))
         done
 
-        if [ -n "$JIT" ]; then
+        if [ "$CODE" = "202" ]; then
+          LAST_WORK=$(date +%s)
+          sleep 15
+          continue
+        fi
+
+        if [ "$CODE" = "200" ]; then
           cd /opt/actions-runner
-          sudo -u runner ./run.sh --jitconfig "$JIT"
+          sudo -u runner ./run.sh --jitconfig "$(cat /tmp/jit.out)"
           JOBS_RUN=$((JOBS_RUN + 1))
           LAST_WORK=$(date +%s)
           reset_state
