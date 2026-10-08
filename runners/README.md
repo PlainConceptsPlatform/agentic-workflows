@@ -96,6 +96,22 @@ A VM booted from this image skips straight to runtime setup swap, token, service
 start cutting create-to-ready from **~2.5 min to ~80s** (measured, 2 runs: baseline
 136/164s vs pre-baked 83/81s).
 
+The image also carries what every job used to download or work around:
+
+- **Docker images**, pulled at bake time and pinned in `versions.env`: the gh-aw sandbox
+  images (`GH_AW_IMAGES`, for the gh-aw version in `GH_AW_VERSION`), SQL Server for
+  Testcontainers (`MSSQL_IMAGE`) and the Playwright container
+  (`mcr.microsoft.com/playwright:v$PLAYWRIGHT_VERSION-noble`). `reset_state` in
+  `cloud-init.yaml` prunes containers, volumes and networks between jobs but never images,
+  so they stay warm for every job a VM serves. A consumer only gets the warm copy when it
+  references the exact same tag; `mssql/server:2022-latest` is not one of them.
+- **Chromium's system libraries**, installed with `playwright install-deps chromium` as root.
+  Jobs run as `runner` with no passwordless sudo, so `--with-deps` cannot run at job time;
+  with the libraries baked, `playwright install chromium` alone is enough to launch it.
+
+CI (`Runner image pins`) compiles the workers with `GH_AW_VERSION` and fails when the images
+they pull differ from `GH_AW_IMAGES`, so a gh-aw bump cannot leave the image stale.
+
 ### Build the image
 
 ```bash
@@ -116,12 +132,19 @@ packer init build-image.pkr.hcl
 packer build build-image.pkr.hcl
 ```
 
-The CI path is the primary one: `.github/workflows/build-runner-image.yml` (this repository)
-builds on a monthly schedule (`0 2 1 * *`) or on `workflow_dispatch` with an `image_version`
-input, runs a **post-publish boot test** a throwaway VM from the new version must reach
-`/opt/runner/.ready` and `/etc/runner-scaler.env` with a working `docker info` and only a
-version that passes it is left in the gallery. A failed build or boot test opens an issue
-labeled `runner-platform`.
+`.github/workflows/build-runner-image.yml` (this repository) builds on `workflow_dispatch` with
+an `image_version` input. It has no schedule: the image is published from a local Packer build,
+and the workflow's `AZ_RUNNER_IMAGE_*` secrets are not defined in this repository, so a dispatch
+fails at authentication until a service principal is set up for it. When it runs, it ends with a
+**post-publish boot test**: a throwaway VM from the new version must reach `/opt/runner/.ready`
+and `/etc/runner-scaler.env` with a working `docker info`, every pre-pulled image present and
+the root disk under 60%. A failed build or boot test opens an issue labeled `runner-platform`
+(the label is created on first use).
+
+`provision-image.sh` asserts the same things at bake time, plus that a Chromium downloaded by
+`runner` without `--with-deps` has no missing libraries and that the 30 GB bake disk
+(`os_disk_size_gb`) is under 80% full. It prints `df -h /` and `docker system df`, which is where
+to read the image's real size.
 
 ### Use the pre-baked image
 
@@ -167,10 +190,10 @@ customData** restoring only one boots a fleet whose cloud-init and image disagre
 - Tool version bumps in `opencode-ci.md` (OPENCODE_VERSION, RTK_VERSION, etc.)
 - Security patches (Ubuntu packages, docker-ce, trivy)
 - Changes to `provision-image.sh` itself
-- Monthly as a routine hygiene cadence
+- A `GH_AW_VERSION`, `MSSQL_IMAGE` or `PLAYWRIGHT_VERSION` bump in `versions.env`
+- Periodically, as routine hygiene
 
-The monthly rebuild covers the routine case; a boot test gates every publish, so a broken
-provision script or a dead upstream cannot ship a broken image into the gallery.
+Validate a new version on the Dogfood fleet before flipping `galleryImageVersion` on the others.
 
 ### What stays in cloud-init
 
