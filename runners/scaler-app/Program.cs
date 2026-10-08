@@ -57,6 +57,10 @@ bool IsOurs(string label) => label == ciLabel || label == agentLabel;
 
 // The one number a bug must never exceed. Post-write verification scales back down.
 const int MaxVms = 6;
+// VMs held back from agent leases while CI is waiting, so a CI/CD job never queues behind
+// an agent run. Agents are capped at MaxVms - ReservedCiVms and the held VMs serve CI only.
+// 0 disables it (exactly the pre-reserve behaviour). Set the RESERVED_CI_VMS app setting.
+var ReservedCiVms = int.Parse(Environment.GetEnvironmentVariable("RESERVED_CI_VMS") ?? "0");
 // How long a leased VM waits, between two sequential jobs of the same run, before it
 // decides the run is over and releases the lease. Must exceed the gap GitHub leaves
 // between a job completing and the next job of the run becoming runnable.
@@ -315,10 +319,15 @@ int Sessions() =>
           .Count(k => !leasesByKey.ContainsKey(k));
 int CiDemand() => ledger.Count(kv => kv.Value.Status == "queued" && kv.Value.AffinityLabel is null);
 int Demand() => Sessions() + CiDemand();
+// How many VMs agent sessions may take right now. While CI is waiting, hold back the
+// reserve so CI keeps runners of its own; with no CI, agents may use the whole fleet
+// (nothing is held idle, so no boot/retire churn).
+int AgentCap() => CiDemand() > 0 ? Math.Max(0, MaxVms - ReservedCiVms) : MaxVms;
 // Unlabelled jobs (CI/Deploy) keep the historical per-4 tiering so this deploy changes
 // nothing until affinity labels exist; each workflow session then adds one dedicated VM.
+// Capping the session term at AgentCap stops the reserve being provisioned as idle VMs.
 int CiTier(int n) => n switch { <= 0 => 0, <= 4 => 1, <= 8 => 2, <= 12 => 3, <= 16 => 4, <= 20 => 5, _ => 6 };
-int DesiredVms() => Math.Min(Sessions() + CiTier(CiDemand()), MaxVms);
+int DesiredVms() => Math.Min(Math.Min(Sessions(), AgentCap()) + CiTier(CiDemand()), MaxVms);
 
 var evalLock = new SemaphoreSlim(1, 1);
 async Task Evaluate(string reason)
@@ -426,6 +435,9 @@ app.MapGet("/status", async (HttpRequest r) =>
         demand = Demand(),
         sessions = Sessions(),
         ciDemand = CiDemand(),
+        agentCap = AgentCap(),
+        reservedCi = ReservedCiVms,
+        leased = leasesByKey.Count,
         desired = DesiredVms(),
         maxVms = MaxVms,
         azure,
@@ -513,6 +525,9 @@ app.MapGet("/api/fleet", async (HttpContext ctx) =>
             inProgress = ledger.Count(kv => kv.Value.Status == "in_progress"),
             sessions = Sessions(),
             ciDemand = CiDemand(),
+            agentCap = AgentCap(),
+            reservedCi = ReservedCiVms,
+            leased = leasesByKey.Count,
             desired = DesiredVms(),
             maxVms = MaxVms,
             azure,
@@ -744,11 +759,16 @@ app.MapPost("/vm/jit", async (HttpRequest r) =>
 
         if (lease is null && !serveCi)
         {
-            var claim = ledger
-                .Where(kv => kv.Value.Status == "queued" && kv.Value.AffinityLabel is not null
-                             && kv.Value.RepositoryId is not null && kv.Value.RunAttempt is not null)
-                .GroupBy(kv => new WorkflowKey(kv.Value.RepositoryId!.Value, kv.Value.RunId!.Value, kv.Value.RunAttempt!.Value))
-                .FirstOrDefault(g => !leasesByKey.ContainsKey(g.Key));
+            // Only take an agent run while under the cap; past it the VM becomes a CI-only
+            // runner, which is what keeps CI from queueing behind agent sessions.
+            var canLease = leasesByKey.Count < AgentCap();
+            var claim = canLease
+                ? ledger
+                    .Where(kv => kv.Value.Status == "queued" && kv.Value.AffinityLabel is not null
+                                 && kv.Value.RepositoryId is not null && kv.Value.RunAttempt is not null)
+                    .GroupBy(kv => new WorkflowKey(kv.Value.RepositoryId!.Value, kv.Value.RunId!.Value, kv.Value.RunAttempt!.Value))
+                    .FirstOrDefault(g => !leasesByKey.ContainsKey(g.Key))
+                : null;
             if (claim is not null)
             {
                 var lbl = claim.First().Value.AffinityLabel!;
