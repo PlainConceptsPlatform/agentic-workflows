@@ -42,10 +42,14 @@ app rides on for free.
   roughly 78% of billed time into booting (14 VMs, ~12 min of real work across ~45 min
   of VM life) and added that wait to every stage. Each JIT registration is still
   single-use and ephemeral; only the host is reused.
-- Demand comes from the org webhook (`workflow_job` events, label-filtered,
-  private repos only), persisted as a job ledger in the app's `/home`. Missed
-  webhooks self-heal: entries expire (queued 24h, in_progress 8h) and three
-  fruitless VM boots with no job activity clear stale queued entries.
+- Demand comes from the org webhook (`workflow_job` + `workflow_run` events,
+  label-filtered, private repos only), persisted as a job ledger in the app's
+  `/home`. Missed webhooks self-heal: entries expire (queued 24h, in_progress 8h)
+  and three fruitless VM boots with no job activity clear stale queued entries.
+- Workflow affinity: an agent run carries `agents-aw` +
+  `affinity-<repo_id>-<run_id>-<run_attempt>`, so the scaler pins the whole run
+  to one VM. It claims a lease on `/vm/jit` and releases it on `/vm/done` or the
+  `workflow_run` completed event; a 5-minute sweep frees orphaned leases.
 
 ## Cost
 
@@ -308,9 +312,16 @@ change logs `AuthorizationFailed` and the fleet stays at 0 while demand grows.
 
 ## GitHub side
 
-- Org webhook: `https://agentrunner-scaler-01.azurewebsites.net/github`,
-  content type `application/json`, secret = the app's `WEBHOOK_SECRET`, single
-  event **Workflow jobs**. Org → Settings → Webhooks.
+- Org webhook: `https://agentrunner-scaler-01.azurewebsites.net/github`
+  **without a trailing slash**, content type `application/json`, secret = the
+  app's `WEBHOOK_SECRET`, events **Workflow jobs** + **Workflow runs**.
+  Org → Settings → Webhooks.
+  - The trailing slash is load-bearing, not cosmetic: Easy Auth excludes
+    `/github` by exact path, so `.../github/` is intercepted by the auth layer
+    and every delivery comes back 401 while the app looks healthy. Symptom:
+    `/healthz` 200, but the ledger never grows and the fleet idles. Verify with
+    `gh api /orgs/<org>/hooks/<id>/deliveries --jq '.[].status_code'`.
 - Runner group `agentic` (id 6), `allows_public_repositories=false`; JIT runners
-  are minted into it with the `agents-arc` label.
+  are minted into it. Agent workflows use `agents-aw` + the per-run affinity
+  label; CI/Deploy keep `agents-arc`, so a CI job can never land on a run's VM.
 - Secrets inventory: see [secrets.md](secrets.md).

@@ -114,6 +114,16 @@ az webapp restart -g agentrunner-pro-rg-01 -n agentrunner-scaler-01
 Then paste the same value into the org webhook: PlainConceptsPlatform → Settings →
 Webhooks → the `agentrunner-scaler-01.azurewebsites.net/github` hook → Secret.
 
+The webhook URL must have **no trailing slash** and subscribe to **Workflow jobs**
+and **Workflow runs**. Easy Auth excludes `/github` by exact path, so a
+`.../github/` URL is answered by the auth layer with 401 and the scaler silently
+never sees a delivery (the app still reports `/healthz` 200). Check with:
+
+```bash
+gh api /orgs/PlainConceptsPlatform/hooks --jq '.[] | "\(.config.url) \(.events)"'
+gh api /orgs/PlainConceptsPlatform/hooks/<id>/deliveries --jq '.[0:5] | .[] | .status_code'
+```
+
 ### `VM_TOKEN` (scaler app setting + VMSS custom data, same value)
 
 ```bash
