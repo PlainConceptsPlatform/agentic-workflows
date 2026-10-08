@@ -198,6 +198,15 @@ pre-agent-steps:
 
       printf '%s\n' "$merged" > "$CONFIG"
 
+      # A tracked config now differs from HEAD, so the agent sees it in `git diff`, takes it for
+      # a stray change and reverts it with `git checkout`. That drops the CI agent and its
+      # permissions mid-run: the next shell call is refused and the run falls back to the
+      # default agent with no key (Pliny-Bot run 37674193415). skip-worktree hides the file
+      # from status and diff and makes `git checkout -- opencode.jsonc` refuse the path.
+      if git ls-files --error-unmatch "$CONFIG" > /dev/null 2>&1; then
+        git update-index --skip-worktree "$CONFIG"
+      fi
+
       # gh-aw's own "Write OpenCode Config" step runs next and merges its base config with
       # `$existing * $base`. Base wins on conflicting keys, but it defines neither `model`
       # nor this provider, so both survive and `awf-proxy` is added alongside.
