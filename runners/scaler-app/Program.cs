@@ -56,7 +56,8 @@ var runnerGroupId = int.Parse(Environment.GetEnvironmentVariable("RUNNER_GROUP_I
 bool IsOurs(string label) => label == ciLabel || label == agentLabel;
 
 // The one number a bug must never exceed. Post-write verification scales back down.
-const int MaxVms = 6;
+// Env-driven so the ceiling can move without a code change; the default stays safe.
+var MaxVms = int.Parse(Environment.GetEnvironmentVariable("MAX_VMS") ?? "6");
 // VMs held back from agent leases while CI is waiting, so a CI/CD job never queues behind
 // an agent run. Agents are capped at MaxVms - ReservedCiVms and the held VMs serve CI only.
 // 0 disables it (exactly the pre-reserve behaviour). Set the RESERVED_CI_VMS app setting.
@@ -350,9 +351,13 @@ int Demand() => Sessions() + CiDemand();
 int AgentCap() => CiDemand() > 0 ? Math.Max(0, MaxVms - ReservedCiVms) : MaxVms;
 // Unlabelled jobs (CI/Deploy) keep the historical per-4 tiering so this deploy changes
 // nothing until affinity labels exist; each workflow session then adds one dedicated VM.
-// Capping the session term at AgentCap stops the reserve being provisioned as idle VMs.
+// Capping the session term at AgentCap stops the reserve being provisioned as idle VMs;
+// the CI term is floored at the reserve while CI is queued so those VMs are actually made.
 int CiTier(int n) => n switch { <= 0 => 0, <= 4 => 1, <= 8 => 2, <= 12 => 3, <= 16 => 4, <= 20 => 5, _ => 6 };
-int DesiredVms() => Math.Min(Math.Min(Sessions(), AgentCap()) + CiTier(CiDemand()), MaxVms);
+int DesiredVms() => Math.Min(
+    Math.Min(Sessions(), AgentCap())
+    + Math.Max(CiTier(CiDemand()), CiDemand() > 0 ? ReservedCiVms : 0),
+    MaxVms);
 
 var evalLock = new SemaphoreSlim(1, 1);
 async Task Evaluate(string reason)
