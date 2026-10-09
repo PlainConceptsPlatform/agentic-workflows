@@ -62,9 +62,10 @@ var MaxVms = int.Parse(Environment.GetEnvironmentVariable("MAX_VMS") ?? "6");
 // an agent run. Agents are capped at MaxVms - ReservedCiVms and the held VMs serve CI only.
 // 0 disables it (exactly the pre-reserve behaviour). Set the RESERVED_CI_VMS app setting.
 var ReservedCiVms = int.Parse(Environment.GetEnvironmentVariable("RESERVED_CI_VMS") ?? "0");
-// How long a leased VM waits, between two sequential jobs of the same run, before it
-// decides the run is over and releases the lease. Must exceed the gap GitHub leaves
-// between a job completing and the next job of the run becoming runnable.
+// How long a leased VM waits after its last served job, with nothing queued or running for
+// its run, before it decides the run is over and releases the lease. Measured from the last
+// job served (LastActivity), never from polls or heartbeats, so a VM that keeps polling
+// still releases once its run is done.
 var LeaseGrace = TimeSpan.FromMinutes(10);
 // A VM is dead if it stops heartbeating: the heartbeat is an independent process, so a
 // hung reset_state cannot silence it. Past these deadlines the VM is unhealthy and is
@@ -143,9 +144,9 @@ void ReleaseLocked(WorkflowLease l)
     leasesByKey.TryRemove(l.Key, out _);
     SaveLeases();
 }
-// Record a liveness signal. Updates the lease's LastActivity only when the caller's
-// generation matches (or it sent none), so a stale-generation VM cannot keep alive a
-// lease it no longer owns.
+// Record a liveness signal in vmHeartbeat only. It deliberately does NOT touch the lease's
+// LastActivity: that field means "last job served" and drives the idle grace, so updating
+// it on every poll/heartbeat would keep a finished run's lease alive forever.
 void TouchVm(string instanceId, string state, long? gen)
 {
     lock (leaseLock)
@@ -153,8 +154,6 @@ void TouchVm(string instanceId, string state, long? gen)
         var since = vmHeartbeat.TryGetValue(instanceId, out var prev) && prev.State == state
             ? prev.StateSince : DateTimeOffset.UtcNow;
         vmHeartbeat[instanceId] = new VmHeartbeat(DateTimeOffset.UtcNow, state, since, gen ?? 0);
-        if (leasesByVm.TryGetValue(instanceId, out var l) && (gen is null || gen == l.Generation))
-            leasesByVm[instanceId] = l with { LastActivity = DateTimeOffset.UtcNow };
     }
 }
 
@@ -784,8 +783,6 @@ app.MapPost("/vm/jit", async (HttpRequest r) =>
             else if (ledger.Any(kv => kv.Value.Status == "in_progress" && kv.Value.AffinityLabel == held.AffinityLabel)
                      || DateTimeOffset.UtcNow - held.LastActivity < LeaseGrace)
             {
-                leasesByVm[instanceId] = held with { LastActivity = DateTimeOffset.UtcNow };
-                SaveLeases();
                 TouchVm(instanceId, "holding", held.Generation);
                 log.LogInformation("instance {id} holds lease {l}; nothing queued yet, holding", instanceId, held.AffinityLabel);
                 return Results.StatusCode(202);
