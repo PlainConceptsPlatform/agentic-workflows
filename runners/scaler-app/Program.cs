@@ -54,6 +54,10 @@ var ciLabel       = Environment.GetEnvironmentVariable("RUNNER_LABEL") ?? "agent
 var agentLabel    = Environment.GetEnvironmentVariable("AGENT_RUNNER_LABEL") ?? "agents-aw";
 var runnerGroupId = int.Parse(Environment.GetEnvironmentVariable("RUNNER_GROUP_ID") ?? "6");
 bool IsOurs(string label) => label == ciLabel || label == agentLabel;
+// Repos polled each sweep as a safety net for a queued webhook lost during a restart.
+// Comma-separated names under GH_ORG; empty disables the poll.
+var watchRepos = (Environment.GetEnvironmentVariable("WATCH_REPOS") ?? "")
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
 // The one number a bug must never exceed. Post-write verification scales back down.
 // Env-driven so the ceiling can move without a code change; the default stays safe.
@@ -191,6 +195,22 @@ async Task<HttpResponseMessage> Arm(HttpMethod method, string url, object? body 
     if (body is not null)
         req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
     return await http.SendAsync(req);
+}
+
+// GET a GitHub API URL with the org PAT; null on any non-success so callers treat null as
+// "unknown" and keep their current state rather than acting on a bad read.
+async Task<JsonNode?> GetJson(string url)
+{
+    try
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Authorization = new("Bearer", ghPat);
+        req.Headers.Accept.ParseAdd("application/vnd.github+json");
+        req.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+        var resp = await http.SendAsync(req);
+        return resp.IsSuccessStatusCode ? JsonNode.Parse(await resp.Content.ReadAsStringAsync()) : null;
+    }
+    catch (Exception e) { log.LogWarning("github get failed: {m}", e.Message); return null; }
 }
 
 async Task<int> Capacity()
@@ -957,6 +977,42 @@ _ = Task.Run(async () =>
                 }
             }
             catch (Exception e) { log.LogWarning("ledger reconcile failed: {m}", e.Message); }
+
+            // Safety net: a queued webhook lost while the scaler restarts means the job is
+            // never learned and never runs (it cannot go in_progress without a runner, and a
+            // runner needs the scaler to scale). Poll each watched repo's queued runs and add
+            // any queued job carrying our label that the ledger is missing.
+            foreach (var repo in watchRepos)
+            {
+                try
+                {
+                    var runs = await GetJson($"https://api.github.com/repos/{ghOrg}/{repo}/actions/runs?status=queued&per_page=20");
+                    foreach (var run in runs?["workflow_runs"] as JsonArray ?? [])
+                    {
+                        if (run?["id"]?.GetValue<long>() is not long rid) continue;
+                        var runAttempt = run["run_attempt"]?.GetValue<int>();
+                        var repoId = run["repository"]?["id"]?.GetValue<long>();
+                        var repoFull = run["repository"]?["full_name"]?.GetValue<string>() ?? $"{ghOrg}/{repo}";
+                        var jobs = await GetJson($"https://api.github.com/repos/{ghOrg}/{repo}/actions/runs/{rid}/jobs");
+                        foreach (var job in jobs?["jobs"] as JsonArray ?? [])
+                        {
+                            if (job?["status"]?.GetValue<string>() != "queued") continue;
+                            var labels = (job["labels"] as JsonArray ?? []).Select(l => l!.GetValue<string>()).ToList();
+                            if (!labels.Any(IsOurs)) continue;
+                            var id = job["id"]!.GetValue<long>();
+                            if (ledger.ContainsKey(id)) continue;
+                            var affinity = labels.FirstOrDefault(l => l.StartsWith("affinity-"));
+                            ledger[id] = new("queued", DateTimeOffset.UtcNow, repoFull,
+                                job["name"]?.GetValue<string>(), job["head_branch"]?.GetValue<string>(),
+                                job["html_url"]?.GetValue<string>(), rid, job["workflow_name"]?.GetValue<string>(),
+                                RepositoryId: repoId, RunAttempt: runAttempt, AffinityLabel: affinity);
+                            changed = true;
+                            log.LogWarning("recovered missed queued job {id} in {repo} run {run}", id, repo, rid);
+                        }
+                    }
+                }
+                catch (Exception e) { log.LogWarning("queued poll for {repo} failed: {m}", repo, e.Message); }
+            }
             if (changed) SaveLedger();
 
             // Leases whose VM is gone (deleted out from under us) or that have gone silent

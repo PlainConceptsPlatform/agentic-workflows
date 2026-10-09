@@ -193,6 +193,7 @@ resource scaler 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'AGENT_RUNNER_LABEL', value: 'agents-aw' }
         { name: 'RESERVED_CI_VMS', value: '2' }
         { name: 'MAX_VMS', value: '10' }
+        { name: 'WATCH_REPOS', value: 'Pliny-Bot,Numa,Lyceum,Odyssey' }
         { name: 'RUNNER_GROUP_ID', value: '6' }
       ]
     }
