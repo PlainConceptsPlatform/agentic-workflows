@@ -65,6 +65,13 @@ var ReservedCiVms = int.Parse(Environment.GetEnvironmentVariable("RESERVED_CI_VM
 // decides the run is over and releases the lease. Must exceed the gap GitHub leaves
 // between a job completing and the next job of the run becoming runnable.
 var LeaseGrace = TimeSpan.FromMinutes(10);
+// A VM is dead if it stops heartbeating: the heartbeat is an independent process, so a
+// hung reset_state cannot silence it. Past these deadlines the VM is unhealthy and is
+// deleted, not merely dropped from the lease table — a VM we no longer trust as owner we
+// no longer trust as worker either.
+var HeartbeatStale = TimeSpan.FromMinutes(2);
+var ResetDeadline  = TimeSpan.FromMinutes(4);   // stuck in reset_state this long = corrupt
+var BootGrace      = TimeSpan.FromMinutes(5);   // no heartbeat yet: let a fresh VM boot
 
 var vmssUrl = $"https://management.azure.com/subscriptions/{subscription}/resourceGroups/{resourceGroup}" +
               $"/providers/Microsoft.Compute/virtualMachineScaleSets/{vmssName}";
@@ -112,6 +119,10 @@ var leasesByVm  = new ConcurrentDictionary<string, WorkflowLease>();
 var leasesByKey = new ConcurrentDictionary<WorkflowKey, WorkflowLease>();
 var leaseLock   = new object();
 var leasesPath  = Path.Combine(dataDir, "leases.json");
+// Per-VM liveness from /vm/heartbeat, sent by an independent process so a hung
+// reset_state cannot silence it. Not persisted: a restart just re-learns it.
+var vmHeartbeat = new ConcurrentDictionary<string, VmHeartbeat>();
+long leaseGenCounter = 0;   // monotonic fencing token, bumped on every lease acquisition
 try
 {
     if (File.Exists(leasesPath))
@@ -130,6 +141,20 @@ void ReleaseLocked(WorkflowLease l)
     leasesByVm.TryRemove(l.VmInstanceId, out _);
     leasesByKey.TryRemove(l.Key, out _);
     SaveLeases();
+}
+// Record a liveness signal. Updates the lease's LastActivity only when the caller's
+// generation matches (or it sent none), so a stale-generation VM cannot keep alive a
+// lease it no longer owns.
+void TouchVm(string instanceId, string state, long? gen)
+{
+    lock (leaseLock)
+    {
+        var since = vmHeartbeat.TryGetValue(instanceId, out var prev) && prev.State == state
+            ? prev.StateSince : DateTimeOffset.UtcNow;
+        vmHeartbeat[instanceId] = new VmHeartbeat(DateTimeOffset.UtcNow, state, since, gen ?? 0);
+        if (leasesByVm.TryGetValue(instanceId, out var l) && (gen is null || gen == l.Generation))
+            leasesByVm[instanceId] = l with { LastActivity = DateTimeOffset.UtcNow };
+    }
 }
 
 // ---- Azure (managed identity, no SDK) ----
@@ -465,6 +490,7 @@ app.MapGet("/status", async (HttpRequest r) =>
             l.JobsCompleted,
             l.LastActivity,
         }),
+        vms = vmHeartbeat.Select(kv => new { id = kv.Key, kv.Value.State, kv.Value.Last, kv.Value.Generation }),
         fruitlessCycles,
         reuse = new
         {
@@ -722,6 +748,7 @@ app.MapPost("/vm/jit", async (HttpRequest r) =>
     if (!VmAuthorized(r)) return Results.Unauthorized();
     var node = JsonNode.Parse(await new StreamReader(r.Body).ReadToEndAsync())!;
     var instanceId = node["instanceId"]!.GetValue<string>();
+    var clientGen = long.TryParse(r.Headers["X-Lease-Generation"], out var g) ? g : (long?)null;
     var known = (await Instances()).Any(i => i.Id == instanceId);
     if (!known) { log.LogWarning("jit request from unknown instance {id}", instanceId); return Results.Unauthorized(); }
 
@@ -735,6 +762,13 @@ app.MapPost("/vm/jit", async (HttpRequest r) =>
     {
         if (leasesByVm.TryGetValue(instanceId, out var held))
         {
+            // Fencing: a message with a stale generation means this VM lost its lease to
+            // another VM. Refuse rather than let it serve a run it no longer owns.
+            if (clientGen is not null && clientGen != held.Generation)
+            {
+                log.LogWarning("instance {id} sent stale lease generation {g} (current {c}); refusing", instanceId, clientGen, held.Generation);
+                return Results.StatusCode(409);
+            }
             if (ledger.Any(kv => kv.Value.Status == "queued" && kv.Value.AffinityLabel == held.AffinityLabel))
             {
                 lease = held with { LastActivity = DateTimeOffset.UtcNow, JobsCompleted = held.JobsCompleted + 1 };
@@ -747,6 +781,7 @@ app.MapPost("/vm/jit", async (HttpRequest r) =>
             {
                 leasesByVm[instanceId] = held with { LastActivity = DateTimeOffset.UtcNow };
                 SaveLeases();
+                TouchVm(instanceId, "holding", held.Generation);
                 log.LogInformation("instance {id} holds lease {l}; nothing queued yet, holding", instanceId, held.AffinityLabel);
                 return Results.StatusCode(202);
             }
@@ -772,7 +807,7 @@ app.MapPost("/vm/jit", async (HttpRequest r) =>
             if (claim is not null)
             {
                 var lbl = claim.First().Value.AffinityLabel!;
-                lease = new WorkflowLease(claim.Key, lbl, instanceId, "Active", DateTimeOffset.UtcNow, 1);
+                lease = new WorkflowLease(claim.Key, lbl, instanceId, "Active", DateTimeOffset.UtcNow, 1, ++leaseGenCounter);
                 leasesByKey[lease.Key] = lease;
                 leasesByVm[instanceId] = lease;
                 SaveLeases();
@@ -787,6 +822,7 @@ app.MapPost("/vm/jit", async (HttpRequest r) =>
 
     if (lease is null && !serveCi)
     {
+        TouchVm(instanceId, "idle", null);
         log.LogInformation("instance {id} asked for work; none queued and no unlabelled job waiting", instanceId);
         return Results.NoContent();
     }
@@ -794,8 +830,30 @@ app.MapPost("/vm/jit", async (HttpRequest r) =>
     var jitLabels = lease is null ? new[] { ciLabel } : new[] { agentLabel, lease.AffinityLabel };
     var jit = await MintJit($"i{instanceId}-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}", jitLabels);
     if (jit is null) return Results.StatusCode(502);
-    log.LogInformation("jit issued to instance {id} (labels={l})", instanceId, string.Join(",", jitLabels));
+    TouchVm(instanceId, "runner-starting", lease?.Generation);
+    r.HttpContext.Response.Headers["X-Lease-Generation"] = (lease?.Generation ?? 0).ToString();
+    log.LogInformation("jit issued to instance {id} (labels={l}, gen={g})", instanceId, string.Join(",", jitLabels), lease?.Generation ?? 0);
     return Results.Text(jit);
+});
+
+// Independent liveness from a process that is not the job loop, so a hung reset_state
+// cannot silence it. Also the signal the reconciler uses to tell "busy on a long job"
+// from "stuck".
+app.MapPost("/vm/heartbeat", async (HttpRequest r) =>
+{
+    if (!VmAuthorized(r)) return Results.Unauthorized();
+    var node = JsonNode.Parse(await new StreamReader(r.Body).ReadToEndAsync())!;
+    var instanceId = node["instanceId"]!.GetValue<string>();
+    var state = node["state"]?.GetValue<string>() ?? "unknown";
+    var gen = node["generation"]?.GetValue<long>();
+    var leaseGen = leasesByVm.TryGetValue(instanceId, out var l) ? l.Generation : (long?)null;
+    if (gen is not null && leaseGen is not null && gen != leaseGen)
+    {
+        log.LogWarning("heartbeat from {id} with stale generation {g} (current {c})", instanceId, gen, leaseGen);
+        return Results.StatusCode(409);
+    }
+    TouchVm(instanceId, state, gen);
+    return Results.Ok("ok");
 });
 
 app.MapPost("/vm/done", async (HttpRequest r) =>
@@ -803,9 +861,12 @@ app.MapPost("/vm/done", async (HttpRequest r) =>
     if (!VmAuthorized(r)) return Results.Unauthorized();
     var node = JsonNode.Parse(await new StreamReader(r.Body).ReadToEndAsync())!;
     var instanceId = node["instanceId"]!.GetValue<string>();
+    var unhealthy = node["unhealthy"]?.GetValue<bool>() ?? false;
     // A retiring VM gives up whatever run it held, so a fresh VM can claim it immediately.
     lock (leaseLock)
         if (leasesByVm.TryGetValue(instanceId, out var retiring)) ReleaseLocked(retiring);
+    vmHeartbeat.TryRemove(instanceId, out _);
+    if (unhealthy) log.LogWarning("instance {id} reports unhealthy (reset/cleanup failed); deleting", instanceId);
     var gotJob = node["ranJob"]?.GetValue<bool>() ?? false;
     // jobsRun is how we measure reuse: 1 means the VM paid a full boot for a single job,
     // which is the waste the reuse loop exists to remove.
@@ -889,27 +950,49 @@ _ = Task.Run(async () =>
                 }
                 catch (Exception e) { log.LogWarning("online runner fetch failed: {m}", e.Message); }
 
+                var now = DateTimeOffset.UtcNow;
                 foreach (var (vm, lease) in leasesByVm.ToList())
                 {
+                    var hasRunner = online.Any(n => n.StartsWith($"i{vm}-"));
+                    var hb = vmHeartbeat.TryGetValue(vm, out var h) ? h : (VmHeartbeat?)null;
+                    // Liveness: heartbeat when we have one, else LastActivity (legacy job.sh).
+                    var livenessStale = hb is not null ? now - hb.Last > HeartbeatStale
+                                                       : now - lease.LastActivity > LeaseGrace;
                     var gone = !alive.Contains(vm);
-                    var expired = DateTimeOffset.UtcNow - lease.LastActivity > TimeSpan.FromHours(2);
-                    // A VM that stopped polling /vm/jit with no job of its run queued or running is
-                    // dead or no longer serving. A live VM polls every 15s; a VM busy on a long job
-                    // still has an in_progress ledger entry for its label, so this never frees a
-                    // lease mid-run. Without it a zombie VM holds its lease for the full 2h TTL,
-                    // which pins `sessions` high and blocks scale-down.
-                    var idle = DateTimeOffset.UtcNow - lease.LastActivity > LeaseGrace
+                    var expired = now - lease.LastActivity > TimeSpan.FromHours(2);
+                    // A healthy VM whose run has no queued or running job is just done: release
+                    // the lease, keep the VM (it may serve CI next).
+                    var idle = now - lease.LastActivity > LeaseGrace
                                && !ledger.Any(kv => kv.Value.AffinityLabel == lease.AffinityLabel
                                                     && kv.Value.Status is "queued" or "in_progress");
-                    // The case `idle` misses: the run still has queued jobs, so `idle` is false,
-                    // but the VM cannot serve them because it has no runner at all and stopped
-                    // polling. That is the deadlock that stalled the fleet overnight.
-                    var stuck = !online.Any(n => n.StartsWith($"i{vm}-"))
-                                && DateTimeOffset.UtcNow - lease.LastActivity > LeaseGrace;
-                    if (gone || expired || idle || stuck)
+                    // Unhealthy: no runner AND no fresh heartbeat, or stuck in reset past its
+                    // deadline. A VM we no longer trust as owner we also delete as worker, so it
+                    // cannot return and split-brain the run.
+                    var stuckReset = hb is not null && hb.State == "resetting" && now - hb.StateSince > ResetDeadline;
+                    var unhealthy = (!hasRunner && livenessStale) || stuckReset;
+                    if (gone || expired || idle)
                     {
-                        log.LogWarning("releasing lease {l} from {vm} (gone={g} expired={e} idle={i} stuck={s})", lease.AffinityLabel, vm, gone, expired, idle, stuck);
+                        log.LogWarning("releasing lease {l} from {vm} (gone={g} expired={e} idle={i})", lease.AffinityLabel, vm, gone, expired, idle);
                         lock (leaseLock) ReleaseLocked(lease);
+                    }
+                    else if (unhealthy)
+                    {
+                        log.LogWarning("lease {l} on unhealthy VM {vm} (runner={r} hb={s} stuckReset={x}); releasing and deleting VM", lease.AffinityLabel, vm, hasRunner, hb?.State ?? "none", stuckReset);
+                        lock (leaseLock) ReleaseLocked(lease);
+                        vmHeartbeat.TryRemove(vm, out _);
+                        await DeleteInstance(vm);
+                    }
+                }
+                // A VM with a heartbeat but no lease that went silent with no runner is a zombie
+                // too (stuck before it ever claimed work). Delete it so capacity is reclaimed.
+                foreach (var (vm, h) in vmHeartbeat.ToList())
+                {
+                    if (leasesByVm.ContainsKey(vm) || !alive.Contains(vm)) continue;
+                    if (now - h.Last > HeartbeatStale && !online.Any(n => n.StartsWith($"i{vm}-")))
+                    {
+                        log.LogWarning("zombie VM {vm} (heartbeat stale, no runner); deleting", vm);
+                        vmHeartbeat.TryRemove(vm, out _);
+                        await DeleteInstance(vm);
                     }
                 }
             }
@@ -1031,4 +1114,8 @@ record JobEntry(string Status, DateTimeOffset UpdatedUtc, string? Repo = null, s
 // (same run_id, new attempt) gets its own lease and its own VM instead of colliding.
 record WorkflowKey(long RepositoryId, long RunId, int RunAttempt);
 record WorkflowLease(WorkflowKey Key, string AffinityLabel, string VmInstanceId,
-                     string Status, DateTimeOffset LastActivity, int JobsCompleted);
+                     string Status, DateTimeOffset LastActivity, int JobsCompleted,
+                     long Generation = 0);
+// Liveness reported by /vm/heartbeat. StateSince lets the reconciler time a single state
+// (e.g. a VM stuck in "resetting" past ResetDeadline).
+record VmHeartbeat(DateTimeOffset Last, string State, DateTimeOffset StateSince, long Generation);
