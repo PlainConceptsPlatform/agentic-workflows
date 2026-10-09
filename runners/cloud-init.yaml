@@ -35,7 +35,7 @@ write_files:
       MAX_JOBS=${MAX_JOBS:-100}              # bound state and disk growth on a long-lived instance
       DISK_LIMIT=${DISK_LIMIT:-85}           # percent used on / before refusing more work
       CMD_TIMEOUT=${CMD_TIMEOUT:-60}         # ceiling for any single external command
-      RUNNER_START_TIMEOUT=${RUNNER_START_TIMEOUT:-300}  # wait for a job to be assigned
+      RUNNER_START_TIMEOUT=${RUNNER_START_TIMEOUT:-120}  # wait for a job to be assigned
       RUNNER_JOB_TIMEOUT=${RUNNER_JOB_TIMEOUT:-5400}     # hard cap on one job (90 min)
       RESET_TIMEOUT=${RESET_TIMEOUT:-120}    # whole reset_state budget
 

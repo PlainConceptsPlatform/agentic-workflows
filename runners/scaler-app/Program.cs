@@ -919,6 +919,42 @@ _ = Task.Run(async () =>
                                                              : age > TimeSpan.FromHours(24);
                 if (stale) { ledger.TryRemove(kv.Key, out _); changed = true; log.LogWarning("pruned stale job {id}", kv.Key); }
             }
+            // A queued entry whose workflow run is already completed is a phantom from a
+            // missed completed webhook. Drop it, or the scaler keeps minting JITs for jobs
+            // GitHub will never assign: the runner registers, waits the whole
+            // RUNNER_START_TIMEOUT, and is killed (the 300s cycles in the job logs).
+            try
+            {
+                foreach (var g in ledger
+                    .Where(kv => kv.Value.Status == "queued" && !string.IsNullOrEmpty(kv.Value.Repo) && kv.Value.RunId is not null)
+                    .GroupBy(kv => (Repo: kv.Value.Repo!, Run: kv.Value.RunId!.Value))
+                    .ToList())
+                {
+                    string? runStatus = null;
+                    try
+                    {
+                        using var req = new HttpRequestMessage(HttpMethod.Get, $"https://api.github.com/repos/{g.Key.Repo}/actions/runs/{g.Key.Run}");
+                        req.Headers.Authorization = new("Bearer", ghPat);
+                        req.Headers.Accept.ParseAdd("application/vnd.github+json");
+                        req.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+                        var resp = await http.SendAsync(req);
+                        if (resp.IsSuccessStatusCode)
+                            runStatus = JsonNode.Parse(await resp.Content.ReadAsStringAsync())?["status"]?.GetValue<string>();
+                        else if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+                            runStatus = "completed";   // run gone: treat as done
+                    }
+                    catch (Exception e) { log.LogWarning("run status fetch failed: {m}", e.Message); }
+                    if (runStatus == "completed")
+                    {
+                        foreach (var kv in g) { ledger.TryRemove(kv.Key, out _); changed = true; }
+                        log.LogWarning("pruned {n} phantom queued job(s) of completed run {r} in {repo}", g.Count(), g.Key.Run, g.Key.Repo);
+                    }
+                }
+                // An entry with no repo can never be served; drop it (e.g. a manual test).
+                foreach (var kv in ledger.Where(kv => kv.Value.Status == "queued" && string.IsNullOrEmpty(kv.Value.Repo)).ToList())
+                { ledger.TryRemove(kv.Key, out _); changed = true; }
+            }
+            catch (Exception e) { log.LogWarning("phantom queued prune failed: {m}", e.Message); }
             if (changed) SaveLedger();
 
             // Leases whose VM is gone (deleted out from under us) or that have gone silent
