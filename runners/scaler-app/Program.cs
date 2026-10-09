@@ -916,16 +916,16 @@ _ = Task.Run(async () =>
                                                              : age > TimeSpan.FromHours(24);
                 if (stale) { ledger.TryRemove(kv.Key, out _); changed = true; log.LogWarning("pruned stale job {id}", kv.Key); }
             }
-            // Validate every queued entry against GitHub: a job that is no longer "queued"
-            // (assigned, completed, or gone) is stale, and serving it makes a VM register a
-            // runner GitHub will never hire — a wasted RUNNER_START_TIMEOUT per cycle, which
-            // is the no-job wait seen in the job logs. Runs completed and needs-blocked jobs
-            // both show up here.
+            // Reconcile the whole ledger against GitHub. Missed webhooks (a restart, a 401)
+            // leave entries stale in either direction: a queued job GitHub already assigned,
+            // or an in_progress job GitHub already completed. Serving the first wastes a
+            // RUNNER_START_TIMEOUT; keeping the second pins demand. Drop completed/gone
+            // entries and correct queued<->in_progress drift.
             try
             {
-                foreach (var kv in ledger.Where(kv => kv.Value.Status == "queued").ToList())
+                foreach (var kv in ledger.ToList())
                 {
-                    if (string.IsNullOrEmpty(kv.Value.Repo) || kv.Value.RunId is null)
+                    if (string.IsNullOrEmpty(kv.Value.Repo))
                     { ledger.TryRemove(kv.Key, out _); changed = true; continue; }
                     string? st = null;
                     try
@@ -941,15 +941,22 @@ _ = Task.Run(async () =>
                             st = "gone";
                     }
                     catch (Exception e) { log.LogWarning("job status fetch failed: {m}", e.Message); }
-                    if (st is "completed" or "in_progress" or "gone")
+                    if (st is null) continue;   // unknown: keep the entry
+                    if (st is "completed" or "gone")
                     {
                         ledger.TryRemove(kv.Key, out _);
                         changed = true;
-                        log.LogWarning("pruned stale queued job {id} (github status {s})", kv.Key, st);
+                        log.LogWarning("dropped stale job {id} (github {s})", kv.Key, st);
+                    }
+                    else if (st != kv.Value.Status)
+                    {
+                        ledger[kv.Key] = kv.Value with { Status = st };
+                        changed = true;
+                        log.LogWarning("ledger job {id} corrected {a} -> {b}", kv.Key, kv.Value.Status, st);
                     }
                 }
             }
-            catch (Exception e) { log.LogWarning("queued validation failed: {m}", e.Message); }
+            catch (Exception e) { log.LogWarning("ledger reconcile failed: {m}", e.Message); }
             if (changed) SaveLedger();
 
             // Leases whose VM is gone (deleted out from under us) or that have gone silent
