@@ -987,7 +987,8 @@ _ = Task.Run(async () =>
                 // too (stuck before it ever claimed work). Delete it so capacity is reclaimed.
                 foreach (var (vm, h) in vmHeartbeat.ToList())
                 {
-                    if (leasesByVm.ContainsKey(vm) || !alive.Contains(vm)) continue;
+                    if (leasesByVm.ContainsKey(vm)) continue;
+                    if (!alive.Contains(vm)) { vmHeartbeat.TryRemove(vm, out _); continue; }
                     if (now - h.Last > HeartbeatStale && !online.Any(n => n.StartsWith($"i{vm}-")))
                     {
                         log.LogWarning("zombie VM {vm} (heartbeat stale, no runner); deleting", vm);
