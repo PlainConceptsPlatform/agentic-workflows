@@ -860,6 +860,35 @@ _ = Task.Run(async () =>
             try
             {
                 var alive = (await Instances()).Select(i => i.Id).ToHashSet();
+                // Online runners tell a stuck lease from a busy one: a VM running a job has an
+                // online (busy) runner; a VM between jobs polls /vm/jit every 15s. A VM with
+                // neither is dead — release its lease even if the run still has queued jobs,
+                // so the run is served by a fresh VM instead of deadlocking behind a zombie.
+                var online = new HashSet<string>();
+                try
+                {
+                    var url = $"https://api.github.com/orgs/{ghOrg}/actions/runners?per_page=100";
+                    while (url is not null)
+                    {
+                        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                        req.Headers.Authorization = new("Bearer", ghPat);
+                        req.Headers.Accept.ParseAdd("application/vnd.github+json");
+                        req.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+                        var resp = await http.SendAsync(req);
+                        if (!resp.IsSuccessStatusCode) break;
+                        var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync())!;
+                        foreach (var rr in node["runners"] as JsonArray ?? [])
+                            if (rr?["status"]?.GetValue<string>() == "online" && rr?["name"]?.GetValue<string>() is string nm)
+                                online.Add(nm);
+                        IEnumerable<string>? lh = null;
+                        resp.Headers.TryGetValues("Link", out lh);
+                        var lk = lh?.FirstOrDefault() ?? "";
+                        var mt = System.Text.RegularExpressions.Regex.Match(lk, "<([^>]+)>; rel=\"next\"");
+                        url = mt.Success ? mt.Groups[1].Value : null;
+                    }
+                }
+                catch (Exception e) { log.LogWarning("online runner fetch failed: {m}", e.Message); }
+
                 foreach (var (vm, lease) in leasesByVm.ToList())
                 {
                     var gone = !alive.Contains(vm);
@@ -872,9 +901,14 @@ _ = Task.Run(async () =>
                     var idle = DateTimeOffset.UtcNow - lease.LastActivity > LeaseGrace
                                && !ledger.Any(kv => kv.Value.AffinityLabel == lease.AffinityLabel
                                                     && kv.Value.Status is "queued" or "in_progress");
-                    if (gone || expired || idle)
+                    // The case `idle` misses: the run still has queued jobs, so `idle` is false,
+                    // but the VM cannot serve them because it has no runner at all and stopped
+                    // polling. That is the deadlock that stalled the fleet overnight.
+                    var stuck = !online.Any(n => n.StartsWith($"i{vm}-"))
+                                && DateTimeOffset.UtcNow - lease.LastActivity > LeaseGrace;
+                    if (gone || expired || idle || stuck)
                     {
-                        log.LogWarning("releasing lease {l} from {vm} (gone={g} expired={e} idle={i})", lease.AffinityLabel, vm, gone, expired, idle);
+                        log.LogWarning("releasing lease {l} from {vm} (gone={g} expired={e} idle={i} stuck={s})", lease.AffinityLabel, vm, gone, expired, idle, stuck);
                         lock (leaseLock) ReleaseLocked(lease);
                     }
                 }
