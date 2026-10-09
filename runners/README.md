@@ -67,16 +67,55 @@ app rides on for free.
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `POST /github` | webhook HMAC | workflow_job events update the ledger, trigger evaluate |
-| `POST /vm/jit` | VM bearer token | live instance asks for a JIT config; 204 when no demand |
-| `POST /vm/done` | VM bearer token | instance reports finished; app deletes it, boots next if needed |
-| `GET /status` | VM bearer token | demand, capacity, instances, ledger |
+| `POST /github` | webhook HMAC | workflow_job + workflow_run events update the ledger, trigger evaluate |
+| `POST /vm/jit` | VM bearer token | live instance asks for work: 200 = JIT follows, 202 = hold (its run has nothing queued yet), 204 = idle, 409 = it lost the lease |
+| `POST /vm/heartbeat` | VM bearer token | independent liveness + phase (`requesting-jit`, `runner-running`, `resetting`, `idle`, ...) |
+| `POST /vm/done` | VM bearer token | instance reports finished (optionally `unhealthy`); app releases its lease and deletes it |
+| `GET /status` | VM bearer token | demand, capacity, instances, leases, per-VM heartbeat state, ledger |
 | `GET /healthz` | none | liveness |
 
-App settings: `GH_PAT` (fine-grained PAT, sole grant org "Self-hosted runners: rw",
-expires 2027-08-29), `GH_ORG`, `WEBHOOK_SECRET`, `VM_TOKEN`, `AZ_SUBSCRIPTION`,
-`AZ_RG`, `AZ_VMSS`, `RUNNER_LABEL`, `RUNNER_GROUP_ID`. Azure access uses the app's
-system-assigned managed identity (Virtual Machine Contributor on the RG).
+App settings:
+
+| Setting | Meaning |
+|---|---|
+| `GH_PAT` | fine-grained PAT: org "Self-hosted runners: rw" + Actions read (expires 2027-08-29) |
+| `GH_ORG`, `AZ_SUBSCRIPTION`, `AZ_RG`, `AZ_VMSS` | org and Azure targets |
+| `WEBHOOK_SECRET`, `VM_TOKEN` | webhook HMAC and VM bearer token |
+| `RUNNER_LABEL` | CI/Deploy base label (default `agents-arc`) |
+| `AGENT_RUNNER_LABEL` | agent base label (default `agents-aw`) |
+| `RESERVED_CI_VMS` | VMs held back for CI while CI is queued (default 0; live 2) |
+| `MAX_VMS` | hard fleet ceiling (default 6; live 10) |
+| `WATCH_REPOS` | repos polled each sweep to recover missed queued webhooks (comma-separated) |
+| `RUNNER_GROUP_ID` | GitHub runner group for minted runners |
+
+Azure access uses the app's system-assigned managed identity (Virtual Machine
+Contributor on the RG).
+
+### Worker lifecycle and robustness
+
+A VM runs one job at a time and reuses itself until the queue stays empty. Every step
+that could block is bounded and an independent process reports liveness, so a wedged
+Docker daemon can never leave a VM holding a lease forever (an overnight incident).
+
+- **Affinity leases.** A run whose jobs carry `agents-aw` +
+  `affinity-<repo>-<run>-<attempt>` is pinned to one VM: the scaler claims a lease on
+  `/vm/jit`, mints the runner with that label, and releases the lease on `/vm/done` or the
+  `workflow_run` completed event. A **fencing token** (`X-Lease-Generation`) is returned
+  and must be echoed; a stale generation gets 409, so a VM that lost its lease to another
+  cannot serve the run.
+- **CI reserve.** While any CI job is queued, agent leases are capped at
+  `MAX_VMS - RESERVED_CI_VMS` and the held VMs serve CI only, so CI never queues behind a
+  long agent run. With no CI queued the cap is `MAX_VMS` (nothing sits idle).
+- **`job.sh` timeouts.** Every external command goes through `run_with_timeout`; `run.sh`
+  is bounded in two phases (waiting for a job to be assigned vs running it); `reset_state`
+  restarts a wedged Docker once and otherwise retires the VM as `unhealthy`.
+- **Heartbeat.** `runner-heartbeat.service` (independent of the job loop) POSTs
+  `/vm/heartbeat` every 30s with the phase from `/run/runner.state`. A VM with no runner
+  and a stale heartbeat, or stuck in `resetting` past its deadline, is deleted — a VM we
+  no longer trust as owner we no longer trust as worker.
+- **Ledger self-healing.** Each sweep reconciles every ledger entry against GitHub (drop
+  `completed`/`gone`, fix `queued`↔`in_progress`) and polls `WATCH_REPOS` for queued jobs
+  whose webhook was lost, so a scaler restart cannot strand a run.
 
 Deploy an update:
 
