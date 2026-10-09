@@ -93,7 +93,7 @@ write_files:
       # to be assigned (a JIT whose job vanished would otherwise wait forever); phase 2
       # bounds the job itself.
       run_job() {
-        local jit="$1" log=/tmp/runner.out pid deadline started=0
+        local jit="$1" log=/tmp/runner.out pid deadline started=0 t0=$SECONDS
         : > "$log"
         ( cd /opt/actions-runner && exec sudo -u runner ./run.sh --jitconfig "$jit" ) >>"$log" 2>&1 &
         pid=$!
@@ -103,6 +103,7 @@ write_files:
           [ "$SECONDS" -ge "$deadline" ] && break
           sleep 2
         done
+        echo "runner registration: $((SECONDS - t0))s"
         if [ "$started" -eq 0 ]; then
           if kill -0 "$pid" 2>/dev/null; then
             echo "no job assigned within ${RUNNER_START_TIMEOUT}s; killing runner"
@@ -125,6 +126,7 @@ write_files:
           fi
           sleep 5
         done
+        echo "job wall time: $((SECONDS - t0))s"
         wait "$pid"; return $?
       }
 
@@ -144,6 +146,7 @@ write_files:
         # it as idle), 204 (nothing to do), or 409 (this VM lost the lease to another VM:
         # retire). The X-Lease-Generation header carries the fencing token we send back.
         CODE=000
+        tj=$SECONDS
         for attempt in 1 2 3 4 5; do
           CODE=$(run_with_timeout 60 curl -sS -o /tmp/jit.out -D /tmp/jit.hdr -w "%{http_code}" -X POST "$SCALER_URL/vm/jit" \
             -H "Authorization: Bearer $VM_TOKEN" -H "X-Lease-Generation: $GEN" -H "Content-Type: application/json" \
@@ -152,6 +155,7 @@ write_files:
           echo "jit attempt $attempt got http $CODE; backing off $(($attempt * 10))s"
           sleep $(($attempt * 10))
         done
+        echo "jit request: $((SECONDS - tj))s (http $CODE)"
 
         newgen=$(grep -i '^x-lease-generation:' /tmp/jit.hdr 2>/dev/null | tr -dc '0-9')
         [ -n "$newgen" ] && GEN=$newgen
@@ -163,7 +167,9 @@ write_files:
           set_state runner-starting
           run_job "$(cat /tmp/jit.out)"; rc=$?
           set_state resetting
+          tr=$SECONDS
           if ! reset_state; then echo "reset failed; marking unhealthy"; UNHEALTHY=true; break; fi
+          echo "reset_state: $((SECONDS - tr))s"
           JOBS_RUN=$((JOBS_RUN + 1))
           LAST_WORK=$(date +%s)
           echo "completed job $JOBS_RUN (rc=$rc)"
