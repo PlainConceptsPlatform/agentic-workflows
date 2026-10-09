@@ -947,8 +947,9 @@ _ = Task.Run(async () =>
                         log.LogWarning("pruned {n} phantom queued job(s) of completed run {r} in {repo}", g.Count(), g.Key.Run, g.Key.Repo);
                     }
                 }
-                // An entry with no repo can never be served; drop it (e.g. a manual test).
-                foreach (var kv in ledger.Where(kv => kv.Value.Status == "queued" && string.IsNullOrEmpty(kv.Value.Repo)).ToList())
+                // An entry with no repo or no run can never be served; drop it (e.g. a test).
+                foreach (var kv in ledger.Where(kv => kv.Value.Status == "queued"
+                                                      && (string.IsNullOrEmpty(kv.Value.Repo) || kv.Value.RunId is null)).ToList())
                 { ledger.TryRemove(kv.Key, out _); changed = true; }
             }
             catch (Exception e) { log.LogWarning("phantom queued prune failed: {m}", e.Message); }
