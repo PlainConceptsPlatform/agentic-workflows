@@ -83,6 +83,7 @@ runs:
           const OWNED = new Set([
             'work-router.yml',
             'authorize-bot-work.yml',
+            'release-tag.yml',
             'agentics-checks.yml',
             'agentics-maintenance.yml',
             ...['refine', 'implement', 'triage', 'apply-review', 'merge-gate', 'audit', 'release']

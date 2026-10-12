@@ -15,6 +15,8 @@ export interface WorkflowRoute {
   readonly worker: string;
   readonly description: string;
   readonly defaultEnabled: boolean;
+  /** Plain workflows that exist only to serve this route. They are installed and removed with it. */
+  readonly companions?: readonly string[];
 }
 
 export const workflowRoutes: readonly WorkflowRoute[] = [
@@ -24,7 +26,7 @@ export const workflowRoutes: readonly WorkflowRoute[] = [
   { name: "apply-review", worker: "agent-apply-review.md", description: "Applies reviewer feedback to an open pull request the bot authored, then pushes the fixes to the same branch.", defaultEnabled: true },
   { name: "merge-gate", worker: "agent-merge-gate.md", description: "Decides what happens to a bot-authored pull request once CI has reported: merge, hand to a human, or fix CI.", defaultEnabled: true },
   { name: "audit", worker: "agent-audit.md", description: "Read-only repository audit. Finds 5-7 problems, scores each 1-10, and files a single issue that Refine then sizes and splits.", defaultEnabled: true },
-  { name: "release", worker: "agent-release.md", description: "Writes release notes from the commit log, then a deterministic job bumps the version, tags, and publishes a GitHub Release. Manual dispatch only (operation=release).", defaultEnabled: true },
+  { name: "release", worker: "agent-release.md", description: "Writes release notes from the commit log, then a deterministic job opens a version-bump pull request with auto-merge; once it merges, release-tag.yml tags the commit and publishes the GitHub Release. Manual dispatch only (operation=release).", defaultEnabled: true, companions: ["release-tag.yml"] },
 ];
 
 export const packageOwnedTargets = [

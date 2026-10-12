@@ -40,6 +40,7 @@ describe("catalog installation", () => {
       "workflows/agent-apply-review.md": "# Apply Review\n",
       "workflows/agent-merge-gate.md": "# Merge Gate\n",
       "workflows/agent-release.md": "# Release\n",
+      "workflows/release-tag.yml": "name: Release Tag\n",
       "workflows/shared/defaults.md": "defaults\n",
       "workflows/work-router.yml": "name: Router\n",
       "scripts/compile-agent-workflows.mjs": "compile\n",
@@ -61,6 +62,7 @@ describe("catalog installation", () => {
     expect(result.installed).not.toContain(".github/workflows/agent-implement.md");
     expect(result.installed).not.toContain(".github/workflows/agent-audit.md");
     expect(result.installed).not.toContain(".github/workflows/agent-release.md");
+    expect(result.installed).not.toContain(".github/workflows/release-tag.yml");
     expect(result.changes.every((change) => change.status === "added")).toBe(true);
   });
 
@@ -811,6 +813,41 @@ describe("route lifecycle", () => {
     const repositoryPath = await createDirectory({});
 
     await expect(installedRoutes(repositoryPath)).resolves.toEqual([]);
+  });
+
+  it("installs the release route's companion workflow only with the release route", async () => {
+    const sourcePath = await createDirectory({
+      "workflows/agent-refine.md": "# Refine\n",
+      "workflows/agent-release.md": "# Release\n",
+      "workflows/release-tag.yml": "name: Release Tag\n",
+      "workflows/work-router.yml": "name: Router\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+
+    const withRelease = await installCatalog(await createDirectory({}), { sourcePath, selectedRoutes: ["refine", "release"], dryRun: true });
+    const withoutRelease = await installCatalog(await createDirectory({}), { sourcePath, selectedRoutes: ["refine"], dryRun: true });
+
+    expect(withRelease.installed).toContain(".github/workflows/release-tag.yml");
+    expect(withoutRelease.installed).not.toContain(".github/workflows/release-tag.yml");
+    expect(withoutRelease.installed).toContain(".github/workflows/agent-refine.md");
+  });
+
+  it("removes the release route's companion workflow with its worker", async () => {
+    const repositoryPath = await createDirectory({
+      ".github/workflows/agent-release.md": "# Release\n",
+      ".github/workflows/agent-release.lock.yml": "generated\n",
+      ".github/workflows/release-tag.yml": "name: Release Tag\n",
+      ".github/workflows/agent-refine.md": "# Refine\n",
+    });
+
+    await expect(removeRouteFiles(repositoryPath, ["release"])).resolves.toEqual([
+      ".github/workflows/agent-release.lock.yml",
+      ".github/workflows/agent-release.md",
+      ".github/workflows/release-tag.yml",
+    ]);
+    await expect(readFile(join(repositoryPath, ".github/workflows/release-tag.yml"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(repositoryPath, ".github/workflows/agent-refine.md"), "utf8")).resolves.toBe("# Refine\n");
   });
 
   it("removes a route worker and its generated lock, leaving other workers", async () => {
