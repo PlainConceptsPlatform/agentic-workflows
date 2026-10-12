@@ -40,11 +40,12 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | `merge-gate` | `agent-merge-gate.md` | CI reports on a bot pull request | one of `auto-merge`, `human-review`, `owner-review` or `blocked`, or a fix pushed to the same branch |
 | `apply-review` | `agent-apply-review.md` | someone reviews or comments on a bot pull request | the requested changes pushed to that pull request |
 | `audit` | `agent-audit.md` | Mondays, or on demand | one issue of findings, labelled `refine` so it gets sized and split |
-| `release` | `agent-release.md` | on demand (`operation=release`) | a tagged GitHub Release with AI-generated release notes |
+| `release` | `agent-release.md` | on demand (`operation=release`) | a `chore(release): vX.Y.Z` pull request with auto-merge; `release-tag.yml` tags it and publishes the GitHub Release once it merges |
 
 Plus the plumbing, which has no agent in it: `work-router.yml` (the router itself),
 `authorize-bot-work.yml` (a human's label is checked, then the bot re-labels so the workers see
-a trusted actor), and the `classify-route` / `verify-route-matrix` composite actions.
+a trusted actor), `release-tag.yml` (installed with the `release` route: tags a merged release
+pull request), and the `classify-route` / `verify-route-matrix` composite actions.
 
 ### Keeping itself running
 
@@ -156,19 +157,37 @@ you want the new one.
 
 ## Releasing
 
-`agent-release.md` generates a tagged GitHub Release with AI-written release notes. Trigger it
-manually via `workflow_dispatch` with `operation=release`. The agent reads the commit log since
-the last tag, categorizes commits by conventional-commit prefix, and writes release notes to
-`/tmp/gh-aw/agent/release-notes.md`. A deterministic `conclude` job then bumps the version
-(`auto` detects `BREAKING CHANGE` → major, `feat:` → minor, else → patch), commits, tags, pushes,
-and creates the GitHub Release.
+`agent-release.md` prepares a release as a pull request, so `main` can require pull requests and
+status checks. Trigger it manually via `workflow_dispatch` with `operation=release`. The agent
+reads the commit log since the last tag, categorizes commits by conventional-commit prefix, and
+writes release notes to `/tmp/gh-aw/agent/release-notes.md`. A deterministic `conclude` job then
+bumps the version (`auto` detects `BREAKING CHANGE` → major, `feat:` → minor, else → patch) on a
+`release/v<version>` branch, opens a pull request titled `chore(release): v<version>` whose body is
+the release notes, and enables squash auto-merge. Nothing is pushed to `main` and nothing is tagged
+by the worker.
 
 ```bash
 gh workflow run work-router.yml --repo PlainConceptsPlatform/<repo> -f operation=release -f version-bump=auto
 ```
 
-`version-bump` accepts `auto`, `patch`, `minor`, or `major`. The worker only needs
-`OPENAI_API_KEY` it uses `github.token` for git operations and `gh release create`.
+When that pull request merges, `release-tag.yml` (shipped with the route) sees the
+`chore(release): v<version>` commit on `main`, tags it `v<version>`, and publishes the GitHub
+Release with the notes from the pull request body. It is idempotent: a release that already exists
+is left alone.
+
+Tokens are split on purpose:
+
+- The branch push, the pull request and auto-merge use the Platform App token (`BOT_APP_ID` /
+  `BOT_PRIVATE_KEY`), because a `GITHUB_TOKEN` push starts no workflows and the required checks
+  would never report.
+- The tag and the GitHub Release use `GITHUB_TOKEN`, because a `GITHUB_TOKEN` write starts no
+  workflows. A repository that deploys to production on `v*` tags therefore does not deploy
+  because a release was cut, exactly as before the release became a pull request.
+
+`version-bump` accepts `auto`, `patch`, `minor`, or `major`. The worker needs `OPENAI_API_KEY`,
+`BOT_APP_ID` and `BOT_PRIVATE_KEY`. Auto-merge must be allowed on the repository
+(`gh api -X PATCH repos/<owner>/<repo> -F allow_auto_merge=true`); without it the pull request is
+left open with a warning on the run, and merging it by hand (squash) still tags the release.
 
 ## Publishing to npm
 

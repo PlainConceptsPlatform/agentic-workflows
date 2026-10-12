@@ -384,13 +384,13 @@ export async function removeRouteFiles(
   repositoryPath: string,
   routes: readonly RouteName[],
 ): Promise<string[]> {
-  const workerByRoute = new Map(workflowRoutes.map((route) => [route.name, route.worker]));
+  const routeByName = new Map(workflowRoutes.map((route) => [route.name, route]));
   const removed: string[] = [];
-  for (const route of routes) {
-    const worker = workerByRoute.get(route);
-    if (worker === undefined) continue;
-    const lock = worker.replace(/\.md$/, ".lock.yml");
-    for (const file of [worker, lock]) {
+  for (const name of routes) {
+    const route = routeByName.get(name);
+    if (route === undefined) continue;
+    const lock = route.worker.replace(/\.md$/, ".lock.yml");
+    for (const file of [route.worker, lock, ...(route.companions ?? [])]) {
       const destination = join(repositoryPath, ".github", "workflows", file);
       if (await exists(destination)) {
         await rm(destination, { force: true });

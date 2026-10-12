@@ -412,7 +412,8 @@ reads them next time.
 
 ## agent-release.md
 
-Manual dispatch only. The agent writes prose; a deterministic job does everything irreversible.
+Manual dispatch only. The agent writes prose; deterministic jobs do everything irreversible, and
+nothing reaches `main` except through a pull request.
 
 ```mermaid
 flowchart TD
@@ -420,26 +421,34 @@ flowchart TD
     relFacts("Facts (rung 3)<br/>Commit log since the last tag<br/>and the current version, to disk") --> relAgent
     relAgent("Agent (rung 5)<br/>Categorise by conventional-commit<br/>prefix, write release-notes.md.<br/>The only judgement in this route") --> relNoop
     relNoop("noop<br/>the agent writes a file,<br/>not a GitHub object") --> relConclude
-    relConclude["conclude (rung 6)<br/>Bump: BREAKING is major,<br/>feat is minor, else patch"] --> relPush
-    relPush("Commit, tag, push,<br/>create the GitHub Release") --> relDone
+    relConclude["conclude (rung 6)<br/>Bump: BREAKING is major,<br/>feat is minor, else patch"] --> relPr
+    relPr("App token: push release/vX.Y.Z,<br/>open chore(release) PR,<br/>enable squash auto-merge") --> relMerge
+    relMerge{"CI green and<br/>auto-merge allowed?"}
+    relMerge -->|yes| relTag
+    relMerge -.->|auto-merge disabled| relOpen
+    relTag("release-tag.yml on push to main<br/>GITHUB_TOKEN: tag vX.Y.Z,<br/>Release with the PR body as notes") --> relDone
     relConclude -.->|fails| relFail
-    relDone(("Released<br/>tag and Release published"))
-    relFail(("Failed<br/>no tag created, nothing partial"))
+    relOpen(("PR left open<br/>warning names the fix"))
+    relDone(("Released<br/>tag and Release published,<br/>no tag-triggered workflow fired"))
+    relFail(("Failed<br/>no branch, nothing partial"))
 
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
     classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
     classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
+    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
     classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class relStart start
-    class relFacts,relAgent,relNoop,relPush action
-    class relConclude decision
+    class relFacts,relAgent,relNoop,relPr,relTag action
+    class relConclude,relMerge decision
     class relFail failure
+    class relOpen idle
     class relDone success
 ```
 
 The version bump, the tag and the Release are deterministic on purpose. The agent's only output is
-a file on disk, so a confused model cannot publish a release.
+a file on disk, so a confused model cannot publish a release. The tag and the Release use
+`GITHUB_TOKEN` so that a consumer deploying on `v*` tags does not deploy because a release was cut.
 
 
 ---

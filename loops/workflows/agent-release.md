@@ -6,9 +6,10 @@ env:
   GIT_COMMITTER_NAME: "github-actions[bot]"
   GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
 description: |
-  Generates release notes from the commit log and creates a tagged GitHub Release.
+  Generates release notes from the commit log and opens a release pull request.
   The agent writes human-readable release notes; every other step (version bump,
-  commit, tag, push, release creation) is deterministic.
+  release branch, pull request, auto-merge) is deterministic. release-tag.yml tags
+  the merged commit and publishes the GitHub Release.
 
   Router-only worker: triggered exclusively via workflow_call from work-router.yml.
   Contract input: version-bump(patch|minor|major|auto).
@@ -92,6 +93,15 @@ safe-outputs:
 timeout-minutes: 30
 
 jobs:
+  # The release is a pull request, not a push. A repository whose `main` requires pull
+  # requests and status checks cannot accept a direct push, and a push with GITHUB_TOKEN would
+  # not start CI on the branch either, so the required checks would never report. The App token
+  # does both: its push and its pull request fire workflows, so CI runs and auto-merge can land
+  # the bump once it is green.
+  #
+  # No tag and no GitHub Release here. `release-tag.yml` creates both after the merge, with
+  # GITHUB_TOKEN on purpose: a consumer deploying to production on `v*` tags must not start
+  # that deploy from a release (see the comment at the top of release-tag.yml).
   conclude:
     needs: [activation, agent, safe_outputs]
     if: >
@@ -100,7 +110,7 @@ jobs:
       needs.safe_outputs.result == 'success'
     runs-on: agents-arc
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Download agent output artifact
         id: download-agent-output
@@ -110,10 +120,16 @@ jobs:
           pattern: "{${{ needs.activation.outputs.artifact_prefix }}agent,${{ needs.activation.outputs.artifact_prefix }}agent-output-fallback}"
           merge-multiple: true
           path: /tmp/gh-aw/
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
       - name: Read release notes and determine version
         id: release
@@ -173,32 +189,72 @@ jobs:
               }
             }
           "
-      - name: Commit, tag, and push
+      - name: Commit and push the release branch
+        id: branch
         env:
           NEW_VERSION: ${{ steps.release.outputs.new_version }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          base=$(git rev-parse --abbrev-ref HEAD)
+          branch="release/v${NEW_VERSION}"
+          # A second dispatch before the first release PR merged computes the same version from
+          # the same package.json. Two PRs bumping to one version would tag it twice.
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "::error::Branch $branch already exists: a release PR for v${NEW_VERSION} is open or was abandoned. Merge or close it, delete the branch, then dispatch again."
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
           git add package.json
           [ -f cli/package.json ] && git add cli/package.json
           git commit -m "chore(release): v${NEW_VERSION}"
-          git tag "v${NEW_VERSION}"
-          git push
-          git push --tags
-          echo "Tagged v${NEW_VERSION} and pushed."
-      - name: Create GitHub Release
+          git push origin "$branch"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "Pushed $branch (base $base)."
+      # The body is what release-tag.yml publishes as the GitHub Release notes. The marker is how
+      # it tells this PR from any other PR associated with the merge commit.
+      - name: Open the release pull request
+        id: pr
         env:
           NEW_VERSION: ${{ steps.release.outputs.new_version }}
-          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.branch.outputs.base }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
-          gh release create "v${NEW_VERSION}" \
+          {
+            echo "<!-- release:v${NEW_VERSION} -->"
+            cat /tmp/release-notes.md
+          } > /tmp/release-pr-body.md
+          url=$(gh pr create \
             --repo "$GITHUB_REPOSITORY" \
-            --title "v${NEW_VERSION}" \
-            --notes-file /tmp/release-notes.md
-          echo "GitHub Release v${NEW_VERSION} created."
+            --base "$BASE" \
+            --head "$BRANCH" \
+            --title "chore(release): v${NEW_VERSION}" \
+            --body-file /tmp/release-pr-body.md)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Opened $url"
+      # Squash keeps the PR title as the commit subject, which is what release-tag.yml matches.
+      - name: Enable auto-merge
+        env:
+          NEW_VERSION: ${{ steps.release.outputs.new_version }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          if gh pr merge "$PR_URL" --auto --squash --subject "chore(release): v${NEW_VERSION}" 2>/tmp/auto-merge.err; then
+            echo "Auto-merge enabled on $PR_URL; v${NEW_VERSION} is tagged once it merges."
+            exit 0
+          fi
+          cat /tmp/auto-merge.err >&2
+          allowed=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.allow_auto_merge' 2>/dev/null || echo "unknown")
+          if [ "$allowed" = "false" ]; then
+            echo "::warning::Auto-merge is disabled on $GITHUB_REPOSITORY, so the release PR $PR_URL stays open. Merge it by hand (squash), or enable it once: gh api -X PATCH repos/$GITHUB_REPOSITORY -F allow_auto_merge=true"
+          else
+            echo "::warning::Could not enable auto-merge on $PR_URL; it stays open. Merge it by hand (squash) to tag v${NEW_VERSION}."
+          fi
 
   incomplete:
     needs: [agent, safe_outputs]
@@ -241,4 +297,4 @@ jobs:
    - Keep it concise and factual. Do not invent changes that are not in the log.
 
 5. Call `noop` and stop. The deterministic `conclude` job reads the notes you wrote
-   and handles version bumping, tagging, and release creation.
+   and handles the version bump and the release pull request.
