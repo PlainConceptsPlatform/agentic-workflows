@@ -436,7 +436,11 @@ async function preCommitHookUpdate(repositoryPath: string): Promise<{ target: st
     return { target, content: managedLines };
   }
 
+  // A Windows clone with core.autocrlf checks the hook out with CRLF, which the LF patterns below
+  // never match: every update from Windows appended one more block (one consumer had ten). The
+  // hook is written back with LF, as every managed file is.
   const content = (await readFile(hookPath, "utf8"))
+    .replace(/\r\n/g, "\n")
     .replace("pnpm exec if git diff --cached --name-only -- .github | grep -q .; then", "if git diff --cached --name-only -- .github | grep -q .; then");
 
   // Replace whatever managed block is there, never append beside it. The previous version
