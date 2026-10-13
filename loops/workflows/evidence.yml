@@ -37,7 +37,8 @@ env:
   EVIDENCE_DOTNET_VERSION: "10.0.x"
   EVIDENCE_BRANCH: evidence
   EVIDENCE_MARKER: "<!-- agentic-evidence -->"
-  # Must match the Chromium libraries baked into the runner image (runners/versions.env).
+  # The capture runs in mcr.microsoft.com/playwright at this tag, pre-pulled by the runner image
+  # (runners/versions.env), so the two move together.
   PLAYWRIGHT_VERSION: "1.62.1"
 
 jobs:
