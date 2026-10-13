@@ -185,6 +185,25 @@ jobs:
             echo "::group::Last lines of the app's output"
             tail -n 80 "$log" || true
             echo "::endgroup::"
+            # An orchestrator (Aspire, compose) keeps each service's output to itself, so the
+            # start command's own log rarely says which service never came up. Show them.
+            echo "::group::Listening ports"
+            (ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | head -n 40 || true
+            echo "::endgroup::"
+            echo "::group::Containers"
+            docker ps -a --format '{{.Names}}  {{.Status}}  {{.Image}}' 2>/dev/null || true
+            echo "::endgroup::"
+            for id in $(docker ps -aq 2>/dev/null); do
+              echo "::group::Container $(docker inspect -f '{{.Name}}' "$id" 2>/dev/null)"
+              docker logs --tail 60 "$id" 2>&1 || true
+              echo "::endgroup::"
+            done
+            for f in "$HOME"/.aspire/logs/*.log; do
+              [ -f "$f" ] || continue
+              echo "::group::$f"
+              tail -n 200 "$f" || true
+              echo "::endgroup::"
+            done
           fi
 
       - name: Replay the plans
