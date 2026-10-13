@@ -121,8 +121,14 @@ owns are in `references/customize.md`.
 
 When a pull request merges, the router replays its verification plan (`verification-plan.md`,
 written by `pc-repo-verify` during implement) against the running app and archives one screenshot
-per waypoint on the pull request: the images go to the orphan `evidence` branch, one folder per
-pull request, and a single comment shows them. It is a record, not a gate; nothing waits on it.
+per waypoint beside the plan: the images and a `manifest.json` go to an `evidence/` folder next to
+`verification-plan.md` on the default branch, usually under `openspec/changes/archive/`, in one
+`[skip ci]` commit, and a single comment on the pull request shows them. The comment also embeds the
+manifest for tools such as Project Health. It is a record, not a gate; nothing waits on it.
+
+A pull request that is not merged (`operation=evidence` on an open one) has no plan on the default
+branch to keep the screenshots beside: the comment says so and the run's artifact keeps them for 14
+days. A default branch that refuses the workflow's push gets the same note instead of a failed run.
 
 It needs no secret and no per-repository setting. The app is started with `pnpm run dev` at the
 root (a plan can name another command in its own `start:`), dependencies are installed from the

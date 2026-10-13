@@ -89,19 +89,59 @@ journey:
   });
 });
 
+describe("planDir", () => {
+  it("keeps screenshots beside the plan, in the plan's own directory", () => {
+    expect(capture.planDir("openspec/changes/archive/2026-10-04-chat-home/verification-plan.md"))
+      .toBe("openspec/changes/archive/2026-10-04-chat-home");
+  });
+
+  it("refuses a path that would write outside the repository or at its root", () => {
+    for (const path of ["../x/verification-plan.md", "/etc/verification-plan.md", "verification-plan.md", "a/../../b/verification-plan.md"]) {
+      expect(() => capture.planDir(path)).toThrow(/unsafe plan path/);
+    }
+  });
+});
+
+const plan = "openspec/changes/archive/2026-10-04-chat-home";
+const captured = {
+  sha: "0123456789",
+  plans: [{ path: `${plan}/verification-plan.md`, change: "chat-home", status: "captured", waypoints: [
+    { n: 1, capture: "home", expect: "renders -- fast", file: `${plan}/evidence/01-home.jpg`, reached: true, errors: [] },
+    { n: 2, capture: "save", expect: "", file: `${plan}/evidence/02-save.jpg`, reached: false, errors: ["click role=\"button\": Timeout"] },
+  ] }],
+};
+
 describe("renderComment", () => {
   it("carries the marker and leaves the image base for the publish job to fill", () => {
-    const body = capture.renderComment({
-      sha: "0123456789",
-      plans: [{ change: "chat-home", status: "captured", waypoints: [
-        { n: 1, capture: "home", expect: "renders", file: "01-home.jpg", reached: true, errors: [] },
-        { n: 2, capture: "save", expect: "", file: "02-save.jpg", reached: false, errors: ["click role=\"button\": Timeout"] },
-      ] }],
-    });
+    const body = capture.renderComment(captured);
     expect(body.startsWith(capture.MARKER)).toBe(true);
-    expect(body).toContain(`](${capture.IMAGE_BASE}/01-home.jpg)`);
+    expect(body).toContain(`](${capture.IMAGE_BASE}/${plan}/evidence/01-home.jpg)`);
     expect(body).toContain("2 waypoints, 1 did not reach their state");
     expect(body).toContain("`0123456`");
+    expect(body).toContain("in its `evidence/` folder");
+  });
+
+  it("embeds a manifest other tools read back, and a `--` cannot close the comment early", () => {
+    // Project Health reads this instead of the markdown. A `--` in an expectation would end the
+    // HTML comment and spill the JSON into the rendered page.
+    const body = capture.renderComment(captured);
+    const embedded = body.slice(body.indexOf(`<!-- ${capture.EMBED_MARKER}`));
+    expect(embedded.slice(4, -4)).not.toContain("--");
+    const manifest = capture.readEmbeddedManifest(body);
+    expect(manifest.version).toBe(2);
+    expect(manifest.base).toBe(capture.IMAGE_BASE);
+    expect(manifest.plans[0].waypoints[0]).toEqual({
+      n: 1, capture: "home", expect: "renders -- fast", reached: true, file: `${plan}/evidence/01-home.jpg`,
+    });
+  });
+
+  it("drops the expectations from the embedded manifest before it outgrows a comment", () => {
+    const long = { ...captured, plans: [{ ...captured.plans[0], waypoints: Array.from({ length: 60 }, (_, i) => ({
+      n: i + 1, capture: `step-${i}`, expect: "x".repeat(600), file: `${plan}/evidence/${i}.jpg`, reached: true, errors: [],
+    })) }] };
+    const manifest = capture.readEmbeddedManifest(capture.renderComment(long));
+    expect(manifest.plans[0].waypoints).toHaveLength(60);
+    expect(manifest.plans[0].waypoints[0].expect).toBeUndefined();
   });
 
   it("says why nothing was captured when the app never answered", () => {

@@ -8,7 +8,10 @@
 //     prints {"runnable","url","start","plans"} as JSON, so the workflow knows whether to start
 //     the app at all and which address to wait for
 //   node capture.mjs capture <repo-root> <out-dir> <plan.md>...
-//     writes NN-<capture>.jpg per waypoint plus manifest.json and comment.md into <out-dir>
+//     writes one screenshot per waypoint under <out-dir>/files/, laid out as the repository is:
+//     <plan's directory>/evidence/NN-<capture>.jpg beside a manifest.json for that plan, so the
+//     publish job copies files/ over the default branch as is. Writes the run's manifest.json and
+//     comment.md into <out-dir>
 //   node capture.mjs unreached <repo-root> <out-dir> <plan.md>...
 //     the app never answered: writes manifest.json and comment.md saying so, and nothing else
 //
@@ -16,7 +19,7 @@
 // imports are bare: ESM resolves them from the file's own directory, never from NODE_PATH.
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, posix } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_URL = "http://localhost:3000";
@@ -27,6 +30,13 @@ const NAVIGATION_TIMEOUT_MS = Number(process.env.EVIDENCE_NAVIGATION_TIMEOUT_MS 
 // is the commit that job pushes, so the comment is written here and the publish job fills it in.
 export const IMAGE_BASE = "__EVIDENCE_BASE__";
 export const MARKER = "<!-- agentic-evidence -->";
+// Opens the machine-readable copy of the manifest at the end of the comment, which is what other
+// tools read (Project Health shows the screenshots with each issue) instead of parsing markdown.
+export const EMBED_MARKER = "agentic-evidence-manifest";
+// The folder beside each verification plan that keeps its screenshots.
+export const EVIDENCE_DIR = "evidence";
+// Stays well under GitHub's 65,536 character comment limit with the markdown above it.
+const EMBED_LIMIT = 30000;
 
 const ACTIONS = new Set(["open", "click", "dblclick", "fill", "press", "select", "check", "uncheck", "hover", "wait"]);
 const LOCATOR_KEYS = ["role", "text", "label", "placeholder", "testid", "alt", "title", "css"];
@@ -42,6 +52,17 @@ export function slug(value) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return text.slice(0, 60) || "waypoint";
+}
+
+// The directory a plan lives in, which is where its screenshots are kept. The path comes from the
+// pull request's file list, so it is repository-relative; anything that could climb out of the
+// repository is refused rather than written.
+export function planDir(planPath) {
+  const dir = posix.dirname(String(planPath).replace(/\\/g, "/"));
+  if (dir === "." || dir.startsWith("/") || dir.split("/").includes("..")) {
+    throw new Error(`unsafe plan path ${planPath}`);
+  }
+  return dir;
 }
 
 // The change a plan belongs to, from its directory. Archived changes carry a date prefix.
@@ -422,7 +443,7 @@ async function runStep(page, step, baseUrl) {
   }
 }
 
-async function replay(browser, plan, outDir, prefix) {
+async function replay(browser, plan, outDir, dir) {
   const context = await browser.newContext({ viewport: plan.viewport, ignoreHTTPSErrors: true });
   const page = await context.newPage();
   page.setDefaultTimeout(STEP_TIMEOUT_MS);
@@ -442,10 +463,11 @@ async function replay(browser, plan, outDir, prefix) {
           break;
         }
       }
-      const file = `${prefix}${String(waypoint.n).padStart(2, "0")}-${waypoint.capture}.jpg`;
+      // Repository-relative, so the comment, the manifest and the commit all name the same path.
+      const file = `${dir}/${EVIDENCE_DIR}/${String(waypoint.n).padStart(2, "0")}-${waypoint.capture}.jpg`;
       let captured = false;
       try {
-        await page.screenshot({ path: join(outDir, file), type: "jpeg", quality: 70, fullPage: true });
+        await page.screenshot({ path: join(outDir, "files", file), type: "jpeg", quality: 70, fullPage: true });
         captured = true;
       } catch (error) {
         errors.push(`screenshot: ${firstLine(error)}`);
@@ -459,7 +481,7 @@ async function replay(browser, plan, outDir, prefix) {
         errors,
         ignored: waypoint.ignored,
       });
-      console.log(`${prefix}${waypoint.n} ${waypoint.capture}: ${errors.length === 0 ? "ok" : errors.join("; ")}`);
+      console.log(`${dir} ${waypoint.n} ${waypoint.capture}: ${errors.length === 0 ? "ok" : errors.join("; ")}`);
     }
   } finally {
     await context.close();
@@ -471,11 +493,58 @@ async function replay(browser, plan, outDir, prefix) {
 
 const escapeMarkdown = (text) => String(text).replace(/([\\`*_[\]<>|])/g, "\\$1");
 
+// The manifest other tools read, as an HTML comment so it never renders. JSON can carry `--` only
+// inside strings, where `\u002d` means the same character, so escaping it keeps the comment closed.
+export function embedManifest(manifest) {
+  const compact = (keepExpect) => ({
+    version: 2,
+    base: IMAGE_BASE,
+    sha: manifest.sha ?? "",
+    runUrl: manifest.runUrl ?? "",
+    ...(manifest.app ? { app: manifest.app } : {}),
+    plans: (manifest.plans ?? []).map((plan) => ({
+      path: plan.path,
+      change: plan.change,
+      status: plan.status,
+      ...(plan.reason ? { reason: plan.reason } : {}),
+      ...(plan.waypoints
+        ? {
+            waypoints: plan.waypoints.map((w) => ({
+              n: w.n,
+              capture: w.capture,
+              ...(keepExpect && w.expect ? { expect: w.expect } : {}),
+              reached: w.reached,
+              file: w.file,
+            })),
+          }
+        : {}),
+    })),
+  });
+  let json = JSON.stringify(compact(true));
+  if (json.length > EMBED_LIMIT) json = JSON.stringify(compact(false));
+  if (json.length > EMBED_LIMIT) return "";
+  return `<!-- ${EMBED_MARKER}\n${json.replace(/-(?=-)/g, "\\u002d")}\n-->`;
+}
+
+// Reads the embedded manifest back out of a comment body, or null when there is none.
+export function readEmbeddedManifest(body) {
+  const match = String(body ?? "").match(new RegExp(`<!-- ${EMBED_MARKER}\\n([\\s\\S]*?)\\n-->`));
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+}
+
 export function renderComment(manifest) {
   const lines = [MARKER, "## Visual evidence", ""];
   const short = manifest.sha ? manifest.sha.slice(0, 7) : "";
   const run = manifest.runUrl ? ` ([run](${manifest.runUrl}))` : "";
   lines.push(`The verification plan replayed against \`${short}\`, the head of this pull request${run}.`, "");
+  if ((manifest.plans ?? []).some((plan) => plan.status === "captured")) {
+    lines.push(`The screenshots are kept beside each plan, in its \`${EVIDENCE_DIR}/\` folder on the default branch.`, "");
+  }
 
   if (manifest.app && manifest.app.started === false) {
     lines.push(`Nothing was captured: the app did not answer at ${manifest.app.url} within ${manifest.app.waitedSeconds} seconds of \`${manifest.app.start}\`. The run log has the app's output.`, "");
@@ -503,6 +572,8 @@ export function renderComment(manifest) {
     }
     lines.push("</details>", "");
   }
+  const embedded = embedManifest(manifest);
+  if (embedded) lines.push(embedded, "");
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
@@ -541,19 +612,18 @@ async function capture(root, outDir, paths) {
   await mkdir(outDir, { recursive: true });
   const plans = await loadPlans(root, paths, parse);
   const runnable = plans.filter((plan) => plan.status === "runnable");
-  const manifest = { version: 1, plans: [] };
+  const manifest = { version: 2, plans: [] };
 
   const browser = runnable.length > 0 ? await chromium.launch({ headless: true }) : undefined;
   try {
-    let index = 0;
     for (const plan of plans) {
       if (plan.status !== "runnable") {
         manifest.plans.push({ path: plan.path, change: plan.change, status: plan.status, reason: plan.reason ?? "" });
         continue;
       }
-      index++;
-      const prefix = runnable.length > 1 ? `${index}-` : "";
-      const waypoints = await replay(browser, plan, outDir, prefix);
+      const dir = planDir(plan.path);
+      await mkdir(join(outDir, "files", dir, EVIDENCE_DIR), { recursive: true });
+      const waypoints = await replay(browser, plan, outDir, dir);
       manifest.plans.push({ path: plan.path, change: plan.change, status: "captured", url: plan.url, waypoints });
     }
   } finally {
@@ -573,6 +643,12 @@ async function main(argv) {
     const manifest = await capture(root, outDir, paths);
     manifest.sha = process.env.EVIDENCE_SHA ?? "";
     manifest.runUrl = process.env.EVIDENCE_RUN_URL ?? "";
+    // Each plan keeps its own record beside its screenshots, so the folder explains itself on the
+    // default branch without the pull request comment.
+    for (const plan of manifest.plans.filter((p) => p.status === "captured")) {
+      const record = { version: 2, sha: manifest.sha, runUrl: manifest.runUrl, plan };
+      await writeFile(join(outDir, "files", planDir(plan.path), EVIDENCE_DIR, "manifest.json"), `${JSON.stringify(record, null, 2)}\n`);
+    }
     await writeFile(join(outDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     await writeFile(join(outDir, "comment.md"), renderComment(manifest));
     const shots = manifest.plans.flatMap((plan) => plan.waypoints ?? []).filter((waypoint) => waypoint.file).length;
@@ -586,7 +662,7 @@ async function main(argv) {
     await mkdir(outDir, { recursive: true });
     const plans = await loadPlans(root, paths, parse);
     const manifest = {
-      version: 1,
+      version: 2,
       sha: process.env.EVIDENCE_SHA ?? "",
       runUrl: process.env.EVIDENCE_RUN_URL ?? "",
       app: {

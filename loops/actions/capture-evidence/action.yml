@@ -3,7 +3,8 @@ name: Capture evidence
 description: >
   Reads a pull request's verification plans (written by the harness skill pc-repo-verify) and,
   in capture mode, replays them in headless Chromium against the running app, writing one JPEG
-  per waypoint plus manifest.json and comment.md. Inspect mode only reports whether any plan is
+  per waypoint under files/<plan directory>/evidence/, laid out as the repository is, plus
+  manifest.json and comment.md. Inspect mode only reports whether any plan is
   replayable, at which address, and with which start command. No model, no network beyond
   installing its two pinned packages.
 inputs:

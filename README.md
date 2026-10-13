@@ -47,7 +47,8 @@ Plus the plumbing, which has no agent in it: `work-router.yml` (the router itsel
 a trusted actor), `release-tag.yml` (installed with the `release` route: tags a merged release
 pull request), `evidence.yml` (when a pull request merges, replays the verification plan its
 implementation wrote, `pc-repo-verify`, in headless Chromium and archives one screenshot per
-waypoint on the pull request; no model, no secret, nothing to configure), and the
+waypoint in an `evidence/` folder beside the plan on the default branch, with one comment on the
+pull request; no model, no secret, nothing to configure), and the
 `classify-route` / `verify-route-matrix` composite actions.
 
 ### Keeping itself running

@@ -1723,7 +1723,7 @@ else
     echo "FAIL: evidence.yml's publish job holds a write token and must not check out or run repository code" >&2
   fi
   ev_absent 'secrets\.' "$EVIDENCE_YML" 'evidence.yml must need no secret; GITHUB_TOKEN is enough'
-  ev_absent 'gh (issue|pr) comment.*--attach' "$EVIDENCE_YML" 'gh --attach refuses installation tokens; publish through the evidence branch'
+  ev_absent 'gh (issue|pr) comment.*--attach' "$EVIDENCE_YML" 'gh --attach refuses installation tokens; commit the screenshots beside their plans'
 fi
 
 # The retired worker stays retired: nothing dispatches it and nothing waits for it.
