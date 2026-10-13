@@ -84,9 +84,9 @@ loops/workflows/
       call-triage              agent-triage.md              workflow_call only
       call-apply-review        agent-apply-review.md        workflow_call only
       call-merge-gate          agent-merge-gate.md          workflow_call only
-      call-visual-verify       agent-visual-verify.md       workflow_call only
       call-audit               agent-audit.md               workflow_call only
       call-release             agent-release.md             workflow_call only
+      call-evidence            evidence.yml                 plain YAML, no model
       deterministic jobs       check-implement-pr, dispatch-triage, bot-approve,
                               detect-pr-conflicts, reconcile-bot-pr-runs,
                               audit-close, cleanup-artifacts, validate
@@ -197,7 +197,7 @@ cost a real debugging session.
 | `Invalid secret, BOT_APP_ID is not defined in the referenced workflow` | The router's caller job passes secrets the called worker does not declare in its `secrets:` block. Only pass secrets the worker declares. The release worker needs `OPENAI_API_KEY`, `BOT_APP_ID` and `BOT_PRIVATE_KEY` (its conclude job opens the release PR with the App token). |
 | A pin bump in the shared setup ships without rebuilding the runner image | The fleet's install steps are guards against the baked toolchain, and a version that disagrees re-downloads on every job. The pre-baked image's saving is spent and nothing is red. `runners/versions.env` must move with every bump; see `references/opencode.md` |
 | Every under-limit issue skips the agent in 0s, every gate green, incomplete re-dispatches until the issue parks | A custom job that skips in the happy path (an exclusive alternative: refusal on `too_big != 'true'`) sits in the agent's `needs`, which gh-aw assembles automatically. With no status function in the top-level `if:` GitHub prepends `success()`, and a skipped need fails it. Add `&& !failure()` to the gate, exclude the false branch from `incomplete`'s `if:`, and have the false branch's job release the reservation itself (Pliny-Bot #320-322) |
-| A feature runs "green" on every merge but never once executed (visual-verify: zero screenshots ever) | A step did `uses: ./.github/workflows/<worker>.lock.yml`. A step cannot call a reusable workflow: the runner resolves the path as a local action and dies with "Can't find action.yml", swallowed by `continue-on-error`. Call workers from a job-level `uses:` (router pattern) and if the call must sit downstream of the worker's own agent, the compiler's needs-hoisting forces a cycle, so dispatch the router operation instead (the dispatch-triage pattern) |
+| A feature runs "green" on every merge but never once executed (the retired visual-verify: zero screenshots ever) | A step did `uses: ./.github/workflows/<worker>.lock.yml`. A step cannot call a reusable workflow: the runner resolves the path as a local action and dies with "Can't find action.yml", swallowed by `continue-on-error`. Call workers from a job-level `uses:` (router pattern) and if the call must sit downstream of the worker's own agent, the compiler's needs-hoisting forces a cycle, so dispatch the router operation instead (the dispatch-triage pattern) |
 
 The full trap descriptions, including the caller permission trap, the artifact prefix trap, the
 composite action manifest trap, and the App-token event loop, are in
@@ -332,8 +332,8 @@ run-name: >-
   && inputs.operation == 'merge-gate'
   && format('Agent: Merge Gate PR #{0}', inputs.pr-number)
   || github.event_name == 'workflow_dispatch'
-  && inputs.operation == 'visual-verify'
-  && format('Agent: Visual Verify PR #{0}', inputs.pr-number)
+  && inputs.operation == 'evidence'
+  && format('Agentics: Evidence PR #{0}', inputs.pr-number)
   || github.event_name == 'schedule'
   && github.event.schedule == '17 1 * * 1'
   && format('Agent: Audit weekly')

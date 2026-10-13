@@ -39,7 +39,6 @@ present, lowercased.
 | `## agent-apply-review.md` | `agent-apply-review` | `diagrams/agent-apply-review.{json,html}` |
 | `## agent-audit.md` | `agent-audit` | `diagrams/agent-audit.{json,html}` |
 | `## agent-release.md` | `agent-release` | `diagrams/agent-release.{json,html}` |
-| `## agent-visual-verify.md` | `agent-visual-verify` | `diagrams/agent-visual-verify.{json,html}` |
 | `## housekeeping` | `housekeeping` | `diagrams/housekeeping.{json,html}` |
 | `## agentics-app-errors` | `agentics-app-errors` | `diagrams/agentics-app-errors.{json,html}` |
 | `## agentics-error-report` | `agentics-error-report` | `diagrams/agentics-error-report.{json,html}` |

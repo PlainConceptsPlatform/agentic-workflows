@@ -429,6 +429,30 @@ describe("catalog installation", () => {
     await expect(readFile(join(repositoryPath, ".github/workflows/agent-audit.md"), "utf8")).resolves.toContain("REPO_RULES");
   });
 
+  it("removes the retired visual-verify worker and its lock, but not a consumer's own copy", async () => {
+    const sourcePath = await createDirectory({
+      "workflows/shared/defaults.md": "---\n" + header("loops/workflows/shared/defaults.md") + "---\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const ours = await createDirectory({
+      ".github/workflows/agent-visual-verify.md": "---\n" + header("loops/workflows/agent-visual-verify.md", "1.0.14") + "---\n",
+      ".github/workflows/agent-visual-verify.lock.yml": "# generated\n",
+    });
+    const result = await installCatalog(ours, { sourcePath, selectedRoutes: [], packageVersion: "1.1.0", baseline: offline });
+    expect(result.changes.filter((change) => change.status === "removed").map((change) => change.target)).toEqual([
+      ".github/workflows/agent-visual-verify.lock.yml",
+      ".github/workflows/agent-visual-verify.md",
+    ]);
+    await expect(access(join(ours, ".github/workflows/agent-visual-verify.md"), constants.F_OK)).rejects.toThrow();
+
+    const taken = await createDirectory({
+      ".github/workflows/agent-visual-verify.md": "---\nname: kept on purpose\n---\n",
+    });
+    const kept = await installCatalog(taken, { sourcePath, selectedRoutes: [], packageVersion: "1.1.0", baseline: offline });
+    expect(kept.changes.filter((change) => change.status === "removed")).toEqual([]);
+  });
+
   it("reports nothing to do when there is no orphan and no change", async () => {
     const sourcePath = await createDirectory({
       "actions/keep/action.yml": header("loops/actions/keep/action.yml") + "name: Keep\n",

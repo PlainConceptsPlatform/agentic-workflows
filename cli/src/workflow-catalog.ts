@@ -29,12 +29,22 @@ export const workflowRoutes: readonly WorkflowRoute[] = [
   { name: "release", worker: "agent-release.md", description: "Writes release notes from the commit log, then a deterministic job opens a version-bump pull request with auto-merge; once it merges, release-tag.yml tags the commit and publishes the GitHub Release. Manual dispatch only (operation=release).", defaultEnabled: true, companions: ["release-tag.yml"] },
 ];
 
+// Workflow files the package used to ship and no longer does. `.github/workflows/` is not pruned
+// wholesale, because a missing worker there means a route the consumer left out, so a retired one
+// is named here or it sits in every consumer forever with a lock that still compiles.
+// agent-visual-verify was replaced by evidence.yml in 1.1.0.
+export const retiredWorkflowFiles = [
+  "agent-visual-verify.md",
+  "agent-visual-verify.lock.yml",
+] as const;
+
 export const packageOwnedTargets = [
   ".github/actions",
   ".github/workflows/agent-*.md",
   ".github/workflows/shared/platform-defaults.md",
   ".github/workflows/shared/opencode-ci.md",
   ".github/workflows/work-router.yml",
+  ".github/workflows/evidence.yml",
   "scripts/compile-agent-workflows.mjs",
   "opencode.ci.json",
   "docs/diagrams.md",

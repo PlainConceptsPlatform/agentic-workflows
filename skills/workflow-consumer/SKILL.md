@@ -117,26 +117,25 @@ deliberately making the file consumer-owned.
 Full customization guidance, the migration path from shared configuration, and the values each worker
 owns are in `references/customize.md`.
 
-### Visual verification
+### Visual evidence
 
-The merge-gate worker can run visual verification before auto-merging. Set these env vars on
-`agent-merge-gate.md`:
+When a pull request merges, the router replays its verification plan (`verification-plan.md`,
+written by `pc-repo-verify` during implement) against the running app and archives one screenshot
+per waypoint on the pull request: the images go to the orphan `evidence` branch, one folder per
+pull request, and a single comment shows them. It is a record, not a gate; nothing waits on it.
 
-| Env var | Default | Purpose |
+It needs no secret and no per-repository setting. The app is started with `pnpm run dev` at the
+root (a plan can name another command in its own `start:`), dependencies are installed from the
+lockfile, `.env.example` is copied to `.env` when there is no `.env`, and .NET is set up when the
+repository has a `global.json` or .NET projects.
+
+| Router env var | Default | Purpose |
 |---|---|---|
-| `VISUAL_VERIFY_ENABLED` | `"true"` | Set to `"false"` to disable entirely |
-| `VISUAL_VERIFY_BUILD_COMMAND` | `""` | Build command for the app (e.g. `pnpm --filter @pliny/web build`) |
-| `VISUAL_VERIFY_START_COMMAND` | `""` | Start command for the app (e.g. `pnpm --filter @pliny/web exec next start`) |
-| `VISUAL_VERIFY_PORT` | `"3000"` | Port the app listens on |
-| `VISUAL_VERIFY_WAIT_SECONDS` | `"30"` | Seconds to wait for the app to respond |
+| `EVIDENCE_ENABLED` | `"true"` | `"false"` stops the merge route for a repository whose app cannot start on a runner |
 
-When `VISUAL_VERIFY_START_COMMAND` is empty, the agent runs `/repo-verify` and writes a
-verification plan, but the browser capture step is skipped and a warning comment is posted
-on the issue instead. Consumers must set the build and start commands for screenshots to
-appear.
-
-You can also manually dispatch visual verification on any PR from the router's Run
-workflow dropdown by choosing `visual-verify` as the operation.
+Run it by hand for any pull request from the router's Run workflow dropdown with operation
+`evidence` and the pull request number; that works even when `EVIDENCE_ENABLED` is `"false"`.
+A pull request with no plan, or whose plan says `status: not-applicable`, writes nothing.
 
 ### Merge gate on all pull requests
 

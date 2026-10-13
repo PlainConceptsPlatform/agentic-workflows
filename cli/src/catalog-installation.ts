@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { parse as parseYaml } from "yaml";
 
-import { catalogTemplates, mandatoryFiles, routeNames, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
+import { catalogTemplates, mandatoryFiles, retiredWorkflowFiles, routeNames, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
 import { processRoutes, excludedWorkerFiles } from "./route-processing.js";
 import { generateOpencodeCi, generateOpencodeConfig, generateStackDefaults, injectStackEnv } from "./stack-defaults.js";
 import { mergeRouter, mergeWorker, mirrorRouterLiterals } from "./worker-env.js";
@@ -284,6 +284,15 @@ async function orphanedManagedFiles(repositoryPath: string, keep: ReadonlySet<st
       const content = await readFile(join(directory, file), "utf8");
       if (hasOwnershipHeader(content)) orphans.push(target);
     }
+  }
+
+  // A retired worker is ours when it still carries the header; its lock was generated from it, so
+  // the lock goes with it either way.
+  for (const file of retiredWorkflowFiles) {
+    const target = `.github/workflows/${file}`;
+    const path = join(repositoryPath, target);
+    if (!await exists(path)) continue;
+    if (file.endsWith(".lock.yml") || hasOwnershipHeader(await readFile(path, "utf8"))) orphans.push(target);
   }
 
   return orphans.sort();
