@@ -3,15 +3,16 @@ name: "Agentics: Evidence"
 
 # Archives what a merged pull request looks like. The agent that implemented the change wrote a
 # verification plan with the harness skill pc-repo-verify; this replays that plan against the
-# app, with no model, and keeps one screenshot per waypoint on the pull request. The router calls
-# it when a pull request merges, and operation=evidence runs it by hand for any pull request.
-# Nothing waits on it and nothing reads it: it is the record, not a gate.
+# app, with no model, and keeps one screenshot per waypoint beside the plan it came from. The
+# router calls it when a pull request merges, and operation=evidence runs it by hand for any pull
+# request. Nothing waits on it: it is the record, not a gate. Project Health reads the manifest
+# embedded in the comment to show the screenshots with each issue.
 #
 # Two jobs, because one runs the pull request's code and the other writes. `capture` checks out
 # the head, starts the app and drives Chromium with a read-only token and no secret. `publish`
-# checks nothing out: it takes the images as an artifact, commits them to the orphan `evidence`
-# branch and writes one comment. Both use GITHUB_TOKEN, so a repository configures nothing, and
-# nothing either job writes raises another workflow event.
+# checks nothing out: it takes the images as an artifact, commits them into an `evidence/` folder
+# beside each plan on the default branch and writes one comment. Both use GITHUB_TOKEN, so a
+# repository configures nothing, and nothing either job writes raises another workflow event.
 #
 # This replaced agent-visual-verify, which never produced a screenshot: it ran only on pull
 # requests nobody would review, raced the merge it was dispatched before, re-planned with a model
@@ -35,8 +36,10 @@ env:
   EVIDENCE_START_TIMEOUT_SECONDS: "900"
   # The SDK when a repository has .NET projects but no global.json to say which.
   EVIDENCE_DOTNET_VERSION: "10.0.x"
-  EVIDENCE_BRANCH: evidence
   EVIDENCE_MARKER: "<!-- agentic-evidence -->"
+  # How long the run keeps the screenshots it could not archive: a pull request that is not merged
+  # has no plan on the default branch to keep them beside.
+  EVIDENCE_ARTIFACT_DAYS: "14"
   # The capture runs in mcr.microsoft.com/playwright at this tag, pre-pulled by the runner image
   # (runners/versions.env), so the two move together.
   PLAYWRIGHT_VERSION: "1.62.1"
@@ -66,8 +69,11 @@ jobs:
             const pull_number = Number(process.env.PR_NUMBER);
             const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number });
             const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number, per_page: 100 });
+            // A plan that was only moved (the archive step, in a later pull request) is skipped: its
+            // evidence/ folder moves with it, so replaying it would only repeat the record.
             const plans = files
               .filter((file) => file.status !== 'removed' && /(^|\/)verification-plan\.md$/.test(file.filename))
+              .filter((file) => !(file.status === 'renamed' && file.changes === 0))
               .map((file) => file.filename);
             core.setOutput('sha', pr.head.sha);
             core.setOutput('plans', plans.join('\n'));
@@ -259,7 +265,7 @@ jobs:
         with:
           name: evidence-pr-${{ inputs.pr-number }}
           path: ${{ runner.temp }}/evidence
-          retention-days: 3
+          retention-days: ${{ env.EVIDENCE_ARTIFACT_DAYS }}
           if-no-files-found: error
 
   publish:
@@ -278,72 +284,113 @@ jobs:
           name: evidence-pr-${{ inputs.pr-number }}
           path: ${{ runner.temp }}/evidence
 
-      # An orphan branch rather than the default branch: the images stay out of every build, every
-      # diff and every review, and a clone that only wants the code can leave the branch behind.
-      # One folder per pull request, so two publishes never touch the same file and a lost push
-      # race is a retry, never a conflict.
-      - name: Commit the screenshots to the evidence branch
-        id: branch
+      - name: Read the pull request
+        id: pr
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PR_NUMBER: ${{ inputs.pr-number }}
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(process.env.PR_NUMBER) });
+            core.setOutput('merged', pr.merged ? 'true' : 'false');
+            core.setOutput('branch', pr.base.ref);
+
+      # Beside each plan on the default branch, where the plan itself is archived: the record stays
+      # with the change it proves, and moves with it if the change folder ever moves. Only a merged
+      # pull request's plans are there to keep it beside. A sparse, blob-less fetch reads only the
+      # plan folders, and [skip ci] plus GITHUB_TOKEN keep the commit from starting any workflow.
+      - name: Commit the screenshots beside their plans
+        id: archive
+        if: steps.pr.outputs.merged == 'true'
         env:
           TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SERVER: ${{ github.server_url }}
-          BRANCH: ${{ env.EVIDENCE_BRANCH }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
           PR: ${{ inputs.pr-number }}
         run: |
           set -euo pipefail
-          src="$RUNNER_TEMP/evidence"
-          if ! compgen -G "$src/*.jpg" > /dev/null; then
+          src="$RUNNER_TEMP/evidence/files"
+          if [ ! -d "$src" ] || [ -z "$(find "$src" -name '*.jpg' -print -quit)" ]; then
             echo "No screenshots to keep; the comment records why."
             echo "base=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          work="$RUNNER_TEMP/evidence-branch"
+          # Each folder holding screenshots is <plan directory>/evidence.
+          mapfile -t dirs < <(cd "$src" && find . -type d -name evidence | sed 's|^\./||; s|/evidence$||' | sort)
+
+          work="$RUNNER_TEMP/evidence-commit"
           rm -rf "$work"
-          mkdir -p "$work"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          # Blob-less and sparse: only the plan folders are downloaded, however large the repository.
+          git -c "http.${SERVER}/.extraheader=${auth}" clone -q --filter=blob:none --no-checkout --depth=1 \
+            --branch "$BRANCH" "${SERVER}/${REPO}.git" "$work"
           cd "$work"
-          git init -q
+          git config "http.${SERVER}/.extraheader" "$auth"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config "http.${SERVER}/.extraheader" "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
-          git remote add origin "${SERVER}/${REPO}.git"
+          patterns=()
+          for dir in "${dirs[@]}"; do patterns+=("/$dir/"); done
+          git sparse-checkout set --no-cone "${patterns[@]}"
 
           pushed=false
+          missing=()
           for attempt in 1 2 3 4 5; do
-            if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null 2>&1; then
-              git fetch -q --depth=1 origin "$BRANCH"
-              git checkout -q -f -B "$BRANCH" FETCH_HEAD
+            if [ "$attempt" -eq 1 ]; then
+              git checkout -q "$BRANCH"
             else
-              git checkout -q -f --orphan "$BRANCH"
-              git rm -rqf --cached . > /dev/null 2>&1 || true
-              printf '%s\n' "# Evidence" "" \
-                "Screenshots the evidence workflow replayed from each merged pull request's verification plan, one folder per pull request." \
-                "Written by a workflow, never by hand. Nothing here is built, deployed or merged." > README.md
-              git add README.md
+              git fetch -q --depth=1 origin "$BRANCH"
+              git reset -q --hard FETCH_HEAD
             fi
-
-            rm -rf "pr-$PR"
-            mkdir -p "pr-$PR"
-            cp "$src"/*.jpg "$src/manifest.json" "pr-$PR/"
-            git add -A "pr-$PR"
+            missing=()
+            for dir in "${dirs[@]}"; do
+              # A plan moved or removed since the merge has no folder to keep the record in.
+              if [ ! -f "$dir/verification-plan.md" ]; then
+                missing+=("$dir")
+                continue
+              fi
+              rm -rf "$dir/evidence"
+              mkdir -p "$dir/evidence"
+              cp -R "$src/$dir/evidence/." "$dir/evidence/"
+              git add -A "$dir/evidence"
+            done
             if git diff --cached --quiet; then
               pushed=true
               break
             fi
-            git commit -q -m "evidence: pull request #$PR"
+            git commit -q -m "evidence: screenshots for #$PR [skip ci]"
             if git push -q origin "HEAD:refs/heads/$BRANCH"; then
               pushed=true
               break
             fi
-            echo "Another publish moved $BRANCH first (attempt $attempt); retrying on its new tip."
+            echo "$BRANCH moved before the push (attempt $attempt); retrying on its new tip."
             sleep $((attempt * 3))
           done
-          [ "$pushed" = "true" ] || { echo "::error::could not push to $BRANCH after 5 attempts"; exit 1; }
+          if [ "$pushed" != "true" ]; then
+            # A protected default branch refuses the push. The comment says so, and the run's
+            # artifact keeps the screenshots, so the merge that already happened stays green.
+            echo "::warning::could not push the screenshots to $BRANCH after 5 attempts"
+            echo "base=" >> "$GITHUB_OUTPUT"
+            echo "reason=the push to $BRANCH was refused" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${#missing[@]}" -eq "${#dirs[@]}" ]; then
+            echo "None of the plans is on $BRANCH any more; nothing was kept."
+            echo "base=" >> "$GITHUB_OUTPUT"
+            echo "reason=none of the plans is on $BRANCH any more" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           sha="$(git rev-parse HEAD)"
-          echo "base=${SERVER}/${REPO}/raw/${sha}/pr-${PR}" >> "$GITHUB_OUTPUT"
-          echo "Screenshots kept at ${SERVER}/${REPO}/tree/${sha}/pr-${PR}"
+          echo "base=${SERVER}/${REPO}/raw/${sha}" >> "$GITHUB_OUTPUT"
+          {
+            echo "missing<<EOF"
+            printf '%s\n' "${missing[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Screenshots kept at ${SERVER}/${REPO}/tree/${sha} beside $(( ${#dirs[@]} - ${#missing[@]} )) plan(s)"
 
       # GITHUB_TOKEN on purpose: its comment raises no workflow event, so the router does not wake
       # up to read its own record. One comment per pull request, rewritten on a re-run.
@@ -352,14 +399,56 @@ jobs:
         env:
           PR_NUMBER: ${{ inputs.pr-number }}
           MARKER: ${{ env.EVIDENCE_MARKER }}
-          IMAGE_BASE: ${{ steps.branch.outputs.base }}
+          MERGED: ${{ steps.pr.outputs.merged }}
+          IMAGE_BASE: ${{ steps.archive.outputs.base }}
+          MISSING: ${{ steps.archive.outputs.missing }}
+          REASON: ${{ steps.archive.outputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACT_DAYS: ${{ env.EVIDENCE_ARTIFACT_DAYS }}
         with:
           script: |
             const fs = require('node:fs');
             const path = require('node:path');
             const issue_number = Number(process.env.PR_NUMBER);
-            const source = fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'evidence', 'comment.md'), 'utf8');
-            const body = source.split('__EVIDENCE_BASE__').join(process.env.IMAGE_BASE);
+            const evidence = path.join(process.env.RUNNER_TEMP, 'evidence');
+            let source = fs.readFileSync(path.join(evidence, 'comment.md'), 'utf8');
+            const base = process.env.IMAGE_BASE ?? '';
+            const missing = (process.env.MISSING ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
+            const kept = (file) => Boolean(base) && !missing.some((dir) => file.startsWith(`${dir}/evidence/`));
+
+            // An image that was not archived would render broken: its line goes, and a note says
+            // the run's artifact has it instead.
+            source = source.replace(/^!\[[^\]]*\]\(__EVIDENCE_BASE__\/([^)]*)\)\n?/gm, (line, file) => (kept(file) ? line : ''));
+            const shots = fs.readdirSync(evidence, { recursive: true }).some((name) => String(name).endsWith('.jpg'));
+            if (!base) source = source.replace(/^The screenshots are kept beside each plan.*\n\n?/m, '');
+            if (shots && (!base || missing.length > 0)) {
+              const why = process.env.MERGED !== 'true'
+                ? 'the pull request is not merged, so its plans are not on the default branch'
+                : !base
+                  ? (process.env.REASON || 'the screenshots could not be committed')
+                  : `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} no longer on the default branch`;
+              source = source.replace('## Visual evidence\n', `## Visual evidence\n\n> Not archived: ${why}. The screenshots are in [the run](${process.env.RUN_URL})'s artifact for ${process.env.ARTIFACT_DAYS} days.\n`);
+            }
+
+            // The embedded manifest is what other tools read, so it says exactly what was kept: the
+            // base where the files are, and no file for a screenshot that was not archived. It sits
+            // in an HTML comment, which a `--` would close; `\u002d` is the same to a JSON reader.
+            source = source.replace(/<!-- agentic-evidence-manifest\n([\s\S]*?)\n-->/, (block, json) => {
+              let data;
+              try {
+                data = JSON.parse(json);
+              } catch {
+                return block;
+              }
+              data.base = base || null;
+              for (const plan of data.plans ?? []) {
+                for (const waypoint of plan.waypoints ?? []) {
+                  if (waypoint.file && !kept(waypoint.file)) waypoint.file = null;
+                }
+              }
+              return `<!-- agentic-evidence-manifest\n${JSON.stringify(data).replace(/-(?=-)/g, '\\u002d')}\n-->`;
+            });
+            const body = source.split('__EVIDENCE_BASE__').join(base);
             const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number, per_page: 100 });
             const existing = comments.find((comment) => comment.user?.type === 'Bot' && (comment.body ?? '').includes(process.env.MARKER));
             if (existing) {

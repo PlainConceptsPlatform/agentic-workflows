@@ -630,8 +630,8 @@ jobs:
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
 
   # Screenshots of a merged pull request, replayed from the verification plan its implementation
-  # wrote and archived on the pull request. Plain YAML with no model, so no secret is passed and the
-  # grant is exactly what the publish job writes: the evidence branch and one comment. Its capture
+  # wrote and archived beside that plan. Plain YAML with no model, so no secret is passed and the
+  # grant is exactly what the publish job writes: one commit of evidence/ folders and one comment. Its capture
   # job runs the pull request's code with read-only access; only publish holds these writes, and it
   # runs no repository code.
   call-evidence:

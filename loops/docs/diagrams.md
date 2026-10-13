@@ -626,7 +626,10 @@ earlier versions of them passed against a deliberately broken guard and were rew
 
 Archives what a merged pull request looks like. Not an agent: the plan was written by the agent that
 implemented the change (`pc-repo-verify`), and this replays it. The router calls it when a pull
-request merges, and `operation=evidence` runs it by hand. Nothing waits on it and nothing reads it.
+request merges, and `operation=evidence` runs it by hand. Nothing waits on it. The screenshots are
+committed beside each plan, in an `evidence/` folder on the default branch, so the record stays with
+the change it proves; the comment embeds a manifest that Project Health reads. A pull request that
+is not merged has no plan on the default branch, so its screenshots stay in the run's artifact.
 The capture job runs the pull request's code with a read-only token; only the publish job writes,
 and it runs no repository code.
 
@@ -645,8 +648,8 @@ flowchart TD
     evUp -.->|"no, after the timeout"| evUnreached
     evReplay["replay each waypoint<br/>in headless Chromium,<br/>one JPEG per waypoint"] --> evPublish
     evUnreached["record why nothing<br/>was captured"] --> evPublish
-    evPublish["publish (GITHUB_TOKEN)<br/>commit to the orphan evidence branch,<br/>upsert one comment"] --> evDone
-    evDone(("Archived<br/>on the pull request"))
+    evPublish["publish (GITHUB_TOKEN)<br/>commit beside each plan,<br/>evidence/ on the default branch,<br/>upsert one comment"] --> evDone
+    evDone(("Archived<br/>beside the plan"))
     evIdle(("Nothing to capture"))
 
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
