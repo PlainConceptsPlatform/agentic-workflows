@@ -686,6 +686,26 @@ describe("catalog installation", () => {
     expect(written).toContain("formatting");
   });
 
+  it("recognises the managed block in a CRLF checkout instead of appending another", async () => {
+    // A Windows clone with core.autocrlf checks the hook out with CRLF. The block pattern only
+    // knew LF, so every update from Windows appended one more block; one consumer had ten.
+    const sourcePath = await createDirectory({
+      "actions/check/action.yml": "name: Check\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const block = "if git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/aw/actions-lock.json ] || git add -- .github/aw/actions-lock.json\nfi\n";
+    const hook = `pnpm lint\n\n# Recompile workflow lock files if .github changed\n${block}${block}`.replace(/\n/g, "\r\n");
+    const repositoryPath = await createDirectory({ ".husky/pre-commit": hook });
+
+    await installCatalog(repositoryPath, { force: true, sourcePath });
+    const written = await readFile(join(repositoryPath, ".husky", "pre-commit"), "utf8");
+
+    expect(written.match(/if git diff --cached --name-only -- \.github/g) ?? []).toHaveLength(1);
+    expect(written).not.toContain("\r");
+    expect(written).toContain("pnpm lint");
+  });
+
   it("applies staged generated locks with managed sources", async () => {
     const sourcePath = await createDirectory({
       "actions/check/action.yml": "package action\n",
