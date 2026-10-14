@@ -37,6 +37,10 @@ export const EMBED_MARKER = "agentic-evidence-manifest";
 export const EVIDENCE_DIR = "evidence";
 // Stays well under GitHub's 65,536 character comment limit with the markdown above it.
 const EMBED_LIMIT = 30000;
+// The repository's own steps for signing in locally, read from the default branch so a replay of
+// an older pull request finds them too. The repository owns the file: an update never writes it.
+export const SIGN_IN_FILE = ".github/evidence/sign-in.yml";
+const ACCOUNT_PLACEHOLDER = "{account}";
 
 const ACTIONS = new Set(["open", "click", "dblclick", "fill", "press", "select", "check", "uncheck", "hover", "wait"]);
 const LOCATOR_KEYS = ["role", "text", "label", "placeholder", "testid", "alt", "title", "css"];
@@ -129,13 +133,70 @@ export function normalizePlan(doc) {
     return { n: index + 1, capture, expect: String(raw.expect ?? "").trim(), steps, ignored };
   });
 
+  const login = parseLogin(doc.login ?? environment.login, environment);
   return {
     status: "runnable",
     url: String(doc.url ?? environment.url ?? DEFAULT_URL).trim() || DEFAULT_URL,
     start: String(doc.start ?? environment.start ?? "").trim(),
     viewport: parseViewport(doc.viewport ?? environment.viewport),
+    ...(login ? { login } : {}),
     waypoints,
   };
+}
+
+// A plan that starts signed in says so with `login`, rather than signing in in its first
+// waypoint. The plans written before that waypoint signed in name a mechanism (`login: mock-sso`)
+// and say whom in prose ("Sign in as Bob Builder"), so the prose travels along as a hint. A plan
+// can also name the account (`login: { account: Bob Builder }`) or spell out its own steps.
+export function parseLogin(value, environment = {}) {
+  if (value === undefined || value === null || value === false) return undefined;
+  if (Array.isArray(value)) return { steps: value };
+  if (isObject(value) && Array.isArray(value.steps)) return { steps: value.steps };
+  if (isObject(value) && value.account !== undefined) return { account: String(value.account) };
+  const hint = Object.values(environment).filter((text) => typeof text === "string").join("\n");
+  return { hint };
+}
+
+// The account a plan's prose asks for: one of the repository's accounts right after "sign in as",
+// the earliest when the prose names several. Only an account the repository lists can match.
+export function accountNamed(text, accounts) {
+  let best;
+  for (const account of accounts) {
+    const escaped = account.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const at = String(text ?? "").search(new RegExp(`sign(?:ed)?[\\s-]*in\\s+as\\s+(?:the\\s+)?${escaped}\\b`, "i"));
+    if (at >= 0 && (best === undefined || at < best.at)) best = { account, at };
+  }
+  return best?.account;
+}
+
+// Reads the repository's sign-in: the steps, in the journey's own step syntax, with `{account}`
+// where the account goes, and the accounts a plan can ask for, the first being the default.
+export function parseSignIn(text, parseYaml) {
+  const doc = parseYaml(String(text));
+  if (!isObject(doc) || !Array.isArray(doc.steps) || doc.steps.length === 0) {
+    throw new Error("the sign-in needs a steps list");
+  }
+  return { accounts: asArray(doc.accounts).map((account) => String(account)), steps: doc.steps };
+}
+
+const fillAccount = (value, account) =>
+  typeof value === "string"
+    ? value.split(ACCOUNT_PLACEHOLDER).join(account)
+    : Array.isArray(value)
+      ? value.map((item) => fillAccount(item, account))
+      : isObject(value)
+        ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, fillAccount(item, account)]))
+        : value;
+
+// The steps that sign a plan in before its first waypoint, or why there are none to run.
+export function signInFor(login, signIn) {
+  if (!login) return undefined;
+  const parsed = (raw) => raw.map(parseStep).filter((step) => step.ignored === undefined);
+  if (login.steps) return { steps: parsed(login.steps) };
+  if (!signIn) return { steps: [], error: `the plan starts signed in, but the repository has no ${SIGN_IN_FILE}` };
+  if (signIn.error) return { steps: [], error: signIn.error };
+  const account = login.account ?? accountNamed(login.hint, signIn.accounts) ?? signIn.accounts[0] ?? "";
+  return { ...(account ? { account } : {}), steps: parsed(fillAccount(signIn.steps, account)) };
 }
 
 function locatorOf(value) {
@@ -450,7 +511,23 @@ async function replay(browser, plan, outDir, dir) {
   page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
 
   const results = [];
+  let signedIn;
   try {
+    if (plan.signIn) {
+      // Signing in is not a waypoint: nothing is captured, and a failure is recorded while the
+      // journey still runs, so its screenshots show where a missing sign-in left it.
+      const errors = plan.signIn.error ? [plan.signIn.error] : [];
+      for (const step of plan.signIn.steps) {
+        try {
+          await runStep(page, step, plan.url);
+        } catch (error) {
+          errors.push(`${describeStep(step)}: ${firstLine(error)}`);
+          break;
+        }
+      }
+      signedIn = { ...(plan.signIn.account ? { account: plan.signIn.account } : {}), reached: errors.length === 0, errors };
+      console.log(`${dir} sign-in${plan.signIn.account ? ` as ${plan.signIn.account}` : ""}: ${errors.length === 0 ? "ok" : errors.join("; ")}`);
+    }
     for (const waypoint of plan.waypoints) {
       const errors = [];
       for (const step of waypoint.steps) {
@@ -486,7 +563,7 @@ async function replay(browser, plan, outDir, dir) {
   } finally {
     await context.close();
   }
-  return results;
+  return { waypoints: results, signedIn };
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────────────────────
@@ -560,6 +637,10 @@ export function renderComment(manifest) {
       lines.push(`Not replayed: ${escapeMarkdown(plan.reason || plan.status)}.`, "");
       continue;
     }
+    if (plan.signIn) {
+      const as = plan.signIn.account ? ` as ${escapeMarkdown(plan.signIn.account)}` : "";
+      lines.push(plan.signIn.reached ? `Signed in${as} first.` : `> Could not sign in${as} first: ${escapeMarkdown(plan.signIn.errors.join("; "))}`, "");
+    }
     const missed = plan.waypoints.filter((waypoint) => !waypoint.reached).length;
     const summary = `${plan.waypoints.length} waypoint${plan.waypoints.length === 1 ? "" : "s"}${missed > 0 ? `, ${missed} did not reach their state` : ""}`;
     lines.push("<details>", `<summary>${summary}</summary>`, "");
@@ -606,6 +687,19 @@ async function inspect(root, paths) {
   };
 }
 
+// The repository's sign-in, or null when it has none. The path is relative to the working
+// directory, which is the default branch's checkout, not the pull request head.
+async function loadSignIn(path, parseYaml) {
+  let text;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  return parseSignIn(text, parseYaml);
+}
+
 async function capture(root, outDir, paths) {
   const { parse } = await import("yaml");
   const { chromium } = await import("playwright-core");
@@ -613,6 +707,11 @@ async function capture(root, outDir, paths) {
   const plans = await loadPlans(root, paths, parse);
   const runnable = plans.filter((plan) => plan.status === "runnable");
   const manifest = { version: 2, plans: [] };
+  let signIn = null;
+  if (runnable.some((plan) => plan.login)) {
+    const path = process.env.EVIDENCE_SIGN_IN || SIGN_IN_FILE;
+    signIn = await loadSignIn(path, parse).catch((error) => ({ error: `${path}: ${firstLine(error)}` }));
+  }
 
   const browser = runnable.length > 0 ? await chromium.launch({ headless: true }) : undefined;
   try {
@@ -623,8 +722,8 @@ async function capture(root, outDir, paths) {
       }
       const dir = planDir(plan.path);
       await mkdir(join(outDir, "files", dir, EVIDENCE_DIR), { recursive: true });
-      const waypoints = await replay(browser, plan, outDir, dir);
-      manifest.plans.push({ path: plan.path, change: plan.change, status: "captured", url: plan.url, waypoints });
+      const { waypoints, signedIn } = await replay(browser, { ...plan, signIn: signInFor(plan.login, signIn) }, outDir, dir);
+      manifest.plans.push({ path: plan.path, change: plan.change, status: "captured", url: plan.url, ...(signedIn ? { signIn: signedIn } : {}), waypoints });
     }
   } finally {
     await browser?.close();

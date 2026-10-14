@@ -11,8 +11,9 @@ name: "Agentics: Evidence"
 # Two jobs, because one runs the pull request's code and the other writes. `capture` checks out
 # the head, starts the app and drives Chromium with a read-only token and no secret. `publish`
 # checks nothing out: it takes the images as an artifact, commits them into an `evidence/` folder
-# beside each plan on the default branch and writes one comment. Both use GITHUB_TOKEN, so a
-# repository configures nothing, and nothing either job writes raises another workflow event.
+# beside each plan on the default branch and writes one comment. Both use GITHUB_TOKEN, and nothing
+# either job writes raises another workflow event. The one thing a repository may add is its own
+# .github/evidence/sign-in.yml, for plans that start signed in rather than signing in themselves.
 #
 # This replaced agent-visual-verify, which never produced a screenshot: it ran only on pull
 # requests nobody would review, raced the merge it was dispatched before, re-planned with a model
