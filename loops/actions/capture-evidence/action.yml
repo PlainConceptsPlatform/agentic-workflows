@@ -21,6 +21,13 @@ inputs:
     description: Where capture and unreached write the screenshots, manifest.json and comment.md.
     required: false
     default: ''
+  sign-in:
+    description: >
+      The repository's own sign-in steps for plans that start signed in (`login:`), relative to the
+      workspace, which is the default branch's checkout. The repository owns the file; without it
+      such a plan replays signed out and its comment says why.
+    required: false
+    default: '.github/evidence/sign-in.yml'
   playwright-version:
     description: playwright-core version. Must match the mcr.microsoft.com/playwright image tag the capture runs in.
     required: false
@@ -75,6 +82,7 @@ runs:
         ROOT: ${{ inputs.root }}
         PLANS: ${{ inputs.plans }}
         OUT_DIR: ${{ inputs.out-dir }}
+        EVIDENCE_SIGN_IN: ${{ inputs.sign-in }}
         PLAYWRIGHT_VERSION: ${{ inputs.playwright-version }}
         # Chromium's own stderr. A browser that dies on launch says why only here.
         DEBUG: pw:browser
@@ -102,7 +110,7 @@ runs:
             if command -v docker > /dev/null 2>&1; then
               # The host network, so the browser reaches the app on localhost where it started;
               # the runner's own user, so what it writes the publish job can read.
-              docker run --rm --network host --ipc host                 --user "$(id -u):$(id -g)" -e HOME=/tmp -e DEBUG                 -e EVIDENCE_SHA -e EVIDENCE_RUN_URL -e EVIDENCE_STEP_TIMEOUT_MS -e EVIDENCE_NAVIGATION_TIMEOUT_MS                 -v "$runner:$runner:ro" -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" -v "$OUT_DIR:$OUT_DIR"                 -w "$GITHUB_WORKSPACE"                 "mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-noble"                 node "$runner/capture.mjs" capture "$ROOT" "$OUT_DIR" "${plans[@]}"
+              docker run --rm --network host --ipc host                 --user "$(id -u):$(id -g)" -e HOME=/tmp -e DEBUG                 -e EVIDENCE_SHA -e EVIDENCE_RUN_URL -e EVIDENCE_SIGN_IN -e EVIDENCE_STEP_TIMEOUT_MS -e EVIDENCE_NAVIGATION_TIMEOUT_MS                 -v "$runner:$runner:ro" -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" -v "$OUT_DIR:$OUT_DIR"                 -w "$GITHUB_WORKSPACE"                 "mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-noble"                 node "$runner/capture.mjs" capture "$ROOT" "$OUT_DIR" "${plans[@]}"
             else
               node "$runner/capture.mjs" capture "$ROOT" "$OUT_DIR" "${plans[@]}"
             fi

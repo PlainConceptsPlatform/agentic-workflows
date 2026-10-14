@@ -48,8 +48,27 @@ a trusted actor), `release-tag.yml` (installed with the `release` route: tags a 
 pull request), `evidence.yml` (when a pull request merges, replays the verification plan its
 implementation wrote, `pc-repo-verify`, in headless Chromium and archives one screenshot per
 waypoint in an `evidence/` folder beside the plan on the default branch, with one comment on the
-pull request; no model, no secret, nothing to configure), and the
+pull request; no model, no secret), and the
 `classify-route` / `verify-route-matrix` composite actions.
+
+A plan normally signs in in its first waypoint. One that starts signed in instead says `login:`
+(the form every early plan was written in: `login: mock-sso`, and the account in prose), and the
+replay signs it in with the repository's own `.github/evidence/sign-in.yml`, read from the default
+branch so replays of older pull requests find it too. The repository owns that file; an update
+never writes it. `{account}` is the account the plan asks for ("Sign in as Bob Builder"), or the
+first one listed:
+
+```yaml
+accounts: [Alice Admin, Bob Builder, Carol Chen]
+steps:
+  - open: /
+  - click: { role: button, name: "{account}" }
+  - wait: { role: button, name: New bot }
+```
+
+Without the file such a plan replays signed out, and its comment says why. A plan that says
+`login:` but clicks one of those accounts in its first waypoint already signs itself in, and is
+left to.
 
 ### Keeping itself running
 

@@ -89,6 +89,88 @@ journey:
   });
 });
 
+describe("signing in before the journey", () => {
+  // Pliny-Bot's own sign-in, as its .github/evidence/sign-in.yml has it.
+  const signIn = capture.parseSignIn(`accounts: [Alice Admin, Bob Builder, Carol Chen]
+steps:
+  - open: /
+  - click: { role: button, name: "{account}" }
+  - wait: { role: button, name: New bot }
+`, parse);
+
+  // The form every Pliny-Bot plan was written in before the first waypoint signed in.
+  const legacy = (environment: string): string => fenced(`environment:
+  url: http://localhost:3000
+  login: mock-sso
+${environment}journey:
+  - capture: home
+    arrive:
+      - agent-browser open http://localhost:3000/
+`);
+
+  it("signs a legacy plan in as the account its prose asks for", () => {
+    const plan = capture.extractPlan(legacy("  data: |\n    A separate administrator must already exist.\n    Sign in as Bob Builder (bob) before the journey.\n"), parse);
+    expect(capture.signInFor(plan, signIn)).toEqual({
+      account: "Bob Builder",
+      steps: [
+        { action: "open", target: "/" },
+        { action: "click", locator: { role: "button", name: "Bob Builder" } },
+        { action: "wait", locator: { role: "button", name: "New bot" } },
+      ],
+    });
+  });
+
+  it("takes the account after 'sign in as', not the first one the prose lists", () => {
+    const prose = "The picker contains Alice Admin, Bob Builder and Carol Chen.\nbob is an ordinary user. Sign in as Carol Chen.";
+    expect(capture.accountNamed(prose, signIn.accounts)).toBe("Carol Chen");
+    expect(capture.accountNamed("Sign in as an authenticated development user.", signIn.accounts)).toBeUndefined();
+  });
+
+  it("falls back to the repository's first account when the prose names none", () => {
+    const plan = capture.extractPlan(legacy("  data: Two integrations connected by the signed-in person.\n"), parse);
+    expect(capture.signInFor(plan, signIn).account).toBe("Alice Admin");
+  });
+
+  it("uses the account or the steps a plan names itself", () => {
+    const named = (login: unknown) => ({ login: capture.parseLogin(login), waypoints: [] });
+    expect(capture.signInFor(named({ account: "Carol Chen" }), signIn).account).toBe("Carol Chen");
+    expect(capture.signInFor(named([{ click: { text: "Guest" } }]), null))
+      .toEqual({ steps: [{ action: "click", locator: { text: "Guest" } }] });
+  });
+
+  it("says why when the plan starts signed in and the repository has no sign-in", () => {
+    const plan = capture.extractPlan(legacy(""), parse);
+    expect(capture.signInFor(plan, null)).toEqual({
+      steps: [],
+      error: `the plan starts signed in, but the repository has no ${capture.SIGN_IN_FILE}`,
+    });
+  });
+
+  it("leaves a plan that signs in in its own first waypoint alone", () => {
+    const plan = capture.extractPlan(fenced("url: http://localhost:3000\njourney:\n  - capture: home\n    steps:\n      - open: /\n      - click: { role: button, name: Alice Admin }\n"), parse);
+    expect(plan.login).toBeUndefined();
+    expect(capture.signInFor(plan, signIn)).toBeUndefined();
+  });
+
+  it("does not sign in twice when a plan that says login also clicks an account itself", () => {
+    // Pliny-Bot's specialist-revisions: `login: development-account-picker`, then its first
+    // waypoint clicks Alice Admin. Signed in already, that click would find nothing.
+    const plan = capture.extractPlan(fenced(`environment:
+  login: development-account-picker
+journey:
+  - capture: home
+    arrive:
+      - agent-browser open http://localhost:3000/
+      - agent-browser find text "Alice Admin" click
+`), parse);
+    expect(capture.signInFor(plan, signIn)).toBeUndefined();
+  });
+
+  it("refuses a sign-in without steps", () => {
+    expect(() => capture.parseSignIn("accounts: [Alice Admin]\n", parse)).toThrow(/steps/);
+  });
+});
+
 describe("planDir", () => {
   it("keeps screenshots beside the plan, in the plan's own directory", () => {
     expect(capture.planDir("openspec/changes/archive/2026-10-04-chat-home/verification-plan.md"))
@@ -142,6 +224,13 @@ describe("renderComment", () => {
     const manifest = capture.readEmbeddedManifest(capture.renderComment(long));
     expect(manifest.plans[0].waypoints).toHaveLength(60);
     expect(manifest.plans[0].waypoints[0].expect).toBeUndefined();
+  });
+
+  it("says whom the plan signed in as, or why it could not", () => {
+    const signedIn = capture.renderComment({ ...captured, plans: [{ ...captured.plans[0], signIn: { account: "Bob Builder", reached: true, errors: [] } }] });
+    expect(signedIn).toContain("Signed in as Bob Builder first.");
+    const refused = capture.renderComment({ ...captured, plans: [{ ...captured.plans[0], signIn: { account: "Bob Builder", reached: false, errors: ["click role=\"button\": Timeout"] } }] });
+    expect(refused).toContain("> Could not sign in as Bob Builder first: click role=\"button\": Timeout");
   });
 
   it("says why nothing was captured when the app never answered", () => {
