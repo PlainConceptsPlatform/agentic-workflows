@@ -188,13 +188,24 @@ const fillAccount = (value, account) =>
         ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, fillAccount(item, account)]))
         : value;
 
+// A first waypoint that clicks one of the repository's accounts signs the plan in itself, as some
+// plans that also say `login:` do. Signing in before it would leave that click nothing to find.
+function signsItselfIn(plan, accounts) {
+  const names = new Set(accounts.map((account) => account.toLowerCase()));
+  return (plan.waypoints[0]?.steps ?? []).some((step) =>
+    step.action === "click" && [step.locator?.text, step.locator?.name].some((name) => name !== undefined && names.has(name.toLowerCase())),
+  );
+}
+
 // The steps that sign a plan in before its first waypoint, or why there are none to run.
-export function signInFor(login, signIn) {
+export function signInFor(plan, signIn) {
+  const login = plan.login;
   if (!login) return undefined;
   const parsed = (raw) => raw.map(parseStep).filter((step) => step.ignored === undefined);
   if (login.steps) return { steps: parsed(login.steps) };
   if (!signIn) return { steps: [], error: `the plan starts signed in, but the repository has no ${SIGN_IN_FILE}` };
   if (signIn.error) return { steps: [], error: signIn.error };
+  if (signsItselfIn(plan, signIn.accounts)) return undefined;
   const account = login.account ?? accountNamed(login.hint, signIn.accounts) ?? signIn.accounts[0] ?? "";
   return { ...(account ? { account } : {}), steps: parsed(fillAccount(signIn.steps, account)) };
 }
@@ -722,7 +733,7 @@ async function capture(root, outDir, paths) {
       }
       const dir = planDir(plan.path);
       await mkdir(join(outDir, "files", dir, EVIDENCE_DIR), { recursive: true });
-      const { waypoints, signedIn } = await replay(browser, { ...plan, signIn: signInFor(plan.login, signIn) }, outDir, dir);
+      const { waypoints, signedIn } = await replay(browser, { ...plan, signIn: signInFor(plan, signIn) }, outDir, dir);
       manifest.plans.push({ path: plan.path, change: plan.change, status: "captured", url: plan.url, ...(signedIn ? { signIn: signedIn } : {}), waypoints });
     }
   } finally {

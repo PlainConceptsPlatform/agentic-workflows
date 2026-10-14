@@ -66,7 +66,9 @@ steps:
   - wait: { role: button, name: New bot }
 ```
 
-Without the file such a plan replays signed out, and its comment says why.
+Without the file such a plan replays signed out, and its comment says why. A plan that says
+`login:` but clicks one of those accounts in its first waypoint already signs itself in, and is
+left to.
 
 ### Keeping itself running
 

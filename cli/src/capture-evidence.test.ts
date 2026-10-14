@@ -110,7 +110,7 @@ ${environment}journey:
 
   it("signs a legacy plan in as the account its prose asks for", () => {
     const plan = capture.extractPlan(legacy("  data: |\n    A separate administrator must already exist.\n    Sign in as Bob Builder (bob) before the journey.\n"), parse);
-    expect(capture.signInFor(plan.login, signIn)).toEqual({
+    expect(capture.signInFor(plan, signIn)).toEqual({
       account: "Bob Builder",
       steps: [
         { action: "open", target: "/" },
@@ -128,18 +128,19 @@ ${environment}journey:
 
   it("falls back to the repository's first account when the prose names none", () => {
     const plan = capture.extractPlan(legacy("  data: Two integrations connected by the signed-in person.\n"), parse);
-    expect(capture.signInFor(plan.login, signIn).account).toBe("Alice Admin");
+    expect(capture.signInFor(plan, signIn).account).toBe("Alice Admin");
   });
 
   it("uses the account or the steps a plan names itself", () => {
-    expect(capture.signInFor(capture.parseLogin({ account: "Carol Chen" }), signIn).account).toBe("Carol Chen");
-    expect(capture.signInFor(capture.parseLogin([{ click: { text: "Guest" } }]), null))
+    const named = (login: unknown) => ({ login: capture.parseLogin(login), waypoints: [] });
+    expect(capture.signInFor(named({ account: "Carol Chen" }), signIn).account).toBe("Carol Chen");
+    expect(capture.signInFor(named([{ click: { text: "Guest" } }]), null))
       .toEqual({ steps: [{ action: "click", locator: { text: "Guest" } }] });
   });
 
   it("says why when the plan starts signed in and the repository has no sign-in", () => {
     const plan = capture.extractPlan(legacy(""), parse);
-    expect(capture.signInFor(plan.login, null)).toEqual({
+    expect(capture.signInFor(plan, null)).toEqual({
       steps: [],
       error: `the plan starts signed in, but the repository has no ${capture.SIGN_IN_FILE}`,
     });
@@ -148,7 +149,21 @@ ${environment}journey:
   it("leaves a plan that signs in in its own first waypoint alone", () => {
     const plan = capture.extractPlan(fenced("url: http://localhost:3000\njourney:\n  - capture: home\n    steps:\n      - open: /\n      - click: { role: button, name: Alice Admin }\n"), parse);
     expect(plan.login).toBeUndefined();
-    expect(capture.signInFor(plan.login, signIn)).toBeUndefined();
+    expect(capture.signInFor(plan, signIn)).toBeUndefined();
+  });
+
+  it("does not sign in twice when a plan that says login also clicks an account itself", () => {
+    // Pliny-Bot's specialist-revisions: `login: development-account-picker`, then its first
+    // waypoint clicks Alice Admin. Signed in already, that click would find nothing.
+    const plan = capture.extractPlan(fenced(`environment:
+  login: development-account-picker
+journey:
+  - capture: home
+    arrive:
+      - agent-browser open http://localhost:3000/
+      - agent-browser find text "Alice Admin" click
+`), parse);
+    expect(capture.signInFor(plan, signIn)).toBeUndefined();
   });
 
   it("refuses a sign-in without steps", () => {
