@@ -37,9 +37,9 @@ without touching the others.
 flowchart TD
     ev{"One GitHub event"} --> classify
     classify["classify (rung 1)<br/>pure shell, no network<br/>one event in, one route out"] --> authorize
-    authorize{"authorize (rung 1)<br/>Write permission, and is the<br/>actor one of the org's own?"}
+    authorize{"authorize (rung 1)<br/>Write permission, or<br/>read only?"}
     authorize -->|"human, trusted"| work
-    authorize -->|"outside collaborator"| triageOnly
+    authorize -->|"read only"| triageOnly
     authorize -.->|"no permission"| idle
     work{"route"} -->|refine| wRefine
     work -->|implement| wImpl
@@ -79,7 +79,7 @@ fewer events, not adding more guards.
 ```mermaid
 flowchart LR
     open("Issue opened") --> triage
-    triage{"triage<br/>outside collaborator"} -->|pass| refine
+    triage{"triage<br/>read-only opener"} -->|pass| refine
     triage -.->|block| closed(("Closed"))
     triage -.->|needs-info| author("Author replies") --> triage
     write("Write+ user<br/>self-labels") --> refine
@@ -114,9 +114,9 @@ instead of one pull request that has to fix them all.
 
 ## agent-triage.md
 
-The front door for issues opened from outside the organisation. The gate is membership, not permission
-level: an org member with write skips triage and self-labels into the pipeline, while an outside
-collaborator goes through it even when they hold write.
+The front door for issues opened by people with read-only access. The gate is permission level, not
+membership: anybody with write skips triage and self-labels into the pipeline, org member or not, while
+a read-only outside collaborator goes through it.
 
 Four outcomes, and only one of them closes anything. `needs-maintainer` is the one worth knowing: the
 request is legitimate but addressed to the wrong intake, so the issue stays open with `review` and a
@@ -125,7 +125,7 @@ maintainer takes it on by adding `refine`.
 ```mermaid
 flowchart TD
     triStart("Work Router<br/>triage route") --> triPick
-    triPick{"Opened by an<br/>outside collaborator?"} -->|yes| triReserve
+    triPick{"Opened by a read-only<br/>outside collaborator?"} -->|yes| triReserve
     triPick -.->|"no, write+ user"| triIdle
     triReserve("Reserve (rung 4)<br/>bot-working + triage") --> triFacts
     triFacts("Facts (rung 3)<br/>Issue, comments and every open<br/>issue written to disk") --> triRound

@@ -43,8 +43,8 @@ classify_route() {
         if has_label refine || has_label implement; then
           error="issue opened with a work label; triage skipped"
         else
-          # Issue opened by an outside collaborator → triage. The authorize job
-          # gates the caller on is_outside_collaborator; this routes unconditionally
+          # Issue opened by a read-only outside collaborator → triage. The authorize
+          # job gates the caller on is_outside_collaborator; this routes unconditionally
           # so write+ openers classify to triage but the caller job skips them.
           route="triage"
           triage_mode="first"

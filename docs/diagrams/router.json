@@ -38,7 +38,7 @@
       "id": "authorize",
       "type": "security",
       "label": "Authorize",
-      "sublabel": "write + org member?",
+      "sublabel": "write or read only?",
       "pos": [
         440,
         250
@@ -224,7 +224,7 @@
       "id": "authorize-triage",
       "from": "authorize",
       "to": "wTriage",
-      "label": "outside collab"
+      "label": "read only"
     },
     {
       "id": "work-refine",
