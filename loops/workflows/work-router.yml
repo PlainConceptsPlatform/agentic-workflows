@@ -287,11 +287,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
           EVENT: ${{ github.event_name }}
-          # Who GitHub says this person is relative to the repository, straight from the
-          # payload. OWNER and MEMBER are the organisation's own; COLLABORATOR is repository
-          # access without organisation membership, which is what triage is for. Read from
-          # here because a repository-scoped GITHUB_TOKEN cannot query org membership.
-          AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || github.event.comment.author_association || github.event.pull_request.author_association }}
         run: |
           set -euo pipefail
 
@@ -320,48 +315,14 @@ jobs:
           permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" \
             --jq '.permission' 2>/dev/null || echo "none")
 
-          # Is this person one of the organisation's own, or somebody with repository access
-          # from outside it? Triage exists for the second kind.
-          #
-          # The payload answers it. The org API cannot: `orgs/{org}/members/{user}` needs an
-          # org-scoped token and GITHUB_TOKEN is scoped to this repository, so that call failed
-          # for everybody and every admin who opened an issue was declared an outside
-          # collaborator and triaged. It is kept only as a fallback for events that carry no
-          # association, and it can no longer decide "outside" on its own.
-          org=$(echo "$GITHUB_REPOSITORY" | cut -d/ -f1)
-          case "${AUTHOR_ASSOCIATION:-}" in
-            OWNER | MEMBER)
-              is_member=true
-              ;;
-            COLLABORATOR)
-              is_member=false
-              ;;
-            *)
-              # No association in this payload. Ask the org, and believe a yes rather than a
-              # no: a failed call here is indistinguishable from a real non-member.
-              if gh api "orgs/$org/members/$ACTOR" >/dev/null 2>&1; then
-                is_member=true
-              else
-                is_member=unknown
-              fi
-              ;;
-          esac
-
           case "$permission" in
             admin | maintain | write)
-              # "unknown" counts as inside. Somebody with write or better whose membership
-              # cannot be established is far more likely to be a colleague than an outside
-              # collaborator, and treating them as outside starts a triage agent nobody asked
-              # for - which, with a four-hour timeout, holds a runner for the afternoon.
-              if [ "$is_member" != "false" ]; then
-                echo "trusted=true" >> "$GITHUB_OUTPUT"
-                echo "is_outside_collaborator=false" >> "$GITHUB_OUTPUT"
-                echo "::notice::$ACTOR has $permission permission and is an org member."
-              else
-                echo "trusted=true" >> "$GITHUB_OUTPUT"
-                echo "is_outside_collaborator=true" >> "$GITHUB_OUTPUT"
-                echo "::notice::$ACTOR has $permission permission but is NOT an org member (outside collaborator). Triage route eligible."
-              fi
+              # Write or better is a colleague, org member or not: an outside collaborator who
+              # was given write is somebody the team chose to work with, and triaging what they
+              # open starts an agent nobody asked for. Only read access is the outside door.
+              echo "trusted=true" >> "$GITHUB_OUTPUT"
+              echo "is_outside_collaborator=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::$ACTOR has $permission permission."
               ;;
             read)
               echo "trusted=false" >> "$GITHUB_OUTPUT"
@@ -553,7 +514,7 @@ jobs:
 
   call-triage:
     needs: [classify, authorize]
-    # Triage on issue open is for outside collaborators only (handled by dispatch-triage).
+    # Triage on issue open is for read-only outside collaborators only (handled by dispatch-triage).
     # A trusted actor who opens an issue should not start triage - they can add refine/implement/direct
     # labels or manually dispatch triage. All other triage routes (labeled, comment, dispatch) are trusted.
     if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.trusted == 'true' && !(github.event_name == 'issues' && github.event.action == 'opened')
