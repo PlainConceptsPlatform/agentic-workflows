@@ -78,17 +78,17 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
   # finished refinement: it only counts as the questions outcome when the matching
   # batched-questions comment is also there.
   #
-  # Questions require the draft as well as the comment, which is the contract the worker
-  # states: it leaves a template-wrapped temporal draft AND asks in one batched comment.
-  # Accepting a comment with no body at all let a run that wrote nothing be read as a
-  # question, so the issue parked at `review` waiting for an answer to something nobody
-  # asked, with the run green. Lyceum #44 and #59, Numa #698: the agent lost the story,
-  # posted "Refinement complete", and the loop believed it. Without a draft it is not a
-  # question, it is a run that produced nothing, and invalid is what makes it retry.
+  # A comment with no update at all is a question asked before anything was drafted, which
+  # the worker is allowed to do. A comment alongside an update that carries no draft is not:
+  # that is the shape of a run that called update_issue and delivered no body, which Lyceum
+  # #44 produced when the safe-outputs bridge passed 19 bytes instead of the 16,175 the
+  # agent piped in. Requiring the draft unconditionally also rejected the first shape and
+  # kept this branch red for eleven days; the two are told apart by has_update, not by
+  # demanding a draft from both.
   if child_count >= 2 and has_replacement_body and has_only_source_items then "split"
   elif child_count > 0 then "invalid"
   elif has_replacement_body and (has_draft_body | not) and has_only_source_items then "complete"
-  elif has_clarification and has_draft_body and has_only_source_items
+  elif has_clarification and ((has_update | not) or has_draft_body) and has_only_source_items
     and (reported_incomplete | not) then "questions"
   else "invalid"
   end

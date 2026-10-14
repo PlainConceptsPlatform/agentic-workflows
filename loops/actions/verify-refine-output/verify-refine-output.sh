@@ -52,6 +52,14 @@ assert_output 'question with an update is complete' complete \
   '{"items":[{"type":"update_issue","item_number":42,"body":"# User story"},{"type":"add_comment","item_number":42,"body":"Which users need this feature?"}]}'
 assert_output 'question with a blank update is invalid' invalid \
   '{"items":[{"type":"update_issue","item_number":42,"body":" "},{"type":"add_comment","item_number":42,"body":"Which users need this feature?"}]}'
+# Lyceum #44: the safe-outputs bridge passed 19 bytes, {"issue_number":44}, instead of the
+# 16,175 the agent piped in, so update_issue arrived with no body key at all. The run ended
+# green and the issue parked waiting for an answer to a question nobody asked. A missing key
+# is not the same shape as a blank string, so it is pinned separately from the case above.
+assert_output 'update with no body key is invalid' invalid \
+  '{"items":[{"type":"update_issue","item_number":42}]}'
+assert_output 'update with no body key plus a comment is invalid' invalid \
+  '{"items":[{"type":"update_issue","item_number":42},{"type":"add_comment","item_number":42,"body":"Refinement complete"}]}'
 assert_output 'wrong issue output is invalid' invalid \
   '{"items":[{"type":"add_comment","item_number":7,"body":"Which users need this feature?"}]}'
 assert_output 'complete output cannot update another issue' invalid \
