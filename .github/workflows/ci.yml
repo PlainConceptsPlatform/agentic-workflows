@@ -239,6 +239,49 @@ jobs:
           sys.exit(1 if failed else 0)
           PY
 
+  runner-image-pins:
+    name: Runner image pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The runner image pre-pulls the gh-aw sandbox images so jobs do not download them. Which
+      # images a lock pulls is decided by the gh-aw version that compiled it, so the bake list in
+      # runners/versions.env is only right while it matches that version. Compile the workers
+      # with it and compare: a gh-aw bump that forgets the image fails here, not as a slow fleet.
+      - name: Install the pinned gh-aw
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          . runners/versions.env
+          shipped=$(sed -n 's/^ *GH_AW_VERSION: *//p' loops/templates/agentics/agentics-checks.yml)
+          [ "$GH_AW_VERSION" = "$shipped" ] || {
+            echo "::error file=runners/versions.env::GH_AW_VERSION is $GH_AW_VERSION but agentics-checks.yml pins $shipped. Bump them together."
+            exit 1
+          }
+          gh extension install github/gh-aw --pin "$GH_AW_VERSION"
+
+      - name: Baked gh-aw images match what the workers compile to
+        run: |
+          set -euo pipefail
+          . runners/versions.env
+          work=$(mktemp -d)
+          cp -r loops/workflows "$work/wf"
+          (cd "$work" && git init -q && gh aw compile --dir wf > /dev/null)
+          compiled=$(grep -ho 'download_docker_images.sh" .*' "$work"/wf/*.lock.yml | tr ' ' '\n' | grep -E '^(ghcr|mcr)\.' | sort -u)
+          baked=$(printf '%s\n' $GH_AW_IMAGES | sort -u)
+          [ -n "$compiled" ] || { echo "::error::no image list found in the compiled locks; the gh-aw template changed"; exit 1; }
+          if [ "$compiled" != "$baked" ]; then
+            echo "::error file=runners/versions.env::GH_AW_IMAGES does not match what gh-aw $GH_AW_VERSION compiles. Replace it with:"
+            printf '%s\n' "$compiled"
+            exit 1
+          fi
+          echo "$(printf '%s\n' "$baked" | wc -l) gh-aw images match $GH_AW_VERSION"
+
   diagrams:
     name: Diagrams
     runs-on: ubuntu-latest

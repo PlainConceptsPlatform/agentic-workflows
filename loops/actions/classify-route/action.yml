@@ -53,6 +53,7 @@ runs:
         ISSUE_STATE: ${{ github.event.issue.state }}
         EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
         EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_MERGED: ${{ github.event.pull_request.merged }}
         COMMENT_ON_PR: ${{ github.event.issue.pull_request != '' }}
         COMMENT_SENDER_TYPE: ${{ github.event.comment.user.type }}
         ACTOR: ${{ github.actor }}

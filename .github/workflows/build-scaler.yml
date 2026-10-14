@@ -1,0 +1,87 @@
+name: Build scaler
+
+# The runner scaler app (agentrunner-scaler-01) had no CI: it was built by hand on
+# someone's machine, the published DLL committed to runners/scaler-app/publish/ drifted
+# from the committed source, and production ran a build that was in no branch. This
+# workflow is the single source of truth for that binary. Every push to main that touches
+# the scaler builds it from source and deploys it to the App Service, so the repo and
+# production can never diverge again.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'runners/scaler-app/**'
+      - '.github/workflows/build-scaler.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-scaler
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        working-directory: runners/scaler-app
+        run: dotnet publish -c Release -o publish --nologo
+
+      - name: Build deployment zip
+        working-directory: runners/scaler-app/publish
+        run: zip -r "${{ github.workspace }}/scaler-deploy.zip" .
+
+      - name: Azure login
+        env:
+          AZ_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          AZ_CLIENT_SECRET: ${{ secrets.SECRET_ID }}
+          AZ_SUBSCRIPTION_ID: ${{ secrets.SUBSCRIPTION_ID }}
+          AZ_TENANT_ID: ${{ secrets.TENANT_ID }}
+        run: |
+          # --service-principal sets the subscription as default already; az account set
+          # right after login intermittently fails with "doesn't exist in cloud AzureCloud"
+          # even when the login output shows the right subscription as isDefault=true.
+          az login --service-principal -u "$AZ_CLIENT_ID" -p "$AZ_CLIENT_SECRET" --tenant "$AZ_TENANT_ID"
+
+      - name: Deploy to App Service
+        env:
+          AZ_SUBSCRIPTION_ID: ${{ secrets.SUBSCRIPTION_ID }}
+        run: |
+          az webapp deploy -g agentrunner-pro-rg-01 -n agentrunner-scaler-01 \
+            --src-path "${{ github.workspace }}/scaler-deploy.zip" --type zip --timeout 180
+
+      - name: Health check
+        env:
+          VM_TOKEN: ${{ secrets.VM_TOKEN }}
+        run: |
+          # Wait for the app to finish cold-starting after the zip deploy.
+          code=""
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" https://agentrunner-scaler-01.azurewebsites.net/healthz || true)
+            echo "[$i] healthz: $code"
+            [ "$code" = "200" ] && break
+            sleep 5
+          done
+          [ "$code" = "200" ] || { echo "::error::/healthz did not return 200 after deploy"; exit 1; }
+          echo "scaler is healthy"
+          # /status is best-effort: it makes an ARM call that can race with the cold
+          # start's managed-identity token cache. A failure here is logged but does not
+          # fail the deploy — /healthz is the source of truth for "app is up".
+          status=$(curl -s -H "Authorization: Bearer $VM_TOKEN" https://agentrunner-scaler-01.azurewebsites.net/status || true)
+          echo "$status" | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'capacity={d[\"azure\"].get(\"capacity\",\"?\")} demand={d[\"demand\"]} desired={d[\"desired\"]}')" 2>/dev/null || echo "/status not yet ready (ARM token warming); /healthz=200 is sufficient"
+
+      - name: Azure logout
+        if: always()
+        run: az logout || true

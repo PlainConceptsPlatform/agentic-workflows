@@ -459,6 +459,16 @@ steps:
         > /tmp/gh-aw/agent/review-threads.json
 
 safe-outputs:
+  # Path B, like triage, refine and merge-gate. Without staging the framework's own
+  # safe_outputs job writes as well as conclude: it pushed the fix with GITHUB_TOKEN and
+  # posted the review comment, and conclude pushed the same bundle and posted the comment
+  # again. The push duplicated (conclude fast-forwards a branch the framework had already
+  # moved, which turns red the moment anything else lands on the branch first), and every
+  # review got two identical comments. Worse, the framework's push used GITHUB_TOKEN, which
+  # raises no events, so no CI ran on the new head and the belt stalled on a commit nothing
+  # had checked. Staged runs everything and writes nothing; conclude applies the bundle and
+  # the comment once, with the App token, which does start CI.
+  staged: true
   # A failed run is already a red run. An issue per failure buries the real backlog
   # under noise nobody closes.
   report-failure-as-issue: false

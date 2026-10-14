@@ -56,7 +56,7 @@ then author fresh IR with new stable IDs, domain wording, and layout.
 
 | Mermaid shape | archify type | When |
 |---|---|---|
-| `flowchart TD` with pass/fail/branch nodes | `workflow` | Most workers: triage, refine, implement, merge-gate, apply-review, visual-verify, release |
+| `flowchart TD` with pass/fail/branch nodes | `workflow` | Most workers: triage, refine, implement, merge-gate, apply-review, release |
 | Terminal-state-heavy (success/failure/idle) | `lifecycle` | Workers where state transitions dominate (e.g. audit has a backpressure→active→quiet loop) |
 | Request/response over time | `sequence` | Only if the request-lifecycle nature dominates (none currently) |
 | ETL / data pipeline | `dataflow` | Not applicable to current loop diagrams |

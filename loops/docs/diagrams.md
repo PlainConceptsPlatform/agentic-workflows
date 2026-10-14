@@ -472,7 +472,8 @@ reads them next time.
 
 ## agent-release.md
 
-Manual dispatch only. The agent writes prose; a deterministic job does everything irreversible.
+Manual dispatch only. The agent writes prose; deterministic jobs do everything irreversible, and
+nothing reaches `main` except through a pull request.
 
 ```mermaid
 flowchart TD
@@ -480,26 +481,34 @@ flowchart TD
     relFacts("Facts (rung 3)<br/>Commit log since the last tag<br/>and the current version, to disk") --> relAgent
     relAgent("Agent (rung 5)<br/>Categorise by conventional-commit<br/>prefix, write release-notes.md.<br/>The only judgement in this route") --> relNoop
     relNoop("noop<br/>the agent writes a file,<br/>not a GitHub object") --> relConclude
-    relConclude["conclude (rung 6)<br/>Bump: BREAKING is major,<br/>feat is minor, else patch"] --> relPush
-    relPush("Commit, tag, push,<br/>create the GitHub Release") --> relDone
+    relConclude["conclude (rung 6)<br/>Bump: BREAKING is major,<br/>feat is minor, else patch"] --> relPr
+    relPr("App token: push release/vX.Y.Z,<br/>open chore(release) PR,<br/>enable squash auto-merge") --> relMerge
+    relMerge{"CI green and<br/>auto-merge allowed?"}
+    relMerge -->|yes| relTag
+    relMerge -.->|auto-merge disabled| relOpen
+    relTag("release-tag.yml on push to main<br/>GITHUB_TOKEN: tag vX.Y.Z,<br/>Release with the PR body as notes") --> relDone
     relConclude -.->|fails| relFail
-    relDone(("Released<br/>tag and Release published"))
-    relFail(("Failed<br/>no tag created, nothing partial"))
+    relOpen(("PR left open<br/>warning names the fix"))
+    relDone(("Released<br/>tag and Release published,<br/>no tag-triggered workflow fired"))
+    relFail(("Failed<br/>no branch, nothing partial"))
 
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
     classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
     classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
+    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
     classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class relStart start
-    class relFacts,relAgent,relNoop,relPush action
-    class relConclude decision
+    class relFacts,relAgent,relNoop,relPr,relTag action
+    class relConclude,relMerge decision
     class relFail failure
+    class relOpen idle
     class relDone success
 ```
 
 The version bump, the tag and the Release are deterministic on purpose. The agent's only output is
-a file on disk, so a confused model cannot publish a release.
+a file on disk, so a confused model cannot publish a release. The tag and the Release use
+`GITHUB_TOKEN` so that a consumer deploying on `v*` tags does not deploy because a release was cut.
 
 
 ---
@@ -691,49 +700,44 @@ earlier versions of them passed against a deliberately broken guard and were rew
 
 ---
 
-## agent-visual-verify.md
+## evidence.yml
 
-Runs after merge-gate decides to auto-merge, before the actual merge, and produces **evidence, not
-code changes**: it writes a verification plan, drives a real browser through the app, and attaches
-screenshots to the linked issue. It is called directly by merge-gate's `conclude` job, so it is not
-a router route. Failures never block the merge a browser that will not start or an app that never
-comes up emits a warning comment and the merge proceeds.
+Archives what a merged pull request looks like. Not an agent: the plan was written by the agent that
+implemented the change (`pc-repo-verify`), and this replays it. The router calls it when a pull
+request merges, and `operation=evidence` runs it by hand. Nothing waits on it. The screenshots are
+committed beside each plan, in an `evidence/` folder on the default branch, so the record stays with
+the change it proves; the comment embeds a manifest that Project Health reads. A pull request that
+is not merged has no plan on the default branch, so its screenshots stay in the run's artifact.
+The capture job runs the pull request's code with a read-only token; only the publish job writes,
+and it runs no repository code.
 
 ```mermaid
 flowchart TD
-    vvStart("merge-gate conclude<br/>calls agent-visual-verify") --> vvSubject
-    vvSubject["subject (rung 4)<br/>PR open? linked issue found?"] --> vvConfig
-    vvConfig{"config (rung 4)<br/>VISUAL_VERIFY_ENABLED and<br/>START_COMMAND set?"}
-    vvConfig -.->|"no"| vvIdle
-    vvConfig -->|"yes"| vvFacts
-    vvFacts["Facts (rung 3)<br/>PR branch checked out,<br/>issue context loaded"] --> vvPlan
-    vvPlan{"/repo-verify (rung 5)<br/>reachable UI surface?"}
-    vvPlan -.->|"not-applicable"| vvNoUi
-    vvPlan -->|"yes"| vvStartCmd
-    vvStartCmd{"start command set?<br/>VISUAL_VERIFY_START_COMMAND"}
-    vvStartCmd -.->|"empty"| vvNoStart
-    vvStartCmd -->|"yes"| vvAgent
-    vvAgent["Agent (rung 5)<br/>parse waypoints into plan.json,<br/>one add_comment on the issue"] --> vvCapture
-    vvCapture["post-agent (rung 6)<br/>build + start the app,<br/>agent-browser captures per waypoint"] --> vvAttach
-    vvAttach["attach-screenshots (rung 6)<br/>always(), subject found + enabled"] --> vvShutdown
-    vvShutdown["shut down the app"] --> vvDone
-    vvCapture -.->|"app never started,<br/>no plan, or all waypoints failed"| vvPartial
-    vvDone(("Verified<br/>screenshots attached,<br/>merge proceeds"))
-    vvPartial(("Attach what exists<br/>no-capture explanation,<br/>run stays green"))
-    vvNoUi(("No UI surface<br/>summary comment, stop"))
-    vvNoStart(("Not configured<br/>warning comment, stop"))
-    vvIdle(("Idle<br/>unconfigured or PR not open"))
+    evStart("router: pull request merged<br/>or operation=evidence") --> evPlans
+    evPlans{"verification-plan.md<br/>in the pull request?"}
+    evPlans -.->|"no"| evIdle
+    evPlans -->|"yes"| evInspect
+    evInspect{"capture-evidence inspect<br/>a replayable journey?"}
+    evInspect -.->|"not-applicable or prose"| evIdle
+    evInspect -->|"yes"| evApp
+    evApp["capture (read-only)<br/>check out the head,<br/>install, start the app"] --> evUp
+    evUp{"app answers at<br/>the plan's url?"}
+    evUp -->|"yes"| evReplay
+    evUp -.->|"no, after the timeout"| evUnreached
+    evReplay["replay each waypoint<br/>in headless Chromium,<br/>one JPEG per waypoint"] --> evPublish
+    evUnreached["record why nothing<br/>was captured"] --> evPublish
+    evPublish["publish (GITHUB_TOKEN)<br/>commit beside each plan,<br/>evidence/ on the default branch,<br/>upsert one comment"] --> evDone
+    evDone(("Archived<br/>beside the plan"))
+    evIdle(("Nothing to capture"))
 
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
     classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
     classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
-    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
+    classDef idle fill:#f4f4f6,stroke:#5b5b66,stroke-width:2px,color:#2b2b33
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
-    class vvStart start
-    class vvSubject,vvFacts,vvCapture,vvAttach,vvShutdown action
-    class vvConfig,vvPlan,vvStartCmd decision
-    class vvIdle idle
-    class vvNoUi,vvNoStart,vvPartial failure
-    class vvDone success
+    class evStart start
+    class evApp,evReplay,evUnreached,evPublish action
+    class evPlans,evInspect,evUp decision
+    class evIdle idle
+    class evDone success
 ```

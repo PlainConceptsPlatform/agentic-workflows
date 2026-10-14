@@ -2,7 +2,8 @@
 //
 // All dependencies that cloud-init used to install at boot are baked in here:
 // docker-ce, gh, az, trivy, the actions runner binary, ripgrep, RTK, agentmemory,
-// codegraph, openspec, .NET SDK, and the Docker Compose plugin.
+// codegraph, openspec, .NET SDK, and the Docker Compose plugin. Also Chromium's system
+// libraries and the pinned Docker images in versions.env (gh-aw sandbox, SQL Server, Playwright).
 //
 // Build:
 //   cd runners && packer init build-image.pkr.hcl

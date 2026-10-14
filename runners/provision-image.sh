@@ -10,7 +10,7 @@ set -eu
 
 # Install system packages
 
-echo "=== [1/9] apt packages ==="
+echo "=== [1/11] apt packages ==="
 install -m 0755 -d /etc/apt/keyrings
 
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -35,13 +35,13 @@ apt-get install -y -qq \
   nodejs \
   >/dev/null
 
-echo "=== [2/9] runner user ==="
+echo "=== [2/11] runner user ==="
 useradd -m -s /bin/bash runner || true
 usermod -aG docker runner
 
 # Actions runner binary (pinned version)
 
-echo "=== [3/9] actions runner binary ==="
+echo "=== [3/11] actions runner binary ==="
 mkdir -p /opt/actions-runner
 cd /opt/actions-runner
 
@@ -59,7 +59,7 @@ chown -R runner:runner /opt/actions-runner
 
 # Trivy
 
-echo "=== [4/9] trivy ==="
+echo "=== [4/11] trivy ==="
 
 curl -fsSL \
   "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
@@ -67,7 +67,7 @@ curl -fsSL \
 
 # ripgrep
 
-echo "=== [5/9] ripgrep ==="
+echo "=== [5/11] ripgrep ==="
 
 curl -sSfL \
   "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
@@ -77,7 +77,7 @@ chmod +x /usr/local/bin/rg
 
 # Global npm tools
 
-echo "=== [6/9] global npm tools (opencode, agentmemory, codegraph, openspec) ==="
+echo "=== [6/11] global npm tools (opencode, agentmemory, codegraph, openspec) ==="
 
 # npm no longer runs a dependency's install scripts by default; @opencode/cli
 # downloads its platform binary from postinstall, so it must be allowed
@@ -124,7 +124,7 @@ chown runner:runner /home/runner/.config/opencode/cli.json
 
 # RTK
 
-echo "=== [7/9] RTK ==="
+echo "=== [7/11] RTK ==="
 
 RTK_VERSION="${RTK_VERSION:?}"
 RTK_SHA256="${RTK_SHA256:?}"
@@ -146,7 +146,7 @@ chown -R runner:runner /home/runner/.local
 
 # .NET SDK
 
-echo "=== [8/9] .NET SDK 10.0.x ==="
+echo "=== [8/11] .NET SDK 10.0.x ==="
 
 DOTNET_DIR="/opt/actions-runner/_work/_tool/dotnet"
 
@@ -170,7 +170,7 @@ echo 'export PATH=/home/runner/.local/bin:$PATH' >> /home/runner/.bashrc
 
 # pnpm via corepack
 
-echo "=== [9/9] pnpm via corepack ==="
+echo "=== [9/11] pnpm via corepack ==="
 
 corepack enable
 
@@ -179,6 +179,36 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 
 echo "pnpm: $(pnpm --version)"
+
+# Chromium system libraries
+
+echo "=== [10/11] Chromium system libraries (playwright ${PLAYWRIGHT_VERSION}) ==="
+
+# Jobs run as runner, which has no passwordless sudo, so `playwright install --with-deps`
+# cannot run at job time. That is why consumers run their e2e inside the Playwright
+# container. With the libraries installed here, `playwright install chromium` (no
+# --with-deps) is enough and the browser starts on the bare VM.
+PLAYWRIGHT_VERSION="${PLAYWRIGHT_VERSION:?versions.env missing PLAYWRIGHT_VERSION}"
+npx -y "playwright@${PLAYWRIGHT_VERSION}" install-deps chromium >/dev/null
+rm -rf /root/.npm/_npx
+
+# Pre-pulled Docker images
+
+echo "=== [11/11] Docker images ==="
+
+GH_AW_IMAGES="${GH_AW_IMAGES:?versions.env missing GH_AW_IMAGES}"
+MSSQL_IMAGE="${MSSQL_IMAGE:?versions.env missing MSSQL_IMAGE}"
+PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-noble"
+
+systemctl start docker
+for image in $GH_AW_IMAGES "$MSSQL_IMAGE" "$PLAYWRIGHT_IMAGE"; do
+  echo "pulling $image"
+  docker pull -q "$image" >/dev/null
+done
+docker system df
+
+apt-get clean
+rm -rf /var/lib/apt/lists/*
 
 # ==== IMG-06: In-build asserts ====
 
@@ -243,6 +273,43 @@ if grep -rq "VM_TOKEN" /etc /opt 2>/dev/null; then
   echo "ASSERT FAIL: VM_TOKEN found on disk"
   fail=1
 fi
+
+for image in $GH_AW_IMAGES "$MSSQL_IMAGE" "$PLAYWRIGHT_IMAGE"; do
+  docker image inspect "$image" >/dev/null 2>&1 || {
+    echo "ASSERT FAIL: docker image $image not present"
+    fail=1
+  }
+done
+
+# Prove the libraries are enough, the way a consumer will use them: the runner user downloads
+# Chromium without --with-deps, and nothing the binary links against may be missing. The
+# download goes to a throwaway path so the image does not carry a browser of one version.
+PW_CHECK=/tmp/pw-check
+su -s /bin/bash runner -c "PLAYWRIGHT_BROWSERS_PATH=$PW_CHECK npx -y playwright@${PLAYWRIGHT_VERSION} install chromium-headless-shell >/dev/null 2>&1" || {
+  echo "ASSERT FAIL: runner could not download chromium-headless-shell"
+  fail=1
+}
+# headless_shell before the Chrome for Testing builds, chrome-headless-shell after.
+shell_bin=$(find "$PW_CHECK" -type f \( -name headless_shell -o -name chrome-headless-shell \) 2>/dev/null | head -n 1)
+if [ -z "$shell_bin" ]; then
+  echo "ASSERT FAIL: chromium headless_shell not found after install"
+  fail=1
+elif ldd "$shell_bin" | grep -q "not found"; then
+  echo "ASSERT FAIL: chromium is missing system libraries:"
+  ldd "$shell_bin" | grep "not found"
+  fail=1
+fi
+rm -rf "$PW_CHECK" /home/runner/.npm/_npx
+
+# The bake disk is os_disk_size_gb in build-image.pkr.hcl. The VMSS grows it to 64 GB at boot,
+# where job.sh retires a VM at DISK_LIMIT (85%), but the bake itself has to fit first.
+used=$(df --output=pcent / | tail -n 1 | tr -dc '0-9')
+echo "root disk: ${used}% used after the bake"
+df -h /
+[ "$used" -lt 80 ] || {
+  echo "ASSERT FAIL: root disk ${used}% used at bake time; raise os_disk_size_gb"
+  fail=1
+}
 
 [ "$fail" -eq 0 ] || exit 1
 

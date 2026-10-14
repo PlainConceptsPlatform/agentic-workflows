@@ -209,11 +209,20 @@ describe("excludedWorkerFiles", () => {
     expect(excluded.has("agent-refine.md")).toBe(false);
   });
 
+  // release-tag.yml tags what the release PR merged. Left behind without agent-release.md it
+  // would sit on every push to main serving a route that no longer exists.
+  it("excludes a route's companion workflows with its worker", () => {
+    expect(excludedWorkerFiles(["refine"]).has("release-tag.yml")).toBe(true);
+    expect(excludedWorkerFiles(["refine", "release"]).has("release-tag.yml")).toBe(false);
+  });
+
   it("returns an empty set when all routes are selected", () => {
     expect(excludedWorkerFiles([...routeNames]).size).toBe(0);
   });
 
-  it("returns all worker files when no routes are selected", () => {
-    expect(excludedWorkerFiles([]).size).toBe(routeNames.length);
+  it("returns all worker and companion files when no routes are selected", () => {
+    const excluded = excludedWorkerFiles([]);
+    expect([...excluded].filter((file) => file.startsWith("agent-")).length).toBe(routeNames.length);
+    expect([...excluded].filter((file) => !file.startsWith("agent-"))).toEqual(["release-tag.yml"]);
   });
 });

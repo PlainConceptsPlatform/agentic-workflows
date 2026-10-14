@@ -50,8 +50,11 @@ Preferred the release loop does the bumping, tagging, and release creation:
 gh workflow run work-router.yml --repo PlainConceptsPlatform/agentic-workflows -f operation=release -f version-bump=auto
 ```
 
-It bumps `package.json` and `cli/package.json` to the new version, commits, tags `v<version>`,
-and creates the GitHub Release; publishing that release triggers `npm-publish.yml`.
+It opens a `chore(release): v<version>` pull request bumping `package.json` and
+`cli/package.json`, with auto-merge. Once it merges, `release-tag.yml` tags `v<version>` and creates
+the GitHub Release. Both are created with `GITHUB_TOKEN`, which starts no workflows, so that
+release does not trigger `npm-publish.yml`: publish it by hand (below), or re-publish the release
+from a maintainer account.
 
 By hand:
 

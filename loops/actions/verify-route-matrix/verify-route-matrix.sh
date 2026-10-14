@@ -35,7 +35,7 @@ source "${HERE}/../classify-route/classify-route.sh"
 # Every worker route the package knows. The ones with a worker file here are installed; the
 # others must have no job in this router. Plumbing routes are in every router.
 ALL_WORKER_ROUTES=(refine implement triage apply-review merge-gate audit release)
-PLUMBING_ROUTES=(bot-approve audit-close cleanup-artifacts reconcile-bot-pr-runs housekeeping validate)
+PLUMBING_ROUTES=(bot-approve evidence audit-close cleanup-artifacts reconcile-bot-pr-runs housekeeping validate)
 
 worker_installed() {
   [ -f "${WORKFLOWS_DIR}/agent-$1.md" ]
@@ -78,7 +78,7 @@ route_field() {
     unset EVENT ACTION LABEL ISSUE_LABELS EVENT_ISSUE_NUMBER EVENT_PR_NUMBER \
       COMMENT_ON_PR COMMENT_SENDER_TYPE RUN_PR_NUMBER RUN_CONCLUSION RUN_ID \
       SCHEDULE OPERATION INPUT_ISSUE_NUMBER INPUT_PR_NUMBER INPUT_MODE \
-      INPUT_CI_CONCLUSION INPUT_CI_RUN_ID INPUT_TRIGGER_KIND
+      INPUT_CI_CONCLUSION INPUT_CI_RUN_ID INPUT_TRIGGER_KIND PR_MERGED EVIDENCE_ENABLED
 
     for assignment in "${assignments[@]}"; do
       key="${assignment%%=*}"
@@ -187,6 +187,14 @@ assert_route "a submitted review routes to apply-review" apply-review \
   EVENT=pull_request_review EVENT_PR_NUMBER=7
 assert_route "a pull_request_target routes to bot-approve" bot-approve \
   EVENT=pull_request_target ACTION=opened
+assert_route "a merged pull request routes to evidence" evidence \
+  EVENT=pull_request_target ACTION=closed PR_MERGED=true EVENT_PR_NUMBER=7
+assert "evidence carries the merged pull request" 7 \
+  "$(route_field pr-number EVENT=pull_request_target ACTION=closed PR_MERGED=true EVENT_PR_NUMBER=7)"
+assert_route "a pull request closed unmerged does not route to evidence" bot-approve \
+  EVENT=pull_request_target ACTION=closed PR_MERGED=false EVENT_PR_NUMBER=7
+assert_route "EVIDENCE_ENABLED=false turns the merge route off" none \
+  EVENT=pull_request_target ACTION=closed PR_MERGED=true EVENT_PR_NUMBER=7 EVIDENCE_ENABLED=false
 
 echo "── CI completion ─────────────────────────────────────────────────────────"
 assert_route "a failed App CI run on a pull request routes to merge-gate" merge-gate \
@@ -250,6 +258,14 @@ assert "implement dispatch forwards the attempt count" 2 \
   "$(route_field attempts EVENT=workflow_dispatch OPERATION=implement INPUT_ISSUE_NUMBER=42 INPUT_ATTEMPTS_SO_FAR=2)"
 assert_route "release dispatch needs no numbers" release \
   EVENT=workflow_dispatch OPERATION=release
+assert_route "evidence dispatch with a pull request routes to evidence" evidence \
+  EVENT=workflow_dispatch OPERATION=evidence INPUT_PR_NUMBER=7
+assert_route "evidence dispatch without a pull request routes nowhere" none \
+  EVENT=workflow_dispatch OPERATION=evidence INPUT_PR_NUMBER=
+assert_route "evidence dispatch runs even where the merge route is off" evidence \
+  EVENT=workflow_dispatch OPERATION=evidence INPUT_PR_NUMBER=7 EVIDENCE_ENABLED=false
+assert_route "the retired visual-verify operation routes nowhere" none \
+  EVENT=workflow_dispatch OPERATION=visual-verify INPUT_PR_NUMBER=7
 assert_route "reconcile-bot-pr-runs dispatch needs no numbers" reconcile-bot-pr-runs \
   EVENT=workflow_dispatch OPERATION=reconcile-bot-pr-runs
 assert_route "an unknown operation routes nowhere" none \
@@ -1669,60 +1685,59 @@ if worker_installed merge-gate; then
   if [ "$GATE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
-echo "── Visual verify wiring ───────────────────────────────────────────────────"
+echo "── Evidence wiring ───────────────────────────────────────────────────────"
 
-# The merge-gate's conclude job dispatches agent-visual-verify before merging when the outcome
-# is auto-merge and VISUAL_VERIFY_ENABLED is true. Each of these is one line an edit could drop
-# with nothing going red: a missing dispatch step, a missing env var, or a missing worker file.
-# The guard against the original bug comes first: the call is a dispatch, never a step doing
-# `uses:` on a workflow file -- that resolves as a local action, dies with "Can't find
-# action.yml", and under continue-on-error every auto-merge shipped with zero screenshots
-# and nothing red.
-if worker_installed merge-gate; then
-  VV_OK=1
+# A merged pull request's verification plan is replayed by evidence.yml, a plain workflow with no
+# model. The shape it replaced (agent-visual-verify) never produced one screenshot, and each check
+# below is one way it failed: dispatched from the merge gate it raced the merge, published with a
+# token `gh --attach` refuses, and would have run pull request code beside a write token.
+EVIDENCE_YML="${WORKFLOWS_DIR}/evidence.yml"
+EV_OK=1
+ev() {
+  grep -qE "$1" "$2" || { EV_OK=0; echo "FAIL: $3" >&2; }
+}
+ev_absent() {
+  if grep -qE "$1" "$2"; then EV_OK=0; echo "FAIL: $3" >&2; fi
+}
 
-  vv() {
-    grep -qE "$1" "$2" || { VV_OK=0; echo "FAIL: $3" >&2; }
-  }
-
-  # The dispatch step exists and runs only on auto-merge with the feature flag on.
-  vv 'name: Dispatch visual verification' "$MERGE_GATE_WORKER_MD" 'merge-gate has no visual-verify dispatch step'
-  vv "outcome == 'auto-merge'.*VISUAL_VERIFY_ENABLED == 'true'" "$MERGE_GATE_WORKER_MD" 'visual-verify dispatch has wrong guard'
-
-  # The shape that never worked: a step calling a reusable workflow file. Also reject the
-  # swallowed-failure form it shipped with.
-  vv 'operation=visual-verify' "$MERGE_GATE_WORKER_MD" 'the dispatch must target the router operation, not a nested file'
-  if grep -qE '^      - name:.*\n.*uses: \./\.github/workflows/agent-visual-verify' "$MERGE_GATE_WORKER_MD" 2>/dev/null \
-    || grep -A2 '^      - name:' "$MERGE_GATE_WORKER_MD" | grep -q 'uses: \./\.github/workflows/'; then
-    VV_OK=0
-    echo "FAIL: a step still uses: a workflow file; the runner resolves it as a local action and it cannot work" >&2
+if [ ! -f "$EVIDENCE_YML" ]; then
+  EV_OK=0
+  echo "FAIL: evidence.yml does not exist" >&2
+else
+  ev 'uses: \./\.github/workflows/evidence\.yml' "$ROUTER_YML" 'the router does not call evidence.yml'
+  ev '^  EVIDENCE_ENABLED: ' "$ROUTER_YML" 'the router env does not declare EVIDENCE_ENABLED'
+  ev 'uses: \./\.github/actions/capture-evidence' "$EVIDENCE_YML" 'evidence.yml does not use the capture-evidence action'
+  if [ ! -f "${HERE}/../capture-evidence/action.yml" ] || [ ! -f "${HERE}/../capture-evidence/capture.mjs" ]; then
+    EV_OK=0
+    echo "FAIL: the capture-evidence action is incomplete" >&2
   fi
 
-  # The env vars the worker needs.
-  vv 'VISUAL_VERIFY_ENABLED:' "$MERGE_GATE_WORKER_MD" 'merge-gate missing VISUAL_VERIFY_ENABLED env var'
-  vv 'VISUAL_VERIFY_START_COMMAND:' "$MERGE_GATE_WORKER_MD" 'merge-gate missing VISUAL_VERIFY_START_COMMAND env var'
-
-  # The worker gates its agent on its own configuration, so an unconfigured repository
-  # runs no model: the subject job exposes it, the top-level if: reads it.
-  vv 'enabled: ' "${WORKFLOWS_DIR}/agent-visual-verify.md" 'visual-verify subject does not expose the enabled output'
-  vv "outputs.enabled == 'true'" "${WORKFLOWS_DIR}/agent-visual-verify.md" 'visual-verify agent gate does not read the enabled output'
-
-  # The worker file exists.
-  VV_WORKER_MD="${WORKFLOWS_DIR}/agent-visual-verify.md"
-  if [ ! -f "$VV_WORKER_MD" ]; then
-    VV_OK=0
-    echo "FAIL: agent-visual-verify.md does not exist" >&2
+  # The capture job runs the pull request's code, so it holds no secret and no write.
+  capture_job="$(sed -n '/^  capture:/,/^  publish:/p' "$EVIDENCE_YML")"
+  if grep -qE 'secrets\.|contents: write|pull-requests: write|issues: write' <<<"$capture_job"; then
+    EV_OK=0
+    echo "FAIL: evidence.yml's capture job runs pull request code and must hold no secret and no write" >&2
   fi
-
-  # The attach-screenshots action exists.
-  VV_ATTACH="${HERE}/../attach-screenshots/action.yml"
-  if [ ! -f "$VV_ATTACH" ]; then
-    VV_OK=0
-    echo "FAIL: attach-screenshots/action.yml does not exist" >&2
+  # The publish job writes, so it runs no repository code: no checkout and no local action.
+  publish_job="$(sed -n '/^  publish:/,$p' "$EVIDENCE_YML")"
+  if grep -qE 'actions/checkout|uses: \./' <<<"$publish_job"; then
+    EV_OK=0
+    echo "FAIL: evidence.yml's publish job holds a write token and must not check out or run repository code" >&2
   fi
-
-  if [ "$VV_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+  ev_absent 'secrets\.' "$EVIDENCE_YML" 'evidence.yml must need no secret; GITHUB_TOKEN is enough'
+  ev_absent 'gh (issue|pr) comment.*--attach' "$EVIDENCE_YML" 'gh --attach refuses installation tokens; commit the screenshots beside their plans'
 fi
+
+# The retired worker stays retired: nothing dispatches it and nothing waits for it.
+if worker_installed merge-gate; then
+  ev_absent 'operation=visual-verify|VISUAL_VERIFY_' "$MERGE_GATE_WORKER_MD" 'merge-gate still carries the retired visual-verify wiring'
+fi
+if [ -f "${WORKFLOWS_DIR}/agent-visual-verify.md" ]; then
+  EV_OK=0
+  echo "FAIL: agent-visual-verify.md was retired by evidence.yml and must not come back" >&2
+fi
+
+if [ "$EV_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 echo "── Expression functions ──────────────────────────────────────────────────"
 
@@ -2201,6 +2216,46 @@ if worker_installed refine; then
   if [ "$SIZE_GATE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+# The safeoutputs bridge reads its JSON from stdin only for `tool .`. Any --flag on the line makes
+# it skip stdin and send just the flags (seen on Odyssey #200: 20 bytes, no body, "success", the
+# update_issue allowance spent three times). The refine prompt must therefore show the correct
+# calls with every parameter inside the JSON and no flags, and may name a flagged call only as
+# the wrong one.
+if worker_installed refine; then
+  REFINE_WORKER_MD="${WORKFLOWS_DIR}/agent-refine.md"
+  correct_calls="$(awk '/Correct:$/{found=1; next} /Wrong \(stdin never read/{found=0} found' "$REFINE_WORKER_MD")"
+  if [ -z "$correct_calls" ] \
+    || printf '%s' "$correct_calls" | grep -qE 'safeoutputs [a-z_]+ +--'; then
+    FAIL=$((FAIL + 1))
+    echo "FAIL: refine's correct safeoutputs examples are missing or pass a --flag, which makes the bridge skip stdin and drop the body" >&2
+  else
+    PASS=$((PASS + 1))
+  fi
+fi
+# The implement prompt tells the agent it is already on its branch and to skip the pc-plan-goal
+# branching phase. That is only true if a step before the agent made the branch, and nothing in the
+# sandbox can do it later: no git credentials, and the prompt forbids the commands. Without the
+# step the skill is blocked in its first phase and the agent improvises the rest of the pipeline
+# (Odyssey #200, run 2334). So the worker must create the branch in a step, from the env prefix,
+# and the prompt must name that same branch.
+if worker_installed implement; then
+  IMPLEMENT_WORKER_MD="${WORKFLOWS_DIR}/agent-implement.md"
+  branch_ok=1
+  if ! grep -qE '^  IMPLEMENT_BRANCH_PREFIX: ' "$IMPLEMENT_WORKER_MD"; then
+    branch_ok=0
+    echo "FAIL: implement defines no IMPLEMENT_BRANCH_PREFIX, so the branch name has no single source" >&2
+  fi
+  branch_step="$(awk '/^  - name: Create the feature branch/{found=1; print; next} found && /^  - name:/{exit} found{print}' "$IMPLEMENT_WORKER_MD")"
+  if ! printf '%s' "$branch_step" | grep -qF 'git switch -c'; then
+    branch_ok=0
+    echo "FAIL: implement has no step that creates the feature branch before the agent; the prompt's claim that the agent is already on its branch is false and pc-plan-goal is blocked in its first phase" >&2
+  fi
+  if ! grep -qF 'IMPLEMENT_BRANCH_PREFIX }}${{ inputs.issue-number }}' "$IMPLEMENT_WORKER_MD"; then
+    branch_ok=0
+    echo "FAIL: the implement prompt does not name the branch the step created" >&2
+  fi
+  if [ "$branch_ok" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
 echo "── Runner pools ──────────────────────────────────────────────────────────"
 
 # Where every job runs, stated once and asserted, because GitHub gives a wrong pool no error: a
@@ -2247,13 +2302,7 @@ for worker_md in "${WORKFLOWS_DIR}"/agent-*.md; do
     case " $allowed_pools " in *" $p "*) ;; *) ok=0 ;; esac
   done
   if ! echo "$got" | grep -qw "$AGENT_POOL"; then
-    # visual-verify gets its agent runs-on from a shared import, not from the .md file,
-    # so the pool check only sees the subject gate job on RunnerLandingZone.
-    if [ "$worker_name" = "agent-visual-verify" ] && echo "$got" | grep -qw "$PLUMBING_POOL"; then
-      :
-    else
-      ok=0
-    fi
+    ok=0
   fi
   if [ "$ok" -ne 1 ]; then
     POOL_OK=0
@@ -2261,10 +2310,18 @@ for worker_md in "${WORKFLOWS_DIR}"/agent-*.md; do
   fi
 done
 
+# The router's own jobs run on the agent fleet's per-run lease: `[agents-aw, "affinity-..."]`,
+# which pools_named reads as its first token. That is the shape the compile step rewrites every
+# worker lock to as well, so it is the router's pool, not a drift from agents-arc.
+AFFINITY_POOL="[agents-aw,"
 router_pools="$(pools_named "$ROUTER_YML" | tr '\n' ' ' | sed 's/ $//')"
-if ! echo "$router_pools" | grep -qw "$AGENT_POOL"; then
+router_ok=1
+for p in $router_pools; do
+  case " ${AGENT_POOL} ${PLUMBING_POOL} ${AFFINITY_POOL} " in *" $p "*) ;; *) router_ok=0 ;; esac
+done
+if [ -z "$router_pools" ] || [ "$router_ok" -ne 1 ]; then
   POOL_OK=0
-  echo "FAIL: the router names runner pool(s) '${router_pools}' but must name only '${AGENT_POOL}' and/or '${PLUMBING_POOL}' (with at least ${AGENT_POOL})" >&2
+  echo "FAIL: the router names runner pool(s) '${router_pools}' but must name only '${AFFINITY_POOL} affinity]', '${AGENT_POOL}' and/or '${PLUMBING_POOL}'" >&2
 fi
 
 # And the pool must not be reintroduced as a per-consumer value: that is the mechanism that let

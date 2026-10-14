@@ -72,14 +72,6 @@ env:
   # one unusable report can keep every other bot pull request in the repository waiting.
   PARK_AT_UNUSABLE_OUTPUT: "2"
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
-  # Visual verification runs after auto-merge is decided and before the merge itself. The worker
-  # runs /repo-verify, drives a browser via agent-browser, and attaches screenshots to the linked
-  # issue. Failures never block the merge. Consumers opt out by setting this to "false".
-  VISUAL_VERIFY_ENABLED: "true"
-  VISUAL_VERIFY_BUILD_COMMAND: ""
-  VISUAL_VERIFY_START_COMMAND: ""
-  VISUAL_VERIFY_PORT: "3000"
-  VISUAL_VERIFY_WAIT_SECONDS: "30"
   GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
@@ -411,17 +403,6 @@ jobs:
           protected-hit: ${{ needs.protected_changes.outputs.requires_review }}
           owner-hit: ${{ needs.protected_changes.outputs.owner_hit }}
           confidence-threshold: ${{ env.CONFIDENCE_THRESHOLD }}
-  # The pre-merge screenshot pass is dispatched rather than nested. A nested
-  # workflow_call job cannot live downstream of this worker's agent: the compiler hoists
-  # prompt-referenced jobs into the agent's needs, and any call job depending on
-  # validate_output closes a cycle through agent (measured: the graph refuses to compile).
-  # The first version of this wiring was a step doing `uses:` on the worker's lock file,
-  # which is not a call at all -- the runner resolved it as a local action and died with
-  # "Can't find action.yml" under continue-on-error, so every auto-merge since the feature
-  # shipped merged with zero screenshots and nothing red. This dispatches the router's
-  # existing visual-verify operation (the dispatch-triage pattern) before the merge below.
-  # The merge pins the head SHA with --match-head-commit, and visual-verify re-reads the
-  # pull request itself, so the called worker owns its own subject validation.
   conclude:
     needs: [activation, subject, protected_changes, agent, safe_outputs, validate_output]
     # `protected_changes.result == 'success'` is stated rather than relied on. GitHub skips a job
@@ -440,8 +421,6 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
-      # dispatching the visual-verify pass through the router's workflow_dispatch
-      actions: write
     steps:
       - name: Create bot token
         id: app-token
@@ -503,39 +482,6 @@ jobs:
             ```
 
             Findings and verification on the linked issue: #${{ needs.subject.outputs.issue }}. [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-      # Screenshots before the merge. The visual-verify pass is dispatched through the
-      # router (see the visual_verify note above conclude) and cannot be awaited from here;
-      # the merge below pins the head SHA with --match-head-commit, so a screenshot run on
-      # the same head describes exactly what is being merged. GITHUB_TOKEN: a dispatch
-      # raises one workflow_run-free event, and the called worker re-owns its subject.
-      # A stack root never enters either branch: its screenshots wait with it.
-      - name: Dispatch visual verification
-        if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.stack_root != 'true' && env.VISUAL_VERIFY_ENABLED == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          REF: ${{ github.event.repository.default_branch }}
-          PR: ${{ needs.subject.outputs.pr }}
-          ISSUE: ${{ needs.subject.outputs.issue }}
-        run: |
-          set -euo pipefail
-          if gh workflow run work-router.yml --repo "$REPO" --ref "$REF" \
-            -f operation=visual-verify -f pr-number="$PR" -f issue-number="$ISSUE"; then
-            echo "Visual verification dispatched for PR #$PR."
-          else
-            echo "::warning::could not dispatch visual verification for PR #$PR; merging without screenshots."
-          fi
-      # The visual verification pass is the visual_verify dispatch above. It runs as its own
-      # worker because a step cannot call a reusable workflow, and the merge below may land
-      # while the capture is still running -- the head SHA pin keeps the two honest.
-      # A stack root never merges on its own. The feature issue parks with `review` (refine
-      # puts it there), so the subject job normally cannot even find the root PR — this
-      # guard is the defense in depth for a root that reaches the merge step anyway, for
-      # example because the feature issue was mislabeled `implement`. The children merge
-      # into the feature branch; the root merges into main only when a person does it, after
-      # the stack completes and validates. The hold comment lands on the linked issue (not
-      # the PR) with the App token on purpose: an App-token issue comment raises a routed
-      # event, keeping the loop event-driven.
       - name: Merge approved pull request
         if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.stack_root != 'true'
         env:

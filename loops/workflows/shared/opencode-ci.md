@@ -139,12 +139,11 @@ pre-agent-steps:
       npm install -g "@fission-ai/openspec@1.8.0"
       openspec --version
 
-  # NOTE: playwright-cli and SQL Server startup steps are not part of the shared CI
-  # baseline. The agent path captures no visual evidence: it cannot reach a browser
-  # from inside the awf sandbox, and a screenshot with no baseline to compare against
-  # gated nothing. Run /ops-evidence locally when a change warrants screenshots. If
-  # you need playwright-cli or SQL Server inside the agent sandbox for other reasons,
-  # add them as consumer-specific steps after the shared baseline.
+  # NOTE: no browser and no SQL Server in the shared CI baseline. An agent cannot reach a
+  # browser from inside the awf sandbox, so it only writes the verification plan
+  # (/repo-verify); evidence.yml replays that plan outside the sandbox once the pull request
+  # merges and archives the screenshots on it. If you need SQL Server inside the agent sandbox
+  # for other reasons, add it as a consumer-specific step after the shared baseline.
 
   - name: Setup .NET
     # Ephemeral VMs carry no SDK; the old host had it baked in, and GitHub-hosted images made
@@ -197,6 +196,15 @@ pre-agent-steps:
       fi
 
       printf '%s\n' "$merged" > "$CONFIG"
+
+      # A tracked config now differs from HEAD, so the agent sees it in `git diff`, takes it for
+      # a stray change and reverts it with `git checkout`. That drops the CI agent and its
+      # permissions mid-run: the next shell call is refused and the run falls back to the
+      # default agent with no key (Pliny-Bot run 37674193415). skip-worktree hides the file
+      # from status and diff and makes `git checkout -- opencode.jsonc` refuse the path.
+      if git ls-files --error-unmatch "$CONFIG" > /dev/null 2>&1; then
+        git update-index --skip-worktree "$CONFIG"
+      fi
 
       # gh-aw's own "Write OpenCode Config" step runs next and merges its base config with
       # `$existing * $base`. Base wins on conflicting keys, but it defines neither `model`

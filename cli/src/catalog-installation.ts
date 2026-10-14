@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { parse as parseYaml } from "yaml";
 
-import { catalogTemplates, mandatoryFiles, routeNames, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
+import { catalogTemplates, mandatoryFiles, retiredWorkflowFiles, routeNames, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
 import { processRoutes, excludedWorkerFiles } from "./route-processing.js";
 import { generateOpencodeCi, generateOpencodeConfig, generateStackDefaults, injectStackEnv } from "./stack-defaults.js";
 import { mergeRouter, mergeWorker, mirrorRouterLiterals } from "./worker-env.js";
@@ -286,6 +286,15 @@ async function orphanedManagedFiles(repositoryPath: string, keep: ReadonlySet<st
     }
   }
 
+  // A retired worker is ours when it still carries the header; its lock was generated from it, so
+  // the lock goes with it either way.
+  for (const file of retiredWorkflowFiles) {
+    const target = `.github/workflows/${file}`;
+    const path = join(repositoryPath, target);
+    if (!await exists(path)) continue;
+    if (file.endsWith(".lock.yml") || hasOwnershipHeader(await readFile(path, "utf8"))) orphans.push(target);
+  }
+
   return orphans.sort();
 }
 
@@ -384,13 +393,13 @@ export async function removeRouteFiles(
   repositoryPath: string,
   routes: readonly RouteName[],
 ): Promise<string[]> {
-  const workerByRoute = new Map(workflowRoutes.map((route) => [route.name, route.worker]));
+  const routeByName = new Map(workflowRoutes.map((route) => [route.name, route]));
   const removed: string[] = [];
-  for (const route of routes) {
-    const worker = workerByRoute.get(route);
-    if (worker === undefined) continue;
-    const lock = worker.replace(/\.md$/, ".lock.yml");
-    for (const file of [worker, lock]) {
+  for (const name of routes) {
+    const route = routeByName.get(name);
+    if (route === undefined) continue;
+    const lock = route.worker.replace(/\.md$/, ".lock.yml");
+    for (const file of [route.worker, lock, ...(route.companions ?? [])]) {
       const destination = join(repositoryPath, ".github", "workflows", file);
       if (await exists(destination)) {
         await rm(destination, { force: true });
@@ -427,7 +436,11 @@ async function preCommitHookUpdate(repositoryPath: string): Promise<{ target: st
     return { target, content: managedLines };
   }
 
+  // A Windows clone with core.autocrlf checks the hook out with CRLF, which the LF patterns below
+  // never match: every update from Windows appended one more block (one consumer had ten). The
+  // hook is written back with LF, as every managed file is.
   const content = (await readFile(hookPath, "utf8"))
+    .replace(/\r\n/g, "\n")
     .replace("pnpm exec if git diff --cached --name-only -- .github | grep -q .; then", "if git diff --cached --name-only -- .github | grep -q .; then");
 
   // Replace whatever managed block is there, never append beside it. The previous version

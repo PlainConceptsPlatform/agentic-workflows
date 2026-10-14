@@ -1,0 +1,98 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/release-tag.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: Release Tag
+
+# The second half of the release route. agent-release.md opens a `chore(release): vX.Y.Z` pull
+# request instead of pushing to `main`, so `main` can require pull requests. Once that PR is
+# squash-merged, this tags the merge commit and publishes the GitHub Release with the notes the
+# agent wrote, which the PR body carries. No model is involved.
+#
+# The tag and the Release are created with GITHUB_TOKEN, never the App token, and that is
+# load-bearing. GITHUB_TOKEN writes start no workflows, so a consumer whose deploy triggers on
+# `v*` tags (Numa's app-deploy.yml deploys to production on one) does not ship to production
+# because a release was cut. That is exactly how the release behaved when it pushed the tag
+# itself; moving the bump into a pull request must not change it.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag and publish the release
+    if: >-
+      startsWith(github.event.head_commit.message, 'chore(release): v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tag the release commit and publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Squash keeps the PR title as the subject and appends ` (#123)`.
+          subject="${HEAD_MESSAGE%%$'\n'*}"
+          if ! [[ "$subject" =~ ^chore\(release\):\ v([0-9]+\.[0-9]+\.[0-9]+)([[:space:]]|$) ]]; then
+            echo "Head commit is not a release commit: $subject"
+            exit 0
+          fi
+          version="${BASH_REMATCH[1]}"
+          tag="v${version}"
+
+          if [ -f package.json ]; then
+            manifest=$(node -p "require('./package.json').version")
+            if [ "$manifest" != "$version" ]; then
+              echo "::error::The commit says $tag but package.json is at $manifest; not tagging."
+              exit 1
+            fi
+          fi
+
+          # Idempotent: a re-run, or a second push of the same commit, does nothing.
+          if gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $tag already exists; nothing to do."
+            exit 0
+          fi
+          if existing=$(gh api "repos/$REPO/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null); then
+            if [ "$existing" != "$SHA" ]; then
+              echo "::warning::Tag $tag already exists on $existing, not on $SHA; leaving it alone."
+              exit 0
+            fi
+          fi
+
+          # The marker tells the release PR apart from any other PR associated with this commit.
+          marker="<!-- release:${tag} -->"
+          gh api "repos/$REPO/commits/$SHA/pulls" > /tmp/pulls.json
+          MARKER="$marker" node -e '
+            const pulls = JSON.parse(require("fs").readFileSync("/tmp/pulls.json", "utf8"));
+            const pr = pulls.find((p) => p.merged_at && (p.body || "").includes(process.env.MARKER));
+            if (!pr) process.exit(3);
+            const notes = pr.body.split(/\r?\n/).filter((line) => line.trim() !== process.env.MARKER).join("\n").trim();
+            require("fs").writeFileSync("/tmp/release-notes.md", notes + "\n");
+            console.log(`Notes from #${pr.number}`);
+          ' || status=$?
+
+          if [ "${status:-0}" -eq 3 ]; then
+            echo "::warning::No merged pull request carrying $marker is associated with $SHA; publishing generated notes instead."
+            gh release create "$tag" --repo "$REPO" --target "$SHA" --title "$tag" --generate-notes
+          elif [ "${status:-0}" -ne 0 ]; then
+            echo "::error::Could not read the release notes from the pull request."
+            exit 1
+          else
+            gh release create "$tag" --repo "$REPO" --target "$SHA" --title "$tag" --notes-file /tmp/release-notes.md
+          fi
+          echo "Tagged $SHA as $tag and published the GitHub Release."

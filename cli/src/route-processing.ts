@@ -62,7 +62,7 @@ export function excludedWorkerFiles(selectedRoutes: readonly RouteName[]): Set<s
   return new Set(
     workflowRoutes
       .filter((route) => !selectedRoutes.includes(route.name))
-      .map((route) => route.worker),
+      .flatMap((route) => [route.worker, ...(route.companions ?? [])]),
   );
 }
 

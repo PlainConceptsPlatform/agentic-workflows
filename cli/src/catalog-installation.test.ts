@@ -40,6 +40,7 @@ describe("catalog installation", () => {
       "workflows/agent-apply-review.md": "# Apply Review\n",
       "workflows/agent-merge-gate.md": "# Merge Gate\n",
       "workflows/agent-release.md": "# Release\n",
+      "workflows/release-tag.yml": "name: Release Tag\n",
       "workflows/shared/defaults.md": "defaults\n",
       "workflows/work-router.yml": "name: Router\n",
       "scripts/compile-agent-workflows.mjs": "compile\n",
@@ -61,6 +62,7 @@ describe("catalog installation", () => {
     expect(result.installed).not.toContain(".github/workflows/agent-implement.md");
     expect(result.installed).not.toContain(".github/workflows/agent-audit.md");
     expect(result.installed).not.toContain(".github/workflows/agent-release.md");
+    expect(result.installed).not.toContain(".github/workflows/release-tag.yml");
     expect(result.changes.every((change) => change.status === "added")).toBe(true);
   });
 
@@ -427,6 +429,30 @@ describe("catalog installation", () => {
     await expect(readFile(join(repositoryPath, ".github/workflows/agent-audit.md"), "utf8")).resolves.toContain("REPO_RULES");
   });
 
+  it("removes the retired visual-verify worker and its lock, but not a consumer's own copy", async () => {
+    const sourcePath = await createDirectory({
+      "workflows/shared/defaults.md": "---\n" + header("loops/workflows/shared/defaults.md") + "---\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const ours = await createDirectory({
+      ".github/workflows/agent-visual-verify.md": "---\n" + header("loops/workflows/agent-visual-verify.md", "1.0.14") + "---\n",
+      ".github/workflows/agent-visual-verify.lock.yml": "# generated\n",
+    });
+    const result = await installCatalog(ours, { sourcePath, selectedRoutes: [], packageVersion: "1.1.0", baseline: offline });
+    expect(result.changes.filter((change) => change.status === "removed").map((change) => change.target)).toEqual([
+      ".github/workflows/agent-visual-verify.lock.yml",
+      ".github/workflows/agent-visual-verify.md",
+    ]);
+    await expect(access(join(ours, ".github/workflows/agent-visual-verify.md"), constants.F_OK)).rejects.toThrow();
+
+    const taken = await createDirectory({
+      ".github/workflows/agent-visual-verify.md": "---\nname: kept on purpose\n---\n",
+    });
+    const kept = await installCatalog(taken, { sourcePath, selectedRoutes: [], packageVersion: "1.1.0", baseline: offline });
+    expect(kept.changes.filter((change) => change.status === "removed")).toEqual([]);
+  });
+
   it("reports nothing to do when there is no orphan and no change", async () => {
     const sourcePath = await createDirectory({
       "actions/keep/action.yml": header("loops/actions/keep/action.yml") + "name: Keep\n",
@@ -660,6 +686,26 @@ describe("catalog installation", () => {
     expect(written).toContain("formatting");
   });
 
+  it("recognises the managed block in a CRLF checkout instead of appending another", async () => {
+    // A Windows clone with core.autocrlf checks the hook out with CRLF. The block pattern only
+    // knew LF, so every update from Windows appended one more block; one consumer had ten.
+    const sourcePath = await createDirectory({
+      "actions/check/action.yml": "name: Check\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const block = "if git diff --cached --name-only -- .github | grep -q .; then\n  node scripts/compile-agent-workflows.mjs\n  git add -- .github/workflows/*.lock.yml\n  [ ! -f .github/aw/actions-lock.json ] || git add -- .github/aw/actions-lock.json\nfi\n";
+    const hook = `pnpm lint\n\n# Recompile workflow lock files if .github changed\n${block}${block}`.replace(/\n/g, "\r\n");
+    const repositoryPath = await createDirectory({ ".husky/pre-commit": hook });
+
+    await installCatalog(repositoryPath, { force: true, sourcePath });
+    const written = await readFile(join(repositoryPath, ".husky", "pre-commit"), "utf8");
+
+    expect(written.match(/if git diff --cached --name-only -- \.github/g) ?? []).toHaveLength(1);
+    expect(written).not.toContain("\r");
+    expect(written).toContain("pnpm lint");
+  });
+
   it("applies staged generated locks with managed sources", async () => {
     const sourcePath = await createDirectory({
       "actions/check/action.yml": "package action\n",
@@ -811,6 +857,41 @@ describe("route lifecycle", () => {
     const repositoryPath = await createDirectory({});
 
     await expect(installedRoutes(repositoryPath)).resolves.toEqual([]);
+  });
+
+  it("installs the release route's companion workflow only with the release route", async () => {
+    const sourcePath = await createDirectory({
+      "workflows/agent-refine.md": "# Refine\n",
+      "workflows/agent-release.md": "# Release\n",
+      "workflows/release-tag.yml": "name: Release Tag\n",
+      "workflows/work-router.yml": "name: Router\n",
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+
+    const withRelease = await installCatalog(await createDirectory({}), { sourcePath, selectedRoutes: ["refine", "release"], dryRun: true });
+    const withoutRelease = await installCatalog(await createDirectory({}), { sourcePath, selectedRoutes: ["refine"], dryRun: true });
+
+    expect(withRelease.installed).toContain(".github/workflows/release-tag.yml");
+    expect(withoutRelease.installed).not.toContain(".github/workflows/release-tag.yml");
+    expect(withoutRelease.installed).toContain(".github/workflows/agent-refine.md");
+  });
+
+  it("removes the release route's companion workflow with its worker", async () => {
+    const repositoryPath = await createDirectory({
+      ".github/workflows/agent-release.md": "# Release\n",
+      ".github/workflows/agent-release.lock.yml": "generated\n",
+      ".github/workflows/release-tag.yml": "name: Release Tag\n",
+      ".github/workflows/agent-refine.md": "# Refine\n",
+    });
+
+    await expect(removeRouteFiles(repositoryPath, ["release"])).resolves.toEqual([
+      ".github/workflows/agent-release.lock.yml",
+      ".github/workflows/agent-release.md",
+      ".github/workflows/release-tag.yml",
+    ]);
+    await expect(readFile(join(repositoryPath, ".github/workflows/release-tag.yml"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(repositoryPath, ".github/workflows/agent-refine.md"), "utf8")).resolves.toBe("# Refine\n");
   });
 
   it("removes a route worker and its generated lock, leaving other workers", async () => {

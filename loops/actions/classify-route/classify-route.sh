@@ -148,6 +148,17 @@ classify_route() {
         # CI status will be fetched by the merge-gate workflow
         ci_conclusion=""
         ci_run_id=""
+      elif [ "${ACTION:-}" = "closed" ] && [ "${PR_MERGED:-false}" = "true" ]; then
+        # A merge is when the change's verification plan describes what the default branch now
+        # does, so the evidence run replays it then. detect-pr-conflicts reacts to this same
+        # event as its own event-gated job, not as a route, so taking the route here costs it
+        # nothing.
+        if [ "${EVIDENCE_ENABLED:-true}" = "true" ]; then
+          route="evidence"
+          pr_number="${EVENT_PR_NUMBER:-}"
+        else
+          error="evidence is turned off for this repository (EVIDENCE_ENABLED)"
+        fi
       else
         route="bot-approve"
       fi
@@ -230,12 +241,13 @@ classify_route() {
             error="operation 'merge-gate' needs a positive pr-number, got '${INPUT_PR_NUMBER:-}'"
           fi
           ;;
-        visual-verify)
+        evidence)
+          # By hand it runs whatever EVIDENCE_ENABLED says: asking for it is the opt-in.
           if is_issue_number "${INPUT_PR_NUMBER:-}"; then
-            route="visual-verify"
+            route="evidence"
             pr_number="${INPUT_PR_NUMBER}"
           else
-            error="operation 'visual-verify' needs a positive pr-number, got '${INPUT_PR_NUMBER:-}'"
+            error="operation 'evidence' needs a positive pr-number, got '${INPUT_PR_NUMBER:-}'"
           fi
           ;;
         audit)

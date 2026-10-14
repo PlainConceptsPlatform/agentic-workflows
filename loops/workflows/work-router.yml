@@ -67,8 +67,8 @@ run-name: >-
   && inputs.operation == 'merge-gate'
   && format('Agent: Merge Gate - PR #{0}', inputs.pr-number)
   || github.event_name == 'workflow_dispatch'
-  && inputs.operation == 'visual-verify'
-  && format('Agent: Visual Verify - PR #{0}', inputs.pr-number)
+  && inputs.operation == 'evidence'
+  && format('Agentics: Evidence - PR #{0}', inputs.pr-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'batch'
   && format('Working: Batch - #{0}', inputs.issue-number)
@@ -144,6 +144,11 @@ env:
   # merge-gate worker carried its own MAX_ATTEMPTS; the route matrix now asserts the two
   # agree, because a belt that gives up later than the worker says burns whole runs.
   MAX_GATE_ATTEMPTS: "6"
+  # Whether a merged pull request's verification plan is replayed and its screenshots archived on
+  # the pull request (evidence.yml). It needs nothing configured: the app starts with the root
+  # `pnpm run dev`, and a pull request with no plan costs one API call. Set it to "false" for a
+  # repository whose app cannot start on a runner; operation=evidence still works by hand.
+  EVIDENCE_ENABLED: "true"
 
 on:
   issues:
@@ -158,7 +163,8 @@ on:
   pull_request_target:
     # opened / reopened / synchronize feed conflict detection (detect-pr-conflicts) and
     # bot-approve. closed feeds detect-pr-conflicts: when a PR merges, the target branch
-    # moved and previously-mergeable sibling bot PRs may now conflict.
+    # moved and previously-mergeable sibling bot PRs may now conflict. A merge also routes to
+    # evidence, which replays the pull request's verification plan.
     types: [opened, synchronize, reopened, labeled, closed]
 
   # CI completion on a pull request. The classifier admits only conclusion == failure with an
@@ -199,7 +205,7 @@ on:
           - triage
           - apply-review
           - merge-gate
-          - visual-verify
+          - evidence
           - audit
           - audit-close
           - cleanup-artifacts
@@ -212,7 +218,7 @@ on:
         required: false
         type: string
       pr-number:
-        description: "Pull request number (required for apply-review / merge-gate)"
+        description: "Pull request number (required for apply-review / merge-gate / evidence)"
         required: false
         type: string
       mode:
@@ -267,7 +273,7 @@ permissions:
 jobs:
   # Public repositories must check repository permission before an event can start a model.
   authorize:
-    runs-on: agents-arc
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 5
     permissions:
       contents: read
@@ -370,7 +376,7 @@ jobs:
           esac
 
   classify:
-    runs-on: agents-arc
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 5
     permissions:
       contents: read
@@ -428,7 +434,7 @@ jobs:
   check-implement-pr:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true'
-    runs-on: agents-arc
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 3
     permissions:
       contents: read
@@ -668,7 +674,7 @@ jobs:
   dispatch-triage:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.is_outside_collaborator == 'true'
-    runs-on: agents-arc
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 5
     permissions:
       actions: write
@@ -772,18 +778,24 @@ jobs:
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
 
-  call-visual-verify:
+  # Screenshots of a merged pull request, replayed from the verification plan its implementation
+  # wrote and archived beside that plan. Plain YAML with no model, so no secret is passed and the
+  # grant is exactly what the publish job writes: one commit of evidence/ folders and one comment. Its capture
+  # job runs the pull request's code with read-only access; only publish holds these writes, and it
+  # runs no repository code.
+  call-evidence:
     needs: classify
-    if: needs.classify.outputs.route == 'visual-verify'
-    uses: ./.github/workflows/agent-visual-verify.lock.yml
-    permissions: write-all
+    if: needs.classify.outputs.route == 'evidence'
+    uses: ./.github/workflows/evidence.yml
+    concurrency:
+      group: evidence-${{ needs.classify.outputs.pr-number }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
     with:
       pr-number: ${{ needs.classify.outputs.pr-number }}
-      linked-issue: ${{ needs.classify.outputs.linked-issue }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
 
   call-audit:
     needs: classify
@@ -812,13 +824,16 @@ jobs:
       version-bump: ${{ github.event.inputs.version-bump || 'auto' }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      # The release PR is pushed and opened with the App token so its CI runs; see conclude.
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
 
   bot-approve:
     needs: classify
     if: >
       needs.classify.outputs.route == 'bot-approve' &&
         (github.actor == 'app/github-actions' || github.actor == 'platform-devbox[bot]')
-    runs-on: agents-arc
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 5
     permissions:
       actions: write
@@ -875,7 +890,7 @@ jobs:
           github.event.pull_request.head.repo.full_name == github.repository
         )
       )
-    runs-on: agents-arc
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 10
     permissions:
       contents: read
@@ -1166,7 +1181,7 @@ jobs:
   reconcile-bot-pr-runs:
     needs: classify
     if: needs.classify.outputs.route == 'reconcile-bot-pr-runs'
-    runs-on: agents-arc
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 5
     permissions:
       contents: read
@@ -1393,7 +1408,7 @@ jobs:
   audit-close:
     needs: classify
     if: needs.classify.outputs.route == 'audit-close'
-    runs-on: agents-arc
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 15
     concurrency:
       group: audit-close
@@ -1418,7 +1433,7 @@ jobs:
   cleanup-artifacts:
     needs: classify
     if: needs.classify.outputs.route == 'cleanup-artifacts' && !github.event.repository.fork
-    runs-on: agents-arc
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 15
     concurrency:
       group: cleanup-artifacts
@@ -1442,7 +1457,7 @@ jobs:
   housekeeping:
     needs: classify
     if: needs.classify.outputs.route == 'housekeeping' && !github.event.repository.fork
-    runs-on: agents-arc
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 15
     concurrency:
       group: housekeeping
@@ -1483,7 +1498,7 @@ jobs:
   validate:
     needs: classify
     if: needs.classify.outputs.route == 'validate'
-    runs-on: agents-arc
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 10
     permissions:
       contents: read

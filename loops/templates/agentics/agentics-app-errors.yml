@@ -1,8 +1,9 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/templates/agentics/agentics-app-errors.yml. Update with `workflows update --force`; consumer edits may be overwritten.
 name: "Agentics: App Errors"
 
-# Once a day, ask Application Insights what the deployed application actually threw, and file
-# the distinct problems as issues here, labelled so refine sizes them and implement fixes them.
+# Every eight hours, ask Application Insights what the deployed application actually threw,
+# and file the distinct problems as issues here, labelled so refine sizes them and implement
+# fixes them.
 #
 # THIS REPORT STAYS IN THIS REPOSITORY. That is the design constraint, and it is the opposite
 # of the one in agentics-error-report.yml. That workflow exists to carry a *workflow* failure
@@ -28,14 +29,14 @@ name: "Agentics: App Errors"
 #     --role "Monitoring Reader" \
 #     --scope "$(az monitor log-analytics workspace show -g "$AZURE_RG" -n "$WORKSPACE" --query id -o tsv)"
 
-run-name: "App errors: ${{ github.event.inputs.app-env || 'pre' }}, last ${{ github.event.inputs.lookback-hours || '24' }}h"
+run-name: "App errors: ${{ github.event.inputs.app-env || 'pre' }}, last ${{ github.event.inputs.lookback-hours || '8' }}h"
 
 on:
   schedule:
-    # An hour after the workflow error report, so a morning's reading arrives together. This
-    # runs on a GitHub-hosted runner and never touches the agent fleet, so there is no slot to
-    # stagger against other repositories.
-    - cron: "41 7 * * *"
+    # Every eight hours: a failure should surface the same working day, not tomorrow morning.
+    # This runs on a GitHub-hosted runner and never touches the agent fleet, so there is no
+    # slot to stagger against other repositories.
+    - cron: "17 1,9,17 * * *"
   workflow_dispatch:
     inputs:
       app-env:
@@ -47,7 +48,7 @@ on:
         description: "How far back to look"
         required: false
         type: string
-        default: '24'
+        default: '8'
       dry-run:
         description: "Work out what would be filed and file nothing"
         required: false
@@ -64,7 +65,7 @@ env:
   APP_ENV: "pre"
   # Matches the cron. A window wider than the schedule counts the same problem twice; a
   # narrower one loses whatever happened in the gap.
-  LOOKBACK_HOURS: "24"
+  LOOKBACK_HOURS: "8"
   # The floor. A problem below this is real but not yet news, and a belt buried under
   # single-occurrence reports is a belt somebody switches off.
   MIN_OCCURRENCES: "5"

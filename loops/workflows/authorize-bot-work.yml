@@ -34,7 +34,7 @@ jobs:
        github.event.label.name == 'refine') &&
       !contains(github.event.issue.labels.*.name, 'bot-working') &&
       !endsWith(github.actor, '[bot]')
-    runs-on: agents-arc
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 5
     concurrency:
       group: authorize-${{ github.event.issue.number }}

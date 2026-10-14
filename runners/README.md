@@ -42,10 +42,14 @@ app rides on for free.
   roughly 78% of billed time into booting (14 VMs, ~12 min of real work across ~45 min
   of VM life) and added that wait to every stage. Each JIT registration is still
   single-use and ephemeral; only the host is reused.
-- Demand comes from the org webhook (`workflow_job` events, label-filtered,
-  private repos only), persisted as a job ledger in the app's `/home`. Missed
-  webhooks self-heal: entries expire (queued 24h, in_progress 8h) and three
-  fruitless VM boots with no job activity clear stale queued entries.
+- Demand comes from the org webhook (`workflow_job` + `workflow_run` events,
+  label-filtered, private repos only), persisted as a job ledger in the app's
+  `/home`. Missed webhooks self-heal: entries expire (queued 24h, in_progress 8h)
+  and three fruitless VM boots with no job activity clear stale queued entries.
+- Workflow affinity: an agent run carries `agents-aw` +
+  `affinity-<repo_id>-<run_id>-<run_attempt>`, so the scaler pins the whole run
+  to one VM. It claims a lease on `/vm/jit` and releases it on `/vm/done` or the
+  `workflow_run` completed event; a 5-minute sweep frees orphaned leases.
 
 ## Cost
 
@@ -63,16 +67,55 @@ app rides on for free.
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `POST /github` | webhook HMAC | workflow_job events update the ledger, trigger evaluate |
-| `POST /vm/jit` | VM bearer token | live instance asks for a JIT config; 204 when no demand |
-| `POST /vm/done` | VM bearer token | instance reports finished; app deletes it, boots next if needed |
-| `GET /status` | VM bearer token | demand, capacity, instances, ledger |
+| `POST /github` | webhook HMAC | workflow_job + workflow_run events update the ledger, trigger evaluate |
+| `POST /vm/jit` | VM bearer token | live instance asks for work: 200 = JIT follows, 202 = hold (its run has nothing queued yet), 204 = idle, 409 = it lost the lease |
+| `POST /vm/heartbeat` | VM bearer token | independent liveness + phase (`requesting-jit`, `runner-running`, `resetting`, `idle`, ...) |
+| `POST /vm/done` | VM bearer token | instance reports finished (optionally `unhealthy`); app releases its lease and deletes it |
+| `GET /status` | VM bearer token | demand, capacity, instances, leases, per-VM heartbeat state, ledger |
 | `GET /healthz` | none | liveness |
 
-App settings: `GH_PAT` (fine-grained PAT, sole grant org "Self-hosted runners: rw",
-expires 2027-08-29), `GH_ORG`, `WEBHOOK_SECRET`, `VM_TOKEN`, `AZ_SUBSCRIPTION`,
-`AZ_RG`, `AZ_VMSS`, `RUNNER_LABEL`, `RUNNER_GROUP_ID`. Azure access uses the app's
-system-assigned managed identity (Virtual Machine Contributor on the RG).
+App settings:
+
+| Setting | Meaning |
+|---|---|
+| `GH_PAT` | fine-grained PAT: org "Self-hosted runners: rw" + Actions read (expires 2027-08-29) |
+| `GH_ORG`, `AZ_SUBSCRIPTION`, `AZ_RG`, `AZ_VMSS` | org and Azure targets |
+| `WEBHOOK_SECRET`, `VM_TOKEN` | webhook HMAC and VM bearer token |
+| `RUNNER_LABEL` | CI/Deploy base label (default `agents-arc`) |
+| `AGENT_RUNNER_LABEL` | agent base label (default `agents-aw`) |
+| `RESERVED_CI_VMS` | VMs held back for CI while CI is queued (default 0; live 2) |
+| `MAX_VMS` | hard fleet ceiling (default 6; live 10) |
+| `WATCH_REPOS` | repos polled each sweep to recover missed queued webhooks (comma-separated) |
+| `RUNNER_GROUP_ID` | GitHub runner group for minted runners |
+
+Azure access uses the app's system-assigned managed identity (Virtual Machine
+Contributor on the RG).
+
+### Worker lifecycle and robustness
+
+A VM runs one job at a time and reuses itself until the queue stays empty. Every step
+that could block is bounded and an independent process reports liveness, so a wedged
+Docker daemon can never leave a VM holding a lease forever (an overnight incident).
+
+- **Affinity leases.** A run whose jobs carry `agents-aw` +
+  `affinity-<repo>-<run>-<attempt>` is pinned to one VM: the scaler claims a lease on
+  `/vm/jit`, mints the runner with that label, and releases the lease on `/vm/done` or the
+  `workflow_run` completed event. A **fencing token** (`X-Lease-Generation`) is returned
+  and must be echoed; a stale generation gets 409, so a VM that lost its lease to another
+  cannot serve the run.
+- **CI reserve.** While any CI job is queued, agent leases are capped at
+  `MAX_VMS - RESERVED_CI_VMS` and the held VMs serve CI only, so CI never queues behind a
+  long agent run. With no CI queued the cap is `MAX_VMS` (nothing sits idle).
+- **`job.sh` timeouts.** Every external command goes through `run_with_timeout`; `run.sh`
+  is bounded in two phases (waiting for a job to be assigned vs running it); `reset_state`
+  restarts a wedged Docker once and otherwise retires the VM as `unhealthy`.
+- **Heartbeat.** `runner-heartbeat.service` (independent of the job loop) POSTs
+  `/vm/heartbeat` every 30s with the phase from `/run/runner.state`. A VM with no runner
+  and a stale heartbeat, or stuck in `resetting` past its deadline, is deleted — a VM we
+  no longer trust as owner we no longer trust as worker.
+- **Ledger self-healing.** Each sweep reconciles every ledger entry against GitHub (drop
+  `completed`/`gone`, fix `queued`↔`in_progress`) and polls `WATCH_REPOS` for queued jobs
+  whose webhook was lost, so a scaler restart cannot strand a run.
 
 Deploy an update:
 
@@ -96,6 +139,22 @@ A VM booted from this image skips straight to runtime setup swap, token, service
 start cutting create-to-ready from **~2.5 min to ~80s** (measured, 2 runs: baseline
 136/164s vs pre-baked 83/81s).
 
+The image also carries what every job used to download or work around:
+
+- **Docker images**, pulled at bake time and pinned in `versions.env`: the gh-aw sandbox
+  images (`GH_AW_IMAGES`, for the gh-aw version in `GH_AW_VERSION`), SQL Server for
+  Testcontainers (`MSSQL_IMAGE`) and the Playwright container
+  (`mcr.microsoft.com/playwright:v$PLAYWRIGHT_VERSION-noble`). `reset_state` in
+  `cloud-init.yaml` prunes containers, volumes and networks between jobs but never images,
+  so they stay warm for every job a VM serves. A consumer only gets the warm copy when it
+  references the exact same tag; `mssql/server:2022-latest` is not one of them.
+- **Chromium's system libraries**, installed with `playwright install-deps chromium` as root.
+  Jobs run as `runner` with no passwordless sudo, so `--with-deps` cannot run at job time;
+  with the libraries baked, `playwright install chromium` alone is enough to launch it.
+
+CI (`Runner image pins`) compiles the workers with `GH_AW_VERSION` and fails when the images
+they pull differ from `GH_AW_IMAGES`, so a gh-aw bump cannot leave the image stale.
+
 ### Build the image
 
 ```bash
@@ -116,12 +175,19 @@ packer init build-image.pkr.hcl
 packer build build-image.pkr.hcl
 ```
 
-The CI path is the primary one: `.github/workflows/build-runner-image.yml` (this repository)
-builds on a monthly schedule (`0 2 1 * *`) or on `workflow_dispatch` with an `image_version`
-input, runs a **post-publish boot test** a throwaway VM from the new version must reach
-`/opt/runner/.ready` and `/etc/runner-scaler.env` with a working `docker info` and only a
-version that passes it is left in the gallery. A failed build or boot test opens an issue
-labeled `runner-platform`.
+`.github/workflows/build-runner-image.yml` (this repository) builds on `workflow_dispatch` with
+an `image_version` input. It has no schedule: the image is published from a local Packer build,
+and the workflow's `AZ_RUNNER_IMAGE_*` secrets are not defined in this repository, so a dispatch
+fails at authentication until a service principal is set up for it. When it runs, it ends with a
+**post-publish boot test**: a throwaway VM from the new version must reach `/opt/runner/.ready`
+and `/etc/runner-scaler.env` with a working `docker info`, every pre-pulled image present and
+the root disk under 60%. A failed build or boot test opens an issue labeled `runner-platform`
+(the label is created on first use).
+
+`provision-image.sh` asserts the same things at bake time, plus that a Chromium downloaded by
+`runner` without `--with-deps` has no missing libraries and that the 30 GB bake disk
+(`os_disk_size_gb`) is under 80% full. It prints `df -h /` and `docker system df`, which is where
+to read the image's real size.
 
 ### Use the pre-baked image
 
@@ -167,10 +233,10 @@ customData** restoring only one boots a fleet whose cloud-init and image disagre
 - Tool version bumps in `opencode-ci.md` (OPENCODE_VERSION, RTK_VERSION, etc.)
 - Security patches (Ubuntu packages, docker-ce, trivy)
 - Changes to `provision-image.sh` itself
-- Monthly as a routine hygiene cadence
+- A `GH_AW_VERSION`, `MSSQL_IMAGE` or `PLAYWRIGHT_VERSION` bump in `versions.env`
+- Periodically, as routine hygiene
 
-The monthly rebuild covers the routine case; a boot test gates every publish, so a broken
-provision script or a dead upstream cannot ship a broken image into the gallery.
+Validate a new version on the Dogfood fleet before flipping `galleryImageVersion` on the others.
 
 ### What stays in cloud-init
 
@@ -285,9 +351,16 @@ change logs `AuthorizationFailed` and the fleet stays at 0 while demand grows.
 
 ## GitHub side
 
-- Org webhook: `https://agentrunner-scaler-01.azurewebsites.net/github`,
-  content type `application/json`, secret = the app's `WEBHOOK_SECRET`, single
-  event **Workflow jobs**. Org → Settings → Webhooks.
+- Org webhook: `https://agentrunner-scaler-01.azurewebsites.net/github`
+  **without a trailing slash**, content type `application/json`, secret = the
+  app's `WEBHOOK_SECRET`, events **Workflow jobs** + **Workflow runs**.
+  Org → Settings → Webhooks.
+  - The trailing slash is load-bearing, not cosmetic: Easy Auth excludes
+    `/github` by exact path, so `.../github/` is intercepted by the auth layer
+    and every delivery comes back 401 while the app looks healthy. Symptom:
+    `/healthz` 200, but the ledger never grows and the fleet idles. Verify with
+    `gh api /orgs/<org>/hooks/<id>/deliveries --jq '.[].status_code'`.
 - Runner group `agentic` (id 6), `allows_public_repositories=false`; JIT runners
-  are minted into it with the `agents-arc` label.
+  are minted into it. Agent workflows use `agents-aw` + the per-run affinity
+  label; CI/Deploy keep `agents-arc`, so a CI job can never land on a run's VM.
 - Secrets inventory: see [secrets.md](secrets.md).

@@ -1,7 +1,7 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-refine.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
-  REPO_RULES: "Refine only the selected issue into a grounded, implementation-ready user story. Read repository documentation for domain context. Write acceptance criteria that match existing patterns. Where a story or its open questions decide how business data (named people, roles, addresses) is stored, resolve it toward the repository's convention for that data -- a database entity or a settings entry -- and record that choice in the acceptance criteria; do not carry a person's name or email address into the story as something the code reads from a constant. Do not implement code."
+  REPO_RULES: "Refine only the selected issue into a grounded, implementation-ready user story. Read repository documentation for domain context. Write acceptance criteria that match existing patterns. Where a story or its open questions decide how business data (named people, roles, addresses) is stored, resolve it toward the repository's convention for that data -- a database entity or a settings entry -- and record that choice in the acceptance criteria; do not carry a person's name or email address into the story as something the code reads from a constant. Do not implement code. Do not use web search or web fetch tools. The issue body already contains the research that motivated it; derive your domain context from the repository's own code and documentation only."
   # The estimate decides whether a story gets split, and the prompt tells the agent these bands
   # come from this repository's own merged pull requests. They have to actually come from it, or
   # the claim is false and every repository sizes work on another one's diffs.
@@ -139,12 +139,19 @@ jobs:
   # needs-maintainer while this run waited in a queue, the issue now carries review and
   # the verdict must stand: the reserve step clears review blindly, so eligibility has to
   # catch it first (Pliny-Bot #372).
+  #
+  # BUT: when mode is rerefine, the trigger was a human comment answering a question the
+  # bot asked and then parked for review. That comment IS the human review the label was
+  # waiting for, so refusing to run would silence exactly the feedback the bot asked for
+  # (Odyssey #226: the bot asked a question, the user answered, and the review label
+  # made the router skip the answer). In rerefine mode the label is cleared and the
+  # refine proceeds; in first mode the triage verdict still stands.
   eligibility:
     needs: [still_open]
     if: needs.still_open.outputs.open == 'true'
     runs-on: agents-arc
     permissions:
-      issues: read
+      issues: write
     outputs:
       eligible: ${{ steps.check.outputs.eligible }}
     steps:
@@ -153,11 +160,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ inputs.issue-number }}
+          MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
           labels=$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels \
             --jq '[.labels[].name]')
           if jq -e 'index("review")' >/dev/null <<<"$labels"; then
+            if [ "$MODE" = "rerefine" ]; then
+              # A rerefine is triggered by a human comment on an issue the bot parked for
+              # review. The comment is the review: clear the label and proceed.
+              gh issue edit "$ISSUE_NUMBER" --remove-label "review" 2>/dev/null ||
+                echo "::notice::review label already gone on #$ISSUE_NUMBER"
+              echo "eligible=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::Issue #$ISSUE_NUMBER had review label; cleared it for rerefine (user answered the bot)."
+              exit 0
+            fi
             echo "eligible=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Issue #$ISSUE_NUMBER has the review label. Automated refinement skipped."
             exit 0
@@ -361,9 +378,25 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      # No apply-agent-output here. safe_outputs already creates the split children, links
-      # them as sub-issues of the parent and rewrites the parent body; running the action too
-      # filed a second unlinked, unlabelled copy of every child.
+      # Path B needs this step, exactly as triage and merge-gate have it. `staged: true` above
+      # means the framework writes nothing, so without an apply the run validates everything and
+      # publishes nothing: the agent's comment and the refined body stay in the artifact, conclude
+      # reports success, and the issue keeps `refine` forever. That is how a refine came back green
+      # and untouched.
+      #
+      # It is not redundant with safe_outputs: staged, safe_outputs never writes. The comment that
+      # used to sit here said this action filed a duplicate of every split child, which is what
+      # happens when it runs *without* staging. Staged, the children exist only in the artifact
+      # and this step is the only thing that creates them.
+      - name: Apply agent output
+        uses: ./.github/actions/apply-agent-output
+        with:
+          artifact-name: ${{ needs.activation.outputs.artifact_prefix }}agent
+          token: ${{ steps.app-token.outputs.token }}
+          apply-labels: 'false'
+          update-issues: 'true'
+          create-issues: 'true'
+          fallback-issue-number: ${{ inputs.issue-number }}
       - name: Apply complete refinement labels
         if: needs.validate_output.outputs.outcome == 'complete'
         uses: ./.github/actions/add-issue-labels
@@ -891,14 +924,22 @@ timeout-minutes: 90
    size of a very long message, tighten the body; a shorter call that lands beats a longer one
    that is cut off.
 
-   **Pipe JSON via stdin and always pass `.` as the trailing argument.** The safeoutputs bridge
-   reads the JSON payload from stdin only when the final argument is `.`. Quote the issue-number
-   flags on the same line, never in place of the dot. Correct:
+   **Pipe JSON via stdin, put every parameter inside the JSON, and pass no flags.** The
+   safeoutputs bridge reads the JSON payload from stdin only when the command line is the tool
+   name followed by a lone `.`. Any `--flag` on the line, `--issue_number` and `--item_number`
+   included, makes it skip stdin: it sends just the flags (for example the 20 bytes
+   `{"issue_number":685}`), drops the body, and still returns success, which spends the call
+   allowance on nothing. Put the target number in the JSON as `issue_number` (`update_issue`) or
+   `item_number` (`add_comment`). Correct:
    `printf '%s' "$JSON" | safeoutputs create_issue .`
+   `printf '%s' "$JSON" | safeoutputs update_issue .` with `{"issue_number":685,"body":"..."}`
+   `printf '%s' "$JSON" | safeoutputs add_comment .` with `{"item_number":685,"body":"..."}`
+   Wrong (stdin never read, body silently empty, bridge returns success):
    `printf '%s' "$JSON" | safeoutputs update_issue --issue_number 685 .`
    `printf '%s' "$JSON" | safeoutputs add_comment --item_number 685 .`
-   Wrong (stdin never read, body silently empty, bridge returns success):
    `printf '%s' "$JSON" | safeoutputs update_issue --issue_number 685`
+   A call that reports only about 20 argument bytes for a body of thousands did not carry the body.
+   Do not repeat it in the same form: resend the whole payload with the number inside the JSON.
 
 8. Decide exactly one outcome:
 

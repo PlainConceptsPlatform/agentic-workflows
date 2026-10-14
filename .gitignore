@@ -8,3 +8,10 @@ runners/*.pkrvars.hcl
 # Generated from /loops by cli/scripts/copy-loops.mjs on prepare and prepack.
 # Committing it duplicates every change and the two trees drift.
 cli/loops/
+
+# Scaler app build output. Built fresh by .github/workflows/build-scaler.yml on every
+# push to main. Committing a binary here is how production drifted from source once
+# already: a hand-built DLL was committed, later source fixes were not rebuilt into it,
+# and the deployed app ran code that existed in no branch.
+runners/scaler-app/publish/
+runners/scaler-app/publish.zip

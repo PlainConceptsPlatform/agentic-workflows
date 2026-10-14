@@ -2,12 +2,13 @@
 # Runners this repository actually has.
 #
 # actionlint knows GitHub's own labels and rejects everything else, so a workflow that
-# names one of our runner groups was reported as an error on every pull request. Both
-# of these are real: agents-arc runs the agentic workflows, RunnerLandingZone runs the
-# work router. Listing them here is how actionlint is told a label is self-hosted
-# rather than a typo, and it keeps that knowledge in a file the workflow generator
-# does not overwrite.
+# names one of our runner groups was reported as an error on every pull request. All of
+# these are real: agents-arc runs CI/Deploy, agents-aw runs the agent workflows,
+# RunnerLandingZone runs the work router. Listing them here is how actionlint is told a
+# label is self-hosted rather than a typo, and it keeps that knowledge in a file the
+# workflow generator does not overwrite.
 self-hosted-runner:
   labels:
     - agents-arc
+    - agents-aw
     - RunnerLandingZone

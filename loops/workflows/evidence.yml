@@ -1,0 +1,461 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/evidence.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: "Agentics: Evidence"
+
+# Archives what a merged pull request looks like. The agent that implemented the change wrote a
+# verification plan with the harness skill pc-repo-verify; this replays that plan against the
+# app, with no model, and keeps one screenshot per waypoint beside the plan it came from. The
+# router calls it when a pull request merges, and operation=evidence runs it by hand for any pull
+# request. Nothing waits on it: it is the record, not a gate. Project Health reads the manifest
+# embedded in the comment to show the screenshots with each issue.
+#
+# Two jobs, because one runs the pull request's code and the other writes. `capture` checks out
+# the head, starts the app and drives Chromium with a read-only token and no secret. `publish`
+# checks nothing out: it takes the images as an artifact, commits them into an `evidence/` folder
+# beside each plan on the default branch and writes one comment. Both use GITHUB_TOKEN, and nothing
+# either job writes raises another workflow event. The one thing a repository may add is its own
+# .github/evidence/sign-in.yml, for plans that start signed in rather than signing in themselves.
+#
+# This replaced agent-visual-verify, which never produced a screenshot: it ran only on pull
+# requests nobody would review, raced the merge it was dispatched before, re-planned with a model
+# what implement had already planned, and published through `gh --attach`, which refuses the
+# installation tokens a workflow has.
+
+on:
+  workflow_call:
+    inputs:
+      pr-number:
+        description: Pull request whose verification plans are replayed.
+        required: true
+        type: string
+
+env:
+  # The command that brings the whole stack up with mock auth. Every Platform repository has it at
+  # the root; a plan that needs something else names it in its own `start:`.
+  EVIDENCE_START_COMMAND: "pnpm run dev"
+  # How long the app may take to answer before the run records that it never did. A cold .NET
+  # build plus SQL Server in a container is most of it.
+  EVIDENCE_START_TIMEOUT_SECONDS: "900"
+  # The SDK when a repository has .NET projects but no global.json to say which.
+  EVIDENCE_DOTNET_VERSION: "10.0.x"
+  EVIDENCE_MARKER: "<!-- agentic-evidence -->"
+  # How long the run keeps the screenshots it could not archive: a pull request that is not merged
+  # has no plan on the default branch to keep them beside.
+  EVIDENCE_ARTIFACT_DAYS: "14"
+  # The capture runs in mcr.microsoft.com/playwright at this tag, pre-pulled by the runner image
+  # (runners/versions.env), so the two move together.
+  PLAYWRIGHT_VERSION: "1.62.1"
+
+jobs:
+  capture:
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      has-evidence: ${{ steps.done.outputs.has-evidence }}
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Find the pull request's verification plans
+        id: plans
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PR_NUMBER: ${{ inputs.pr-number }}
+        with:
+          script: |
+            const pull_number = Number(process.env.PR_NUMBER);
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number });
+            const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number, per_page: 100 });
+            // A plan that was only moved (the archive step, in a later pull request) is skipped: its
+            // evidence/ folder moves with it, so replaying it would only repeat the record.
+            const plans = files
+              .filter((file) => file.status !== 'removed' && /(^|\/)verification-plan\.md$/.test(file.filename))
+              .filter((file) => !(file.status === 'renamed' && file.changes === 0))
+              .map((file) => file.filename);
+            core.setOutput('sha', pr.head.sha);
+            core.setOutput('plans', plans.join('\n'));
+            core.setOutput('found', plans.length > 0 ? 'true' : 'false');
+            core.info(plans.length > 0
+              ? `Verification plans in #${pull_number}: ${plans.join(', ')}`
+              : `#${pull_number} carries no verification plan; there is nothing to capture.`);
+
+      - name: Check out the pull request head
+        if: steps.plans.outputs.found == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.plans.outputs.sha }}
+          path: pr
+          persist-credentials: false
+
+      # A plan that only says "no UI surface", or that is prose with no journey, starts nothing and
+      # writes nothing: a comment on every backend pull request saying so would be noise.
+      - name: Read the plans
+        id: inspect
+        if: steps.plans.outputs.found == 'true'
+        uses: ./.github/actions/capture-evidence
+        with:
+          mode: inspect
+          root: pr
+          plans: ${{ steps.plans.outputs.plans }}
+          playwright-version: ${{ env.PLAYWRIGHT_VERSION }}
+
+      - name: Detect the toolchain the app needs
+        id: toolchain
+        if: steps.inspect.outputs.runnable == 'true'
+        working-directory: pr
+        run: |
+          set -euo pipefail
+          global_json="$(find . -maxdepth 3 -name global.json -not -path '*/node_modules/*' | head -n 1)"
+          dotnet_project="$(find . -maxdepth 3 \( -name '*.slnx' -o -name '*.sln' -o -name '*.csproj' \) -not -path '*/node_modules/*' | head -n 1)"
+          if [ -n "$global_json" ] || [ -n "$dotnet_project" ]; then
+            echo "dotnet=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "dotnet=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "global-json=${global_json#./}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up .NET
+        if: steps.toolchain.outputs.dotnet == 'true'
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          global-json-file: ${{ steps.toolchain.outputs.global-json != '' && format('pr/{0}', steps.toolchain.outputs.global-json) || '' }}
+          dotnet-version: ${{ steps.toolchain.outputs.global-json == '' && env.EVIDENCE_DOTNET_VERSION || '' }}
+        env:
+          # the default /usr/share/dotnet needs root; the tool cache belongs to the runner user
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
+
+      - name: Install the app's dependencies
+        if: steps.inspect.outputs.runnable == 'true'
+        working-directory: pr
+        run: |
+          set -euo pipefail
+          # Local development reads .env; the example is what a new clone is told to copy.
+          if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi
+          if [ -f pnpm-lock.yaml ]; then
+            corepack enable
+            corepack prepare --activate
+            pnpm install --frozen-lockfile
+          elif [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f package.json ]; then
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Start the app
+        id: app
+        if: steps.inspect.outputs.runnable == 'true'
+        working-directory: pr
+        env:
+          START: ${{ steps.inspect.outputs.start || env.EVIDENCE_START_COMMAND }}
+          APP_URL: ${{ steps.inspect.outputs.url }}
+          TIMEOUT: ${{ env.EVIDENCE_START_TIMEOUT_SECONDS }}
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/evidence-app.log"
+          # Its own session, so the whole tree it spawns stops with one signal at the end.
+          setsid bash -c "$START" > "$log" 2>&1 < /dev/null &
+          pid=$!
+          {
+            echo "pid=$pid"
+            echo "start=$START"
+          } >> "$GITHUB_OUTPUT"
+
+          waited=0
+          up=false
+          # Any HTTP answer counts, a 500 from a dev server still compiling included: the first
+          # waypoint's navigation waits for the page itself.
+          while [ "$waited" -lt "$TIMEOUT" ]; do
+            if curl -s -o /dev/null --max-time 5 "$APP_URL"; then
+              up=true
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "::warning::'$START' exited before the app answered at $APP_URL"
+              break
+            fi
+            sleep 5
+            waited=$((waited + 5))
+          done
+
+          {
+            echo "up=$up"
+            echo "waited=$waited"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$up" = "true" ]; then
+            echo "The app answered at $APP_URL after ${waited}s."
+          else
+            echo "::warning::the app did not answer at $APP_URL after ${waited}s of '$START'; recording that instead of screenshots"
+            echo "::group::Last lines of the app's output"
+            tail -n 80 "$log" || true
+            echo "::endgroup::"
+            # An orchestrator (Aspire, compose) keeps each service's output to itself, so the
+            # start command's own log rarely says which service never came up. Show them.
+            echo "::group::Listening ports"
+            (ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | head -n 40 || true
+            echo "::endgroup::"
+            echo "::group::Containers"
+            docker ps -a --format '{{.Names}}  {{.Status}}  {{.Image}}' 2>/dev/null || true
+            echo "::endgroup::"
+            for id in $(docker ps -aq 2>/dev/null); do
+              echo "::group::Container $(docker inspect -f '{{.Name}}' "$id" 2>/dev/null)"
+              docker logs --tail 60 "$id" 2>&1 || true
+              echo "::endgroup::"
+            done
+            for f in "$HOME"/.aspire/logs/*.log; do
+              [ -f "$f" ] || continue
+              echo "::group::$f"
+              tail -n 200 "$f" || true
+              echo "::endgroup::"
+            done
+          fi
+
+      - name: Replay the plans
+        if: steps.app.outputs.up == 'true'
+        uses: ./.github/actions/capture-evidence
+        env:
+          EVIDENCE_SHA: ${{ steps.plans.outputs.sha }}
+          EVIDENCE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          mode: capture
+          root: pr
+          plans: ${{ steps.plans.outputs.plans }}
+          out-dir: ${{ runner.temp }}/evidence
+          playwright-version: ${{ env.PLAYWRIGHT_VERSION }}
+
+      - name: Record that the app never answered
+        if: steps.app.outputs.up == 'false'
+        uses: ./.github/actions/capture-evidence
+        env:
+          EVIDENCE_SHA: ${{ steps.plans.outputs.sha }}
+          EVIDENCE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVIDENCE_APP_URL: ${{ steps.inspect.outputs.url }}
+          EVIDENCE_START: ${{ steps.app.outputs.start }}
+          EVIDENCE_WAITED_SECONDS: ${{ steps.app.outputs.waited }}
+        with:
+          mode: unreached
+          root: pr
+          plans: ${{ steps.plans.outputs.plans }}
+          out-dir: ${{ runner.temp }}/evidence
+
+      - name: Stop the app
+        if: always() && steps.app.outputs.pid != ''
+        env:
+          PID: ${{ steps.app.outputs.pid }}
+        run: |
+          kill -TERM -- "-$PID" 2>/dev/null || true
+          sleep 3
+          kill -KILL -- "-$PID" 2>/dev/null || true
+
+      - name: Hand the evidence to the publish job
+        id: done
+        if: always() && steps.plans.outputs.found == 'true'
+        run: |
+          if [ -f "$RUNNER_TEMP/evidence/comment.md" ]; then
+            echo "has-evidence=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-evidence=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload the evidence
+        if: always() && steps.done.outputs.has-evidence == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evidence-pr-${{ inputs.pr-number }}
+          path: ${{ runner.temp }}/evidence
+          retention-days: ${{ env.EVIDENCE_ARTIFACT_DAYS }}
+          if-no-files-found: error
+
+  publish:
+    needs: capture
+    if: always() && needs.capture.outputs.has-evidence == 'true'
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Download the evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: evidence-pr-${{ inputs.pr-number }}
+          path: ${{ runner.temp }}/evidence
+
+      - name: Read the pull request
+        id: pr
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PR_NUMBER: ${{ inputs.pr-number }}
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(process.env.PR_NUMBER) });
+            core.setOutput('merged', pr.merged ? 'true' : 'false');
+            core.setOutput('branch', pr.base.ref);
+
+      # Beside each plan on the default branch, where the plan itself is archived: the record stays
+      # with the change it proves, and moves with it if the change folder ever moves. Only a merged
+      # pull request's plans are there to keep it beside. A sparse, blob-less fetch reads only the
+      # plan folders, and [skip ci] plus GITHUB_TOKEN keep the commit from starting any workflow.
+      - name: Commit the screenshots beside their plans
+        id: archive
+        if: steps.pr.outputs.merged == 'true'
+        env:
+          TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
+          PR: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/evidence/files"
+          if [ ! -d "$src" ] || [ -z "$(find "$src" -name '*.jpg' -print -quit)" ]; then
+            echo "No screenshots to keep; the comment records why."
+            echo "base=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Each folder holding screenshots is <plan directory>/evidence.
+          mapfile -t dirs < <(cd "$src" && find . -type d -name evidence | sed 's|^\./||; s|/evidence$||' | sort)
+
+          work="$RUNNER_TEMP/evidence-commit"
+          rm -rf "$work"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          # Blob-less and sparse: only the plan folders are downloaded, however large the repository.
+          git -c "http.${SERVER}/.extraheader=${auth}" clone -q --filter=blob:none --no-checkout --depth=1 \
+            --branch "$BRANCH" "${SERVER}/${REPO}.git" "$work"
+          cd "$work"
+          git config "http.${SERVER}/.extraheader" "$auth"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          patterns=()
+          for dir in "${dirs[@]}"; do patterns+=("/$dir/"); done
+          git sparse-checkout set --no-cone "${patterns[@]}"
+
+          pushed=false
+          missing=()
+          for attempt in 1 2 3 4 5; do
+            if [ "$attempt" -eq 1 ]; then
+              git checkout -q "$BRANCH"
+            else
+              git fetch -q --depth=1 origin "$BRANCH"
+              git reset -q --hard FETCH_HEAD
+            fi
+            missing=()
+            for dir in "${dirs[@]}"; do
+              # A plan moved or removed since the merge has no folder to keep the record in.
+              if [ ! -f "$dir/verification-plan.md" ]; then
+                missing+=("$dir")
+                continue
+              fi
+              rm -rf "$dir/evidence"
+              mkdir -p "$dir/evidence"
+              cp -R "$src/$dir/evidence/." "$dir/evidence/"
+              git add -A "$dir/evidence"
+            done
+            if git diff --cached --quiet; then
+              pushed=true
+              break
+            fi
+            git commit -q -m "evidence: screenshots for #$PR [skip ci]"
+            if git push -q origin "HEAD:refs/heads/$BRANCH"; then
+              pushed=true
+              break
+            fi
+            echo "$BRANCH moved before the push (attempt $attempt); retrying on its new tip."
+            sleep $((attempt * 3))
+          done
+          if [ "$pushed" != "true" ]; then
+            # A protected default branch refuses the push. The comment says so, and the run's
+            # artifact keeps the screenshots, so the merge that already happened stays green.
+            echo "::warning::could not push the screenshots to $BRANCH after 5 attempts"
+            echo "base=" >> "$GITHUB_OUTPUT"
+            echo "reason=the push to $BRANCH was refused" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${#missing[@]}" -eq "${#dirs[@]}" ]; then
+            echo "None of the plans is on $BRANCH any more; nothing was kept."
+            echo "base=" >> "$GITHUB_OUTPUT"
+            echo "reason=none of the plans is on $BRANCH any more" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          sha="$(git rev-parse HEAD)"
+          echo "base=${SERVER}/${REPO}/raw/${sha}" >> "$GITHUB_OUTPUT"
+          {
+            echo "missing<<EOF"
+            printf '%s\n' "${missing[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Screenshots kept at ${SERVER}/${REPO}/tree/${sha} beside $(( ${#dirs[@]} - ${#missing[@]} )) plan(s)"
+
+      # GITHUB_TOKEN on purpose: its comment raises no workflow event, so the router does not wake
+      # up to read its own record. One comment per pull request, rewritten on a re-run.
+      - name: Write the evidence comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PR_NUMBER: ${{ inputs.pr-number }}
+          MARKER: ${{ env.EVIDENCE_MARKER }}
+          MERGED: ${{ steps.pr.outputs.merged }}
+          IMAGE_BASE: ${{ steps.archive.outputs.base }}
+          MISSING: ${{ steps.archive.outputs.missing }}
+          REASON: ${{ steps.archive.outputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACT_DAYS: ${{ env.EVIDENCE_ARTIFACT_DAYS }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const issue_number = Number(process.env.PR_NUMBER);
+            const evidence = path.join(process.env.RUNNER_TEMP, 'evidence');
+            let source = fs.readFileSync(path.join(evidence, 'comment.md'), 'utf8');
+            const base = process.env.IMAGE_BASE ?? '';
+            const missing = (process.env.MISSING ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
+            const kept = (file) => Boolean(base) && !missing.some((dir) => file.startsWith(`${dir}/evidence/`));
+
+            // An image that was not archived would render broken: its line goes, and a note says
+            // the run's artifact has it instead.
+            source = source.replace(/^!\[[^\]]*\]\(__EVIDENCE_BASE__\/([^)]*)\)\n?/gm, (line, file) => (kept(file) ? line : ''));
+            const shots = fs.readdirSync(evidence, { recursive: true }).some((name) => String(name).endsWith('.jpg'));
+            if (!base) source = source.replace(/^The screenshots are kept beside each plan.*\n\n?/m, '');
+            if (shots && (!base || missing.length > 0)) {
+              const why = process.env.MERGED !== 'true'
+                ? 'the pull request is not merged, so its plans are not on the default branch'
+                : !base
+                  ? (process.env.REASON || 'the screenshots could not be committed')
+                  : `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} no longer on the default branch`;
+              source = source.replace('## Visual evidence\n', `## Visual evidence\n\n> Not archived: ${why}. The screenshots are in [the run](${process.env.RUN_URL})'s artifact for ${process.env.ARTIFACT_DAYS} days.\n`);
+            }
+
+            // The embedded manifest is what other tools read, so it says exactly what was kept: the
+            // base where the files are, and no file for a screenshot that was not archived. It sits
+            // in an HTML comment, which a `--` would close; `\u002d` is the same to a JSON reader.
+            source = source.replace(/<!-- agentic-evidence-manifest\n([\s\S]*?)\n-->/, (block, json) => {
+              let data;
+              try {
+                data = JSON.parse(json);
+              } catch {
+                return block;
+              }
+              data.base = base || null;
+              for (const plan of data.plans ?? []) {
+                for (const waypoint of plan.waypoints ?? []) {
+                  if (waypoint.file && !kept(waypoint.file)) waypoint.file = null;
+                }
+              }
+              return `<!-- agentic-evidence-manifest\n${JSON.stringify(data).replace(/-(?=-)/g, '\\u002d')}\n-->`;
+            });
+            const body = source.split('__EVIDENCE_BASE__').join(base);
+            const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number, per_page: 100 });
+            const existing = comments.find((comment) => comment.user?.type === 'Bot' && (comment.body ?? '').includes(process.env.MARKER));
+            if (existing) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+              core.info(`Updated ${existing.html_url}`);
+            } else {
+              const { data } = await github.rest.issues.createComment({ ...context.repo, issue_number, body });
+              core.info(`Created ${data.html_url}`);
+            }
