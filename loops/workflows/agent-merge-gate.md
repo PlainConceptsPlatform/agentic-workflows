@@ -43,9 +43,16 @@ env:
   BLAST_HIGH_LINES: "800"
   BLAST_MEDIUM_FILES: "5"
   BLAST_MEDIUM_LINES: "200"
+  # Paths that change no runtime behaviour: tests, docs, specs, translations and generated
+  # migration code. They count toward neither size nor owner paths, so a feature's tests do not
+  # double its blast radius. Protected paths are still matched against every file.
+  BLAST_IGNORE_PATHS: '(^|/)([Tt]ests?|__tests__|__snapshots__|e2e)/|(^|/)[^/]+\.[A-Za-z]*Tests?/|\.(test|spec)\.[cm]?[jt]sx?$|\.snap$|\.feature$|(^|/)openspec/|\.md$|(^|/)evidence/|(^|/)(i18n|locales?|translations?)/[^/]*\.json$|\.Designer\.cs$|ModelSnapshot\.cs$'
   # Agent confidence below which the pull request goes to a human. The agent reports the number;
   # this decides what it means.
   CONFIDENCE_THRESHOLD: "0.8"
+  # Replay the verification plan when the gate hands the pull request to a person, so the
+  # reviewer sees the screenshots before deciding. "false" leaves evidence to the merge.
+  EVIDENCE_BEFORE_REVIEW: "true"
   WORKING_LABEL: bot-working
   IMPLEMENT_LABEL: implement
   REVIEW_LABEL: review
@@ -203,6 +210,8 @@ jobs:
       required_owners: ${{ steps.blast.outputs.required_owners }}
       files_changed: ${{ steps.blast.outputs.files_changed }}
       lines_changed: ${{ steps.blast.outputs.lines_changed }}
+      files_total: ${{ steps.blast.outputs.files_total }}
+      lines_total: ${{ steps.blast.outputs.lines_total }}
       owner_hit: ${{ steps.blast.outputs.owner_hit }}
       sensitive_hit: ${{ steps.blast.outputs.sensitive_hit }}
       # The decision, computed once. A protected path holds the merge for a human, but it must
@@ -229,6 +238,7 @@ jobs:
           high-lines: ${{ env.BLAST_HIGH_LINES }}
           medium-files: ${{ env.BLAST_MEDIUM_FILES }}
           medium-lines: ${{ env.BLAST_MEDIUM_LINES }}
+          ignore-paths: ${{ env.BLAST_IGNORE_PATHS }}
 
   review_required:
     needs: [subject, protected_changes]
@@ -291,6 +301,18 @@ jobs:
             Required owners: `${{ needs.protected_changes.outputs.required_owners || 'none configured' }}`
 
             **Verdict:** owner-review
+      - name: Replay the verification plan for the owner
+        if: needs.protected_changes.outputs.holds_review == 'true' && env.EVIDENCE_BEFORE_REVIEW == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.subject.outputs.pr }}
+        run: |
+          set -euo pipefail
+          branch=$(gh api "repos/$REPO" --jq .default_branch)
+          gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
+            -f ref="$branch" -f "inputs[operation]=evidence" -f "inputs[pr-number]=$PR"
 
   reserve:
     needs: subject
@@ -440,7 +462,7 @@ jobs:
             | Disposition | `${{ needs.validate_output.outputs.outcome }}` |
             | CI | ${{ needs.subject.outputs.conclusion }} |
             | Blast radius | ${{ needs.protected_changes.outputs.level }} |
-            | Files / lines | ${{ needs.protected_changes.outputs.files_changed }} / ${{ needs.protected_changes.outputs.lines_changed }} |
+            | Files / lines | ${{ needs.protected_changes.outputs.files_changed }} / ${{ needs.protected_changes.outputs.lines_changed }} counted, ${{ needs.protected_changes.outputs.files_total }} / ${{ needs.protected_changes.outputs.lines_total }} in the diff |
             | Protected paths | ${{ needs.protected_changes.outputs.requires_review == 'true' && 'yes' || 'no' }} |
             | Owner paths | ${{ needs.protected_changes.outputs.owner_hit == 'true' && 'yes' || 'no' }} |
             ${{ needs.validate_output.outputs.outcome == 'owner-review'
@@ -453,6 +475,7 @@ jobs:
             ```
 
             Findings and verification on the linked issue: #${{ needs.subject.outputs.issue }}. [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            ${{ env.EVIDENCE_BEFORE_REVIEW == 'true' && contains(fromJson('["human-review","owner-review"]'), needs.validate_output.outputs.outcome) && 'Screenshots of this head follow in their own comment if it carries a verification plan. Approving the pull request merges it.' || '' }}
       - name: Merge approved pull request
         if: needs.validate_output.outputs.outcome == 'auto-merge'
         env:
@@ -512,6 +535,20 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.WORKING_LABEL }}
+      # A person decides this one, so the screenshots come before the decision, in a router run of
+      # their own outside the belt. Never on auto-merge: that dispatch would race the merge.
+      - name: Replay the verification plan for the reviewer
+        if: env.EVIDENCE_BEFORE_REVIEW == 'true' && contains(fromJson('["human-review","owner-review"]'), needs.validate_output.outputs.outcome)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.subject.outputs.pr }}
+        run: |
+          set -euo pipefail
+          branch=$(gh api "repos/$REPO" --jq .default_branch)
+          gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
+            -f ref="$branch" -f "inputs[operation]=evidence" -f "inputs[pr-number]=$PR"
       - name: Clear merged issue labels
         if: needs.validate_output.outputs.outcome == 'auto-merge'
         uses: ./.github/actions/remove-issue-labels

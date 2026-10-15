@@ -316,7 +316,7 @@ key. The groups this package uses:
 |---|---|---|
 | `refine` | `refine-<issue>` | Issues refine in parallel, one run per issue |
 | `implement` | `write-pipeline-<issue>` | One writer per issue |
-| `merge-gate` | `merge-belt` | One repo-wide slot. A gate run may merge, so two of them racing can merge onto a branch the other just read |
+| `merge-gate` | `merge-belt`, `queue: max` | One repo-wide slot with a FIFO queue. A gate run may merge, so two of them racing can merge onto a branch the other just read |
 | `apply-review` | `pr-feedback-<pr>` | Pull requests take feedback in parallel |
 | `audit` | `audit` | Singleton |
 

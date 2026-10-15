@@ -282,7 +282,7 @@ flowchart TD
     gateFix("Repair<br/>read the failure, fix, verify.<br/>Empty evidence on a conflicting<br/>PR means the conflict is the fault") --> gatePush
     gatePush(("Pushed<br/>CI runs again, gate re-enters"))
     gateFix -.->|"cannot fix"| gateHuman
-    gateProtected{"protected_changes (rung 4b)<br/>blast radius from paths,<br/>CODEOWNERS and diff shape"}
+    gateProtected{"protected_changes (rung 4b)<br/>blast radius from paths, CODEOWNERS<br/>and the size of the code that ships"}
     gateProtected -.->|"protected path"| gateOwner
     gateProtected -->|"measured low, medium or high"| gateAssess
     gateAssess("Agent (rung 5)<br/>find defects, verify them,<br/>rate recoverability") --> gateDisposition
@@ -294,6 +294,10 @@ flowchart TD
     gateMerge(("AUTO-MERGE<br/>squash, issue closed,<br/>pr-pending removed"))
     gateHuman(("HUMAN REVIEW<br/>review label,<br/>implement label kept"))
     gateOwner(("OWNER REVIEW<br/>review + owner-review,<br/>CODEOWNERS asked when named"))
+    gateHuman --> gatePreview
+    gateOwner --> gatePreview
+    gatePreview("operation=evidence<br/>screenshots of the head<br/>before the person decides") --> gateApproved
+    gateApproved(("Approved by a writer<br/>merge-approved merges<br/>the approved commit"))
     gateBlocked(("BLOCKED<br/>review + blocked,<br/>the belt does not retry"))
     gateIdle(("Idle<br/>not ours, or not open"))
     gateFix -.->|"attempt 6 of 6"| gateBlocked
@@ -305,11 +309,11 @@ flowchart TD
     classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class gateStart start
-    class gateBranch,gateFacts,gateFix,gateAssess action
+    class gateBranch,gateFacts,gateFix,gateAssess,gatePreview action
     class gateSubject,gateCi,gateProtected,gateDisposition decision
     class gateIdle idle
     class gateHuman,gateOwner,gateBlocked failure
-    class gateMerge,gatePush success
+    class gateMerge,gatePush,gateApproved success
 ```
 
 A protected-path match holds the merge but does not stop the repair path: the agent may still fix
@@ -320,6 +324,12 @@ validator computes the outcome from that report and from the blast radius measur
 agent ran. A category the diff touches is no longer, on its own, a reason to park a pull request:
 only a verified high or critical finding, a sensitive path, or a change that would be hard to undo
 sends it to a person.
+
+Size counts only code that ships: tests, docs, specs, translations and generated migration code
+(`BLAST_IGNORE_PATHS`) are left out, and a new EF Core migration whose `Up()` only creates and adds
+is a medium change rather than an owner one. When the gate parks a pull request for a person it
+dispatches `operation=evidence`, so the screenshots arrive before the decision, and an approval
+from anyone with write access merges the approved commit (`merge-approved` in the router).
 
 ---
 
@@ -628,14 +638,16 @@ Archives what a merged pull request looks like. Not an agent: the plan was writt
 implemented the change (`pc-repo-verify`), and this replays it. The router calls it when a pull
 request merges, and `operation=evidence` runs it by hand. Nothing waits on it. The screenshots are
 committed beside each plan, in an `evidence/` folder on the default branch, so the record stays with
-the change it proves; the comment embeds a manifest that Project Health reads. A pull request that
-is not merged has no plan on the default branch, so its screenshots stay in the run's artifact.
+the change it proves; the comment embeds a manifest that Project Health reads. The merge gate also
+runs it when it hands a pull request to a person: that pull request is not merged, so its
+screenshots go to a preview folder (`pr-<number>/`) on the `evidence-previews` branch, and the
+merge replaces them with the archived ones.
 The capture job runs the pull request's code with a read-only token; only the publish job writes,
 and it runs no repository code.
 
 ```mermaid
 flowchart TD
-    evStart("router: pull request merged<br/>or operation=evidence") --> evPlans
+    evStart("router: pull request merged,<br/>the gate parked it for a person,<br/>or operation=evidence") --> evPlans
     evPlans{"verification-plan.md<br/>in the pull request?"}
     evPlans -.->|"no"| evIdle
     evPlans -->|"yes"| evInspect
@@ -648,8 +660,11 @@ flowchart TD
     evUp -.->|"no, after the timeout"| evUnreached
     evReplay["replay each waypoint<br/>in headless Chromium,<br/>one JPEG per waypoint"] --> evPublish
     evUnreached["record why nothing<br/>was captured"] --> evPublish
-    evPublish["publish (GITHUB_TOKEN)<br/>commit beside each plan,<br/>evidence/ on the default branch,<br/>upsert one comment"] --> evDone
-    evDone(("Archived<br/>beside the plan"))
+    evPublish{"publish (GITHUB_TOKEN)<br/>merged?"}
+    evPublish -->|"yes"| evDone
+    evPublish -->|"not yet"| evPreview
+    evDone(("Archived beside the plan<br/>on the default branch,<br/>one comment upserted"))
+    evPreview(("Preview on evidence-previews<br/>pr-number folder,<br/>same comment"))
     evIdle(("Nothing to capture"))
 
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
@@ -658,8 +673,8 @@ flowchart TD
     classDef idle fill:#f4f4f6,stroke:#5b5b66,stroke-width:2px,color:#2b2b33
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class evStart start
-    class evApp,evReplay,evUnreached,evPublish action
-    class evPlans,evInspect,evUp decision
+    class evApp,evReplay,evUnreached action
+    class evPlans,evInspect,evUp,evPublish decision
     class evIdle idle
-    class evDone success
+    class evDone,evPreview success
 ```

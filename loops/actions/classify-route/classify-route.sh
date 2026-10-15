@@ -135,7 +135,13 @@ classify_route() {
       ;;
 
     pull_request_review_comment | pull_request_review)
-      route="apply-review"
+      # An approval is a decision, not feedback: the router merges the pull request when the
+      # gate had handed it to a person (merge-approved checks the rest).
+      if [ "${EVENT:-}" = "pull_request_review" ] && [ "${REVIEW_STATE:-}" = "approved" ]; then
+        route="merge-approved"
+      else
+        route="apply-review"
+      fi
       pr_number="${EVENT_PR_NUMBER:-}"
       ;;
 

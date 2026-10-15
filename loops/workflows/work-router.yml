@@ -562,12 +562,9 @@ jobs:
   # only changes between gates, every merge re-arms the siblings through
   # detect-pr-conflicts's rescan, and the queue drains one pull request at a time.
   #
-  # `cancel-in-progress: false` protects the RUNNING gate, not the waiting ones: GitHub keeps
-  # exactly one pending run per group and cancels the previously pending one when a new run
-  # arrives. That is fine for the path this belt is built for, where detect-pr-conflicts re-arms
-  # one sibling per merge. It is a trap for a person dispatching by hand: labelling four pull
-  # requests `merge-gate` in one go leaves one running, one pending and two silently cancelled,
-  # with nothing on the pull requests to say so. Dispatch one, let it finish, then the next.
+  # `queue: max` keeps up to 100 gates waiting in order. Without it GitHub keeps one pending run
+  # per group and silently cancels the previous one: in one week Numa cancelled 12 gates and
+  # finished 6, and those pull requests were merged by hand without a verdict.
   call-merge-gate:
     needs: classify
     if: needs.classify.outputs.route == 'merge-gate'
@@ -575,6 +572,7 @@ jobs:
     concurrency:
       group: merge-belt
       cancel-in-progress: false
+      queue: max
     permissions: write-all
     with:
       pr-number: ${{ needs.classify.outputs.pr-number }}
@@ -589,6 +587,94 @@ jobs:
       BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+
+  # The decision the gate parked for: a person with write access approves a bot pull request the
+  # gate handed to them (human-review or owner-review), and the bot merges the commit they
+  # approved. Re-running the gate would only reproduce the same parked verdict.
+  merge-approved:
+    needs: classify
+    if: needs.classify.outputs.route == 'merge-approved'
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 5
+    concurrency:
+      group: merge-approved-${{ needs.classify.outputs.pr-number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout for App token action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Merge the approved commit
+        id: merge
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.classify.outputs.pr-number }}
+          ISSUE: ${{ needs.classify.outputs.linked-issue }}
+          REVIEWER: ${{ github.event.review.user.login }}
+          REVIEW_COMMIT: ${{ github.event.review.commit_id }}
+        run: |
+          set -euo pipefail
+          skip() { echo "::notice::Not merging #$PR: $1"; exit 0; }
+
+          permission=$(gh api "repos/$REPO/collaborators/$REVIEWER/permission" --jq '.permission' 2>/dev/null || echo none)
+          case "$permission" in admin|maintain|write) ;; *) skip "$REVIEWER has $permission access" ;; esac
+
+          read -r state author head_sha < <(gh api "repos/$REPO/pulls/$PR" --jq '[.state, .user.login, .head.sha] | @tsv')
+          [ "$state" = open ] || skip "it is $state"
+          case " $TRUSTED_BOTS " in *" $author "*) ;; *) skip "it was opened by $author, not the bot" ;; esac
+          [ "$head_sha" = "$REVIEW_COMMIT" ] || skip "$REVIEWER approved ${REVIEW_COMMIT:0:7}, the head is now ${head_sha:0:7}"
+
+          # Another reviewer's change request still stands.
+          decision=$(gh pr view "$PR" --repo "$REPO" --json reviewDecision --jq '.reviewDecision // ""')
+          [ "$decision" = APPROVED ] || skip "the review decision is '${decision:-none}'"
+
+          # The gate parked it for a person. A protected-path hold comments on the issue rather
+          # than the pull request, so the issue's labels speak for it.
+          verdict=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
+            --jq '.[] | select((.body | contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))) | .body' |
+            grep -oE '\*\*Verdict:\*\* [a-z-]+' | tail -1 | sed 's/.* //' || true)
+          if [ -z "$verdict" ] && [ -n "$ISSUE" ]; then
+            labels=$(gh api "repos/$REPO/issues/$ISSUE/labels" --jq '[.[].name] | join(" ")')
+            case " $labels " in *" blocked "*) ;; *" owner-review "*) verdict=owner-review ;; esac
+          fi
+          case "$verdict" in human-review|owner-review) ;; *) skip "the gate's verdict is '${verdict:-none}', not a hand-over" ;; esac
+
+          ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
+            --jq '[.workflow_runs[] | select(.name == env.CI_WORKFLOW_NAME)] | sort_by(.created_at) | last | .conclusion // ""')
+          [ "$ci" = success ] || skip "$CI_WORKFLOW_NAME on ${head_sha:0:7} is '${ci:-not run}'"
+
+          gh pr merge "$PR" --repo "$REPO" --squash --match-head-commit "$head_sha"
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+      - name: Clear the issue's labels
+        if: steps.merge.outputs.merged == 'true' && needs.classify.outputs.linked-issue != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ needs.classify.outputs.linked-issue }}
+        run: |
+          for label in implement bot-working review owner-review blocked pr-pending; do
+            gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/$label" >/dev/null 2>&1 || true
+          done
+      # GITHUB_TOKEN: its comment raises no event for the router to read.
+      - name: Say whose approval merged it
+        if: steps.merge.outputs.merged == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.classify.outputs.pr-number }}
+          REVIEWER: ${{ github.event.review.user.login }}
+          REVIEW_COMMIT: ${{ github.event.review.commit_id }}
+        run: gh pr comment "$PR" --repo "$REPO" --body "Merged on @$REVIEWER's approval of \`${REVIEW_COMMIT:0:7}\`."
 
   # Screenshots of a merged pull request, replayed from the verification plan its implementation
   # wrote and archived beside that plan. Plain YAML with no model, so no secret is passed and the
@@ -751,7 +837,7 @@ jobs:
           }
 
           # A gate already queued or running for this pull request will read the same CI verdict;
-          # a second dispatch queues behind merge-belt and the single-slot queue cancels it. Same
+          # a second dispatch would wait in the belt's queue and run the same gate twice. Same
           # live-run test as the reconcile belt's stale-reservation sweep, keyed on the exact
           # title run-name gives a gate dispatch.
           gate_is_live() {
@@ -942,7 +1028,7 @@ jobs:
           }
 
           # A gate already queued or running for this pull request will read the same CI verdict;
-          # a second dispatch queues behind merge-belt and the single-slot queue cancels it.
+          # a second dispatch would wait in the belt's queue and run the same gate twice.
           gate_is_live() {
             local pr="$1" status live
             for status in queued in_progress waiting pending; do
@@ -1103,19 +1189,9 @@ jobs:
                 -f "inputs[ci-run-id]=$ci_run_id" \
                 -f "inputs[attempts_so_far]=$attempts"
 
-              # One gate per tick, because that is all the concurrency group can hold. The gate
-              # runs in `merge-belt`, and GitHub keeps only the most recent *pending* run in a
-              # group -- `cancel-in-progress: false` does not change that, it only protects a run
-              # that has already started. A tick that dispatched three gates therefore ran the
-              # last and silently cancelled the other two: no comment, no attempt recorded, and
-              # nothing on the pull request to say it had been passed over. Seen on Pliny-Bot,
-              # where dispatching a gate for PR #135 cancelled the one queued for PR #136.
-              #
-              # Stopping here loses nothing: every pull request eligible this tick is still
-              # eligible next tick, and a run that never started consumes no attempt. The belt
-              # now does one thing and says so, instead of appearing to start work it discarded.
-              echo "One gate dispatched this tick; any other eligible pull request waits for the next one."
-              break
+              # Every eligible pull request in one tick. The belt queues them first in, first out
+              # (`queue: max` on call-merge-gate); before it did, each dispatch cancelled the one
+              # pending ahead of it, so this loop stopped after one and the rest waited an hour.
             done
 
   audit-close:
