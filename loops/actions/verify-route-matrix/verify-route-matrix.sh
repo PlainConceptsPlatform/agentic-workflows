@@ -2755,6 +2755,9 @@ fi
 if worker_installed merge-gate; then
   st 'stack-root-pr: \$PR -->' "$MERGE_GATE_WORKER_MD" 'does not test the feature issue for the root marker'
   st 'needs\.subject\.outputs\.stack_root == .true.' "$MERGE_GATE_WORKER_MD" 'has no root-hold branch before the merge step'
+  # The stack step reads the subject's PR; with no subject it fails on an empty number.
+  gate_stack_step=$(sed -n '/- name: Detect the pull request.s base and its role in a stack/,/run: |/p' "$MERGE_GATE_WORKER_MD")
+  st_str "if: steps.subject.outputs.found == 'true'" "$gate_stack_step" 'runs the stack step without a subject, so a gate dispatched for a held root fails'
   st '\*\*Stack root held\.\*\*' "$MERGE_GATE_WORKER_MD" 'posts no human-readable hold explanation on the root'
   st 'gh issue close "\$ISSUE" --repo "\$REPO" --reason completed \|\| true' "$MERGE_GATE_WORKER_MD" 'does not close the child issue when its PR lands off the default branch'
   st 'needs\.subject\.outputs\.pr_base != .. \&\& needs\.subject\.outputs\.pr_base != github\.event\.repository\.default_branch' "$MERGE_GATE_WORKER_MD" 'gates the child-issue close on the base not being the default branch'

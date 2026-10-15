@@ -201,6 +201,12 @@ jobs:
       # repos without stacks see no change at all in either output ('' and 'false').
       - name: Detect the pull request's base and its role in a stack
         id: stack
+        # Only for a resolved subject. Without one, PR is empty and `gh pr view ""` falls back to
+        # the checked-out branch and fails, so every gate dispatched for a pull request that is
+        # not a subject -- a held stack root whose CI went green, for one -- ended red (Lyceum
+        # #106, run 38750643587: "no pull requests found for branch main"). Skipped, both outputs
+        # are empty, which everything downstream already reads as "not a root".
+        if: steps.subject.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
