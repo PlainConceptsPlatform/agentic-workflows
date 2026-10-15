@@ -80,6 +80,11 @@ jobs:
     concurrency:
       group: merge-belt
 
+  merge-approved:
+    needs: classify
+    if: needs.classify.outputs.route == 'merge-approved'
+    runs-on: ubuntu-latest
+
   call-audit:
     needs: classify
     if: needs.classify.outputs.route == 'audit'
@@ -148,6 +153,10 @@ describe("stripRouteFromRouter", () => {
     expect(jobs(withoutTriage)).not.toContain("call-triage");
     expect(jobs(withoutTriage)).not.toContain("dispatch-triage");
     expect(withoutTriage).not.toContain("route == 'triage'");
+ 
+    const withoutGate = stripRouteFromRouter(ROUTER_YAML, "merge-gate");
+    expect(jobs(withoutGate)).not.toContain("call-merge-gate");
+    expect(jobs(withoutGate)).not.toContain("merge-approved");
   });
 
   it("removes the comment that introduces a job, and keeps the job before it intact", () => {

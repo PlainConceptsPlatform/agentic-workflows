@@ -18,7 +18,8 @@
 #
 # Usage:
 #   validate-merge-gate-output.sh OUTPUT_FILE ISSUE CI_CONCLUSION \
-#                                 BLAST_LEVEL PROTECTED_HIT OWNER_HIT CONFIDENCE_THRESHOLD
+#                                 BLAST_LEVEL PROTECTED_HIT OWNER_HIT CONFIDENCE_THRESHOLD \
+#                                 CODE_RULES
 
 set -euo pipefail
 
@@ -33,6 +34,9 @@ blast_level="${4-low}"
 protected_hit="${5-false}"
 owner_hit="${6-false}"
 confidence_threshold="${7-0.8}"
+# pass, fail or absent (the repository has no check-diff). An empty value is a job that did not
+# report, and like every other unmeasured fact it goes to a person.
+code_rules="${8-absent}"
 
 # An empty measured level is not a low-risk pull request, it is a job that did not report. The
 # defaults above exist for a caller that genuinely has nothing to say; an empty string arriving
@@ -56,7 +60,8 @@ jq -r \
   --arg blast "$blast_level" \
   --arg protected "$protected_hit" \
   --arg owner "$owner_hit" \
-  --arg threshold "$confidence_threshold" '
+  --arg threshold "$confidence_threshold" \
+  --arg code "$code_rules" '
 
   def level_rank: {"low": 0, "medium": 1, "high": 2}[.];
   def is_bool: type == "boolean";
@@ -143,11 +148,13 @@ jq -r \
 
                 | if $conclusion != "success" then "blocked"
                   elif $blockers > 0 then "blocked"
+                  elif $code == "fail" then "blocked"
                   elif $protected == "true" or $owner == "true" or $level == 2 then "owner-review"
                   # A fact the workflow could not measure is not a fact. Anything other than a
                   # clean true or false here means protected_changes did not report, and the
                   # pull request goes to a person rather than through on a default.
                   elif $protected != "false" or $owner != "false" then "human-review"
+                  elif $code != "pass" and $code != "absent" then "human-review"
                   elif $level == 1 and $recoverability == "low" then "human-review"
                   elif ($report | has("acceptanceCriteriaMet")) and $report.acceptanceCriteriaMet == false then "human-review"
                   elif $confidence < ($threshold | tonumber) then "human-review"

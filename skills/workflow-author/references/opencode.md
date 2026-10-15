@@ -273,7 +273,7 @@ Mitigation is twofold:
    `action_required`, then for each open bot pull request compares the latest CI conclusion against
    the newest merge-gate verdict and dispatches `operation=merge-gate` when CI is newer. It needs
    `actions: write`. It skips a pull request whose gate is already queued or running, because the
-   merge-belt concurrency group would cancel the duplicate anyway.
+   belt's queue would otherwise run the same gate twice.
 
 ---
 

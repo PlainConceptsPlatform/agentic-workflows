@@ -2,7 +2,9 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/actions/assess-blast-radius/assess-blast-radius.sh. Update with `workflows update --force`; consumer edits may be overwritten.
 # Classify a pull request's blast radius from its changed paths and diff shape.
 #
-# Reads the changed paths on stdin, one per line. Prints GITHUB_OUTPUT lines on stdout.
+# Reads the changed paths that count toward the diff's size on stdin, one per line. Prints
+# GITHUB_OUTPUT lines on stdout. ALL_PATHS, when set, is every changed path, ignored ones included:
+# protected paths are matched against it, so ignoring a path never unprotects it.
 # Deliberately model-free: the point of this file is that the most consequential input to the
 # merge decision is computed from facts a shell can check, before any agent reads the diff.
 #
@@ -21,8 +23,13 @@ HIGH_FILES="${HIGH_FILES:-20}"
 HIGH_LINES="${HIGH_LINES:-800}"
 MEDIUM_FILES="${MEDIUM_FILES:-5}"
 MEDIUM_LINES="${MEDIUM_LINES:-200}"
+# Added migrations the caller proved only add schema (migration-is-additive.sh), one per line.
+ADDITIVE_MIGRATIONS="${ADDITIVE_MIGRATIONS:-}"
+IGNORED_FILES="${IGNORED_FILES:-0}"
+IGNORED_LINES="${IGNORED_LINES:-0}"
 
 files="$(cat)"
+all_paths="${ALL_PATHS:-$files}"
 
 # An empty regex matches every line in grep -E, which would mark every pull request protected.
 # A list nobody configured must match nothing, not everything.
@@ -34,9 +41,9 @@ files="$(cat)"
 # before any of them is used: a `match` failure cannot report itself, because `match` runs
 # inside a command substitution and anything it sets dies with the subshell.
 match() {
-  local pattern="$1"
+  local pattern="$1" paths="${2-$files}"
   [ -n "$pattern" ] || return 0
-  printf '%s\n' "$files" | grep -E "$pattern" || true
+  printf '%s\n' "$paths" | grep -E "$pattern" || true
 }
 
 # Compile each configured pattern against nothing. grep exits 2 when the regex is bad, which is
@@ -50,14 +57,22 @@ for name in PROTECTED_PATHS OWNER_PATHS SENSITIVE_PATHS; do
   fi
 done
 
-protected_hits="$(match "$PROTECTED_PATHS")"
+protected_hits="$(match "$PROTECTED_PATHS" "$all_paths")"
 owner_hits="$(match "$OWNER_PATHS")"
 sensitive_hits="$(match "$SENSITIVE_PATHS")"
+
+# An additive migration loses no data, so it asks for a second look (medium) rather than its
+# owner. Every other owner path still forces high.
+additive_hits=""
+if [ -n "$ADDITIVE_MIGRATIONS" ] && [ -n "$owner_hits" ]; then
+  additive_hits="$(printf '%s\n' "$owner_hits" | grep -Fxf <(printf '%s\n' "$ADDITIVE_MIGRATIONS") || true)"
+  owner_hits="$(printf '%s\n' "$owner_hits" | grep -vFxf <(printf '%s\n' "$ADDITIVE_MIGRATIONS") || true)"
+fi
 
 # A threshold that is not a number turns its comparison into a shell error that `set -e` does
 # not catch, because the test is an `if` condition: `HIGH_FILES=twenty` printed a diagnostic to
 # stderr and quietly produced `level=low` for a diff of any size.
-for threshold in HIGH_FILES HIGH_LINES MEDIUM_FILES MEDIUM_LINES files_changed lines_changed; do
+for threshold in HIGH_FILES HIGH_LINES MEDIUM_FILES MEDIUM_LINES files_changed lines_changed IGNORED_FILES IGNORED_LINES; do
   case "${!threshold}" in
     ""|*[!0-9]*)
       echo "assess-blast-radius: ${threshold} must be a whole number, got '${!threshold}'" >&2
@@ -92,6 +107,10 @@ if [ "$lines_changed" -ge "$HIGH_LINES" ]; then
 fi
 
 if [ "$level" != high ]; then
+  if [ -n "$additive_hits" ]; then
+    level=medium
+    add_signal "additive migrations, no owner needed ($(printf '%s\n' "$additive_hits" | tr '\n' ' ' | sed 's/ $//'))"
+  fi
   if [ -n "$sensitive_hits" ]; then
     level=medium
     add_signal "sensitive paths touched ($(printf '%s\n' "$sensitive_hits" | tr '\n' ' ' | sed 's/ $//'))"
@@ -107,6 +126,9 @@ if [ "$level" != high ]; then
 fi
 
 [ -n "$signals" ] || signals="no blast-radius signal fired: $files_changed files, $lines_changed lines, no configured path matched"
+if [ "$IGNORED_FILES" -gt 0 ]; then
+  add_signal "not counted toward size: $IGNORED_FILES files, $IGNORED_LINES lines (tests, docs, specs, translations, generated code)"
+fi
 
 # A fixed heredoc delimiter is a fail-open here. Every multi-line value below is built from
 # paths the pull request chose, so a path that is exactly the delimiter closes its block early

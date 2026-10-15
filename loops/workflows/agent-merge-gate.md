@@ -43,9 +43,16 @@ env:
   BLAST_HIGH_LINES: "800"
   BLAST_MEDIUM_FILES: "5"
   BLAST_MEDIUM_LINES: "200"
+  # Paths that change no runtime behaviour: tests, docs, specs, translations and generated
+  # migration code. They count toward neither size nor owner paths, so a feature's tests do not
+  # double its blast radius. Protected paths are still matched against every file.
+  BLAST_IGNORE_PATHS: '(^|/)([Tt]ests?|__tests__|__snapshots__|e2e)/|(^|/)[^/]+\.[A-Za-z]*Tests?/|\.(test|spec)\.[cm]?[jt]sx?$|\.snap$|\.feature$|(^|/)openspec/|\.md$|(^|/)evidence/|(^|/)(i18n|locales?|translations?)/[^/]*\.json$|\.Designer\.cs$|ModelSnapshot\.cs$'
   # Agent confidence below which the pull request goes to a human. The agent reports the number;
   # this decides what it means.
   CONFIDENCE_THRESHOLD: "0.8"
+  # Replay the verification plan when the gate hands the pull request to a person, so the
+  # reviewer sees the screenshots before deciding. "false" leaves evidence to the merge.
+  EVIDENCE_BEFORE_REVIEW: "true"
   WORKING_LABEL: bot-working
   IMPLEMENT_LABEL: implement
   REVIEW_LABEL: review
@@ -126,7 +133,9 @@ on:
   # this entry activation read needs.protected_changes.outputs.requires_review before
   # protected_changes had started; the value was '' and the clause was always true
   # (Pliny-Bot run 34042143350: activation finished 18 s before protected_changes began).
-  needs: [protected_changes]
+  # code_rules is here for the same reason: the prompt prints its result and report, and the
+  # prompt is rendered in activation.
+  needs: [protected_changes, code_rules]
 
 # Rung 4. Router has classified the event; identify-gate-subject validates PR ownership,
 # resolves the closing issue, and confirms the CI verdict.
@@ -232,6 +241,8 @@ jobs:
       required_owners: ${{ steps.blast.outputs.required_owners }}
       files_changed: ${{ steps.blast.outputs.files_changed }}
       lines_changed: ${{ steps.blast.outputs.lines_changed }}
+      files_total: ${{ steps.blast.outputs.files_total }}
+      lines_total: ${{ steps.blast.outputs.lines_total }}
       owner_hit: ${{ steps.blast.outputs.owner_hit }}
       sensitive_hit: ${{ steps.blast.outputs.sensitive_hit }}
       # The decision, computed once. A protected path holds the merge for a human, but it must
@@ -258,6 +269,52 @@ jobs:
           high-lines: ${{ env.BLAST_HIGH_LINES }}
           medium-files: ${{ env.BLAST_MEDIUM_FILES }}
           medium-lines: ${{ env.BLAST_MEDIUM_LINES }}
+          ignore-paths: ${{ env.BLAST_IGNORE_PATHS }}
+
+  # Rung 4c. The comments and tests the change adds, measured by the harness's check-diff on the
+  # pull request head before any model reads it. Prose in the implement prompt did not hold bot
+  # pull requests to the guardrails: they added 27-63% comment lines in October 2026. `fail`
+  # stops an auto-merge in the validator; the agent is told to repair it like a CI failure.
+  # A repository without the script reports `absent` and is not held to it.
+  code_rules:
+    needs: subject
+    if: needs.subject.outputs.found == 'true'
+    runs-on: agents-arc
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.check.outputs.result }}
+      report: ${{ steps.check.outputs.report }}
+    steps:
+      - name: Checkout the pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/pull/${{ needs.subject.outputs.pr }}/head
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check the comments and tests it adds
+        id: check
+        env:
+          BASE: origin/${{ github.event.repository.default_branch || 'main' }}
+        run: |
+          set -uo pipefail
+          if [ ! -f .opencode/scripts/check-diff.mjs ]; then
+            echo "result=absent" >> "$GITHUB_OUTPUT"
+            echo "check-diff is not installed (agent-harness 3.2.0 or later ships it), so comments and tests were not checked." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          report=$(node .opencode/scripts/check-diff.mjs --base "$BASE" 2>&1)
+          code=$?
+          case "$code" in 0) result=pass ;; 1) result=fail ;; *) result=error ;; esac
+          delimiter="EOF_$(openssl rand -hex 8)"
+          {
+            echo "result=$result"
+            echo "report<<$delimiter"
+            printf '%s\n' "${report:0:8000}"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+          printf '```\n%s\n```\n' "$report" >> "$GITHUB_STEP_SUMMARY"
 
   review_required:
     needs: [subject, protected_changes]
@@ -320,6 +377,18 @@ jobs:
             Required owners: `${{ needs.protected_changes.outputs.required_owners || 'none configured' }}`
 
             **Verdict:** owner-review
+      - name: Replay the verification plan for the owner
+        if: needs.protected_changes.outputs.holds_review == 'true' && env.EVIDENCE_BEFORE_REVIEW == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.subject.outputs.pr }}
+        run: |
+          set -euo pipefail
+          branch=$(gh api "repos/$REPO" --jq .default_branch)
+          gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
+            -f ref="$branch" -f "inputs[operation]=evidence" -f "inputs[pr-number]=$PR"
 
   reserve:
     needs: subject
@@ -369,7 +438,7 @@ jobs:
             Problems found in PR #${{ needs.subject.outputs.pr }}. ${{ steps.conflicts.outputs.has_conflicts == 'true' && 'Merge conflicts detected.' || 'CI failed.' }}
             Bot is working on fixing it.
   validate_output:
-    needs: [activation, subject, protected_changes, agent, safe_outputs]
+    needs: [activation, subject, protected_changes, code_rules, agent, safe_outputs]
     if: >
       always() &&
       needs.agent.result == 'success' &&
@@ -403,6 +472,7 @@ jobs:
           protected-hit: ${{ needs.protected_changes.outputs.requires_review }}
           owner-hit: ${{ needs.protected_changes.outputs.owner_hit }}
           confidence-threshold: ${{ env.CONFIDENCE_THRESHOLD }}
+          code-rules: ${{ needs.code_rules.outputs.result }}
   conclude:
     needs: [activation, subject, protected_changes, agent, safe_outputs, validate_output]
     # `protected_changes.result == 'success'` is stated rather than relied on. GitHub skips a job
@@ -469,7 +539,7 @@ jobs:
             | Disposition | `${{ needs.validate_output.outputs.outcome }}` |
             | CI | ${{ needs.subject.outputs.conclusion }} |
             | Blast radius | ${{ needs.protected_changes.outputs.level }} |
-            | Files / lines | ${{ needs.protected_changes.outputs.files_changed }} / ${{ needs.protected_changes.outputs.lines_changed }} |
+            | Files / lines | ${{ needs.protected_changes.outputs.files_changed }} / ${{ needs.protected_changes.outputs.lines_changed }} counted, ${{ needs.protected_changes.outputs.files_total }} / ${{ needs.protected_changes.outputs.lines_total }} in the diff |
             | Protected paths | ${{ needs.protected_changes.outputs.requires_review == 'true' && 'yes' || 'no' }} |
             | Owner paths | ${{ needs.protected_changes.outputs.owner_hit == 'true' && 'yes' || 'no' }} |
             ${{ needs.validate_output.outputs.outcome == 'owner-review'
@@ -482,6 +552,7 @@ jobs:
             ```
 
             Findings and verification on the linked issue: #${{ needs.subject.outputs.issue }}. [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            ${{ env.EVIDENCE_BEFORE_REVIEW == 'true' && contains(fromJson('["human-review","owner-review"]'), needs.validate_output.outputs.outcome) && 'Screenshots of this head follow in their own comment if it carries a verification plan. Approving the pull request merges it.' || '' }}
       - name: Merge approved pull request
         if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.stack_root != 'true'
         env:
@@ -571,6 +642,20 @@ jobs:
         run: |
           set -euo pipefail
           gh issue close "$ISSUE" --repo "$REPO" --reason completed || true
+      # A person decides this one, so the screenshots come before the decision, in a router run of
+      # their own outside the belt. Never on auto-merge: that dispatch would race the merge.
+      - name: Replay the verification plan for the reviewer
+        if: env.EVIDENCE_BEFORE_REVIEW == 'true' && contains(fromJson('["human-review","owner-review"]'), needs.validate_output.outputs.outcome)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.subject.outputs.pr }}
+        run: |
+          set -euo pipefail
+          branch=$(gh api "repos/$REPO" --jq .default_branch)
+          gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
+            -f ref="$branch" -f "inputs[operation]=evidence" -f "inputs[pr-number]=$PR"
       - name: Clear merged issue labels
         if: needs.validate_output.outputs.outcome == 'auto-merge'
         uses: ./.github/actions/remove-issue-labels
@@ -875,6 +960,18 @@ timeout-minutes: 120
    ```
    ${{ needs.protected_changes.outputs.signals }}
    ```
+
+   **Comments and tests (`check-diff`): `${{ needs.code_rules.outputs.result }}`**
+
+   ```
+   ${{ needs.code_rules.outputs.report }}
+   ```
+
+   When that is `fail`, repairing it is part of this run whatever CI concluded: delete the
+   comments and tests it lists, leave every file it names with no slop, run
+   `node .opencode/scripts/check-diff.mjs`
+   until it exits 0, then verify, push and report `remediated` as in step 6. An `assessed`
+   verdict while it fails blocks the pull request.
 
    - **success** → step 4, then step 5 (review the change).
    - **failure** → step 4, then step 6 (CI remediation).

@@ -37,8 +37,8 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | `triage` | `agent-triage.md` | someone outside the organisation opens an issue | a comment, and either the `refine` label when it passes, the `review` label when it needs a person, or a close when it is genuinely rejected |
 | `refine` | `agent-refine.md` | the `refine` label is added | a refined story wrapped in the repository's own issue template with a Fibonacci estimate, or a temporal draft plus questions for the author, or a split into several right-sized issues |
 | `implement` | `agent-implement.md` | the `implement` label is added | one branch, one pull request, one issue closed |
-| `merge-gate` | `agent-merge-gate.md` | CI reports on a bot pull request | one of `auto-merge`, `human-review`, `owner-review` or `blocked`, or a fix pushed to the same branch |
-| `apply-review` | `agent-apply-review.md` | someone reviews or comments on a bot pull request | the requested changes pushed to that pull request |
+| `merge-gate` | `agent-merge-gate.md` | CI reports on a bot pull request | one of `auto-merge`, `human-review`, `owner-review` or `blocked`, or a fix pushed to the same branch; a pull request parked for a person gets its screenshots before the decision |
+| `apply-review` | `agent-apply-review.md` | someone comments on a bot pull request or requests changes | the requested changes pushed to that pull request. An approval is not feedback: `merge-approved` merges the approved commit when the gate had parked it for a person |
 | `audit` | `agent-audit.md` | Mondays, or on demand | one issue of findings, labelled `refine` so it gets sized and split |
 | `release` | `agent-release.md` | on demand (`operation=release`) | a `chore(release): vX.Y.Z` pull request with auto-merge; `release-tag.yml` tags it and publishes the GitHub Release once it merges |
 
@@ -48,7 +48,8 @@ a trusted actor), `release-tag.yml` (installed with the `release` route: tags a 
 pull request), `evidence.yml` (when a pull request merges, replays the verification plan its
 implementation wrote, `pc-repo-verify`, in headless Chromium and archives one screenshot per
 waypoint in an `evidence/` folder beside the plan on the default branch, with one comment on the
-pull request; no model, no secret), and the
+pull request; when the gate parks a pull request for a person it runs first and keeps a preview on
+the `evidence-previews` branch; no model, no secret), and the
 `classify-route` / `verify-route-matrix` composite actions.
 
 A plan normally signs in in its first waypoint. One that starts signed in instead says `login:`
@@ -107,6 +108,12 @@ slice smaller than 3 points is a fragment and is folded into a sibling. Audit
 creates work rather than consuming it, and files into `refine` rather than straight to
 `implement`, so a report of several unrelated findings becomes one properly sized issue per
 finding instead of one pull request that has to fix them all.
+
+Comments and tests are measured, not requested. When the repository has agent-harness 3.2.0 or
+later, implement and apply-review run its `.opencode/scripts/check-diff.mjs` with their
+verification, and the merge gate runs it on the pull request head before the agent starts. A
+failing `check-diff` never auto-merges: the gate agent deletes what it lists and pushes, like a
+CI repair.
 
 ### Stacked features
 

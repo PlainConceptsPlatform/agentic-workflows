@@ -13,6 +13,7 @@ const routeCrons: Partial<Record<RouteName, string>> = {
 const routeHelperJobs: Partial<Record<RouteName, readonly string[]>> = {
   implement: ["check-implement-pr"],
   triage: ["dispatch-triage"],
+  "merge-gate": ["merge-approved"],
 };
 
 export function stripRouteFromRouter(yaml: string, route: RouteName): string {
