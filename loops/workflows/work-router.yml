@@ -582,8 +582,10 @@ jobs:
           gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label bot-working >/dev/null 2>&1 || true
           marker='<!-- stack-held -->'
           if ! gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null | grep -qF "$marker"; then
-            printf '%s\nHeld until%s have landed on `%s`: this child builds on them. It keeps `implement` and is released when they merge.\n' \
-              "$marker" "$waiting" "$STACK_BRANCH" > /tmp/held.md
+            {
+              printf '%s\n' "$marker"
+              printf "Held until%s have landed on \`%s\`: this child builds on them. It keeps \`implement\` and is released when they merge.\n" "$waiting" "$STACK_BRANCH"
+            } > /tmp/held.md
             gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file /tmp/held.md >/dev/null || true
           fi
 
