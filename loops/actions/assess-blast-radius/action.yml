@@ -35,6 +35,10 @@ inputs:
     description: Lines changed at or above which the radius is MEDIUM.
     required: false
     default: '200'
+  ignore-paths:
+    description: Extended regular expression. Matching paths count toward neither size nor owner and sensitive paths; protected paths still match them.
+    required: false
+    default: ''
 outputs:
   level:
     description: "low, medium or high."
@@ -64,11 +68,17 @@ outputs:
     description: CODEOWNERS entries covering the changed paths, space separated. Empty when the repository has no CODEOWNERS.
     value: ${{ steps.assess.outputs.required_owners }}
   files_changed:
-    description: Number of files in the diff.
+    description: Number of files that count toward size, ignored paths excluded.
     value: ${{ steps.assess.outputs.files_changed }}
   lines_changed:
-    description: Additions plus deletions.
+    description: Additions plus deletions of the files that count toward size.
     value: ${{ steps.assess.outputs.lines_changed }}
+  files_total:
+    description: Number of files in the whole diff.
+    value: ${{ steps.assess.outputs.files_total }}
+  lines_total:
+    description: Additions plus deletions of the whole diff.
+    value: ${{ steps.assess.outputs.lines_total }}
 runs:
   using: composite
   steps:
@@ -86,22 +96,51 @@ runs:
         HIGH_LINES: ${{ inputs.high-lines }}
         MEDIUM_FILES: ${{ inputs.medium-files }}
         MEDIUM_LINES: ${{ inputs.medium-lines }}
+        IGNORE_PATHS: ${{ inputs.ignore-paths }}
       run: |
         set -euo pipefail
         # One API call. The job this replaced already paid for it to grep PROTECTED_PATHS, and
         # the additions and deletions come back in the same payload, so the diff shape costs
         # nothing extra.
         gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files?per_page=100" \
-          --jq '[.[] | {filename, additions, deletions}]' > /tmp/blast-files.json
+          --jq '[.[] | {filename, status, additions, deletions, patch}]' | jq -s 'add // []' > /tmp/blast-files.json
 
-        files=$(jq -r '.[].filename' /tmp/blast-files.json)
-        files_changed=$(jq -r 'length' /tmp/blast-files.json)
-        lines_changed=$(jq -r '[.[] | .additions + .deletions] | add // 0' /tmp/blast-files.json)
+        all_files=$(jq -r '.[].filename' /tmp/blast-files.json)
+        files_total=$(jq -r 'length' /tmp/blast-files.json)
+        lines_total=$(jq -r '[.[] | .additions + .deletions] | add // 0' /tmp/blast-files.json)
 
-        bash "${{ github.action_path }}/assess-blast-radius.sh" \
+        # Tests, docs, specs, translations and generated code change no runtime behaviour, so they
+        # do not make a diff bigger. They stay in ALL_PATHS, so a protected path is never ignored.
+        if [ -n "$IGNORE_PATHS" ]; then
+          jq -c --arg re "$IGNORE_PATHS" '[.[] | select(.filename | test($re) | not)]' /tmp/blast-files.json > /tmp/blast-counted.json
+        else
+          cp /tmp/blast-files.json /tmp/blast-counted.json
+        fi
+        files=$(jq -r '.[].filename' /tmp/blast-counted.json)
+        files_changed=$(jq -r 'length' /tmp/blast-counted.json)
+        lines_changed=$(jq -r '[.[] | .additions + .deletions] | add // 0' /tmp/blast-counted.json)
+
+        # A new EF Core migration whose Up() only adds schema. An edited one never qualifies:
+        # changing a migration that may already have run is exactly what needs its owner.
+        additive=""
+        while IFS= read -r candidate; do
+          [ -n "$candidate" ] || continue
+          if jq -r --arg f "$candidate" '.[] | select(.filename == $f) | .patch // ""' /tmp/blast-counted.json |
+             bash "${{ github.action_path }}/migration-is-additive.sh" >/dev/null; then
+            additive="${additive}${additive:+$'\n'}${candidate}"
+          fi
+        done < <(jq -r '.[] | select(.status == "added") | .filename
+                        | select(test("(^|/)[Mm]igrations/[^/]+[.]cs$"))
+                        | select(test("([.]Designer|ModelSnapshot)[.]cs$") | not)' /tmp/blast-counted.json)
+
+        ALL_PATHS="$all_files" ADDITIVE_MIGRATIONS="$additive" \
+        IGNORED_FILES=$((files_total - files_changed)) IGNORED_LINES=$((lines_total - lines_changed)) \
+          bash "${{ github.action_path }}/assess-blast-radius.sh" \
           "$files_changed" "$lines_changed" <<<"$files" > /tmp/blast-out.env
 
         cat /tmp/blast-out.env >> "$GITHUB_OUTPUT"
+        echo "files_total=$files_total" >> "$GITHUB_OUTPUT"
+        echo "lines_total=$lines_total" >> "$GITHUB_OUTPUT"
 
         # CODEOWNERS refines who is asked; it never decides whether anyone is. A repository
         # without the file still gets an owner disposition from OWNER_PATHS, and the comment
@@ -139,7 +178,7 @@ runs:
             esac
             # An unanchored CODEOWNERS pattern matches at any depth, an anchored one only at the root.
             if [ "$anchored" -eq 1 ]; then regex="^${regex}"; else regex="(^|/)${regex}"; fi
-            if printf '%s\n' "$files" | grep -qE "$regex"; then
+            if printf '%s\n' "$all_files" | grep -qE "$regex"; then
               owners="$owners $rest"
             fi
           done < "$candidate"

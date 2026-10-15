@@ -78,7 +78,7 @@ route_field() {
     unset EVENT ACTION LABEL ISSUE_LABELS EVENT_ISSUE_NUMBER EVENT_PR_NUMBER \
       COMMENT_ON_PR COMMENT_SENDER_TYPE RUN_PR_NUMBER RUN_CONCLUSION RUN_ID \
       SCHEDULE OPERATION INPUT_ISSUE_NUMBER INPUT_PR_NUMBER INPUT_MODE \
-      INPUT_CI_CONCLUSION INPUT_CI_RUN_ID INPUT_TRIGGER_KIND PR_MERGED EVIDENCE_ENABLED
+      INPUT_CI_CONCLUSION INPUT_CI_RUN_ID INPUT_TRIGGER_KIND PR_MERGED EVIDENCE_ENABLED REVIEW_STATE
 
     for assignment in "${assignments[@]}"; do
       key="${assignment%%=*}"
@@ -185,6 +185,12 @@ assert_route "a review comment routes to apply-review" apply-review \
   EVENT=pull_request_review_comment EVENT_PR_NUMBER=7
 assert_route "a submitted review routes to apply-review" apply-review \
   EVENT=pull_request_review EVENT_PR_NUMBER=7
+assert_route "a review requesting changes routes to apply-review" apply-review \
+  EVENT=pull_request_review REVIEW_STATE=changes_requested EVENT_PR_NUMBER=7
+assert_route "an approval routes to merge-approved" merge-approved \
+  EVENT=pull_request_review REVIEW_STATE=approved EVENT_PR_NUMBER=7
+assert "merge-approved carries the pull request" 7 \
+  "$(route_field pr-number EVENT=pull_request_review REVIEW_STATE=approved EVENT_PR_NUMBER=7)"
 assert_route "a pull_request_target routes to bot-approve" bot-approve \
   EVENT=pull_request_target ACTION=opened
 assert_route "a merged pull request routes to evidence" evidence \
@@ -704,7 +710,7 @@ if [ "$(count -c 'attempts_so_far' "$ROUTER_YML")" -lt 2 ]; then
   BELT_OK=0; echo "FAIL: dispatch sites must forward attempts_so_far" >&2
 fi
 # A second gate for a pull request whose gate is already queued or running reads the same CI
-# verdict and is cancelled by the single-slot merge-belt queue (two cancellations on 2026-09-06).
+# verdict, and the belt's queue would run it twice.
 if [ "$(count -c 'a merge-gate run is already live' "$ROUTER_YML")" -lt 2 ]; then
   BELT_OK=0; echo "FAIL: both dispatch paths must skip a pull request whose gate is already live" >&2
 fi
@@ -1079,6 +1085,17 @@ for route in "${EXCLUDED_ROUTES[@]}"; do
   fi
 done
 
+# merge-approved serves the gate and leaves with it.
+if worker_installed merge-gate; then
+  if grep -q "route == 'merge-approved'" "$ROUTER_YML"; then PASS=$((PASS + 1)); else
+    FAIL=$((FAIL + 1)); echo "FAIL: work-router.yml has no job for route 'merge-approved'" >&2
+  fi
+elif grep -q "route == 'merge-approved'" "$ROUTER_YML"; then
+  FAIL=$((FAIL + 1)); echo "FAIL: merge-approved is installed without the merge gate" >&2
+else
+  PASS=$((PASS + 1))
+fi
+
 while read -r operation; do
   if grep -q "route == '${operation}'" "$ROUTER_YML"; then
     PASS=$((PASS + 1))
@@ -1415,7 +1432,93 @@ level=low")
     printf '%s\n' "$blast_injection" >&2
   fi
 
+  # Ignored paths leave the size, never the protection: a protected path that only reaches the
+  # script through ALL_PATHS still holds the merge.
+  blast_ignored=$(PROTECTED_PATHS='^\.' OWNER_PATHS='' SENSITIVE_PATHS='' \
+    HIGH_FILES=20 HIGH_LINES=800 MEDIUM_FILES=5 MEDIUM_LINES=200 \
+    ALL_PATHS=$'src/ui/list.tsx\n.github/workflows/ci.yml' IGNORED_FILES=1 IGNORED_LINES=4 \
+    bash "$BLAST_SCRIPT" 1 10 <<<"src/ui/list.tsx")
+  printf '%s\n' "$blast_ignored" | grep -qx 'requires_review=true' ||
+    { BLAST_OK=0; echo "FAIL: a protected path outside the counted files no longer holds the merge" >&2; }
+
+  # An additive migration under an owner path asks for a second look, not its owner. Any other
+  # owner path in the same diff still forces high.
+  blast_additive() {
+    PROTECTED_PATHS='^\.' OWNER_PATHS='(^|/)([Mm]igrations|auth)/' SENSITIVE_PATHS='' \
+      HIGH_FILES=20 HIGH_LINES=800 MEDIUM_FILES=5 MEDIUM_LINES=200 \
+      ADDITIVE_MIGRATIONS="$1" bash "$BLAST_SCRIPT" 2 120 <<<"$2" | sed -n 's/^level=//p'
+  }
+  [ "$(blast_additive 'src/Migrations/1_AddX.cs' $'src/Migrations/1_AddX.cs\nsrc/ui/x.tsx')" = medium ] ||
+    { BLAST_OK=0; echo "FAIL: an additive migration still forces its owner" >&2; }
+  [ "$(blast_additive '' $'src/Migrations/1_AddX.cs\nsrc/ui/x.tsx')" = high ] ||
+    { BLAST_OK=0; echo "FAIL: a migration nobody proved additive no longer needs its owner" >&2; }
+  [ "$(blast_additive 'src/Migrations/1_AddX.cs' $'src/Migrations/1_AddX.cs\nsrc/auth/login.ts')" = high ] ||
+    { BLAST_OK=0; echo "FAIL: an additive migration let another owner path through" >&2; }
+
+  # The shipped ignore list, against paths from real consumer pull requests.
+  ignore_re=$(sed -n "s/^  BLAST_IGNORE_PATHS: '\(.*\)'$/\1/p" "$MERGE_GATE_WORKER_MD")
+  for ignored in tests/Pliny.UnitTests/Agents/SecretRedactorTests.cs apps/api/tests/Numa.UnitTests/QuoteTests.cs \
+                 apps/web/src/views/chat/ui/internals-pane.test.tsx apps/web/src/shared/config/i18n/es.json \
+                 openspec/changes/archive/x/verification-plan.md docs/ARCH.md \
+                 src/Pliny.Infrastructure/Migrations/20261014225437_X.Designer.cs src/Migrations/AppDbContextModelSnapshot.cs; do
+    grep -qE "$ignore_re" <<<"$ignored" ||
+      { BLAST_OK=0; echo "FAIL: BLAST_IGNORE_PATHS counts ${ignored} toward the diff's size" >&2; }
+  done
+  for counted in src/Pliny.Infrastructure/Agents/SecretRedactor.cs apps/web/src/views/chat/ui/internals-pane.tsx \
+                 src/Pliny.Infrastructure/Migrations/20261014225437_X.cs apps/api/src/Numa.Api/appsettings.json; do
+    if grep -qE "$ignore_re" <<<"$counted"; then
+      BLAST_OK=0; echo "FAIL: BLAST_IGNORE_PATHS ignores ${counted}, which ships" >&2
+    fi
+  done
+
   if [ "$BLAST_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+  # A migration is additive only when its Up() creates and adds. Down() is all drops by design,
+  # and a data rewrite or a required column with no default needs the owner.
+  MIGRATION_OK=1
+  MIGRATION_SCRIPT="${HERE}/../assess-blast-radius/migration-is-additive.sh"
+  migration_case() {
+    local name="$1" want="$2" patch="$3" got
+    if bash "$MIGRATION_SCRIPT" <<<"$patch" >/dev/null; then got=additive; else got=owner; fi
+    [ "$got" = "$want" ] || { MIGRATION_OK=0; echo "FAIL: migration '${name}' read as ${got}, expected ${want}" >&2; }
+  }
+  migration_case "a new table, dropped in Down()" additive '+    protected override void Up(MigrationBuilder migrationBuilder)
++    {
++        migrationBuilder.CreateTable(name: "TokenRevocations", columns: table => new { Id = table.Column<Guid>(nullable: false) });
++        migrationBuilder.AddColumn<string>(
++            name: "Note",
++            table: "Quotes",
++            nullable: true);
++    }
++    protected override void Down(MigrationBuilder migrationBuilder)
++    {
++        migrationBuilder.DropTable(name: "TokenRevocations");
++    }'
+  migration_case "a data rewrite" owner '+    protected override void Up(MigrationBuilder migrationBuilder)
++    {
++        migrationBuilder.Sql("UPDATE Bots SET Instructions = NULL");
++    }'
+  migration_case "a renamed column" owner '+    protected override void Up(MigrationBuilder migrationBuilder)
++    {
++        migrationBuilder.RenameColumn(name: "A", table: "T", newName: "B");
++    }'
+  migration_case "a required column with no default" owner '+    protected override void Up(MigrationBuilder migrationBuilder)
++    {
++        migrationBuilder.AddColumn<int>(
++            name: "Level",
++            table: "Quotes",
++            nullable: false);
++    }'
+  migration_case "a required column with a default" additive '+    protected override void Up(MigrationBuilder migrationBuilder)
++    {
++        migrationBuilder.AddColumn<int>(
++            name: "Level",
++            table: "Quotes",
++            nullable: false,
++            defaultValue: 0);
++    }'
+  migration_case "no Up() in the patch" owner '+// generated'
+  if [ "$MIGRATION_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
 # apply-review's validator compares the unresolved review threads on a pull request against the
@@ -1724,6 +1827,28 @@ else
   fi
   ev_absent 'secrets\.' "$EVIDENCE_YML" 'evidence.yml must need no secret; GITHUB_TOKEN is enough'
   ev_absent 'gh (issue|pr) comment.*--attach' "$EVIDENCE_YML" 'gh --attach refuses installation tokens; commit the screenshots beside their plans'
+  # An unmerged pull request's preview goes to its own branch, never to the pull request's branch
+  # (a commit there invalidates the gate's verdict) and never to the default branch.
+  preview_step="$(sed -n '/name: Commit a preview of the screenshots/,/name: Write the evidence comment/p' "$EVIDENCE_YML")"
+  grep -q "if: steps.pr.outputs.merged != 'true'" <<<"$preview_step" ||
+    { EV_OK=0; echo "FAIL: the preview step must run only for an unmerged pull request" >&2; }
+  grep -qF 'git push -q origin "HEAD:refs/heads/$PREVIEW"' <<<"$preview_step" ||
+    { EV_OK=0; echo "FAIL: the preview must be pushed to EVIDENCE_PREVIEW_BRANCH and nowhere else" >&2; }
+  ev '^  EVIDENCE_PREVIEW_BRANCH: ' "$EVIDENCE_YML" 'evidence.yml does not declare EVIDENCE_PREVIEW_BRANCH'
+fi
+
+# The gate replays the plan for a person it hands the pull request to, never on auto-merge: a
+# dispatch next to the merge is the race that sank agent-visual-verify.
+if worker_installed merge-gate; then
+  ev '^  EVIDENCE_BEFORE_REVIEW: ' "$MERGE_GATE_WORKER_MD" 'merge-gate does not declare EVIDENCE_BEFORE_REVIEW'
+  review_dispatch="$(sed -n '/name: Replay the verification plan for the reviewer/,/inputs\[pr-number\]/p' "$MERGE_GATE_WORKER_MD")"
+  if ! grep -q '"human-review","owner-review"' <<<"$review_dispatch" || grep -q 'auto-merge' <<<"$review_dispatch" ||
+     ! grep -q 'inputs\[operation\]=evidence' <<<"$review_dispatch"; then
+    EV_OK=0
+    echo "FAIL: the gate must dispatch evidence for human-review and owner-review only" >&2
+  fi
+  grep -q 'name: Replay the verification plan for the owner' "$MERGE_GATE_WORKER_MD" ||
+    { EV_OK=0; echo "FAIL: a protected-path hold never reaches conclude, so it must dispatch evidence itself" >&2; }
 fi
 
 # The retired worker stays retired: nothing dispatches it and nothing waits for it.
@@ -2366,31 +2491,18 @@ for worker_md in "${WORKFLOWS_DIR}"/agent-*.md; do
 done
 if [ "$INPUT_WIRING_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
-# The belt dispatches one gate per tick and stops. The gate's concurrency group holds a single
-# pending run, so GitHub cancels every earlier pending dispatch in it -- `cancel-in-progress:
-# false` only protects a run that has already started. A loop without this `break` dispatched one
-# gate per eligible pull request, ran the last, and discarded the rest with no comment, no
-# recorded attempt, and nothing on the pull request to show it had been skipped. Asserted because
-# removing the break produces no error anywhere: the extra dispatches all return 204.
-BELT_ONE_PER_TICK_OK=1
-belt_dispatch_block=$(awk '
-  /Dispatching Merge Gate for PR/ { found = 1 }
-  found { print }
-  found && /^ *done$/ { exit }
-' "$ROUTER_YML")
-if [ -z "$belt_dispatch_block" ]; then
-  BELT_ONE_PER_TICK_OK=0
-  echo "FAIL: the merge belt's gate dispatch could not be located, so its one-per-tick guard cannot be checked" >&2
-elif ! printf '%s\n' "$belt_dispatch_block" | grep -qE '^ *break$'; then
-  BELT_ONE_PER_TICK_OK=0
-  echo "FAIL: the merge belt dispatches a gate per eligible pull request and never breaks; only the last stays pending and the rest are cancelled in silence" >&2
-fi
-# And the group it relies on must still be the serialising one.
-# Anchored to the whole line: a substring search matched `merge-belt-renamed` and stayed green
-# through a mutation that removed the serialisation the break depends on.
-grep -qE '^ *group: merge-belt *$' "$ROUTER_YML" ||
-  { BELT_ONE_PER_TICK_OK=0; echo "FAIL: the merge gate is no longer serialised on the merge-belt concurrency group" >&2; }
-if [ "$BELT_ONE_PER_TICK_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+# Several paths dispatch gates at once (the reconcile tick, CI's dispatch-merge-gate, the
+# conflict rescan). Without `queue: max` GitHub keeps one pending run in the group and cancels the
+# rest with no comment and no recorded attempt; every dispatch still returns 204.
+BELT_QUEUE_OK=1
+belt_caller=$(awk '/^  call-merge-gate:/ { found = 1; print; next } found && /^  [a-z]/ { exit } found { print }' "$ROUTER_YML")
+printf '%s
+' "$belt_caller" | grep -qE '^ *group: merge-belt *$' ||
+  { BELT_QUEUE_OK=0; echo "FAIL: the merge gate is no longer serialised on the merge-belt concurrency group" >&2; }
+printf '%s
+' "$belt_caller" | grep -qE '^ *queue: max *$' ||
+  { BELT_QUEUE_OK=0; echo "FAIL: call-merge-gate must queue its waiting gates (queue: max); a single-slot group cancels every gate but the last" >&2; }
+if [ "$BELT_QUEUE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # The specific wiring that broke, asserted end to end: the router resolves the run ID, the gate
 # forwards it, and the action seeds from it rather than only from its own lookup.

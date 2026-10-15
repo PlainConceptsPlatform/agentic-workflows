@@ -38,9 +38,11 @@ env:
   # The SDK when a repository has .NET projects but no global.json to say which.
   EVIDENCE_DOTNET_VERSION: "10.0.x"
   EVIDENCE_MARKER: "<!-- agentic-evidence -->"
-  # How long the run keeps the screenshots it could not archive: a pull request that is not merged
-  # has no plan on the default branch to keep them beside.
+  # How long the run keeps the screenshots it could not commit anywhere.
   EVIDENCE_ARTIFACT_DAYS: "14"
+  # Where an unmerged pull request's screenshots go, under pr-<number>/: its plans are not on the
+  # default branch yet, and a commit to its own branch would invalidate the gate's verdict.
+  EVIDENCE_PREVIEW_BRANCH: "evidence-previews"
   # The capture runs in mcr.microsoft.com/playwright at this tag, pre-pulled by the runner image
   # (runners/versions.env), so the two move together.
   PLAYWRIGHT_VERSION: "1.62.1"
@@ -393,6 +395,72 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Screenshots kept at ${SERVER}/${REPO}/tree/${sha} beside $(( ${#dirs[@]} - ${#missing[@]} )) plan(s)"
 
+      # The reviewer of a parked pull request needs the screenshots before the merge. One orphan
+      # branch holds every preview, a folder per pull request; GITHUB_TOKEN pushes start no workflow.
+      - name: Commit a preview of the screenshots
+        id: preview
+        if: steps.pr.outputs.merged != 'true'
+        env:
+          TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+          PREVIEW: ${{ env.EVIDENCE_PREVIEW_BRANCH }}
+          PR: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/evidence/files"
+          if [ ! -d "$src" ] || [ -z "$(find "$src" -name '*.jpg' -print -quit)" ]; then
+            echo "base=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          work="$RUNNER_TEMP/evidence-preview"
+          rm -rf "$work"
+          mkdir -p "$work"
+          cd "$work"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          git init -q
+          git config "http.${SERVER}/.extraheader" "$auth"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config core.sparseCheckout true
+          echo "/pr-${PR}/" > .git/info/sparse-checkout
+          git remote add origin "${SERVER}/${REPO}.git"
+
+          pushed=false
+          for attempt in 1 2 3 4 5; do
+            if git fetch -q --depth=1 --filter=blob:none origin "refs/heads/$PREVIEW" 2>/dev/null; then
+              git checkout -q -f -B "$PREVIEW" FETCH_HEAD
+            else
+              # No branch yet: start a fresh orphan each attempt, so a failed push is never
+              # mistaken for one that landed.
+              git checkout -q --orphan "preview-$attempt"
+              git rm -rq --cached . >/dev/null 2>&1 || true
+            fi
+            rm -rf "pr-${PR}"
+            mkdir -p "pr-${PR}"
+            cp -R "$src/." "pr-${PR}/"
+            git add -A "pr-${PR}"
+            if git diff --cached --quiet; then
+              pushed=true
+              break
+            fi
+            git commit -q -m "evidence: preview for #$PR [skip ci]"
+            if git push -q origin "HEAD:refs/heads/$PREVIEW"; then
+              pushed=true
+              break
+            fi
+            echo "$PREVIEW moved before the push (attempt $attempt); retrying on its new tip."
+            sleep $((attempt * 3))
+          done
+          if [ "$pushed" != "true" ]; then
+            echo "::warning::could not push the preview to $PREVIEW after 5 attempts"
+            echo "base=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sha="$(git rev-parse HEAD)"
+          echo "base=${SERVER}/${REPO}/raw/${sha}/pr-${PR}" >> "$GITHUB_OUTPUT"
+
       # GITHUB_TOKEN on purpose: its comment raises no workflow event, so the router does not wake
       # up to read its own record. One comment per pull request, rewritten on a re-run.
       - name: Write the evidence comment
@@ -401,7 +469,9 @@ jobs:
           PR_NUMBER: ${{ inputs.pr-number }}
           MARKER: ${{ env.EVIDENCE_MARKER }}
           MERGED: ${{ steps.pr.outputs.merged }}
-          IMAGE_BASE: ${{ steps.archive.outputs.base }}
+          IMAGE_BASE: ${{ steps.archive.outputs.base || steps.preview.outputs.base }}
+          PREVIEW: ${{ steps.preview.outputs.base != '' && 'true' || 'false' }}
+          PREVIEW_BRANCH: ${{ env.EVIDENCE_PREVIEW_BRANCH }}
           MISSING: ${{ steps.archive.outputs.missing }}
           REASON: ${{ steps.archive.outputs.reason }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -421,7 +491,12 @@ jobs:
             // the run's artifact has it instead.
             source = source.replace(/^!\[[^\]]*\]\(__EVIDENCE_BASE__\/([^)]*)\)\n?/gm, (line, file) => (kept(file) ? line : ''));
             const shots = fs.readdirSync(evidence, { recursive: true }).some((name) => String(name).endsWith('.jpg'));
-            if (!base) source = source.replace(/^The screenshots are kept beside each plan.*\n\n?/m, '');
+            if (process.env.PREVIEW === 'true') {
+              source = source.replace(/^The screenshots are kept beside each plan.*$/m,
+                `A preview before the merge: the screenshots are on the \`${process.env.PREVIEW_BRANCH}\` branch for now, and are kept beside each plan once the pull request merges.`);
+            } else if (!base) {
+              source = source.replace(/^The screenshots are kept beside each plan.*\n\n?/m, '');
+            }
             if (shots && (!base || missing.length > 0)) {
               const why = process.env.MERGED !== 'true'
                 ? 'the pull request is not merged, so its plans are not on the default branch'
