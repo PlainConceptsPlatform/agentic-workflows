@@ -636,9 +636,14 @@ safe-outputs:
     protected-files: allowed
     allowed-files:
       - "**"
-    # Stack children target the feature branch: refine stamps `<!-- stack-root-branch: feat/N -->`
-    # on the issue and the agent passes `base: feat/N`. The default stays `main`, so a repo
-    # without stack markers sees no change at all.
+    # The pull request targets the branch this run was started on, which is the branch the work
+    # was cut from: `main` when the router calls this worker, `feat/N` when it dispatches a stack
+    # child with `--ref feat/N`. Taken from the run rather than asked of the agent, because the
+    # agent was asked and did not: on Lyceum #72 it emitted branch and title with no base, the
+    # handler fell back to the default branch, and a bundle built on feat/44 could not be replayed
+    # onto main (run 38694942046). A repository with no stack markers is never dispatched, so its
+    # base stays `main` exactly as before.
+    base-branch: ${{ github.ref_name }}
     allowed-base-branches:
       - "main"
       - "feat/*"
@@ -749,19 +754,12 @@ timeout-minutes: 180
    safeoutputs/create_pull_request(title="[bot] Fix X", body="Closes #${{ inputs.issue-number }}\n\n...", branch="${{ env.IMPLEMENT_BRANCH_PREFIX }}${{ inputs.issue-number }}")
    ```
 
-   For a stack child (the issue carries `<!-- stack-root-branch: feat/N -->`), add the base:
-
-   ```
-   safeoutputs/create_pull_request(title="[bot] Fix X", body="Closes #${{ inputs.issue-number }}\n\n...", branch="fix/x", base="feat/N")
-   ```
-
    Choose exactly one:
 
-   - **`safeoutputs/create_pull_request`** , the normal path. Propose a pull request against
-     `main` with the verified changes, unless the issue context contains a
-     `<!-- stack-root-branch: feat/N -->` marker: then pass `base: "feat/N"` (that exact
-     branch) so the pull request merges into the feature branch instead of `main`. Either
-     way, the `body` **must close exactly this issue and nothing else**
+   - **`safeoutputs/create_pull_request`** , the normal path. Propose a pull request with the
+     verified changes. Do not pass `base`: the workflow sets it to the branch this run started
+     on, which is the branch you are working from, so a stack child lands on its feature branch
+     without you doing anything. The `body` **must close exactly this issue and nothing else**
      (`Closes #${{ inputs.issue-number }}`) and summarise what changed and why. Its `branch` is
      the branch you are on, the one named in step 1; do not invent another name. You do not
      need to check whether a pull request already exists for this issue: the router does

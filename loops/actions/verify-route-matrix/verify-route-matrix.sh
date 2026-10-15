@@ -2717,6 +2717,16 @@ if [ -n "$CHECK_STACK_JOB" ]; then
     st_str 'gh workflow run agent-implement\.lock\.yml .* --ref "\$STACK_BRANCH"' "$DISPATCH_JOB" 'does not dispatch the stack implement at all'
     st_str 'create-github-app-token' "$DISPATCH_JOB" 'dispatches with GITHUB_TOKEN, which can start no run'
   fi
+  # The child's pull request targets the ref the run was dispatched on, taken from the run.
+  # Asking the agent for it failed in practice (Lyceum #72, run 38694942046): it emitted no
+  # base, the handler fell back to the default branch, and a bundle cut from the feature
+  # branch would not replay there. Both halves are checked, because a prompt that asks again
+  # would invite an explicit base that disagrees with the ref.
+  st 'base-branch: \$\{\{ github\.ref_name \}\}' "$IMPLEMENT_WORKER_MD" 'leaves the pull request base to the agent instead of the dispatched ref'
+  if grep -qE 'base="feat/N"|pass `base: "feat/N"`' "$IMPLEMENT_WORKER_MD"; then
+    STACK_OK=0
+    echo "FAIL: stacked features prompt asks the agent for the base again; the run already sets it" >&2
+  fi
 else
   # check-stack-branch serves only the implement route, so the CLI drops it from a router
   # that did not install implement. Nothing to assert then, and the section above must not
