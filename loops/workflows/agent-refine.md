@@ -946,7 +946,8 @@ timeout-minutes: 90
    - the line `${{ env.SPLIT_PARENT_PREFIX }}N -->` naming the parent issue number
    - a `Blocked by #aw_<id>` line for each sibling that must land first, when order genuinely
      matters, one line per sibling. Siblings have no numbers yet, so give every child a
-     `temporary_id` (`aw_` plus a few letters) and name siblings by it; the workflow rewrites each
+     `temporary_id` of `aw_` plus 3 to 12 letters, digits or underscores (`aw_modules`, not
+     `aw_module_backend`, which gh-aw rejects as too long) and name siblings by it; the workflow rewrites each
      `#aw_<id>` to the real issue number once the children exist. Write dependencies only as these
      lines and never set the `blocked_by` field: it takes one reference, and a value naming two
      rejected the item and discarded the whole refinement (Lyceum #45).
