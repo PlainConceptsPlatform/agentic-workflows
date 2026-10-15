@@ -944,7 +944,12 @@ timeout-minutes: 90
    per child, and in each child body include:
 
    - the line `${{ env.SPLIT_PARENT_PREFIX }}N -->` naming the parent issue number
-   - a `Blocked by #M` line naming any sibling that must land first, when order genuinely matters
+   - a `Blocked by #aw_<id>` line for each sibling that must land first, when order genuinely
+     matters, one line per sibling. Siblings have no numbers yet, so give every child a
+     `temporary_id` (`aw_` plus a few letters) and name siblings by it; the workflow rewrites each
+     `#aw_<id>` to the real issue number once the children exist. Write dependencies only as these
+     lines and never set the `blocked_by` field: it takes one reference, and a value naming two
+     rejected the item and discarded the whole refinement (Lyceum #45).
    - a `Parent feature branch: feat/<parent issue number>` line (for parent #123,
      `Parent feature branch: feat/123`) naming the branch the whole split integrates on:
      each child's pull request targets that branch, never the default branch, the children

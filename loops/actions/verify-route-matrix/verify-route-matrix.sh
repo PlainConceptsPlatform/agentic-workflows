@@ -2790,6 +2790,11 @@ if worker_installed refine; then
   # The workflow tells the apply which issue the children belong to, and the apply stamps the
   # marker and links the sub-issue itself.
   CREATE_ISSUES_ACTION="${HERE}/../create-agent-issues/action.yml"
+  # Dependencies travel as `Blocked by #aw_<id>` lines the apply resolves, never as the
+  # blocked_by field: a value naming two siblings failed the staged preview and threw away a
+  # finished refinement (Lyceum #45, run 38770811334).
+  st 'never set the .blocked_by. field' "$REFINE_WORKER_MD" 'lets the agent express dependencies through blocked_by, which one bad value turns into a lost run'
+  st 'Blocked by #aw_<id>' "$REFINE_WORKER_MD" 'asks for sibling numbers the agent cannot know yet'
   st 'parent-issue: \$\{\{ needs\.validate_output\.outputs\.outcome == .split.' "$REFINE_WORKER_MD" 'does not tell the apply which issue the split children belong to'
   st 'issues/\{issue_number\}/sub_issues' "$CREATE_ISSUES_ACTION" 'does not link split children as sub-issues of their parent'
   st 'split-parent: \$\{parent\}' "$CREATE_ISSUES_ACTION" 'does not stamp the split-parent marker that the sanitizer strips from the agent'
