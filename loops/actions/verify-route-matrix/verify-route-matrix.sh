@@ -2741,6 +2741,12 @@ st 'stack-complete' "$ROUTER_YML" 'has no idempotent completion marker on the ro
 st 'closingIssuesReferences\[0\]\.number // empty' "$ROUTER_YML" 'does not read the child PR to find the closed issue'
 st 'split-parent: \[0-9\]+' "$ROUTER_YML" 'does not walk from the child to its feature issue'
 st 'stack-root-pr: \[0-9\]+' "$ROUTER_YML" 'does not read the root pull request number off the feature issue'
+# gh pr view and gh issue view answer OPEN, not open. An exact lowercase match on their state
+# never matches, which left every root closed and every child done as far as completion knew.
+if grep -nE "(gh pr view|gh issue view)[^|]*--json state[^|]*\| *grep -q?x open" "$ROUTER_YML" >/dev/null; then
+  STACK_OK=0
+  echo "FAIL: stacked features compares a GraphQL state (OPEN) to lowercase open; the root and children never read as open" >&2
+fi
 
 # 3. The gate. A child PR that lands on a feature branch closes exactly its own child issue
 # there (GitHub's closing keywords do not fire off the default branch); the root is held

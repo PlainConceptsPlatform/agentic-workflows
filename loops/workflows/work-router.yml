@@ -1156,8 +1156,13 @@ jobs:
                 else
                   root_pr=$(printf '%s' "$(gh issue view "$parent" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')" \
                     | grep -oE '<!-- stack-root-pr: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
+                  # Case-insensitive on purpose, here and in the child count below: `gh pr view` and
+                  # `gh issue view` read GraphQL and answer OPEN, where the REST API answers open. An
+                  # exact `open` never matched, so no root was ever open and no child was ever counted
+                  # open, and the stack-complete announcement could not fire (Lyceum #44, router run
+                  # 38752856518: "Stack #44 has no open root pull request" with #70 open).
                   root_open=false
-                  [ -n "$root_pr" ] && root_open=$(gh pr view "$root_pr" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qx open && echo true || echo false)
+                  [ -n "$root_pr" ] && root_open=$(gh pr view "$root_pr" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open && echo true || echo false)
                   if [ "$root_open" != true ]; then
                     echo "Stack #$parent has no open root pull request; nothing to announce."
                   else
@@ -1176,7 +1181,7 @@ jobs:
                     else
                     open_children=0
                     for child in $children; do
-                      if gh issue view "$child" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qx open; then
+                      if gh issue view "$child" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open; then
                         open_children=$((open_children + 1))
                       fi
                     done
