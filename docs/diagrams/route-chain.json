@@ -38,7 +38,7 @@
       "id": "triage",
       "type": "security",
       "label": "Triage",
-      "sublabel": "outside collaborator",
+      "sublabel": "read-only opener",
       "pos": [
         260,
         40

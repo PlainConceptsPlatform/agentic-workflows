@@ -54,11 +54,9 @@ description: |
   cannot be done, is a security risk, is too dangerous, or is still ambiguous after
   three rounds.
 
-  The gate is organisation membership, not permission level. The authorize job sets
-  is_outside_collaborator for read permission, and also for write or better when the
-  author association is COLLABORATOR repository access without being one of the
-  organisation's own. An org member with write skips triage; an outside collaborator
-  with write does not.
+  The gate is permission level, not organisation membership. The authorize job sets
+  is_outside_collaborator for read permission only. Anybody with write or better skips
+  triage, org member or not: an outside collaborator given write is a colleague.
 
   Router-only worker: triggered exclusively via workflow_call from work-router.yml.
   Contract inputs: issue-number, mode(first|retriage).

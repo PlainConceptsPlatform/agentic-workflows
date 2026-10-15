@@ -383,11 +383,10 @@ package versions.
 
 ## Triage route for outside collaborators
 
-The `triage` route gates issues opened from outside the organisation. **The gate is organisation
-membership, not permission level.** The `authorize` job marks an actor an outside collaborator when they
-have Read permission, and also when they have Write or better but their author association is
-`COLLABORATOR` repository access without being one of the organisation's own. So an org member with
-write skips triage; an outside collaborator with write does not.
+The `triage` route gates issues opened by people with read-only access. **The gate is permission
+level, not organisation membership.** The `authorize` job marks an actor an outside collaborator only
+when they have Read permission. Anybody with Write or better skips triage, org member or not: an
+outside collaborator who was given write is somebody the team chose to work with.
 
 When such an issue is opened, the triage agent runs 10 checks (template completeness, security risk, change
 size, danger level, duplicate detection, clarity, reproducibility, acceptance criteria quality,

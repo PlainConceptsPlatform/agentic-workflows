@@ -206,6 +206,9 @@ jobs:
         with:
           format: cyclonedx-json
           artifact-name: ${{ env.SBOM_ARTIFACT_NAME }}
+          # On a tag that already has a GitHub Release the action attaches the SBOM to it, which
+          # needs contents: write this workflow does not have, and fails the run that gates deploy.
+          upload-release-assets: false
 
   # A bot pull request is opened with GITHUB_TOKEN, and GitHub delivers no workflow_run event
   # for the CI runs that follow (the run's actor is the bot). The router's CI-completion route

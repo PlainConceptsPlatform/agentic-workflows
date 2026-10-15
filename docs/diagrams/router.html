@@ -5163,7 +5163,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <path data-edge-from="classify" data-edge-to="authorize" data-edge-key="1" data-edge-id="classify-authorize" data-composition-points="370,271;440,271" d="M 370 271 L 440 271" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="authorize" data-edge-to="work" data-edge-label="trusted" data-edge-key="2" data-edge-id="authorize-work" data-composition-points="570,271;640,271" d="M 570 271 L 640 271" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="authorize" data-edge-to="idle" data-edge-label="no permission" data-edge-key="3" data-edge-id="authorize-idle" data-composition-points="440,285;400,285;400,496;360,496" d="M 440 285 L 408 285 Q 400 285 400 293 L 400 488 Q 400 496 392 496 L 360 496" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="authorize" data-edge-to="wTriage" data-edge-label="outside collab" data-edge-key="4" data-edge-id="authorize-triage" data-composition-points="570,285;594,285;594,516;870,516" d="M 570 285 L 586 285 Q 594 285 594 293 L 594 508 Q 594 516 602 516 L 870 516" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="authorize" data-edge-to="wTriage" data-edge-label="read only" data-edge-key="4" data-edge-id="authorize-triage" data-composition-points="570,285;594,285;594,516;870,516" d="M 570 285 L 586 285 Q 594 285 594 293 L 594 508 Q 594 516 602 516 L 870 516" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="work" data-edge-to="wRefine" data-edge-label="refine" data-edge-key="5" data-edge-id="work-refine" data-composition-points="770,266;820,266;820,96;870,96" d="M 770 266 L 812 266 Q 820 266 820 258 L 820 104 Q 820 96 828 96 L 870 96" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="work" data-edge-to="wImpl" data-edge-label="implement" data-edge-key="6" data-edge-id="work-impl" data-composition-points="770,270.8;820,270.8;820,166;870,166" d="M 770 270.8 L 812 270.8 Q 820 270.8 820 262.8 L 820 174 Q 820 166 828 166 L 870 166" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="work" data-edge-to="wReview" data-edge-label="apply-review" data-edge-key="7" data-edge-id="work-review" data-composition-points="770,275.6;820,275.6;820,236;870,236" d="M 770 275.6 L 812 275.6 Q 820 275.6 820 267.6 L 820 244 Q 820 236 828 236 L 870 236" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
@@ -5195,8 +5195,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="305" y="292" class="t-muted" font-size="9" text-anchor="middle">rung 1, pure shell</text>
         </g>
 
-        <g id="node-authorize" data-node-id="authorize" data-node-label="Authorize" tabindex="0" role="button" aria-label="Focus Authorize, write + org member?, Router (rung 1)" aria-pressed="false" data-node-kind="security" data-node-sublabel="write + org member?" data-node-context="Router (rung 1)">
-          <title>Authorize · write + org member? · Router (rung 1)</title>
+        <g id="node-authorize" data-node-id="authorize" data-node-label="Authorize" tabindex="0" role="button" aria-label="Focus Authorize, write or read only?, Router (rung 1)" aria-pressed="false" data-node-kind="security" data-node-sublabel="write or read only?" data-node-context="Router (rung 1)">
+          <title>Authorize · write or read only? · Router (rung 1)</title>
           <rect x="440" y="250" width="130" height="56" rx="6" class="c-mask"/>
           <rect x="440" y="250" width="130" height="56" rx="6" class="c-security" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(446 256) scale(0.6875)">
@@ -5204,7 +5204,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="505" y="276" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Authorize</text>
-        <text data-detail="context" x="505" y="292" class="t-muted" font-size="9" text-anchor="middle">write + org member?</text>
+        <text data-detail="context" x="505" y="292" class="t-muted" font-size="9" text-anchor="middle">write or read only?</text>
         </g>
 
         <g id="node-work" data-node-id="work" data-node-label="Route" tabindex="0" role="button" aria-label="Focus Route, dispatch one worker, Router (rung 1)" aria-pressed="false" data-node-kind="security" data-node-sublabel="dispatch one worker" data-node-context="Router (rung 1)">
@@ -5323,9 +5323,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <rect x="363.8" y="370.5" width="72.4" height="14" rx="3" class="c-mask"/>
           <text x="400" y="380.5" class="t-messagebus" font-size="8" text-anchor="middle">no permission</text>
         </g>
-        <g data-detail="context" data-edge-from="authorize" data-edge-to="wTriage" data-edge-label="outside collab" data-edge-key="4" data-edge-id="authorize-triage">
-          <rect x="555.4" y="380.5" width="77.2" height="14" rx="3" class="c-mask"/>
-          <text x="594" y="390.5" class="t-muted" font-size="8" text-anchor="middle">outside collab</text>
+        <g data-detail="context" data-edge-from="authorize" data-edge-to="wTriage" data-edge-label="read only" data-edge-key="4" data-edge-id="authorize-triage">
+          <rect x="567.4" y="380.5" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+          <text x="594" y="390.5" class="t-muted" font-size="8" text-anchor="middle">read only</text>
         </g>
         <g data-detail="context" data-edge-from="work" data-edge-to="wRefine" data-edge-label="refine" data-edge-key="5" data-edge-id="work-refine">
           <rect x="800.6" y="161" width="38.8" height="14" rx="3" class="c-mask"/>
