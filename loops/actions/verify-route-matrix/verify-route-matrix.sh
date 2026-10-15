@@ -2716,6 +2716,12 @@ if [ -n "$CHECK_STACK_JOB" ]; then
   if [ -n "$DISPATCH_JOB" ]; then
     st_str 'gh workflow run agent-implement\.lock\.yml .* --ref "\$STACK_BRANCH"' "$DISPATCH_JOB" 'does not dispatch the stack implement at all'
     st_str 'create-github-app-token' "$DISPATCH_JOB" 'dispatches with GITHUB_TOKEN, which can start no run'
+    # A child blocked by an open sibling is held, and the sibling's landing releases it. Without
+    # both halves a dependent child cuts from a feature branch that lacks its dependency (Lyceum
+    # #112, dispatched alongside #111), or is held forever.
+    st_str "stack-blocked != 'true'" "$DISPATCH_JOB" 'dispatches a child whose blockers have not landed'
+    st 'name: Hold a child whose blockers have not landed' "$ROUTER_YML" 'never holds a child behind the siblings it is blocked by'
+    st 'Released #\$child: everything it was blocked by has landed' "$ROUTER_YML" 'holds blocked children but never releases them'
   fi
   # The child's pull request targets the ref the run was dispatched on, taken from the run.
   # Asking the agent for it failed in practice (Lyceum #72, run 38694942046): it emitted no
@@ -2743,6 +2749,8 @@ st 'split-parent: \[0-9\]+' "$ROUTER_YML" 'does not walk from the child to its f
 st 'stack-root-pr: \[0-9\]+' "$ROUTER_YML" 'does not read the root pull request number off the feature issue'
 # gh pr view and gh issue view answer OPEN, not open. An exact lowercase match on their state
 # never matches, which left every root closed and every child done as far as completion knew.
+# The child whose pull request just landed is done even if the gate has not closed its issue yet.
+st '# Landed, though the gate may not have closed its issue yet' "$ROUTER_YML" 'counts the child that just landed as still open, so the stack never reads complete'
 if grep -nE "(gh pr view|gh issue view)[^|]*--json state[^|]*\| *grep -q?x open" "$ROUTER_YML" >/dev/null; then
   STACK_OK=0
   echo "FAIL: stacked features compares a GraphQL state (OPEN) to lowercase open; the root and children never read as open" >&2

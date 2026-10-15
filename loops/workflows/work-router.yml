@@ -486,12 +486,13 @@ jobs:
     timeout-minutes: 3
     permissions:
       contents: read
-      issues: read
+      issues: write
       actions: read
     outputs:
       is-stack: ${{ steps.stack.outputs.is-stack }}
       stack-branch: ${{ steps.stack.outputs.stack-branch }}
       stack-in-flight: ${{ steps.inflight.outputs.stack-in-flight }}
+      stack-blocked: ${{ steps.blocked.outputs.stack-blocked }}
     steps:
       - name: Resolve the feature branch from the stack markers
         id: stack
@@ -543,6 +544,43 @@ jobs:
 
           echo "is-stack=true" >> "$GITHUB_OUTPUT"
           echo "stack-branch=$branch" >> "$GITHUB_OUTPUT"
+
+      # A child whose `Blocked by #N` sibling has not landed is held, not dispatched: dispatched now
+      # it would cut from a feature branch that lacks the sibling's work. Lyceum #112 (units,
+      # blocked by #111, modules) was dispatched alongside #111 and would have built units on a
+      # feat/45 with no modules. The in-flight check below cannot catch that: both routers ran
+      # before either dispatch existed, and serialising runs would still start #112 before #111's
+      # pull request merged. The landing of the blocker releases the child (the stack block in
+      # detect-pr-conflicts). Held, it keeps `implement` and loses `bot-working`, so it reads as
+      # waiting rather than stuck.
+      - name: Hold a child whose blockers have not landed
+        id: blocked
+        if: steps.stack.outputs.is-stack == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
+          STACK_BRANCH: ${{ steps.stack.outputs.stack-branch }}
+        run: |
+          set -euo pipefail
+          echo "stack-blocked=false" >> "$GITHUB_OUTPUT"
+          body=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')
+          waiting=""
+          for b in $(printf '%s' "$body" | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true); do
+            if gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open; then
+              waiting="$waiting #$b"
+            fi
+          done
+          [ -n "$waiting" ] || exit 0
+          echo "::notice::#$ISSUE_NUMBER is blocked by$waiting, not yet landed on $STACK_BRANCH; holding it."
+          echo "stack-blocked=true" >> "$GITHUB_OUTPUT"
+          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label bot-working >/dev/null 2>&1 || true
+          marker='<!-- stack-held -->'
+          if ! gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null | grep -qF "$marker"; then
+            printf '%s\nHeld until%s have landed on `%s`: this child builds on them. It keeps `implement` and is released when they merge.\n' \
+              "$marker" "$waiting" "$STACK_BRANCH" > /tmp/held.md
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file /tmp/held.md >/dev/null || true
+          fi
 
       - name: Detect an in-flight implement on the feature branch
         id: inflight
@@ -606,7 +644,8 @@ jobs:
       needs.authorize.outputs.trusted == 'true' &&
       needs.check-implement-pr.outputs.has-open-pr != 'true' &&
       needs.check-stack-branch.outputs.is-stack == 'true' &&
-      needs.check-stack-branch.outputs.stack-in-flight != 'true'
+      needs.check-stack-branch.outputs.stack-in-flight != 'true' &&
+      needs.check-stack-branch.outputs.stack-blocked != 'true'
     runs-on: agents-arc
     timeout-minutes: 5
     permissions:
@@ -1179,8 +1218,37 @@ jobs:
                     if [ -z "$children" ]; then
                       echo "Cannot list any child of stack #$parent; leaving completion undetected for a rerun."
                     else
+                    # Release the children this landing unblocks. check-stack-branch holds a child
+                    # whose `Blocked by #N` sibling is still open, and nothing else re-dispatches it,
+                    # so the landing does: re-adding `implement` with the App token is a bot label
+                    # event, which the router routes straight to implement. The child that just
+                    # landed counts as done even before the gate closes its issue a moment later.
+                    for child in $children; do
+                      [ "$child" = "$closed_issue" ] && continue
+                      meta=$(gh issue view "$child" --repo "$REPO" --json state,labels,body 2>/dev/null || echo '{}')
+                      printf '%s' "$meta" | jq -e '(.state // "" | ascii_downcase) == "open"' >/dev/null || continue
+                      printf '%s' "$meta" | jq -e '[.labels[]?.name] | (index("implement") != null) and (index("bot-working") == null)' >/dev/null || continue
+                      blockers=$(printf '%s' "$meta" | jq -r '.body // ""' | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
+                      [ -n "$blockers" ] || continue
+                      waiting=""
+                      for b in $blockers; do
+                        [ "$b" = "$closed_issue" ] && continue
+                        if gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open; then
+                          waiting="$waiting #$b"
+                        fi
+                      done
+                      if [ -n "$waiting" ]; then
+                        echo "#$child still waits on$waiting."
+                        continue
+                      fi
+                      gh issue edit "$child" --repo "$REPO" --remove-label implement >/dev/null 2>&1 || true
+                      gh issue edit "$child" --repo "$REPO" --add-label implement >/dev/null
+                      echo "Released #$child: everything it was blocked by has landed."
+                    done
                     open_children=0
                     for child in $children; do
+                      # Landed, though the gate may not have closed its issue yet.
+                      [ "$child" = "$closed_issue" ] && continue
                       if gh issue view "$child" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open; then
                         open_children=$((open_children + 1))
                       fi
