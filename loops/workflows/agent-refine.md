@@ -397,6 +397,7 @@ jobs:
           update-issues: 'true'
           create-issues: 'true'
           fallback-issue-number: ${{ inputs.issue-number }}
+          parent-issue: ${{ needs.validate_output.outputs.outcome == 'split' && inputs.issue-number || '' }}
       - name: Apply complete refinement labels
         if: needs.validate_output.outputs.outcome == 'complete'
         uses: ./.github/actions/add-issue-labels

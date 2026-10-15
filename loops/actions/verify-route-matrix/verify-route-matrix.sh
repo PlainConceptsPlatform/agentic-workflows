@@ -2775,6 +2775,15 @@ if worker_installed refine; then
   # The hand-over stamp: a child handed to implement carries the feature branch marker, so
   # the resolver reads it off the child body without chasing the chain first.
   st 'stack-root-branch: %s' "$REFINE_WORKER_MD" 'does not stamp the feature branch on each child at hand-over'
+  # The children have to be found. gh-aw's sanitizer strips HTML comments from agent_output.json,
+  # so the split-parent marker the agent writes never arrives, and staged, nothing links the
+  # children as sub-issues either (Lyceum #45, run 38747143251: three children, none handed over).
+  # The workflow tells the apply which issue the children belong to, and the apply stamps the
+  # marker and links the sub-issue itself.
+  CREATE_ISSUES_ACTION="${HERE}/../create-agent-issues/action.yml"
+  st 'parent-issue: \$\{\{ needs\.validate_output\.outputs\.outcome == .split.' "$REFINE_WORKER_MD" 'does not tell the apply which issue the split children belong to'
+  st 'issues/\{issue_number\}/sub_issues' "$CREATE_ISSUES_ACTION" 'does not link split children as sub-issues of their parent'
+  st 'split-parent: \$\{parent\}' "$CREATE_ISSUES_ACTION" 'does not stamp the split-parent marker that the sanitizer strips from the agent'
   # The guard against re-handing a child already handed over: it carries the refined label,
   # and handing it again would start a second implement on work in flight.
   st 'grep -qx "\$REFINED_LABEL"' "${WORKFLOWS_DIR}/agent-refine.md" 'does not skip an already-handed-over child'

@@ -39,6 +39,10 @@ inputs:
     description: Issue an update_issue item targets when it names none.
     required: false
     default: ''
+  parent-issue:
+    description: The split parent; see create-agent-issues. Empty for anything but a split.
+    required: false
+    default: ''
 outputs:
   item-count:
     description: Number of items the agent produced.
@@ -92,6 +96,7 @@ runs:
       with:
         output-file: ${{ steps.output.outputs.output-file }}
         token: ${{ inputs.token }}
+        parent-issue: ${{ inputs.parent-issue }}
 
     - name: Post agent comments
       if: steps.output.outputs.item-count != '0'
