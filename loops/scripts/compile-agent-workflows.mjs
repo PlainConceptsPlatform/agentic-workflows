@@ -393,6 +393,21 @@ for (const file of readdirSync(workflowDirectory)) {
     }
   }
 
+  // The pull request base belongs to the handler, never to the MCP server. agent-implement sets
+  // base-branch from the dispatched ref so a stack child lands on its feature branch, and gh-aw
+  // writes that base into both configs. The safe-outputs MCP server runs inside the sandbox,
+  // where remote refs are not visible, and given a base it insists on a merge-base against
+  // origin/<base>: on Lyceum #73 it answered "No remote refs available for merge-base
+  // calculation" twice and the run died at max-turns with the code already written (run
+  // 38737284343). With no base it patches from the pinned SHA, which the stack dispatch sets to
+  // the feature tip, and that is exactly the patch the handler then applies onto the base. So
+  // the MCP config loses the base and the handler config keeps it. The check below fails the
+  // compile if this stops matching.
+  rewritten = rewritten.replace(
+    /^([ \t]+GH_AW_SAFE_OUTPUTS_CONFIG: "[^\n]*?)\\"base_branch\\":\\"[^\\"]*\\",/m,
+    "$1",
+  );
+
   // Guard the two rewrites the compiled agent jobs cannot work without. The anchors are
   // upstream template text: when a gh-aw upgrade reshapes either step, the silent
   // failure mode returns (an artifact with no bundle, a skipped push, a green gate on
@@ -407,6 +422,21 @@ for (const file of readdirSync(workflowDirectory)) {
       ok: lock =>
         !lock.includes('"update_issue": {') ||
         /"update_issue": \{[\s\S]{0,3000}?"body": \{\s*\n\s*"required": true,/.test(lock),
+    },
+    // The base reaches the handler and never the MCP server; see the rewrite above. Anchored on
+    // the escaped quotes because allowed_base_branches contains the bare text base_branch.
+    {
+      name: "pull request base stays out of the MCP config",
+      ok: lock => {
+        const mcp = (lock.match(/^[ \t]+GH_AW_SAFE_OUTPUTS_CONFIG: "[^\n]*/m) || [""])[0];
+        const handler = (lock.match(/^[ \t]+GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG: "[^\n]*/m) || [""])[0];
+        if (mcp.includes('\\"base_branch\\"')) return false;
+        // The handler config keeps the expression for Actions to expand before the job starts;
+        // only the MCP config is rewritten to an env reference. Either form is the run's ref.
+        return !file.startsWith("agent-implement") ||
+          handler.includes('\\"base_branch\\":\\"${{ github.ref_name }}\\"') ||
+          handler.includes('\\"base_branch\\":\\"${GITHUB_REF_NAME}\\"');
+      },
     },
   ]) {
     const passed = typeof check.ok === "function" ? check.ok(rewritten) : check.ok.test(rewritten);
