@@ -2721,6 +2721,7 @@ if [ -n "$CHECK_STACK_JOB" ]; then
     # #112, dispatched alongside #111), or is held forever.
     st_str "stack-blocked != 'true'" "$DISPATCH_JOB" 'dispatches a child whose blockers have not landed'
     st 'name: Hold a child whose blockers have not landed' "$ROUTER_YML" 'never holds a child behind the siblings it is blocked by'
+    st 'state merged --base "\$STACK_BRANCH"' "$ROUTER_YML" 'holds a child behind a blocker whose pull request already landed, which nothing releases again'
     st 'Released #\$child: everything it was blocked by has landed' "$ROUTER_YML" 'holds blocked children but never releases them'
   fi
   # The child's pull request targets the ref the run was dispatched on, taken from the run.

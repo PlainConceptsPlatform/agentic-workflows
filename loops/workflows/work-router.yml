@@ -567,9 +567,14 @@ jobs:
           body=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')
           waiting=""
           for b in $(printf '%s' "$body" | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true); do
-            if gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open; then
-              waiting="$waiting #$b"
-            fi
+            gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open || continue
+            # Open, but landed if a pull request that closes it has merged into the feature branch:
+            # the release fires on that merge and the gate closes the issue a moment later, or not
+            # at all when it fails. Reading the issue state alone would hold the child again with
+            # no later landing left to release it.
+            landed=$(gh pr list --repo "$REPO" --state merged --base "$STACK_BRANCH" --search "#$b in:body"               --json body --jq "[.[] | select(.body | test(\"(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?) #${b}([^0-9]|$)\"))] | length" 2>/dev/null || echo 0)
+            [ "${landed:-0}" -gt 0 ] && continue
+            waiting="$waiting #$b"
           done
           [ -n "$waiting" ] || exit 0
           echo "::notice::#$ISSUE_NUMBER is blocked by$waiting, not yet landed on $STACK_BRANCH; holding it."
