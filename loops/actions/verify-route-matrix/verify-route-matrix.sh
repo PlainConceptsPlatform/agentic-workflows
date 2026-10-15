@@ -1496,7 +1496,7 @@ level=low")
 +    }'
   migration_case "a data rewrite" owner '+    protected override void Up(MigrationBuilder migrationBuilder)
 +    {
-+        migrationBuilder.Sql("UPDATE Bots SET Instructions = ''x''");
++        migrationBuilder.Sql("UPDATE Bots SET Instructions = NULL");
 +    }'
   migration_case "a renamed column" owner '+    protected override void Up(MigrationBuilder migrationBuilder)
 +    {
