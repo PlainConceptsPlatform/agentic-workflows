@@ -435,6 +435,58 @@ jobs:
             ${{ env.REFINE_LABEL }}
             ${{ env.WORKING_LABEL }}
             ${{ env.REVIEW_LABEL }}
+      # The stack root pull request. Every output in this worker is staged and applied by this
+      # job, and gh-aw's handler opens nothing while the run is staged: a per-output
+      # `staged: false` on create-pull-request compiles into the handler config and is ignored
+      # there (Lyceum #45, run 38740216266: "Pull request creation preview written to step
+      # summary"). So the root is opened here, from the agent's own create_pull_request request,
+      # once the validator has called the run a split. Refine writes no code, so the root carries
+      # none: an empty commit on the default branch's tip, created through the API, which is what
+      # gh-aw's allow-empty would have pushed. Idempotent: an open root on the feature branch is
+      # reused and an existing branch is not recreated, so a retry stamps the same root.
+      - name: Open the stack root pull request
+        id: root
+        if: needs.validate_output.outputs.outcome == 'split'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue-number }}
+          AGENT_OUTPUT: agent-artifact/agent_output.json
+        run: |
+          set -euo pipefail
+          branch="feat/${ISSUE}"
+          item=$(jq -c '[.items[] | select(.type == "create_pull_request")][0] // {}' "$AGENT_OUTPUT")
+          title=$(printf '%s' "$item" | jq -r '.title // empty')
+          body=$(printf '%s' "$item" | jq -r '.body // empty')
+          if [ -z "$title" ]; then
+            title=$(gh issue view "$ISSUE" --repo "$REPO" --json title --jq '.title')
+          fi
+          case "$title" in "[bot] "*) ;; *) title="[bot] ${title}" ;; esac
+          # The root's merge is what ends the feature, so it must close the feature issue.
+          if ! printf '%s' "$body" | grep -qiE "(fixes|closes|resolves) #${ISSUE}([^0-9]|$)"; then
+            body=$(printf '%s\n\nFixes #%s' "$body" "$ISSUE")
+          fi
+
+          existing=$(gh pr list --repo "$REPO" --state open --head "$branch" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Reusing open root #${existing} on ${branch}"
+            echo "pr_number=${existing}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          default=$(gh api "repos/${REPO}" --jq '.default_branch')
+          if ! gh api "repos/${REPO}/git/ref/heads/${branch}" >/dev/null 2>&1; then
+            base_sha=$(gh api "repos/${REPO}/git/ref/heads/${default}" --jq '.object.sha')
+            tree=$(gh api "repos/${REPO}/git/commits/${base_sha}" --jq '.tree.sha')
+            commit=$(gh api "repos/${REPO}/git/commits" -f message="chore: open the stack root for #${ISSUE}" \
+              -f tree="$tree" -f "parents[]=${base_sha}" --jq '.sha')
+            gh api "repos/${REPO}/git/refs" -f ref="refs/heads/${branch}" -f sha="$commit" >/dev/null
+          fi
+          printf '%s' "$body" > /tmp/root-body.md
+          url=$(gh pr create --repo "$REPO" --base "$default" --head "$branch" --title "$title" --body-file /tmp/root-body.md)
+          echo "Opened root ${url} on ${branch}"
+          echo "pr_number=${url##*/}" >> "$GITHUB_OUTPUT"
       # The stack markers. The feature branch and its root pull request are what every child
       # builds on and what completion is counted against, so they are recorded on the feature
       # issue itself, where the child implement runs and the router read them back with no new
@@ -445,13 +497,13 @@ jobs:
       # discarded first attempt re-stamps cleanly. Missing markers fail closed -- a child
       # without them takes the flat path, never a silent feature-branch dispatch.
       - name: Record the stack root on the issue
-        if: needs.validate_output.outputs.outcome == 'split' && needs.safe_outputs.outputs.created_pr_number != ''
+        if: needs.validate_output.outputs.outcome == 'split' && (steps.root.outputs.pr_number != '' || needs.safe_outputs.outputs.created_pr_number != '')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           ISSUE: ${{ inputs.issue-number }}
-          PR_NUMBER: ${{ needs.safe_outputs.outputs.created_pr_number }}
+          PR_NUMBER: ${{ steps.root.outputs.pr_number || needs.safe_outputs.outputs.created_pr_number }}
         run: |
           set -euo pipefail
           branch=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefName --jq '.headRefName')
@@ -533,7 +585,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           PARENT: ${{ inputs.issue-number }}
-          ROOT_PR: ${{ needs.safe_outputs.outputs.created_pr_number }}
+          ROOT_PR: ${{ steps.root.outputs.pr_number || needs.safe_outputs.outputs.created_pr_number }}
           REFINE_LABEL: ${{ env.REFINE_LABEL }}
           REFINED_LABEL: ${{ env.REFINED_LABEL }}
           IMPLEMENT_LABEL: ${{ env.IMPLEMENT_LABEL }}
@@ -802,14 +854,8 @@ safe-outputs:
   # the prompt tells the agent to choose (feat/ plus the parent issue number). Only the
   # root targets the default branch, so allowed-base-branches admits nothing else.
   create-pull-request:
-    # Not staged, unlike everything else here. Staging means gh-aw writes nothing and the apply
-    # step below publishes the body and the children, but that step has no way to open a pull
-    # request, and the stamp and hand-over steps read the root from
-    # needs.safe_outputs.outputs.created_pr_number. Staged, that number is always empty: no
-    # feature branch, no root, and every child silently takes the flat path to main. Only the
-    # root is published here; the validator still decides the outcome, and the children still
-    # come from the artifact.
-    staged: false
+    # Staged like everything else, and opened by the `Open the stack root pull request` step:
+    # gh-aw ignores a per-output `staged: false` while the worker is staged.
     allowed-branches: ["feat/*"]
     allowed-base-branches: ["main"]
     preserve-branch-name: true
