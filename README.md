@@ -108,6 +108,12 @@ creates work rather than consuming it, and files into `refine` rather than strai
 `implement`, so a report of several unrelated findings becomes one properly sized issue per
 finding instead of one pull request that has to fix them all.
 
+Comments and tests are measured, not requested. When the repository has agent-harness 3.2.0 or
+later, implement and apply-review run its `.opencode/scripts/check-diff.mjs` with their
+verification, and the merge gate runs it on the pull request head before the agent starts. A
+failing `check-diff` never auto-merges: the gate agent deletes what it lists and pushes, like a
+CI repair.
+
 A merge-gate verdict parks the **code** it was given on, not the CI run that prompted it. Both
 paths that dispatch the gate compare the standing verdict against the newest commit on the
 branch: re-run CI as often as you like and the park holds, but push a commit -- which is what

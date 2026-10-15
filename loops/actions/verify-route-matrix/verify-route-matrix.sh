@@ -1574,10 +1574,10 @@ if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
 
   gate_case() {
     local name="$1" want="$2" json="$3" conclusion="$4"
-    local blast="${5:-low}" protected="${6:-false}" owner="${7:-false}"
+    local blast="${5:-low}" protected="${6:-false}" owner="${7:-false}" code="${8-pass}"
     printf '%s' "$json" > "$gate_fixture"
     local got
-    got=$(bash "$GATE_VALIDATOR" "$gate_fixture" 7 "$conclusion" "$blast" "$protected" "$owner" 0.8 2>&1)
+    got=$(bash "$GATE_VALIDATOR" "$gate_fixture" 7 "$conclusion" "$blast" "$protected" "$owner" 0.8 "$code" 2>&1)
     if [ "$got" != "$want" ]; then
       VALIDATOR_OK=0
       echo "FAIL: the merge-gate validator called '${name}' ${got}, expected ${want}" >&2
@@ -1602,6 +1602,14 @@ if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
   gate_case "a protected path needs the owner"   owner-review "$(gate_items "$(gate_comment assessed)")" success low  true
   gate_case "an owner path needs the owner"      owner-review "$(gate_items "$(gate_comment assessed)")" success low  false true
   gate_case "a non-success CI conclusion blocks" blocked      "$(gate_items "$(gate_comment assessed)")" failure low
+
+  # check-diff on the pull request head is a measured fact like CI: failing it never merges,
+  # a repository without the script is not held to it, and a job that did not report is a person's call.
+  gate_case "failing check-diff blocks"          blocked      "$(gate_items "$(gate_comment assessed)")" success low false false fail
+  gate_case "no check-diff installed auto-merges" auto-merge  "$(gate_items "$(gate_comment assessed)")" success low false false absent
+  gate_case "check-diff that did not report needs a person" \
+                                                 human-review "$(gate_items "$(gate_comment assessed)")" success low false false ''
+  gate_case "remediating check-diff is accepted" remediated   "$(gate_items "$(gate_comment remediated),${gate_push}")" success low false false fail
 
   # The agent's report decides the rest. This is the rule the whole redesign rests on: an
   # unverified finding is a warning whatever severity it claims, so a model cannot fail the gate

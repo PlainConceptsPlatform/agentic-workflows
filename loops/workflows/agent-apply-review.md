@@ -541,6 +541,11 @@ timeout-minutes: 90
     ${{ env.VERIFY_COMMANDS }}
     ```
 
+   When `.opencode/scripts/check-diff.mjs` exists, also run
+   `node .opencode/scripts/check-diff.mjs`.
+   It must exit 0: delete the comments and tests it lists. The merge gate runs it too and does not
+   merge while it fails.
+
 7. Select one review outcome.
 
    - **implemented**: You made the requested change, verification passed, and you will propose

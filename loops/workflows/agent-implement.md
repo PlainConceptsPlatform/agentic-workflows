@@ -707,6 +707,12 @@ timeout-minutes: 180
 
      Never open a pull request that does not pass them.
 
+     When `.opencode/scripts/check-diff.mjs` exists, also run
+     `node .opencode/scripts/check-diff.mjs`
+     on both paths. It must exit 0. It holds the comments and tests you add to the size of the
+     change and makes you clean the files you touched; fix every line it lists. The merge gate
+     runs it again and does not merge while it fails.
+
 5. Do not touch `changelog.json`. The workflow records the change itself once the work is on
    the default branch. Every implement used to edit that one file, so two runs whose branches
    were cut before the other merged conflicted on it and failed to open a pull request with the
