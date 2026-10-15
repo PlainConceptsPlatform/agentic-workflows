@@ -60,6 +60,15 @@ assert_output 'update with no body key is invalid' invalid \
   '{"items":[{"type":"update_issue","item_number":42}]}'
 assert_output 'update with no body key plus a comment is invalid' invalid \
   '{"items":[{"type":"update_issue","item_number":42},{"type":"add_comment","item_number":42,"body":"Refinement complete"}]}'
+# A stack split opens the root pull request alongside its children. Lyceum #45: the agent
+# emitted the parent body, two children and the root, and the validator called it invalid
+# because a pull request was not a source item, so no stack split had ever been accepted.
+assert_output 'stack split with a root pull request is a split' split \
+  '{"items":[{"type":"update_issue","item_number":42,"body":"# Parent"},{"type":"create_issue","title":"A","body":"child A"},{"type":"create_issue","title":"B","body":"child B"},{"type":"create_pull_request","title":"Root","body":"Fixes #42","branch":"feat/42"}]}'
+assert_output 'a split with two root pull requests is invalid' invalid \
+  '{"items":[{"type":"update_issue","item_number":42,"body":"# Parent"},{"type":"create_issue","title":"A","body":"child A"},{"type":"create_issue","title":"B","body":"child B"},{"type":"create_pull_request","title":"Root","body":"x","branch":"feat/42"},{"type":"create_pull_request","title":"Again","body":"y","branch":"feat/43"}]}'
+assert_output 'a pull request on a complete refinement is invalid' invalid \
+  '{"items":[{"type":"update_issue","item_number":42,"body":"# User story"},{"type":"create_pull_request","title":"Root","body":"x","branch":"feat/42"}]}'
 assert_output 'wrong issue output is invalid' invalid \
   '{"items":[{"type":"add_comment","item_number":7,"body":"Which users need this feature?"}]}'
 assert_output 'complete output cannot update another issue' invalid \

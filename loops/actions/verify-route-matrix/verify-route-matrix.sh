@@ -2763,6 +2763,12 @@ if worker_installed refine; then
   st 'allowed-branches: \["feat/\*"\]' "$REFINE_WORKER_MD" 'does not constrain the feature branch name'
   st 'allowed-base-branches: \["main"\]' "$REFINE_WORKER_MD" 'lets the root target a branch other than the default'
   st 'preserve-branch-name: true' "$REFINE_WORKER_MD" 'does not preserve the feature branch name on root PR creation'
+  # Refine stages its outputs and applies them itself, and that apply cannot open a pull
+  # request; the root has to be published by gh-aw or created_pr_number is empty and every
+  # child goes flat. Both halves: the root unstaged, and everything else still staged.
+  refine_pr_block=$(sed -n '/^  create-pull-request:$/,/^  [a-z-]*:$/p' "$REFINE_WORKER_MD")
+  st_str 'staged: false' "$refine_pr_block" 'stages the root pull request, so no root is ever opened and every child goes flat'
+  st '^  staged: true$' "$REFINE_WORKER_MD" 'no longer stages the body and children for validation before they are applied'
   st 'stack-root-branch: %s' "$REFINE_WORKER_MD" 'does not stamp the feature branch on the parent issue'
   st 'Fixes #\$\{\{ inputs\.issue-number \}\}' "$REFINE_WORKER_MD" 'does not make the root PR close the feature issue'
   # The hand-over stamp: a child handed to implement carries the feature branch marker, so

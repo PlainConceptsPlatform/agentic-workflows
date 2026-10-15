@@ -802,6 +802,14 @@ safe-outputs:
   # the prompt tells the agent to choose (feat/ plus the parent issue number). Only the
   # root targets the default branch, so allowed-base-branches admits nothing else.
   create-pull-request:
+    # Not staged, unlike everything else here. Staging means gh-aw writes nothing and the apply
+    # step below publishes the body and the children, but that step has no way to open a pull
+    # request, and the stamp and hand-over steps read the root from
+    # needs.safe_outputs.outputs.created_pr_number. Staged, that number is always empty: no
+    # feature branch, no root, and every child silently takes the flat path to main. Only the
+    # root is published here; the validator still decides the outcome, and the children still
+    # come from the artifact.
+    staged: false
     allowed-branches: ["feat/*"]
     allowed-base-branches: ["main"]
     preserve-branch-name: true
