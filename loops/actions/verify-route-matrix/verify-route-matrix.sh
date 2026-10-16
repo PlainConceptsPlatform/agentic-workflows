@@ -203,20 +203,23 @@ assert_route "EVIDENCE_ENABLED=false turns the merge route off" none \
   EVENT=pull_request_target ACTION=closed PR_MERGED=true EVENT_PR_NUMBER=7 EVIDENCE_ENABLED=false
 
 echo "── CI completion ─────────────────────────────────────────────────────────"
-assert_route "a failed App CI run on a pull request routes to merge-gate" merge-gate \
-  EVENT=workflow_run RUN_PR_NUMBER=7 RUN_CONCLUSION=failure RUN_ID=99
-assert "merge-gate carries the failing CI conclusion" failure \
-  "$(route_field ci-conclusion EVENT=workflow_run RUN_PR_NUMBER=7 \
-    RUN_CONCLUSION=failure RUN_ID=99)"
-assert "merge-gate carries the failing CI run id" 99 \
-  "$(route_field ci-run-id EVENT=workflow_run RUN_PR_NUMBER=7 \
-    RUN_CONCLUSION=failure RUN_ID=99)"
-assert_route "a green App CI run does not auto-trigger the gate" none \
-  EVENT=workflow_run RUN_PR_NUMBER=7 RUN_CONCLUSION=success RUN_ID=99
-assert_route "a cancelled App CI run does not auto-trigger the gate" none \
-  EVENT=workflow_run RUN_PR_NUMBER=7 RUN_CONCLUSION=cancelled RUN_ID=99
-assert_route "a failed CI run with no pull request routes nowhere" none \
-  EVENT=workflow_run RUN_PR_NUMBER= RUN_CONCLUSION=failure RUN_ID=99
+# A CI verdict moves the merge train, green or red; the train picks which pull request the gate
+# takes. Dispatching the gate for the run's own pull request is how a night of them raced each
+# other for the default branch.
+assert_route "a failed App CI run on a pull request moves the merge train" merge-train   EVENT=workflow_run RUN_PR_NUMBER=7 RUN_CONCLUSION=failure RUN_ID=99
+assert_route "a green App CI run on a pull request moves the merge train" merge-train   EVENT=workflow_run RUN_PR_NUMBER=7 RUN_CONCLUSION=success RUN_ID=99
+assert "the train hears the CI conclusion" failure   "$(route_field ci-conclusion EVENT=workflow_run RUN_PR_NUMBER=7     RUN_CONCLUSION=failure RUN_ID=99)"
+assert "the train hears the CI run id" 99   "$(route_field ci-run-id EVENT=workflow_run RUN_PR_NUMBER=7     RUN_CONCLUSION=failure RUN_ID=99)"
+assert_route "a cancelled App CI run moves nothing" none   EVENT=workflow_run RUN_PR_NUMBER=7 RUN_CONCLUSION=cancelled RUN_ID=99
+assert_route "a failed CI run with no pull request routes nowhere" none   EVENT=workflow_run RUN_PR_NUMBER= RUN_CONCLUSION=failure RUN_ID=99
+# A consumer CI hands its verdict over with GITHUB_TOKEN. Old CIs dispatch merge-gate; that is a
+# CI completion, so it moves the train instead of jumping the queue. A person or the train itself
+# dispatching merge-gate still reaches the gate.
+assert_route "a consumer CI's merge-gate handover moves the train" merge-train   EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7 ACTOR='github-actions[bot]'
+assert "the handover carries its verdict to the train" success   "$(route_field ci-conclusion EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7     ACTOR='github-actions[bot]' INPUT_CI_CONCLUSION=success INPUT_CI_RUN_ID=5)"
+assert_route "the train's own gate dispatch reaches the gate" merge-gate   EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7 ACTOR='platform-devbox[bot]'
+assert_route "merge-train dispatch needs no pull request" merge-train   EVENT=workflow_dispatch OPERATION=merge-train
+assert "a merge-train handover carries its run id" 5   "$(route_field ci-run-id EVENT=workflow_dispatch OPERATION=merge-train INPUT_PR_NUMBER=7     INPUT_CI_CONCLUSION=failure INPUT_CI_RUN_ID=5)"
 
 echo "── Schedules ─────────────────────────────────────────────────────────────"
 while read -r cron; do
@@ -694,60 +697,76 @@ if worker_installed merge-gate; then
   fi
 fi
 
-# A verdict is the gate marker AND a `**Verdict:**` line together. Comments carrying the
-# marker alone were progress notes and failed attempts, and the reconcile belt read every
-# one of them as final: a crashed or OOM-killed gate parked its pull request for the rest
-# of the night. Attempts are counted separately, capped, and reset by any new CI run.
-# The belt lives in the router's plumbing jobs, so this holds in every repository.
-BELT_OK=1
-if ! grep -q 'agent-merge-gate-attempt' "$ROUTER_YML"; then
-  BELT_OK=0; echo "FAIL: router never counts gate attempts" >&2
+# The belt is the merge train now: one gate at a time, oldest pull request first. Its I/O lives in
+# the merge-train action and every rule it learned as the belt is asserted there.
+#
+# A verdict is the gate marker AND a `**Verdict:**` line together. Comments carrying the marker
+# alone were progress notes and failed attempts, and the belt read every one of them as final: a
+# crashed or OOM-killed gate parked its pull request for the rest of the night. Attempts are
+# counted separately and capped.
+TRAIN_SH="${HERE}/../merge-train/merge-train.sh"
+if worker_installed merge-gate; then
+  BELT_OK=1
+  if [ ! -f "$TRAIN_SH" ]; then
+    BELT_OK=0; echo "FAIL: the merge gate is installed without the merge-train action" >&2
+  else
+    grep -q 'agent-merge-gate-attempt' "$TRAIN_SH" ||
+      { BELT_OK=0; echo "FAIL: the merge train never counts gate attempts" >&2; }
+    grep -qF 'contains("<!-- agent-merge-gate -->")) and (.body | test("Verdict:' "$TRAIN_SH" ||
+      { BELT_OK=0; echo "FAIL: the train's verdict detection must pair the gate marker with a Verdict line" >&2; }
+    grep -qF 'inputs[attempts_so_far]=' "$TRAIN_SH" ||
+      { BELT_OK=0; echo "FAIL: the train must forward attempts_so_far to the gate" >&2; }
+    # One gate at a time, found by the title run-name gives it. The belt looked for a title that
+    # run-name had stopped producing, saw no live gate ever, and dispatched #680 five times in
+    # an hour onto a belt that runs one gate at a time.
+    gate_title="$(sed -n "s/.*format('\(Agent: Merge Gate - PR #\){0}'.*/\1/p" "$ROUTER_YML" | head -1)"
+    if [ -z "$gate_title" ] || ! grep -qF "GATE_TITLE_PREFIX=\"${gate_title}\"" "$TRAIN_SH"; then
+      BELT_OK=0
+      echo "FAIL: the train looks for live gates titled differently from what run-name names them ('${gate_title:-unread}')" >&2
+    fi
+    # A conflicting pull request has no refs/pull/N/merge, so CI can never run on its head; the
+    # train hands it to the gate on the branch's last verdict rather than waiting forever.
+    grep -qF 'actions/runs?branch=$head_ref' "$TRAIN_SH" ||
+      { BELT_OK=0; echo "FAIL: the train must gate a conflicting pull request on its branch's last verdict" >&2; }
+    # GitHub computes mergeability on demand and the first read answers UNKNOWN.
+    grep -q 'mergeable=$(mergeable_state' "$TRAIN_SH" ||
+      { BELT_OK=0; echo "FAIL: the train must poll the mergeable state; a single read answers UNKNOWN" >&2; }
+    # The park is keyed to the head commit, never the CI time: a CI re-run must not reopen a park
+    # a person owns.
+    grep -qF '[ "$verdict_at" \> "$head_committed" ]' "$TRAIN_SH" ||
+      { BELT_OK=0; echo "FAIL: the train must key a verdict's park to the head commit" >&2; }
+  fi
+  # The App token: a dispatch or a branch update made with GITHUB_TOKEN starts no workflow.
+  train_job="$(sed -n '/^  merge-train:$/,/^  [a-z-]*:$/p' "$ROUTER_YML")"
+  if ! grep -q 'token: ${{ steps.app-token.outputs.token }}' <<<"$train_job" ||
+    ! grep -q 'group: merge-train' <<<"$train_job" ||
+    ! grep -q 'needs: \[classify, call-merge-gate\]' <<<"$train_job"; then
+    BELT_OK=0
+    echo "FAIL: the merge-train job must use the App token, hold the merge-train lock and tick after the gate" >&2
+  fi
+  if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
-if [ "$(count -cF 'contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))' "$ROUTER_YML")" -lt 4 ]; then
-  BELT_OK=0; echo "FAIL: verdict detection must pair the gate marker with a Verdict line in both dispatch paths" >&2
-fi
-if [ "$(count -c 'attempts_so_far' "$ROUTER_YML")" -lt 2 ]; then
-  BELT_OK=0; echo "FAIL: dispatch sites must forward attempts_so_far" >&2
-fi
-# A second gate for a pull request whose gate is already queued or running reads the same CI
-# verdict, and the belt's queue would run it twice.
-if [ "$(count -c 'a merge-gate run is already live' "$ROUTER_YML")" -lt 2 ]; then
-  BELT_OK=0; echo "FAIL: both dispatch paths must skip a pull request whose gate is already live" >&2
-fi
-# A conflicting pull request has no refs/pull/N/merge for GitHub to build, so a `pull_request`
-# CI workflow can never run on that head. Requiring a fresh verdict before dispatching deadlocks
-# the belt: only the gate resolves the conflict, and the gate never runs. Both paths fall back to
-# the branch's last verdict when, and only when, the pull request is conflicting.
-if [ "$(count -c 'conflicts, so CI cannot run on' "$ROUTER_YML")" -lt 2 ]; then
-  BELT_OK=0
-  echo "FAIL: both dispatch paths must gate a conflicting pull request that can never get fresh CI" >&2
-fi
-# That fallback has to read the computed mergeable state. The REST boolean is null until GitHub
-# recomputes it, and stays null for a pull request nobody has opened recently, which is exactly
-# the stale conflicting pull request the fallback exists for: it never fired once in production.
-# The state has to be polled, not read once. GitHub computes mergeability on demand and the
-# first read answers UNKNOWN (or null through REST) while it works it out, so a single read
-# reports "not conflicting" for exactly the stale pull requests the fallback is for. Observed
-# twice in production: the fallback logged "no completed CI run" for a pull request that
-# `gh pr view` reported as CONFLICTING from a warm cache seconds later.
-if [ "$(count -c 'mergeable_state()' "$ROUTER_YML")" -lt 2 ] ||
-  [ "$(count -c 'mergeable_now=$(mergeable_state' "$ROUTER_YML")" -lt 2 ]; then
-  BELT_OK=0
-  echo "FAIL: both dispatch paths must poll the mergeable state; a single read answers UNKNOWN" >&2
-fi
-if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
-# GitHub delivers workflow_run only for CI runs whose actor is a human, so a bot pull request's
-# CI never reaches the router's CI-completion route. The package ships a dispatch-merge-gate job
-# in templates/ci that hands the verdict over from inside CI; a consumer CI workflow, where one
-# exists beside the router, must carry it or bot pull requests wait for the hourly belt.
+# GitHub delivers workflow_run only for CI runs whose actor is a human, so a bot-updated pull
+# request's CI never reaches the router's CI-completion route. The package ships a dispatch job in
+# templates/ci that hands the verdict over from inside CI; a consumer CI workflow, where one exists
+# beside the router, must carry it or those pull requests wait for the hourly tick.
 for ci in "${WORKFLOWS_DIR}/ci.yml" "${WORKFLOWS_DIR}/app-ci.yml"; do
   [ -f "$ci" ] || continue
-  if grep -q 'operation=merge-gate' "$ci"; then
+  if grep -qE 'operation=merge-(gate|train)' "$ci"; then
     PASS=$((PASS + 1))
   else
     FAIL=$((FAIL + 1))
-    echo "FAIL: $(basename "$ci") has no dispatch-merge-gate job; bot pull requests would wait for the hourly belt" >&2
+    echo "FAIL: $(basename "$ci") hands no CI verdict to the merge train; pull requests would wait for the hourly tick" >&2
+  fi
+done
+for template in "${HERE}/../../templates/ci/"*.yml; do
+  [ -f "$template" ] || continue
+  if grep -q 'operation=merge-train' "$template" && ! grep -q "pull_request.user.type == 'Bot'" "$template"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: $(basename "$template") must hand every same-repository pull request's verdict to the merge train" >&2
   fi
 done
 
@@ -1110,7 +1129,7 @@ done < <(sed -n '/^      operation:/,/^      issue-number:/p' "$ROUTER_YML" |
 # contents and issues and failed nightly on a 403 that named the endpoint and nothing else.
 # Paired job-to-scope rather than parsed out of each action: the jobs that touch pull
 # requests are few and known, and naming them here is what makes the omission visible.
-for pr_job in audit-close reconcile-bot-pr-runs detect-pr-conflicts housekeeping; do
+for pr_job in audit-close reconcile-bot-pr-runs merge-train land-stack-child housekeeping; do
   if ! grep -q "^  ${pr_job}:$" "$ROUTER_YML"; then
     continue
   fi
@@ -1754,17 +1773,18 @@ fi
 
 echo "── Merge gate park ───────────────────────────────────────────────────────"
 
-# A gate verdict parks the code it was given on. Both dispatch paths -- detect-pr-conflicts and
-# the reconcile belt -- used to compare the standing verdict against the CI finish time, which
-# made the park worthless: any later run on the same commits was newer than the verdict, so the
-# belt re-dispatched a pull request a human already owned and reset its attempt budget at the
-# same time. Lyceum PR #13 sat parked for six days while that happened. Asserted because both
-# comparisons are one line and neither failing produces a red run.
+# A gate verdict parks the code it was given on. The belt used to compare the standing verdict
+# against the CI finish time, which made the park worthless: any later run on the same commits was
+# newer than the verdict, so it re-dispatched a pull request a human already owned. Lyceum PR #13
+# sat parked for six days while that happened. The opposite failure is what parked Pliny-Bot for
+# whole weekends: a park that never expired, so a pull request blocked on Friday night was still
+# blocked on Monday though the default branch had moved under it a dozen times. The train's two
+# pure functions decide both, and they are exercised here rather than read.
 if worker_installed merge-gate; then
   GATE_OK=1
 
-  # Neither path may key the park to CI timing again.
-  stale_horizon=$(count -cE 'verdict" \\> "\$ci_finished"|latest_verdict" \\> "\$ci_finished"' "$ROUTER_YML")
+  # Nothing may key the park to CI timing again.
+  stale_horizon=$(count -cE 'verdict" \> "\$ci_finished"|latest_verdict" \> "\$ci_finished"' "$ROUTER_YML")
   if [ "$stale_horizon" -eq 0 ]; then
     PASS=$((PASS + 1))
   else
@@ -1772,13 +1792,37 @@ if worker_installed merge-gate; then
     echo "FAIL: the merge-gate park is keyed to the CI finish time in ${stale_horizon} place(s); a CI re-run would reopen a park a person owns" >&2
   fi
 
-  # Both must fall back to the CI time only when the head commit cannot be read.
-  horizons=$(count -cE '\$\{head_committed:-\$ci_finished\}' "$ROUTER_YML")
-  if [ "$horizons" -eq 2 ]; then
-    PASS=$((PASS + 1))
-  else
-    GATE_OK=0
-    echo "FAIL: ${horizons} of the 2 gate dispatch paths key their park to the head commit" >&2
+  if [ -f "$TRAIN_SH" ]; then
+    # Each call in its own shell: the facts are environment variables, and one case's must not
+    # leak into the next.
+    park() { env "$@" bash -c "source '$TRAIN_SH'; train_park"; }
+    move() { env "$@" bash -c "source '$TRAIN_SH'; train_move" | sed -n 's/^move=//p'; }
+
+    assert "no verdict leaves the pull request to the train" none "$(park VERDICT= VERDICT_NEWER=false)"
+    assert "a verdict older than the head is spent" none "$(park VERDICT=owner-review VERDICT_NEWER=false)"
+    assert "owner-review on this head waits for its owner" held "$(park VERDICT=owner-review VERDICT_NEWER=true BASE_MOVED=true)"
+    assert "human-review on this head waits for a person" held "$(park VERDICT=human-review VERDICT_NEWER=true BASE_MOVED=true)"
+    assert "remediated never parks: the gate wants the next CI" none "$(park VERDICT=remediated VERDICT_NEWER=true)"
+    assert "blocked holds while the base has not moved" held "$(park VERDICT=blocked VERDICT_NEWER=true BASE_MOVED=false RETRIES=1)"
+    assert "blocked is retried once the base moves" none "$(park VERDICT=blocked VERDICT_NEWER=true BASE_MOVED=true RETRIES=1 MAX_RETRIES=3)"
+    assert "blocked holds once its retries are spent" held "$(park VERDICT=blocked VERDICT_NEWER=true BASE_MOVED=true RETRIES=3 MAX_RETRIES=3)"
+    assert "a merge that did not happen is retried once the base moves" none "$(park VERDICT=auto-merge VERDICT_NEWER=true BASE_MOVED=true RETRIES=1)"
+    assert "a stack root is never retried into a merge" held "$(park VERDICT=auto-merge VERDICT_NEWER=true BASE_MOVED=true RETRIES=0 STACK_ROOT=true)"
+
+    assert "hold keeps a pull request off the train" skip "$(move HOLD=true CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "requested changes keep it off the train" skip "$(move REVIEW_DECISION=CHANGES_REQUESTED CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a parked pull request is passed by, not waited on" skip "$(move PARK=held CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a spent attempt budget is passed by" skip "$(move ATTEMPTS=6 MAX_ATTEMPTS=6 CI_STATUS=completed CI_CONCLUSION=failure)"
+    assert "a conflict goes to the gate even with no CI" gate "$(move MERGEABLE=CONFLICTING CI_STATUS=none)"
+    assert "running CI is waited on" wait "$(move MERGEABLE=MERGEABLE CI_STATUS=in_progress)"
+    assert "CI stuck past the limit is passed by" skip "$(move MERGEABLE=MERGEABLE CI_STATUS=queued CI_STUCK=true)"
+    assert "red CI goes to the gate" gate "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
+    assert "green but behind is brought up to date first" update "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success BEHIND_BY=2)"
+    assert "green and current goes to the gate" gate "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success BEHIND_BY=0)"
+    assert "no CI run is passed by" skip "$(move MERGEABLE=MERGEABLE CI_STATUS=none)"
+    assert "a trusted bot's CI awaiting approval is approved" approve "$(move CI_STATUS=completed CI_CONCLUSION=action_required TRUSTED_AUTHOR=true)"
+    assert "a person's CI awaiting approval is not approved by the train" skip "$(move CI_STATUS=completed CI_CONCLUSION=action_required TRUSTED_AUTHOR=false)"
+    assert "a cancelled run is no verdict" skip "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=cancelled)"
   fi
 
   # One cap, not four literals, and it has to match what the worker tells the reader.
@@ -2518,8 +2562,8 @@ for worker_md in "${WORKFLOWS_DIR}"/agent-*.md; do
 done
 if [ "$INPUT_WIRING_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
-# Several paths dispatch gates at once (the reconcile tick, CI's dispatch-merge-gate, the
-# conflict rescan). Without `queue: max` GitHub keeps one pending run in the group and cancels the
+# The train dispatches one gate at a time, but a person, a merge-gate label and an old consumer CI
+# can still dispatch one beside it. Without `queue: max` GitHub keeps one pending run in the group and cancels the
 # rest with no comment and no recorded attempt; every dispatch still returns 204.
 BELT_QUEUE_OK=1
 belt_caller=$(awk '/^  call-merge-gate:/ { found = 1; print; next } found && /^  [a-z]/ { exit } found { print }' "$ROUTER_YML")
@@ -2573,7 +2617,7 @@ if worker_installed merge-gate; then
     echo "FAIL: the incomplete job must read one computed budget decision, not re-derive it" >&2
   fi
   # The park has to be a verdict or the belt keeps dispatching: a comment carrying the gate
-  # marker AND a Verdict line is what detect-pr-conflicts and the reconcile belt both park on.
+  # marker AND a Verdict line is what the merge train parks on.
   if ! grep -A 16 "Record an unusable report as a decision" "$MERGE_GATE_WORKER_MD" |
        grep -q '\${{ env.GATE_MARKER }}' ||
      ! grep -A 16 "Record an unusable report as a decision" "$MERGE_GATE_WORKER_MD" |

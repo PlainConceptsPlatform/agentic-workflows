@@ -88,7 +88,7 @@ loops/workflows/
       call-release             agent-release.md             workflow_call only
       call-evidence            evidence.yml                 plain YAML, no model
       deterministic jobs       check-implement-pr, dispatch-triage, bot-approve,
-                              detect-pr-conflicts, reconcile-bot-pr-runs,
+                              merge-train, land-stack-child, reconcile-bot-pr-runs,
                               audit-close, cleanup-artifacts, validate
   authorize-bot-work.yml       human adds implement/refine → bot adds bot-working
 ```
@@ -190,7 +190,8 @@ cost a real debugging session.
 | Agent wrote a plausible body or comment, but the worker stopped incomplete | Outcome validation required model-authored label changes or did not classify the output |
 | Router classified a trusted App label event, but every worker job skipped | The called worker did not set `GH_AW_ALLOWED_BOTS` in `env:`, so `check_membership.cjs` rejected the bot's role `none`. Set `GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"` in the worker's env. `on.bots:` does not work for `workflow_call` workers. |
 | Merge gate skips protected-file PRs even when CI failed | `protected_changes` blocks all agent runs, not just merge. The `review_required`, `agent`, and `incomplete` jobs must allow protected-file PRs through when `needs.subject.outputs.conclusion == 'failure'` so the agent can remediate. Auto-merge is still blocked by the `conclude` job's `requires_review != 'true'` guard on the `auto-merge` disposition. |
-| Reconcile cron skips a PR whose CI failed again | The reconcile script compares the latest merge-gate comment timestamp against CI completion time. A prior disposition or `incomplete` verdict newer than CI prevents re-dispatch. Remove `review` or re-dispatch manually. |
+| The merge train passes a PR by and never comes back to it | A standing `owner-review` or `human-review` verdict newer than the head commit parks it until a commit lands or a writer approves. `blocked` and a merge that did not happen expire when the base branch moves, `MERGE_TRAIN_MAX_RETRIES` times. The run summary of the `merge-train` job lists every open PR with its move and why. |
+| Several gates for one PR in an hour, all on the single-slot belt (before 1.6.0) | The belt skipped a PR whose gate was live by looking for runs titled `Working (Merge Gate): PR #N`, a title run-name no longer produced, so it saw none. The train looks for the title run-name gives, and the route matrix asserts the two agree. |
 | Several gates dispatched together, only the last one runs (before 1.3.0) | GitHub keeps a single pending run per concurrency group unless the caller sets `queue: max`: each new dispatch cancels the previously pending one, and `cancel-in-progress: false` protects only the running gate. The runs show as `cancelled` with no comment on the pull request. `call-merge-gate` queues since 1.3.0, and the route matrix asserts it. |
 | Merge gate parks every pull request that touches a domain entity | The gate used to escalate on category: any warning became `review`, and `RISK_INDICATORS` named areas every feature PR touches. Dispositions are now computed in `validate-merge-gate-output.sh` from measured blast radius and *verified* findings. An unverified finding never blocks. |
 | Merge gate output is `invalid` on every run after an upgrade | The agent writes `assessed` or `remediated` and a fenced JSON block; the old `merge`/`review` vocabulary is refused on purpose, because those words no longer mean what the validator computes. Recompile the worker. |

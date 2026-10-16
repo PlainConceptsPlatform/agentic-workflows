@@ -1,0 +1,424 @@
+#!/usr/bin/env bash
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/merge-train/merge-train.sh. Update with `workflows update --force`; consumer edits may be overwritten.
+# Move the merge train one step: the oldest open pull request that can move, and only that one.
+#
+# The belt this replaces dispatched the gate for every eligible pull request at once. Each gate
+# then resolved its branch against a default branch the gate ahead of it was about to move, so a
+# night of ten pull requests became ten repairs, ten CI runs and ten more gates after every merge,
+# and a verdict that parked a pull request held it however stale it went. The train keeps one
+# pull request in flight, lowest number first. Everything else waits, untouched, until the one in
+# front of it has merged or been parked for a person.
+#
+# One tick does at most one thing:
+#   wait     the front pull request's CI is still running, or a gate is already on the belt
+#   update   it is green but behind the default branch: merge the default branch in, CI reruns
+#   gate     it is green and current, red, or conflicting: the merge gate repairs or merges it
+#   approve  its CI is waiting for approval and a trusted bot opened it
+# A pull request a person has to decide on, or that carries the hold label, is skipped, so it never
+# blocks the line. Ticks come from every merge, every CI completion, every finished gate, and the
+# hourly schedule as the fallback.
+#
+# `train_move` is pure, so the route matrix sources this file and exercises the same decision the
+# train runs. Everything below it reads GitHub and acts.
+
+set -euo pipefail
+
+# Facts in, one move out. Every input is a plain string the I/O layer measured:
+#   HOLD               true when the pull request carries the hold label
+#   REVIEW_DECISION    GitHub's review decision (CHANGES_REQUESTED holds it for its author)
+#   PARK               none, or held when a standing gate verdict covers this head
+#   ATTEMPTS           failed gate attempts on this head; MAX_ATTEMPTS is the budget
+#   MERGEABLE          MERGEABLE, CONFLICTING or UNKNOWN
+#   CI_STATUS          none, or the latest CI run's status (queued, in_progress, completed, ...)
+#   CI_CONCLUSION      that run's conclusion when it completed
+#   CI_STUCK           true when that run has been pending longer than the train waits
+#   BEHIND_BY          commits on the base branch the head does not have
+#   TRUSTED_AUTHOR     true when a trusted bot opened it (only those runs are approved)
+train_move() {
+  local move="" reason=""
+
+  if [ "${HOLD:-false}" = true ]; then
+    move=skip; reason="it carries the hold label"
+  elif [ "${REVIEW_DECISION:-}" = CHANGES_REQUESTED ]; then
+    move=skip; reason="a reviewer requested changes"
+  elif [ "${PARK:-none}" = held ]; then
+    move=skip; reason="a gate verdict on this head is waiting for a person"
+  elif [ "${ATTEMPTS:-0}" -ge "${MAX_ATTEMPTS:-6}" ]; then
+    move=skip; reason="its gate attempt budget on this head is spent"
+  elif [ "${MERGEABLE:-UNKNOWN}" = CONFLICTING ]; then
+    # A conflicting pull request has no merge ref, so CI can never run on it: waiting for a
+    # verdict would wait forever. Resolving the conflict is the gate's job.
+    move=gate; reason="it conflicts with its base branch"
+  else
+    case "${CI_STATUS:-none}" in
+      none)
+        move=skip; reason="no CI run on its head, nothing to gate on" ;;
+      completed)
+        case "${CI_CONCLUSION:-}" in
+          success)
+            if [ "${BEHIND_BY:-0}" -gt 0 ]; then
+              move=update; reason="green but ${BEHIND_BY} commit(s) behind its base branch"
+            else
+              move=gate; reason="green and up to date"
+            fi
+            ;;
+          failure) move=gate; reason="CI failed" ;;
+          action_required)
+            if [ "${TRUSTED_AUTHOR:-false}" = true ]; then
+              move=approve; reason="CI is waiting for approval"
+            else
+              move=skip; reason="CI is waiting for a person to approve it"
+            fi
+            ;;
+          *) move=skip; reason="CI concluded '${CI_CONCLUSION:-none}', which is no verdict" ;;
+        esac
+        ;;
+      *)
+        if [ "${CI_STUCK:-false}" = true ]; then
+          move=skip; reason="CI has been '${CI_STATUS}' for longer than the train waits"
+        else
+          move=wait; reason="CI is ${CI_STATUS}"
+        fi
+        ;;
+    esac
+  fi
+
+  printf 'move=%s\nreason=%s\n' "$move" "$reason"
+}
+
+# A standing verdict holds the pull request when it is newer than the head commit. Two verdicts
+# never hold: `remediated` is the gate saying it pushed and wants the next CI, and its comment is
+# always newer than the commit it pushed. `blocked` and a merge that did not happen expire once
+# the base branch moves, a bounded number of times: the failure may have been the base's, and a
+# repair attempt on a newer base is cheap next to a weekend of waiting.
+#   VERDICT            the latest gate verdict word, or empty
+#   VERDICT_NEWER      true when that verdict is newer than the head commit
+#   BASE_MOVED         true when the base branch has a commit newer than the verdict
+#   RETRIES            blocked or failed-merge verdicts already given on this head
+#   MAX_RETRIES        how many of those the train retries before leaving it to a person
+#   STACK_ROOT         true for a stack's root pull request, which a person always merges
+train_park() {
+  local park=none
+  if [ "${VERDICT_NEWER:-false}" = true ]; then
+    case "${VERDICT:-}" in
+      remediated | "") park=none ;;
+      blocked | auto-merge)
+        if [ "${STACK_ROOT:-false}" = true ]; then
+          park=held
+        elif [ "${BASE_MOVED:-false}" = true ] && [ "${RETRIES:-0}" -lt "${MAX_RETRIES:-3}" ]; then
+          park=none
+        else
+          park=held
+        fi
+        ;;
+      *) park=held ;;
+    esac
+  fi
+  echo "$park"
+}
+
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
+
+: "${REPO:?}" "${DEFAULT_BRANCH:?}" "${CI_WORKFLOW_NAME:?}"
+TRUSTED_BOTS="${TRUSTED_BOTS:-}"
+HOLD_LABEL="${HOLD_LABEL:-hold}"
+MAX_ATTEMPTS="${MAX_ATTEMPTS:-6}"
+MAX_RETRIES="${MAX_RETRIES:-3}"
+STUCK_HOURS="${STUCK_HOURS:-3}"
+DRY_RUN="${DRY_RUN:-false}"
+SELF_RUN_ID="${GITHUB_RUN_ID:-0}"
+GATE_TITLE_PREFIX="Agent: Merge Gate - PR #"
+SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+now_epoch=$(date -u +%s)
+iso_epoch() { date -u -d "$1" +%s 2>/dev/null || echo 0; }
+
+summary() { printf '%s\n' "$*" >>"$SUMMARY"; }
+
+# Every write goes through this, so a dry run is honest: there is no second path that forgets.
+act() {
+  local what="$1"
+  shift
+  if [ "$DRY_RUN" = true ]; then
+    echo "[dry-run] $what"
+    summary "**Next move (dry run):** $what"
+    return 0
+  fi
+  echo "$what"
+  summary "**Next move:** $what"
+  "$@"
+}
+
+is_trusted_bot() {
+  case " $TRUSTED_BOTS " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
+# Who may ride the train: a trusted bot, or a person with write access. Asked once per login.
+declare -A WRITE_ACCESS=()
+can_ride() {
+  local login="$1" permission
+  is_trusted_bot "$login" && return 0
+  if [ -z "${WRITE_ACCESS[$login]+set}" ]; then
+    permission=$(gh api "repos/$REPO/collaborators/$login/permission" --jq '.permission' 2>/dev/null || echo none)
+    case "$permission" in admin | maintain | write) WRITE_ACCESS[$login]=true ;; *) WRITE_ACCESS[$login]=false ;; esac
+  fi
+  [ "${WRITE_ACCESS[$login]}" = true ]
+}
+
+# One gate at a time across the repository. A gate dispatched by a tick, by a person or by a
+# consumer CI is a router run titled by run-name; the run this tick belongs to is excluded,
+# because the tick after a gate runs inside the gate's own router run.
+live_gate() {
+  local status
+  for status in queued in_progress waiting pending requested; do
+    gh api "repos/$REPO/actions/workflows/work-router.yml/runs?status=$status&per_page=100" \
+      --jq ".workflow_runs[]
+        | select(.id != $SELF_RUN_ID)
+        | select(.display_title | startswith(\"$GATE_TITLE_PREFIX\"))
+        | .display_title" 2>/dev/null | head -1
+  done | head -1
+}
+
+# GitHub works mergeability out on demand: the first read of a pull request nobody has opened
+# recently answers UNKNOWN while it computes. Ask until it settles.
+mergeable_state() {
+  local pr="$1" state=UNKNOWN
+  for _ in 1 2 3 4 5 6; do
+    state=$(gh pr view "$pr" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo UNKNOWN)
+    [ "$state" = UNKNOWN ] || break
+    sleep 5
+  done
+  echo "$state"
+}
+
+# Gate comments carry the marker and a Verdict line, on the pull request or on its issue. The
+# agent's own report says `assessed` and is always followed by the disposition the workflow
+# computed from it, so it is not a verdict of its own.
+verdict_comments() {
+  local number="$1"
+  gh api --paginate "repos/$REPO/issues/$number/comments?per_page=100" \
+    --jq '.[] | select((.body | contains("<!-- agent-merge-gate -->")) and (.body | test("Verdict:[*]+ [a-z-]+")))
+      | [.created_at, (.body | capture("Verdict:[*]+ (?<v>[a-z-]+)").v)]
+      | select(.[1] != "assessed") | @tsv' 2>/dev/null || true
+}
+
+# shellcheck disable=SC2317 # called through act
+approve_runs() {
+  local branch="$1" id
+  gh api "repos/$REPO/actions/runs?status=action_required&branch=$branch" --jq '.workflow_runs[].id' |
+    while IFS= read -r id; do
+      gh api "repos/$REPO/actions/runs/$id/approve" --method POST >/dev/null
+    done
+}
+
+# shellcheck disable=SC2317 # called through act
+update_branch() {
+  local pr="$1" head_sha="$2"
+  gh api "repos/$REPO/pulls/$pr/update-branch" --method PUT -f expected_head_sha="$head_sha" >/dev/null
+}
+
+attempt_count() {
+  local number="$1" since="$2"
+  gh api --paginate "repos/$REPO/issues/$number/comments?per_page=100" \
+    --jq "[.[] | select(.body | contains(\"<!-- agent-merge-gate-attempt -->\")) | select(.created_at > \"$since\")] | length" \
+    2>/dev/null | awk '{ n += $1 } END { print n + 0 }'
+}
+
+# shellcheck disable=SC2317 # called through act
+dispatch_gate() {
+  local pr="$1" conclusion="$2" run_id="$3" attempts="$4" since
+  since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
+    -f ref="$DEFAULT_BRANCH" \
+    -f "inputs[operation]=merge-gate" \
+    -f "inputs[pr-number]=$pr" \
+    -f "inputs[ci-conclusion]=$conclusion" \
+    -f "inputs[ci-run-id]=$run_id" \
+    -f "inputs[attempts_so_far]=$attempts" >/dev/null
+  # The next tick waits behind this one and must see the gate it started, or it starts a second.
+  for _ in $(seq 1 12); do
+    if gh api "repos/$REPO/actions/workflows/work-router.yml/runs?event=workflow_dispatch&created=>=$since&per_page=20" \
+      --jq ".workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\") | .id" 2>/dev/null | grep -q .; then
+      return 0
+    fi
+    sleep 5
+  done
+  echo "::warning::Dispatched the gate for #$pr but its run did not appear within a minute."
+}
+
+summary "### Merge train"
+summary ""
+
+if gate=$(live_gate) && [ -n "$gate" ]; then
+  echo "A gate is already on the belt (${gate}); the train waits for it."
+  summary "Waiting: \`${gate}\` is on the belt."
+  exit 0
+fi
+
+base_head_date=""
+base_head_date_for() {
+  local base="$1"
+  gh api "repos/$REPO/commits/$base" --jq '.commit.committer.date' 2>/dev/null || echo ""
+}
+
+summary "| PR | Author | Move | Why |"
+summary "|---|---|---|---|"
+
+mapfile -t candidates < <(
+  gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" |
+    jq -r --arg repo "$REPO" --arg hold "$HOLD_LABEL" '
+      .[]
+      | select(.draft == false and (.head.repo.full_name // "") == $repo)
+      | [.number, .user.login, .head.sha, .head.ref, .base.ref,
+         ([.labels[].name] | index($hold) != null)] | @tsv' |
+    sort -n
+)
+
+if [ "${#candidates[@]}" -eq 0 ]; then
+  echo "No open pull request on this repository; the train is empty."
+  summary "| - | - | empty | no open pull request |"
+  exit 0
+fi
+
+for line in "${candidates[@]}"; do
+  IFS=$'\t' read -r pr author head_sha head_ref base_ref hold <<<"$line"
+
+  if ! can_ride "$author"; then
+    echo "#$pr: opened by $author, who has no write access; not on the train."
+    continue
+  fi
+
+  meta=$(gh pr view "$pr" --repo "$REPO" --json reviewDecision,commits,closingIssuesReferences 2>/dev/null || echo '{}')
+  review_decision=$(jq -r '.reviewDecision // ""' <<<"$meta")
+  head_committed=$(jq -r '[.commits[]?.committedDate] | max // ""' <<<"$meta")
+  linked_issue=$(jq -r '.closingIssuesReferences[0].number // ""' <<<"$meta")
+
+  # The latest verdict on the pull request or its issue, and how many retries it has had.
+  verdicts=$(
+    {
+      verdict_comments "$pr"
+      [ -z "$linked_issue" ] || verdict_comments "$linked_issue"
+    } | sort
+  )
+  verdict_line=$(tail -1 <<<"$verdicts")
+  verdict_at=$(cut -f1 <<<"$verdict_line")
+  verdict=$(cut -f2 <<<"$verdict_line")
+  verdict_newer=false
+  if [ -n "$verdict_at" ] && { [ -z "$head_committed" ] || [ "$verdict_at" \> "$head_committed" ]; }; then
+    verdict_newer=true
+  fi
+  retries=$(awk -F'\t' -v since="$head_committed" '$1 > since && ($2 == "blocked" || $2 == "auto-merge")' <<<"$verdicts" | grep -c . || true)
+
+  base_moved=false
+  if [ "$verdict_newer" = true ]; then
+    base_head_date=$(base_head_date_for "$base_ref")
+    if [ -n "$base_head_date" ] && [ "$base_head_date" \> "$verdict_at" ]; then
+      base_moved=true
+    fi
+  fi
+
+  stack_root=false
+  if [ "$verdict_newer" = true ] && [ -n "$linked_issue" ]; then
+    if gh issue view "$linked_issue" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null |
+      grep -q "<!-- stack-root-pr: $pr -->"; then
+      stack_root=true
+    fi
+  fi
+
+  park=$(VERDICT="$verdict" VERDICT_NEWER="$verdict_newer" BASE_MOVED="$base_moved" \
+    RETRIES="$retries" MAX_RETRIES="$MAX_RETRIES" STACK_ROOT="$stack_root" train_park)
+
+  attempts=0
+  if [ "$park" = none ]; then
+    horizon="${head_committed:-1970-01-01T00:00:00Z}"
+    # A retried verdict starts a fresh budget from the verdict it retries, not from the head.
+    [ "$verdict_newer" = true ] && horizon="$verdict_at"
+    attempts=$(attempt_count "$pr" "$horizon")
+    if [ -n "$linked_issue" ]; then
+      attempts=$((attempts + $(attempt_count "$linked_issue" "$horizon")))
+    fi
+  fi
+
+  ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
+    --jq '[.workflow_runs[] | select(.name == env.CI_WORKFLOW_NAME)] | sort_by(.created_at) | last // empty
+      | [.id, .status, (.conclusion // ""), .created_at] | @tsv' 2>/dev/null || true)
+  IFS=$'\t' read -r ci_run_id ci_status ci_conclusion ci_created <<<"${ci:-}"
+  ci_status="${ci_status:-none}"
+  # A CI run hands its verdict over from its last job, so the run itself is still in progress
+  # when this tick reads it. Its own word stands in for the conclusion GitHub has not written yet.
+  if [ -n "${HINT_RUN_ID:-}" ] && [ "${ci_run_id:-}" = "$HINT_RUN_ID" ] && [ "$ci_status" != completed ]; then
+    case "${HINT_CONCLUSION:-}" in
+      success | failure) ci_status=completed; ci_conclusion="$HINT_CONCLUSION" ;;
+    esac
+  fi
+  ci_stuck=false
+  if [ "$ci_status" != none ] && [ "$ci_status" != completed ] && [ -n "${ci_created:-}" ]; then
+    [ $((now_epoch - $(iso_epoch "$ci_created"))) -lt $((STUCK_HOURS * 3600)) ] || ci_stuck=true
+  fi
+
+  mergeable=UNKNOWN
+  behind_by=0
+  if [ "$park" = none ] && [ "$hold" != true ] && [ "$review_decision" != CHANGES_REQUESTED ]; then
+    mergeable=$(mergeable_state "$pr")
+    if [ "$ci_status" = completed ] && [ "$ci_conclusion" = success ]; then
+      behind_by=$(gh api "repos/$REPO/compare/$base_ref...$head_sha" --jq '.behind_by' 2>/dev/null || echo 0)
+    fi
+  fi
+
+  trusted_author=false
+  is_trusted_bot "$author" && trusted_author=true
+
+  decision=$(HOLD="$hold" REVIEW_DECISION="$review_decision" PARK="$park" \
+    ATTEMPTS="$attempts" MAX_ATTEMPTS="$MAX_ATTEMPTS" MERGEABLE="$mergeable" \
+    CI_STATUS="$ci_status" CI_CONCLUSION="$ci_conclusion" CI_STUCK="$ci_stuck" \
+    BEHIND_BY="${behind_by:-0}" TRUSTED_AUTHOR="$trusted_author" train_move)
+  move=$(sed -n 's/^move=//p' <<<"$decision")
+  reason=$(sed -n 's/^reason=//p' <<<"$decision")
+
+  echo "#$pr ($author): $move, $reason."
+  summary "| #$pr | $author | $move | $reason |"
+
+  case "$move" in
+    skip) continue ;;
+    wait) exit 0 ;;
+    approve)
+      act "Approving the CI runs waiting on #$pr." approve_runs "$head_ref"
+      exit 0
+      ;;
+    update)
+      # Merge, never rebase: the gate's pushes are fast-forward only, and so are a person's.
+      if act "Merging $base_ref into #$pr so CI judges it against what it will land on." \
+        update_branch "$pr" "$head_sha"; then
+        exit 0
+      fi
+      echo "::warning::GitHub could not update #$pr from $base_ref; handing it to the gate."
+      act "Dispatching the merge gate for #$pr to bring it up to date." \
+        dispatch_gate "$pr" success "${ci_run_id:-}" "$attempts"
+      exit 0
+      ;;
+    gate)
+      conclusion="${ci_conclusion:-}"
+      if [ "$ci_status" != completed ] || { [ "$conclusion" != success ] && [ "$conclusion" != failure ]; }; then
+        # Only a conflict gets here without a usable verdict on this head. The branch's last
+        # verdict tells the gate which path it is on; with none, the repair path resolves it.
+        last=$(gh api "repos/$REPO/actions/runs?branch=$head_ref&per_page=100" \
+          --jq '[.workflow_runs[] | select(.name == env.CI_WORKFLOW_NAME and .status == "completed"
+                  and (.conclusion == "success" or .conclusion == "failure"))]
+                | sort_by(.created_at) | last // empty | [.id, .conclusion] | @tsv' 2>/dev/null || true)
+        ci_run_id=$(cut -f1 <<<"$last")
+        conclusion=$(cut -f2 <<<"$last")
+        [ -n "$conclusion" ] || conclusion=failure
+      fi
+      act "Dispatching the merge gate for #$pr (CI $conclusion, attempt $((attempts + 1)) of $MAX_ATTEMPTS)." \
+        dispatch_gate "$pr" "$conclusion" "${ci_run_id:-}" "$attempts"
+      exit 0
+      ;;
+  esac
+done
+
+echo "Nothing on the train can move: every open pull request is parked, held or has no CI verdict."
+summary ""
+summary "Nothing can move: every open pull request is parked, held or has no CI verdict."

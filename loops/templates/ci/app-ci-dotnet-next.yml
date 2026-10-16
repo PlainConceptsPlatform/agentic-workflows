@@ -280,32 +280,31 @@ jobs:
           # needs contents: write this workflow does not have, and fails the run that gates deploy.
           upload-release-assets: false
 
-  # A bot pull request is opened with GITHUB_TOKEN, and GitHub delivers no workflow_run event
-  # for the CI runs that follow (the run's actor is the bot). The router's CI-completion route
-  # never sees them, so this job hands the verdict over from inside CI. workflow_dispatch is
-  # one of the two events GITHUB_TOKEN may raise, so no App token is needed here, and the
-  # router treats a dispatch as trusted. Human pull requests are left to the workflow_run
-  # route, which does fire for them. The reconcile belt remains the hourly fallback.
+  # Hands this run's verdict to the router's merge train, which decides whether this pull request
+  # is the one in front and what it needs. A pull request opened or updated with a bot token gets
+  # no workflow_run event for its CI (the run's actor is the bot), and the train brings people's
+  # pull requests up to date with one too, so every pull request on this repository hands over
+  # from here. workflow_dispatch is one of the two events GITHUB_TOKEN may raise, so no App token
+  # is needed, and the router treats a dispatch as trusted. The hourly schedule is the fallback.
   #
   # If a deploy pipeline calls this workflow with `uses:`, that caller must also grant
   # `actions: write`. A called workflow may not request a scope its caller withheld, and the
   # whole run fails to start with zero jobs and no annotation when it does.
-  dispatch-merge-gate:
-    name: Dispatch merge gate
+  dispatch-merge-train:
+    name: Dispatch merge train
     needs: [api, mutation-api, web, mutation-web]
     if: >
       always() &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.user.type == 'Bot'
+      github.event.pull_request.draft == false
     runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       contents: read
       actions: write
     steps:
-      - name: Dispatch the merge gate with this run's verdict
+      - name: Hand this run's verdict to the merge train
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -324,10 +323,10 @@ jobs:
           done
           # A cancelled run was superseded by a newer push, whose own run dispatches.
           if [ "$conclusion" = cancelled ]; then
-            echo "CI was cancelled; not dispatching the merge gate."
+            echo "CI was cancelled; not moving the merge train."
             exit 0
           fi
-          echo "Dispatching the merge gate for PR #$PR_NUMBER with CI $conclusion (run $RUN_ID)."
+          echo "Moving the merge train for PR #$PR_NUMBER with CI $conclusion (run $RUN_ID)."
           gh workflow run work-router.yml --repo "$REPO" --ref "$REF" \
-            -f operation=merge-gate -f pr-number="$PR_NUMBER" \
+            -f operation=merge-train -f pr-number="$PR_NUMBER" \
             -f ci-conclusion="$conclusion" -f ci-run-id="$RUN_ID"

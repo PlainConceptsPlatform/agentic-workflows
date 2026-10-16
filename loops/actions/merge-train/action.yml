@@ -1,0 +1,66 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/merge-train/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Merge train
+description: >-
+  Move the oldest open pull request that can move one step towards merging (update it from its
+  base, hand it to the merge gate, or approve its CI), and leave every other one alone.
+  Deterministic: no model runs here.
+
+inputs:
+  token:
+    description: App token. Its dispatches and branch updates must start workflows, which GITHUB_TOKEN's do not.
+    required: true
+  ci-workflow-name:
+    description: The CI workflow whose verdict the train reads.
+    required: true
+  trusted-bots:
+    description: Space-separated bot logins whose pull requests ride the train and whose CI runs it approves.
+    required: false
+    default: ''
+  hold-label:
+    description: A pull request carrying this label stays off the train.
+    required: false
+    default: hold
+  max-gate-attempts:
+    description: Failed gate attempts on one head before the train stops dispatching it.
+    required: false
+    default: '6'
+  max-retries:
+    description: How many times a blocked verdict, or a merge that did not happen, is retried after the base branch moves.
+    required: false
+    default: '3'
+  stuck-hours:
+    description: How long the train waits behind a CI run that never finishes before it passes that pull request by.
+    required: false
+    default: '3'
+  dry-run:
+    description: Decide and report the move without making it.
+    required: false
+    default: 'false'
+  ci-run-id:
+    description: A CI run that handed its verdict over from inside itself, and so still reads as in progress.
+    required: false
+    default: ''
+  ci-conclusion:
+    description: That run's verdict, success or failure, which stands in for its conclusion.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Move the train
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        CI_WORKFLOW_NAME: ${{ inputs.ci-workflow-name }}
+        TRUSTED_BOTS: ${{ inputs.trusted-bots }}
+        HOLD_LABEL: ${{ inputs.hold-label }}
+        MAX_ATTEMPTS: ${{ inputs.max-gate-attempts }}
+        MAX_RETRIES: ${{ inputs.max-retries }}
+        STUCK_HOURS: ${{ inputs.stuck-hours }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        HINT_RUN_ID: ${{ inputs.ci-run-id }}
+        HINT_CONCLUSION: ${{ inputs.ci-conclusion }}
+      run: bash "${GITHUB_ACTION_PATH}/merge-train.sh"

@@ -267,13 +267,12 @@ So after a manual approval, or after a bot PR's CI fails on a feature branch, th
 never hears about the CI result. The pull request sits open with no gate action.
 
 Mitigation is twofold:
-1. The consumer CI's own `dispatch-merge-gate` job (`templates/ci`), which hands the verdict over
-   from inside the CI run rather than waiting for an event that will not arrive.
-2. The router's `reconcile-bot-pr-runs` job, hourly at minute 17. It approves bot CI runs stuck at
-   `action_required`, then for each open bot pull request compares the latest CI conclusion against
-   the newest merge-gate verdict and dispatches `operation=merge-gate` when CI is newer. It needs
-   `actions: write`. It skips a pull request whose gate is already queued or running, because the
-   belt's queue would otherwise run the same gate twice.
+1. The consumer CI's own `dispatch-merge-train` job (`templates/ci`), which hands the verdict to
+   the merge train from inside the CI run rather than waiting for an event that will not arrive.
+2. The router's hourly schedule at minute 17. `reconcile-bot-pr-runs` approves bot CI runs stuck
+   at `action_required`, and the same tick moves the merge train, which takes the oldest open pull
+   request that can move and dispatches `operation=merge-gate` for it. The train never dispatches
+   a second gate while one is queued or running.
 
 ---
 

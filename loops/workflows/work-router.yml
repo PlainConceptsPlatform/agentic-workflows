@@ -65,7 +65,14 @@ run-name: >-
   && format('Agent: Implement - #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'merge-gate'
+  && github.actor == 'github-actions[bot]'
+  && format('Agentics: Merge Train - CI on PR #{0}', inputs.pr-number)
+  || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'merge-gate'
   && format('Agent: Merge Gate - PR #{0}', inputs.pr-number)
+  || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'merge-train'
+  && format('Agentics: Merge Train{0}', '')
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'evidence'
   && format('Agentics: Evidence - PR #{0}', inputs.pr-number)
@@ -144,6 +151,15 @@ env:
   # merge-gate worker carried its own MAX_ATTEMPTS; the route matrix now asserts the two
   # agree, because a belt that gives up later than the worker says burns whole runs.
   MAX_GATE_ATTEMPTS: "6"
+  # The merge train takes the oldest open pull request, bot or person, and moves it one step at a
+  # time until it merges or a person has to decide. A pull request with this label stays off it.
+  MERGE_TRAIN_HOLD_LABEL: "hold"
+  # How many times a `blocked` verdict, or a merge that did not happen, is retried once the base
+  # branch has moved. After that the pull request waits for a person or a new commit.
+  MERGE_TRAIN_MAX_RETRIES: "3"
+  # "true" logs the move the train would make and makes none. For trying the train on a
+  # repository before letting it act.
+  MERGE_TRAIN_DRY_RUN: "false"
   # Whether a merged pull request's verification plan is replayed and its screenshots archived on
   # the pull request (evidence.yml). It needs nothing configured: the app starts with the root
   # `pnpm run dev`, and a pull request with no plan costs one API call. Set it to "false" for a
@@ -161,25 +177,22 @@ on:
     types: [submitted]
 
   pull_request_target:
-    # opened / reopened / synchronize feed conflict detection (detect-pr-conflicts) and
-    # bot-approve. closed feeds detect-pr-conflicts: when a PR merges, the target branch
-    # moved and previously-mergeable sibling bot PRs may now conflict. A merge also routes to
-    # evidence, which replays the pull request's verification plan.
+    # opened / reopened / synchronize feed bot-approve. closed feeds the merge train: a merge
+    # moved the base branch, so the next pull request in line can move. A merge into a feature
+    # branch also lands a stack child (land-stack-child), and every merge routes to evidence,
+    # which replays the pull request's verification plan.
     types: [opened, synchronize, reopened, labeled, closed]
 
-  # CI completion on a pull request. The classifier admits only conclusion == failure with an
-  # attached pull request; a green run reaches the gate through the consumer CI's
-  # dispatch-merge-gate job and the reconcile belt, so routing success here would double-fire
-  # the gate on every passing PR.
+  # CI completion on a pull request moves the merge train, green or red: the train decides
+  # whether that pull request is the one in front, and what it needs.
   #
   # Delivery (verified 2026-09-06 in Pliny-Bot): GitHub delivers workflow_run only for CI runs
-  # whose actor is a human. A bot pull request is opened with GITHUB_TOKEN, the CI runs that
-  # follow have the bot as their actor, and no workflow_run arrives for any of them (four
-  # human-actor runs produced four router runs; three bot-actor runs produced none). For bot
-  # pull requests the consumer CI's dispatch-merge-gate job (templates/ci) and the hourly
-  # reconcile-bot-pr-runs belt are the paths. Security: workflow_run runs from the default
-  # branch with secrets, but the gate's subject job rejects any PR that is not open and
-  # bot-authored, so a fork PR's failing CI cannot start privileged work.
+  # whose actor is a human. A pull request opened or updated with a bot token has the bot as the
+  # actor of every CI run that follows, and no workflow_run arrives for any of them. For those
+  # the consumer CI's dispatch job (templates/ci) and the hourly schedule are the paths.
+  # Security: workflow_run runs from the default branch with secrets, but the train only ever
+  # moves pull requests from this repository opened by a trusted bot or someone with write
+  # access, and the gate's subject job checks the same again.
   workflow_run:
     # Mirrored from env.CI_WORKFLOW_NAME by the installer. A trigger evaluates no expression.
     workflows: ["App: CI"]
@@ -205,6 +218,7 @@ on:
           - triage
           - apply-review
           - merge-gate
+          - merge-train
           - evidence
           - audit
           - audit-close
@@ -565,8 +579,8 @@ jobs:
       # blocked by #111, modules) was dispatched alongside #111 and would have built units on a
       # feat/45 with no modules. The in-flight check below cannot catch that: both routers ran
       # before either dispatch existed, and serialising runs would still start #112 before #111's
-      # pull request merged. The landing of the blocker releases the child (the stack block in
-      # detect-pr-conflicts). Held, it keeps `implement` and loses `bot-working`, so it reads as
+      # pull request merged. The landing of the blocker releases the child (land-stack-child).
+      # Held, it keeps `implement` and loses `bot-working`, so it reads as
       # waiting rather than stuck.
       - name: Hold a child whose blockers have not landed
         id: blocked
@@ -768,9 +782,9 @@ jobs:
   # The merge belt is one lock for the whole repository, not one group per pull request.
   # A batch of six overnight pull requests means every merge moves the default branch
   # under the other five; gates running at once would each rebase onto a base another
-  # gate is about to invalidate. Serialising the belt means each gate sees a main that
-  # only changes between gates, every merge re-arms the siblings through
-  # detect-pr-conflicts's rescan, and the queue drains one pull request at a time.
+  # gate is about to invalidate. The merge train dispatches one gate at a time, oldest pull
+  # request first; the lock is what still holds when a person or a consumer CI dispatches one
+  # beside it.
   #
   # `queue: max` keeps up to 100 gates waiting in order. Without it GitHub keeps one pending run
   # per group and silently cancels the previous one: in one week Numa cancelled 12 gates and
@@ -798,7 +812,64 @@ jobs:
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
 
-  # The decision the gate parked for: a person with write access approves a bot pull request the
+  # The merge train: one step for the oldest open pull request that can move, bot or person.
+  # It merges the base branch into a green pull request that fell behind, hands a red,
+  # conflicting or green-and-current one to the gate, and skips one a person has to decide on,
+  # so a parked pull request never blocks the line. One gate in flight at a time; everything
+  # else waits untouched. It ticks on every merge, every CI completion, after every gate (this
+  # job waits for call-merge-gate in the same run), and hourly as the fallback. Deterministic:
+  # it reads GitHub and dispatches, and never checks out or runs pull request code.
+  #
+  # One tick at a time. A pending tick replaced by a newer one loses nothing: each reads the
+  # whole repository afresh.
+  merge-train:
+    needs: [classify, call-merge-gate]
+    if: >
+      always() &&
+      needs.classify.result == 'success' &&
+      !github.event.repository.fork &&
+      (
+        needs.classify.outputs.route == 'merge-train' ||
+        needs.classify.outputs.route == 'merge-gate' ||
+        needs.classify.outputs.route == 'reconcile-bot-pr-runs' ||
+        (github.event_name == 'pull_request_target' &&
+         github.event.action == 'closed' &&
+         github.event.pull_request.merged == true)
+      )
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 15
+    concurrency:
+      group: merge-train
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The App token, not GITHUB_TOKEN: a gate dispatch and a branch update made with
+      # GITHUB_TOKEN start no workflow, so the gate would never run and CI never rerun.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - uses: ./.github/actions/merge-train
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          ci-workflow-name: ${{ env.CI_WORKFLOW_NAME }}
+          trusted-bots: ${{ env.TRUSTED_BOTS }}
+          hold-label: ${{ env.MERGE_TRAIN_HOLD_LABEL }}
+          max-gate-attempts: ${{ env.MAX_GATE_ATTEMPTS }}
+          max-retries: ${{ env.MERGE_TRAIN_MAX_RETRIES }}
+          dry-run: ${{ env.MERGE_TRAIN_DRY_RUN }}
+          ci-run-id: ${{ needs.classify.outputs.ci-run-id }}
+          ci-conclusion: ${{ needs.classify.outputs.ci-conclusion }}
+
+  # The decision the gate parked for: a person with write access approves a pull request the
   # gate handed to them (human-review or owner-review), and the bot merges the commit they
   # approved. Re-running the gate would only reproduce the same parked verdict.
   merge-approved:
@@ -841,7 +912,15 @@ jobs:
 
           read -r state author head_sha < <(gh api "repos/$REPO/pulls/$PR" --jq '[.state, .user.login, .head.sha] | @tsv')
           [ "$state" = open ] || skip "it is $state"
-          case " $TRUSTED_BOTS " in *" $author "*) ;; *) skip "it was opened by $author, not the bot" ;; esac
+          # The gate parks pull requests by people too. Its author needs write access, like
+          # everyone the merge train carries; a bot needs to be one this router trusts.
+          case " $TRUSTED_BOTS " in
+            *" $author "*) ;;
+            *)
+              author_permission=$(gh api "repos/$REPO/collaborators/$author/permission" --jq '.permission' 2>/dev/null || echo none)
+              case "$author_permission" in admin|maintain|write) ;; *) skip "it was opened by $author, who has $author_permission access" ;; esac
+              ;;
+          esac
           [ "$head_sha" = "$REVIEW_COMMIT" ] || skip "$REVIEWER approved ${REVIEW_COMMIT:0:7}, the head is now ${head_sha:0:7}"
 
           # Another reviewer's change request still stands.
@@ -969,41 +1048,23 @@ jobs:
             gh api "repos/$REPO/actions/runs/$run_id/approve" --method POST
           done
 
-  # Conflict watcher for bot pull requests. Merge-conflict state is only available from the
-  # mergeability API, which the pure classifier cannot read, so this is an event-gated
-  # deterministic dispatcher rather than a classify route (it runs alongside bot-approve on
-  # the same pull_request_target event). It NEVER checks out or runs pull request code - it
-  # reads mergeability through the API and dispatches the Merge Gate - so it is safe on
-  # pull_request_target. Two entry points:
-  #   opened / reopened / synchronize → check the pull request that changed. Gated to this
-  #     repository's own branches so a fork PR never starts this App-token job.
-  #   closed & merged                 → the target branch moved, so re-check every open
-  #     pull request that may have just become conflicted (the "main changed after another PR
-  #     merged" case). A merge into the default branch is an inherently trusted internal event.
-  # It dispatches only for open, non-draft pull requests whose head is this
-  # repository AND whose CI has already concluded (dispatching while CI is still pending would
-  # make the gate read a 'pending' verdict and prematurely ask for human review; that PR is
-  # covered by the CI-completion route instead). The gate's subject job re-validates ownership
-  # before any agent runs.
-  detect-pr-conflicts:
+  # A stack child landing. A pull request merged into a feature branch rather than the default
+  # branch is one child of a stack: it may unblock siblings that waited on it, and it may be the
+  # last one, which makes the root pull request ready for a person. Event-gated rather than a
+  # route because a merge already routes to evidence. It NEVER checks out or runs pull request
+  # code; it reads issues and pull requests through the API and writes labels and one comment.
+  land-stack-child:
     needs: classify
     if: >
       github.event_name == 'pull_request_target' &&
-      (
-        (github.event.action == 'closed' && github.event.pull_request.merged == true) ||
-        (
-          (github.event.action == 'opened' ||
-           github.event.action == 'reopened' ||
-           github.event.action == 'synchronize') &&
-          github.event.pull_request.head.repo.full_name == github.repository
-        )
-      )
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref != github.event.repository.default_branch
     runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: read
-      actions: write
     steps:
       - name: Checkout for App token action
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1015,309 +1076,146 @@ jobs:
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - name: Dispatch Merge Gate for conflicting bot pull requests
+      - name: Release unblocked children and announce a complete stack
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          ACTION: ${{ github.event.action }}
           EVENT_PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
 
-          # Dispatch the Merge Gate for one pull request when it is a red-CI open, non-draft
-          # pull request on this repository whose CI has concluded - the
-          # conflict case is one arm of that, because a conflicting PR never gets a fresh
-          # CI run of its own; a merge conflict with red or concluded CI is the same
-          # "needs the gate" signal. A green non-conflicting PR is left for the merge belt
-          # to pick up when its checks finish (bot-approve / reconcile).
-          # GitHub computes mergeability on demand. The first read of a pull request nobody has
-          # opened recently answers UNKNOWN through the API and null through REST, while it works
-          # the answer out in the background. Reading once therefore reports "not conflicting"
-          # for precisely the stale conflicting pull requests that need the gate. Ask until it
-          # settles.
-          mergeable_state() {
-            local pr="$1" state=UNKNOWN
-            for _ in 1 2 3 4 5 6; do
-              state=$(gh pr view "$pr" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo UNKNOWN)
-              [ "$state" = "UNKNOWN" ] || break
-              sleep 5
-            done
-            echo "$state"
-          }
-
-          # A gate already queued or running for this pull request will read the same CI verdict;
-          # a second dispatch would wait in the belt's queue and run the same gate twice. Same
-          # live-run test as the reconcile belt's stale-reservation sweep, keyed on the exact
-          # title run-name gives a gate dispatch.
-          gate_is_live() {
-            local pr="$1" status live
-            for status in queued in_progress waiting pending; do
-              live=$(gh api "repos/$REPO/actions/workflows/work-router.yml/runs?status=$status&per_page=100" \
-                --jq "[.workflow_runs[] | select(.display_title == \"Working (Merge Gate): PR #${pr}\")] | length" 2>/dev/null || echo 0)
-              [ "${live:-0}" -eq 0 ] || return 0
-            done
-            return 1
-          }
-
-          maybe_dispatch() {
-            pr="$1"
-            [ -n "$pr" ] || return 0
-
-            meta=$(gh api "repos/$REPO/pulls/$pr" \
-              --jq '{state:.state, draft:.draft, bot:.user.type, head:(.head.repo.full_name // "")}' \
-              2>/dev/null || echo '')
-            [ -n "$meta" ] || return 0
-            if [ "$(jq -r '.state' <<<"$meta")" != "open" ] \
-              || [ "$(jq -r '.draft' <<<"$meta")" != "false" ] \
-              || [ "$(jq -r '.head'  <<<"$meta")" != "$REPO" ]; then
-              return 0
-            fi
-
-            # Only dispatch when CI has already concluded. A conflict while CI is still
-            # running is handled by the CI-completion route; dispatching now would make the
-            # gate read a 'pending' conclusion and prematurely ask for human review.
-            head_sha=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
-            ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
-              --jq '[.workflow_runs[]
-                | select(.name == env.CI_WORKFLOW_NAME and .status == "completed"
-                         and (.conclusion == "success" or .conclusion == "failure"))]
-                | sort_by(.created_at) | last // empty')
-            if [ -z "$ci" ]; then
-              # A conflicting pull request has no merge ref for GitHub to build, so a
-              # `pull_request` CI workflow can never run on that head: refs/pull/N/merge is a
-              # 404 for as long as the conflict lasts. Waiting for a verdict that cannot arrive
-              # deadlocks the belt, because resolving the conflict is the gate's own job. Fall
-              # back to the branch's last verdict so the gate runs; it stays on the remediation
-              # path and cannot merge on a stale conclusion.
-              head_ref=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.ref')
-              mergeable_now=$(mergeable_state "$pr")
-              if [ "$mergeable_now" != "CONFLICTING" ]; then
-                echo "PR #$pr has no concluded CI run; deferring to the CI-completion route."
-                return 0
-              fi
-              ci=$(gh api "repos/$REPO/actions/runs?branch=$head_ref&per_page=100" \
-                --jq '[.workflow_runs[]
-                  | select(.name == env.CI_WORKFLOW_NAME and .status == "completed"
-                           and (.conclusion == "success" or .conclusion == "failure"))]
-                  | sort_by(.created_at) | last // empty')
-              if [ -z "$ci" ]; then
-                echo "PR #$pr conflicts and has no CI verdict on any head; nothing to gate on yet."
-                return 0
-              fi
-              echo "PR #$pr conflicts, so CI cannot run on $head_sha at all; gating on the branch's last verdict."
-            fi
-            ci_conclusion=$(jq -r '.conclusion' <<<"$ci")
-            ci_finished=$(jq -r '.updated_at' <<<"$ci")
-            ci_run_id=$(jq -r '.id' <<<"$ci")
-
-            # GitHub computes mergeability asynchronously; poll until it is known (not null).
-            mergeable=""
-            for _ in 1 2 3 4 5 6; do
-              mergeable=$(gh api "repos/$REPO/pulls/$pr" --jq '.mergeable // "null"' 2>/dev/null || echo null)
-              [ "$mergeable" = "null" ] || break
-              sleep 5
-            done
-
-            if [ "$mergeable" != "false" ] && [ "$ci_conclusion" != "failure" ]; then
-              # Mergeable and green: the reconcile belt and the PR's own checks finish it.
-              return 0
-            fi
-
-            # A terminal verdict newer than this CI run means a gate already decided;
-            # failed attempts (the attempt marker) deliberately do not count.
-            verdict=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" \
-              --jq '[.[] | select((.body | contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))) | .created_at] | max // empty')
-            linked_issue=$(gh pr view "$pr" --repo "$REPO" --json closingIssuesReferences --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)
-            if [ -n "$linked_issue" ]; then
-              issue_verdict=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
-                --jq '[.[] | select((.body | contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))) | .created_at] | max // empty')
-              if [ -n "$issue_verdict" ] && { [ -z "$verdict" ] || [ "$issue_verdict" \> "$verdict" ]; }; then
-                verdict="$issue_verdict"
-              fi
-            fi
-            # A verdict parks the CODE it was given on, not the CI run that prompted it.
-            # Comparing against the CI finish time meant any later run on the same commits
-            # reopened a park a human already owned. The newest commit on the branch is the
-            # right key: push, and the gate decides again; re-run CI, and the park holds.
-            head_committed=$(gh pr view "$pr" --repo "$REPO" \
-              --json commits --jq '[.commits[].committedDate] | max // empty' 2>/dev/null || true)
-            horizon="${head_committed:-$ci_finished}"
-            if [ -n "$verdict" ] && [ "$verdict" \> "$horizon" ]; then
-              echo "PR #$pr has a gate verdict newer than its head commit; the park holds, skipping."
-              return 0
-            fi
-
-            attempts=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" \
-              --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$horizon"'") ] | length')
-            if [ -n "$linked_issue" ]; then
-              issue_attempts=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
-                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$horizon"'") ] | length')
-              attempts=$((attempts + issue_attempts))
-            fi
-            if [ "$attempts" -ge "$MAX_GATE_ATTEMPTS" ]; then
-              echo "PR #$pr already consumed $attempts gate attempts on this head, parking for review."
-              return 0
-            fi
-            if gate_is_live "$pr"; then
-              echo "PR #$pr: a merge-gate run is already live; not dispatching another."
-              return 0
-            fi
-
-            echo "PR #$pr is $([ "$mergeable" = "false" ] && echo conflicting || echo red-CI) (CI $ci_conclusion); dispatching Merge Gate (attempt $((attempts + 1)) of $MAX_GATE_ATTEMPTS)."
-            gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" \
-              --method POST \
-              -f ref="$DEFAULT_BRANCH" \
-              -f "inputs[operation]=merge-gate" \
-              -f "inputs[pr-number]=$pr" \
-              -f "inputs[ci-conclusion]=$ci_conclusion" \
-              -f "inputs[ci-run-id]=$ci_run_id" \
-                -f "inputs[attempts_so_far]=$attempts"
-          }
-
-          if [ "$ACTION" = "closed" ]; then
-            # The target branch just moved. Any previously-mergeable bot PR may now conflict.
-            # The just-merged PR is now closed and is skipped by maybe_dispatch's state check.
-            gh api "repos/$REPO/pulls?state=open&per_page=100" \
-              --jq '.[] | select(.user.type == "Bot" and .draft == false) | .number' |
-              while IFS= read -r pr; do
-                maybe_dispatch "$pr"
-              done
-
-            # Stacked delivery: the merged pull request merged into a feature branch, not the
-            # default branch, so this is a child landing. If the feature branch has no open
-            # children left and its root pull request is green, the stack is complete and a
-            # comment on the root pull request tells the human it is ready for the root merge.
-            # Repos without stack markers never reach the interesting part: the event PR's base
-            # was the default branch, so the guard below fails immediately. Fully idempotent:
-            # the completion comment carries its own marker, and a run that finds it already
-            # present exits without writing anything.
-            event_base=$(gh api "repos/$REPO/pulls/$EVENT_PR" --jq '.base.ref // empty' 2>/dev/null || echo '')
-            if [ -n "$event_base" ] && [ "$event_base" != "$DEFAULT_BRANCH" ]; then
-              echo "PR #$EVENT_PR merged into a feature branch; checking the stack."
-              # The implement worker's pull request closes exactly its own child issue, so
-              # the closed issue comes from the linked closing references (the resolved form
-              # GitHub computes whatever keyword the agent wrote), with the body text as
-              # fallback for a PR created before that guarantee.
-              closed_issue=$(gh pr view "$EVENT_PR" --repo "$REPO" --json closingIssuesReferences \
-                --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)
-              [ -n "$closed_issue" ] || closed_issue=$(gh api "repos/$REPO/pulls/$EVENT_PR" --jq '.body // ""' \
-                | grep -oiE '(closes?|fixes?|resolves?) #[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
-              if [ -z "$closed_issue" ]; then
-                echo "PR #$EVENT_PR closes no issue; not a stack child. Nothing to do."
+          # Stacked delivery: the merged pull request merged into a feature branch, not the
+          # default branch, so this is a child landing. If the feature branch has no open
+          # children left and its root pull request is green, the stack is complete and a
+          # comment on the root pull request tells the human it is ready for the root merge.
+          # Repos without stack markers never reach the interesting part: the event PR's base
+          # was the default branch, so the guard below fails immediately. Fully idempotent:
+          # the completion comment carries its own marker, and a run that finds it already
+          # present exits without writing anything.
+          event_base=$(gh api "repos/$REPO/pulls/$EVENT_PR" --jq '.base.ref // empty' 2>/dev/null || echo '')
+          if [ -n "$event_base" ] && [ "$event_base" != "$DEFAULT_BRANCH" ]; then
+            echo "PR #$EVENT_PR merged into a feature branch; checking the stack."
+            # The implement worker's pull request closes exactly its own child issue, so
+            # the closed issue comes from the linked closing references (the resolved form
+            # GitHub computes whatever keyword the agent wrote), with the body text as
+            # fallback for a PR created before that guarantee.
+            closed_issue=$(gh pr view "$EVENT_PR" --repo "$REPO" --json closingIssuesReferences \
+              --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)
+            [ -n "$closed_issue" ] || closed_issue=$(gh api "repos/$REPO/pulls/$EVENT_PR" --jq '.body // ""' \
+              | grep -oiE '(closes?|fixes?|resolves?) #[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+            if [ -z "$closed_issue" ]; then
+              echo "PR #$EVENT_PR closes no issue; not a stack child. Nothing to do."
+            else
+              # Refine stamps the split-parent marker on every child body it hands over, so
+              # the child's own body names the feature issue. The reverse sub-issues
+              # listing has no equivalent per-child lookup: the sub-issues API only walks
+              # downward from the parent.
+              parent=$(printf '%s' "$(gh issue view "$closed_issue" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')" \
+                | grep -oE '<!-- split-parent: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
+              if [ -z "$parent" ]; then
+                echo "#$closed_issue is not a stack child issue (no parent found); nothing stack-related to do."
               else
-                # Refine stamps the split-parent marker on every child body it hands over, so
-                # the child's own body names the feature issue. The reverse sub-issues
-                # listing has no equivalent per-child lookup: the sub-issues API only walks
-                # downward from the parent.
-                parent=$(printf '%s' "$(gh issue view "$closed_issue" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')" \
-                  | grep -oE '<!-- split-parent: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
-                if [ -z "$parent" ]; then
-                  echo "#$closed_issue is not a stack child issue (no parent found); nothing stack-related to do."
+                root_pr=$(printf '%s' "$(gh issue view "$parent" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')" \
+                  | grep -oE '<!-- stack-root-pr: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
+                # Case-insensitive on purpose, here and in the child count below: `gh pr view` and
+                # `gh issue view` read GraphQL and answer OPEN, where the REST API answers open. An
+                # exact `open` never matched, so no root was ever open and no child was ever counted
+                # open, and the stack-complete announcement could not fire (Lyceum #44, router run
+                # 38752856518: "Stack #44 has no open root pull request" with #70 open).
+                root_open=false
+                [ -n "$root_pr" ] && root_open=$(gh pr view "$root_pr" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open && echo true || echo false)
+                if [ "$root_open" != true ]; then
+                  echo "Stack #$parent has no open root pull request; nothing to announce."
                 else
-                  root_pr=$(printf '%s' "$(gh issue view "$parent" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')" \
-                    | grep -oE '<!-- stack-root-pr: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
-                  # Case-insensitive on purpose, here and in the child count below: `gh pr view` and
-                  # `gh issue view` read GraphQL and answer OPEN, where the REST API answers open. An
-                  # exact `open` never matched, so no root was ever open and no child was ever counted
-                  # open, and the stack-complete announcement could not fire (Lyceum #44, router run
-                  # 38752856518: "Stack #44 has no open root pull request" with #70 open).
-                  root_open=false
-                  [ -n "$root_pr" ] && root_open=$(gh pr view "$root_pr" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open && echo true || echo false)
-                  if [ "$root_open" != true ]; then
-                    echo "Stack #$parent has no open root pull request; nothing to announce."
+                  # The same child listing refine uses to hand work out: the sub-issues
+                  # link safe_outputs writes, with the body-marker search as fallback. A
+                  # stack parent always has children, so a listing that finds none means
+                  # the lookups failed, and announcing completion of a stack we cannot
+                  # see would be wrong -- stay silent and let a rerun decide.
+                  children=$(gh api "repos/$REPO/issues/$parent/sub_issues" --jq '.[].number' 2>/dev/null || true)
+                  if [ -z "$children" ]; then
+                    children=$(gh issue list --repo "$REPO" --state open --limit 50 \
+                      --search "\"<!-- split-parent: ${parent} -->\" in:body" --json number --jq '.[].number' || true)
+                  fi
+                  if [ -z "$children" ]; then
+                    echo "Cannot list any child of stack #$parent; leaving completion undetected for a rerun."
                   else
-                    # The same child listing refine uses to hand work out: the sub-issues
-                    # link safe_outputs writes, with the body-marker search as fallback. A
-                    # stack parent always has children, so a listing that finds none means
-                    # the lookups failed, and announcing completion of a stack we cannot
-                    # see would be wrong -- stay silent and let a rerun decide.
-                    children=$(gh api "repos/$REPO/issues/$parent/sub_issues" --jq '.[].number' 2>/dev/null || true)
-                    if [ -z "$children" ]; then
-                      children=$(gh issue list --repo "$REPO" --state open --limit 50 \
-                        --search "\"<!-- split-parent: ${parent} -->\" in:body" --json number --jq '.[].number' || true)
+                  # Release the children this landing unblocks. check-stack-branch holds a child
+                  # whose `Blocked by #N` sibling is still open, and nothing else re-dispatches it,
+                  # so the landing does: re-adding `implement` with the App token is a bot label
+                  # event, which the router routes straight to implement. The child that just
+                  # landed counts as done even before the gate closes its issue a moment later.
+                  for child in $children; do
+                    [ "$child" = "$closed_issue" ] && continue
+                    meta=$(gh issue view "$child" --repo "$REPO" --json state,labels,body 2>/dev/null || echo '{}')
+                    printf '%s' "$meta" | jq -e '(.state // "" | ascii_downcase) == "open"' >/dev/null || continue
+                    printf '%s' "$meta" | jq -e '[.labels[]?.name] | (index("implement") != null) and (index("bot-working") == null)' >/dev/null || continue
+                    blockers=$(printf '%s' "$meta" | jq -r '.body // ""' | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
+                    [ -n "$blockers" ] || continue
+                    waiting=""
+                    for b in $blockers; do
+                      [ "$b" = "$closed_issue" ] && continue
+                      if gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open; then
+                        waiting="$waiting #$b"
+                      fi
+                    done
+                    if [ -n "$waiting" ]; then
+                      echo "#$child still waits on$waiting."
+                      continue
                     fi
-                    if [ -z "$children" ]; then
-                      echo "Cannot list any child of stack #$parent; leaving completion undetected for a rerun."
-                    else
-                    # Release the children this landing unblocks. check-stack-branch holds a child
-                    # whose `Blocked by #N` sibling is still open, and nothing else re-dispatches it,
-                    # so the landing does: re-adding `implement` with the App token is a bot label
-                    # event, which the router routes straight to implement. The child that just
-                    # landed counts as done even before the gate closes its issue a moment later.
-                    for child in $children; do
-                      [ "$child" = "$closed_issue" ] && continue
-                      meta=$(gh issue view "$child" --repo "$REPO" --json state,labels,body 2>/dev/null || echo '{}')
-                      printf '%s' "$meta" | jq -e '(.state // "" | ascii_downcase) == "open"' >/dev/null || continue
-                      printf '%s' "$meta" | jq -e '[.labels[]?.name] | (index("implement") != null) and (index("bot-working") == null)' >/dev/null || continue
-                      blockers=$(printf '%s' "$meta" | jq -r '.body // ""' | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
-                      [ -n "$blockers" ] || continue
-                      waiting=""
-                      for b in $blockers; do
-                        [ "$b" = "$closed_issue" ] && continue
-                        if gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open; then
-                          waiting="$waiting #$b"
-                        fi
-                      done
-                      if [ -n "$waiting" ]; then
-                        echo "#$child still waits on$waiting."
-                        continue
-                      fi
-                      gh issue edit "$child" --repo "$REPO" --remove-label implement >/dev/null 2>&1 || true
-                      gh issue edit "$child" --repo "$REPO" --add-label implement >/dev/null
-                      echo "Released #$child: everything it was blocked by has landed."
+                    gh issue edit "$child" --repo "$REPO" --remove-label implement >/dev/null 2>&1 || true
+                    gh issue edit "$child" --repo "$REPO" --add-label implement >/dev/null
+                    echo "Released #$child: everything it was blocked by has landed."
+                  done
+                  open_children=0
+                  for child in $children; do
+                    # Landed, though the gate may not have closed its issue yet.
+                    [ "$child" = "$closed_issue" ] && continue
+                    if gh issue view "$child" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open; then
+                      open_children=$((open_children + 1))
+                    fi
+                  done
+                  if [ "$open_children" -gt 0 ]; then
+                    echo "$open_children child issue(s) still open on stack #$parent; the stack continues."
+                  else
+                    # The root pull request must be green and mergeable. Green: a successful
+                    # CI run on its head SHA. Mergeable: the same on-demand computation
+                    # every gate dispatch already relies on; UNKNOWN settles in the
+                    # background, so ask until it does, like mergeable_state() does.
+                    root_state=UNKNOWN
+                    for _ in 1 2 3 4 5 6; do
+                      root_state=$(gh pr view "$root_pr" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo UNKNOWN)
+                      [ "$root_state" = "UNKNOWN" ] || break
+                      sleep 5
                     done
-                    open_children=0
-                    for child in $children; do
-                      # Landed, though the gate may not have closed its issue yet.
-                      [ "$child" = "$closed_issue" ] && continue
-                      if gh issue view "$child" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open; then
-                        open_children=$((open_children + 1))
-                      fi
-                    done
-                    if [ "$open_children" -gt 0 ]; then
-                      echo "$open_children child issue(s) still open on stack #$parent; the stack continues."
+                    root_sha=$(gh api "repos/$REPO/pulls/$root_pr" --jq '.head.sha')
+                    root_ci=$(gh api "repos/$REPO/actions/runs?head_sha=$root_sha&per_page=100" \
+                      --jq '[.workflow_runs[]
+                        | select(.name == env.CI_WORKFLOW_NAME and .status == "completed"
+                                 and .conclusion == "success")]
+                      | sort_by(.created_at) | last // empty')
+                    if [ -z "$root_ci" ] || [ "$root_state" != "MERGEABLE" ]; then
+                      echo "Root PR #$root_pr is not green/mergeable yet; the human will merge when it is."
                     else
-                      # The root pull request must be green and mergeable. Green: a successful
-                      # CI run on its head SHA. Mergeable: the same on-demand computation
-                      # every gate dispatch already relies on; UNKNOWN settles in the
-                      # background, so ask until it does, like mergeable_state() does.
-                      root_state=UNKNOWN
-                      for _ in 1 2 3 4 5 6; do
-                        root_state=$(gh pr view "$root_pr" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo UNKNOWN)
-                        [ "$root_state" = "UNKNOWN" ] || break
-                        sleep 5
-                      done
-                      root_sha=$(gh api "repos/$REPO/pulls/$root_pr" --jq '.head.sha')
-                      root_ci=$(gh api "repos/$REPO/actions/runs?head_sha=$root_sha&per_page=100" \
-                        --jq '[.workflow_runs[]
-                          | select(.name == env.CI_WORKFLOW_NAME and .status == "completed"
-                                   and .conclusion == "success")]
-                        | sort_by(.created_at) | last // empty')
-                      if [ -z "$root_ci" ] || [ "$root_state" != "MERGEABLE" ]; then
-                        echo "Root PR #$root_pr is not green/mergeable yet; the human will merge when it is."
+                      completion_marker='<!-- stack-complete -->'
+                      # The announcement is a pull request comment, and pull request
+                      # comments live at the issue endpoint for the pull request number,
+                      # so the marker is looked for where the comment was posted.
+                      already=$(gh api "repos/$REPO/issues/$root_pr/comments?per_page=100" \
+                        --jq "[.[] | select(.body | contains(\"$completion_marker\"))] | length" 2>/dev/null || echo 0)
+                      if [ "${already:-0}" -gt 0 ]; then
+                        echo "Stack #$parent already has a completion announcement; staying silent."
                       else
-                        completion_marker='<!-- stack-complete -->'
-                        # The announcement is a pull request comment, and pull request
-                        # comments live at the issue endpoint for the pull request number,
-                        # so the marker is looked for where the comment was posted.
-                        already=$(gh api "repos/$REPO/issues/$root_pr/comments?per_page=100" \
-                          --jq "[.[] | select(.body | contains(\"$completion_marker\"))] | length" 2>/dev/null || echo 0)
-                        if [ "${already:-0}" -gt 0 ]; then
-                          echo "Stack #$parent already has a completion announcement; staying silent."
-                        else
-                          gh pr comment "$root_pr" --repo "$REPO" --body "Stack complete: all children have merged into the feature branch and CI is green. This root pull request is ready for a human to review and merge into $DEFAULT_BRANCH. $completion_marker"
-                          echo "Stack #$parent complete: announced root PR #$root_pr."
-                        fi
+                        gh pr comment "$root_pr" --repo "$REPO" --body "Stack complete: all children have merged into the feature branch and CI is green. This root pull request is ready for a human to review and merge into $DEFAULT_BRANCH. $completion_marker"
+                        echo "Stack #$parent complete: announced root PR #$root_pr."
                       fi
                     fi
-                    fi
+                  fi
                   fi
                 fi
               fi
             fi
-          else
-            maybe_dispatch "$EVENT_PR"
           fi
 
   reconcile-bot-pr-runs:
@@ -1347,40 +1245,13 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
       # Runs only the default-branch workflow and never checks out pull-request code.
       # External users cannot impersonate github-actions[bot].
-      - name: Approve checks and dispatch Merge Gate for trusted bot pull requests
+      # Moving pull requests towards a merge is the merge train's, which this schedule also ticks.
+      - name: Approve trusted bot CI and clear stale reservations
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-
-          # GitHub computes mergeability on demand. The first read of a pull request nobody has
-          # opened recently answers UNKNOWN through the API and null through REST, while it works
-          # the answer out in the background. Reading once therefore reports "not conflicting"
-          # for precisely the stale conflicting pull requests that need the gate. Ask until it
-          # settles.
-          mergeable_state() {
-            local pr="$1" state=UNKNOWN
-            for _ in 1 2 3 4 5 6; do
-              state=$(gh pr view "$pr" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo UNKNOWN)
-              [ "$state" = "UNKNOWN" ] || break
-              sleep 5
-            done
-            echo "$state"
-          }
-
-          # A gate already queued or running for this pull request will read the same CI verdict;
-          # a second dispatch would wait in the belt's queue and run the same gate twice.
-          gate_is_live() {
-            local pr="$1" status live
-            for status in queued in_progress waiting pending; do
-              live=$(gh api "repos/$REPO/actions/workflows/work-router.yml/runs?status=$status&per_page=100" \
-                --jq "[.workflow_runs[] | select(.display_title == \"Working (Merge Gate): PR #${pr}\")] | length" 2>/dev/null || echo 0)
-              [ "${live:-0}" -eq 0 ] || return 0
-            done
-            return 1
-          }
 
           # Stale reservation sweep. Labelling ten issues at once labels all ten immediately,
           # because authorize-bot-work is keyed per issue, while implement-global lets exactly
@@ -1419,7 +1290,7 @@ jobs:
                  )
               | [.number, .head.ref, .head.sha] | @tsv
             ' |
-            while IFS=$'\t' read -r pr_number branch head_sha; do
+            while IFS=$'\t' read -r _ branch _; do
               gh api "repos/$REPO/actions/runs?status=action_required&branch=$branch" \
                 --jq '.workflow_runs[]
                   | select(
@@ -1431,110 +1302,6 @@ jobs:
                   echo "Approving trusted bot run $run_id"
                   gh api "repos/$REPO/actions/runs/$run_id/approve" --method POST
                 done
-
-              ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
-                --jq '[.workflow_runs[]
-                  | select(
-                      .name == env.CI_WORKFLOW_NAME
-                      and .event == "pull_request"
-                      and .status == "completed"
-                      and (.conclusion == "success" or .conclusion == "failure")
-                    )
-                  ] | sort_by(.created_at) | last // empty | [.id, .conclusion, .updated_at] | @tsv')
-              if [ -z "$ci" ]; then
-                # A conflicting pull request has no merge ref for GitHub to build, so a
-                # `pull_request` CI workflow can never run on that head: refs/pull/N/merge is a
-                # 404 for as long as the conflict lasts. Waiting for a verdict that cannot arrive
-                # deadlocks the belt, because resolving the conflict is the gate's own job. Fall
-                # back to the branch's last verdict so the gate runs; it stays on the remediation
-                # path and cannot merge on a stale conclusion.
-                mergeable_now=$(mergeable_state "$pr_number")
-                if [ "$mergeable_now" = "CONFLICTING" ]; then
-                  ci=$(gh api "repos/$REPO/actions/runs?branch=$branch&per_page=100" \
-                    --jq '[.workflow_runs[]
-                      | select(
-                          .name == env.CI_WORKFLOW_NAME
-                          and .event == "pull_request"
-                          and .status == "completed"
-                          and (.conclusion == "success" or .conclusion == "failure")
-                        )
-                      ] | sort_by(.created_at) | last // empty | [.id, .conclusion, .updated_at] | @tsv')
-                fi
-                if [ -z "$ci" ]; then
-                  echo "::warning::PR #$pr_number head $head_sha has no completed $CI_WORKFLOW_NAME run; the belt cannot gate it until CI runs."
-                  continue
-                fi
-                echo "PR #$pr_number conflicts, so CI cannot run on $head_sha at all; gating on the branch's last verdict."
-              fi
-
-              IFS=$'\t' read -r ci_run_id ci_conclusion ci_finished <<<"$ci"
-
-              # A verdict is a comment carrying BOTH the gate marker and a `**Verdict:**`
-              # line; progress comments and failed attempts deliberately carry neither
-              # matching pair, so a crashed or OOM-killed gate never masks a PR from
-              # later sweeps. A recorded verdict only counts when it is NEWER than the
-              # latest CI run; the old existence check made the gate one-shot per PR.
-              # Attempts are failed gates (the attempt marker) since this CI verdict.
-              latest_verdict=$(gh api "repos/$REPO/issues/$pr_number/comments?per_page=100" \
-                --jq '[.[] | select((.body | contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))) | .created_at] | max // empty')
-              linked_issue=$(gh pr view "$pr_number" --repo "$REPO" --json closingIssuesReferences --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)
-              if [ -n "$linked_issue" ]; then
-                issue_verdict=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
-                  --jq '[.[] | select((.body | contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))) | .created_at] | max // empty')
-                if [ -n "$issue_verdict" ] && { [ -z "$latest_verdict" ] || [ "$issue_verdict" \> "$latest_verdict" ]; }; then
-                  latest_verdict="$issue_verdict"
-                fi
-              fi
-              # A verdict parks the CODE it was given on, not the CI run that prompted it. This
-              # used to compare against the CI finish time, which made the park worthless: any
-              # later CI run on the same commits -- a re-run, a nightly, a rebuild triggered by
-              # main moving -- was newer than the verdict, so the belt re-dispatched a pull
-              # request a human had already been handed, and the attempt counter below reset to
-              # zero at the same time and handed it a fresh budget of six full gate runs.
-              # Lyceum PR #13 sat parked by a `review` verdict for six days while this happened.
-              #
-              # The newest commit on the branch is the right key. A gate verdict newer than it
-              # applies to the current head, so the park holds however often CI runs. Push a
-              # commit -- which is what apply-review and a `remediated` verdict both do -- and
-              # the head moves past the verdict and the gate decides again, which is correct:
-              # that is new code nobody has ruled on.
-              head_committed=$(gh pr view "$pr_number" --repo "$REPO" \
-                --json commits --jq '[.commits[].committedDate] | max // empty' 2>/dev/null || true)
-              verdict_horizon="${head_committed:-$ci_finished}"
-              if [ -n "$latest_verdict" ] && [ "$latest_verdict" \> "$verdict_horizon" ]; then
-                echo "PR #$pr_number: gate verdict ($latest_verdict) is newer than its head commit ($verdict_horizon); the park holds, skipping"
-                continue
-              fi
-
-              attempts=$(gh api "repos/$REPO/issues/$pr_number/comments?per_page=100" \
-                --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$verdict_horizon"'") ] | length')
-              if [ -n "$linked_issue" ]; then
-                issue_attempts=$(gh api "repos/$REPO/issues/$linked_issue/comments?per_page=100" \
-                  --jq '[.[] | select(.body | contains("<!-- agent-merge-gate-attempt -->")) | select(.created_at > "'"$verdict_horizon"'") ] | length')
-                attempts=$((attempts + issue_attempts))
-              fi
-              if [ "$attempts" -ge "$MAX_GATE_ATTEMPTS" ]; then
-                echo "PR #$pr_number already consumed $attempts gate attempts on this head, parking for review"
-                continue
-              fi
-              if gate_is_live "$pr_number"; then
-                echo "PR #$pr_number: a merge-gate run is already live; not dispatching another."
-                continue
-              fi
-
-              echo "Dispatching Merge Gate for PR #$pr_number ($ci_conclusion, run $ci_run_id, attempt $((attempts + 1)) of $MAX_GATE_ATTEMPTS)"
-              gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" \
-                --method POST \
-                -f ref="$DEFAULT_BRANCH" \
-                -f "inputs[operation]=merge-gate" \
-                -f "inputs[pr-number]=$pr_number" \
-                -f "inputs[ci-conclusion]=$ci_conclusion" \
-                -f "inputs[ci-run-id]=$ci_run_id" \
-                -f "inputs[attempts_so_far]=$attempts"
-
-              # Every eligible pull request in one tick. The belt queues them first in, first out
-              # (`queue: max` on call-merge-gate); before it did, each dispatch cancelled the one
-              # pending ahead of it, so this loop stopped after one and the rest waited an hour.
             done
 
   audit-close:

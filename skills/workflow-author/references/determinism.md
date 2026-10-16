@@ -338,9 +338,8 @@ a third time.
 A second trap is that `workflow_run` does not fire for `pull_request`-triggered CI completions on
 feature branches. The trigger works for push-to-main, but bot PRs whose CI was triggered by
 `pull_request` never produce the event. Two things cover that: the consumer CI's own
-`dispatch-merge-gate` job, which hands the verdict over from inside CI, and the router's hourly
-`reconcile-bot-pr-runs` job, which sweeps open bot pull requests and dispatches the gate for any
-whose CI has concluded since the last verdict.
+`dispatch-merge-train` job, which hands the verdict to the merge train from inside CI, and the
+router's hourly tick of the train, which reads every open pull request afresh.
 
 ### LifecycleOps
 
@@ -441,7 +440,8 @@ inputs.
 |---|---|
 | `audit-close` | Close audit reports whose referenced issues are all closed |
 | `cleanup-artifacts` | Delete artifacts past the retention window |
-| `reconcile-bot-pr-runs` | Approve pending bot CI, dispatch the gate for a concluded run, clear stale `bot-working` claims |
+| `reconcile-bot-pr-runs` | Approve pending bot CI, clear stale `bot-working` claims |
+| `merge-train` | Move the oldest open pull request one step: update it from its base, dispatch the gate, or approve its CI |
 
 ### Rules
 

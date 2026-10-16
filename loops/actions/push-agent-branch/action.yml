@@ -12,6 +12,10 @@ inputs:
   token:
     description: GitHub token with contents:write.
     required: true
+  expected-branch:
+    description: The only branch the push may target. Empty accepts the branch the item names.
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -28,6 +32,7 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
         OUTPUT_FILE: ${{ inputs.output-file }}
         BUNDLE_FILE: ${{ inputs.bundle-file }}
+        EXPECTED_BRANCH: ${{ inputs.expected-branch }}
       run: |
         set -euo pipefail
         [ -f "$OUTPUT_FILE" ] || exit 0
@@ -36,6 +41,16 @@ runs:
         [ -n "$ITEM" ] || exit 0
 
         BRANCH=$(echo "$ITEM" | jq -r '.branch')
+        # The agent names the branch; the caller knows it. A push anywhere else is refused, not
+        # redirected: a model that named the wrong branch may have built on the wrong one too.
+        # An item that names none was built on the checkout, which is the expected branch.
+        if [ -n "$EXPECTED_BRANCH" ] && { [ -z "$BRANCH" ] || [ "$BRANCH" = null ]; }; then
+          BRANCH="$EXPECTED_BRANCH"
+        fi
+        if [ -n "$EXPECTED_BRANCH" ] && [ "$BRANCH" != "$EXPECTED_BRANCH" ]; then
+          echo "::error::The agent asked to push to '$BRANCH'; this run may only push to '$EXPECTED_BRANCH'."
+          exit 1
+        fi
         echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
     - name: Apply bundle to pull request branch
       if: steps.request.outputs.branch != '' && inputs.bundle-file != ''

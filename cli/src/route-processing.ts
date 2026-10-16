@@ -13,7 +13,13 @@ const routeCrons: Partial<Record<RouteName, string>> = {
 const routeHelperJobs: Partial<Record<RouteName, readonly string[]>> = {
   implement: ["check-implement-pr"],
   triage: ["dispatch-triage"],
-  "merge-gate": ["merge-approved"],
+  "merge-gate": ["merge-approved", "merge-train"],
+};
+
+// Dispatch operations that exist only to serve one worker route. A router without the worker
+// would offer an operation no job answers, which the route matrix reports.
+const routeHelperOperations: Partial<Record<RouteName, readonly string[]>> = {
+  "merge-gate": ["merge-train"],
 };
 
 export function stripRouteFromRouter(yaml: string, route: RouteName): string {
@@ -31,10 +37,12 @@ export function stripRouteFromRouter(yaml: string, route: RouteName): string {
     result = removeJobBlock(result, job);
   }
 
-  result = result.replace(
-    new RegExp(`^          - ${escapeRegex(route)}\\n`, "gm"),
-    "",
-  );
+  for (const operation of [route, ...(routeHelperOperations[route] ?? [])]) {
+    result = result.replace(
+      new RegExp(`^          - ${escapeRegex(operation)}\\n`, "gm"),
+      "",
+    );
+  }
 
   return result;
 }

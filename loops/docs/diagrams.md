@@ -57,7 +57,7 @@ flowchart TD
     wTriage("agent-triage")
     classify -.->|"cron or dispatch"| plumbing
     plumbing["deterministic jobs<br/>no model runs in any of these"] --> pJobs
-    pJobs("bot-approve · audit-close<br/>cleanup-artifacts · validate<br/>reconcile-bot-pr-runs · detect-pr-conflicts<br/>check-stack-branch · dispatch-implement")
+    pJobs("bot-approve · audit-close<br/>cleanup-artifacts · validate<br/>reconcile-bot-pr-runs · merge-train · land-stack-child<br/>check-stack-branch · dispatch-implement")
     idle(("Idle<br/>run ends, ~10s, every job skipped"))
 
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
@@ -87,10 +87,14 @@ flowchart LR
     refine -->|"8 or more"| split("Split into children") --> refine
     refine -.->|questions| author
     implement("implement<br/>branch, PR, closes the issue") --> ci("CI")
-    ci --> gate{"merge-gate"}
+    person("A person opens a PR") --> ci
+    ci --> train{"merge train<br/>oldest PR first,<br/>one at a time"}
+    train -.->|"green, behind main"| update("Merge main in") --> ci
+    train --> gate{"merge-gate"}
     gate -->|merge| merged(("Merged"))
-    gate -.->|"CI failed"| fix("Fix, push, CI again") --> gate
-    gate -.->|"risk or protected"| human(("Human review"))
+    merged -->|"next PR"| train
+    gate -.->|"CI failed or conflict"| fix("Fix, push, CI again") --> ci
+    gate -.->|".github, secrets<br/>or 1000+ lines"| human(("Human review"))
     review("Someone reviews the PR") --> applyReview("apply-review") --> ci
     audit("audit, weekly") -->|"files one issue"| refine
 
@@ -99,9 +103,9 @@ flowchart LR
     classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
-    class open,write,review,audit start
-    class refine,split,implement,ci,fix,applyReview,author action
-    class triage,gate decision
+    class open,write,review,audit,person start
+    class refine,split,implement,ci,fix,applyReview,author,update action
+    class triage,gate,train decision
     class human,closed failure
     class merged success
 ```
@@ -109,6 +113,44 @@ flowchart LR
 Audit creates work rather than consuming it, and files into `refine` rather than straight to
 `implement`, so a report of several unrelated findings becomes one properly sized issue per finding
 instead of one pull request that has to fix them all.
+
+### The merge train
+
+One pull request moves at a time, the lowest number first, whoever opened it. Everything else waits
+untouched, so a merge never invalidates work in flight. A pull request a person has to decide on is
+passed by, so it never blocks the line. The train ticks on every merge, every CI completion, after
+every gate, and hourly as the fallback.
+
+```mermaid
+flowchart TD
+    trainTick("A merge, a CI verdict,<br/>a finished gate, or the hour") --> trainLive
+    trainLive{"A gate already<br/>on the belt?"}
+    trainLive -.->|yes| trainWait
+    trainLive -->|no| trainNext
+    trainNext{"Oldest open PR from this repo,<br/>bot or writer, not draft,<br/>no hold label"}
+    trainNext -.->|"none left"| trainIdle
+    trainNext --> trainPark
+    trainPark{"Parked on this head?<br/>owner or human review,<br/>blocked with main unmoved,<br/>attempts spent"}
+    trainPark -.->|"yes: pass it by"| trainNext
+    trainPark -->|no| trainCi
+    trainCi{"Its CI"}
+    trainCi -.->|running| trainWait
+    trainCi -->|"green, behind main"| trainUpdate
+    trainCi -->|"red, conflicting,<br/>or green and current"| trainGate
+    trainUpdate(("Merge main in<br/>CI reruns on what it<br/>will land on"))
+    trainGate(("Dispatch the gate<br/>repair or squash-merge"))
+    trainWait(("Wait<br/>the next tick looks again"))
+    trainIdle(("Idle<br/>the train is empty"))
+
+    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
+    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
+    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
+    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
+    class trainTick start
+    class trainLive,trainNext,trainPark,trainCi decision
+    class trainWait,trainIdle idle
+    class trainUpdate,trainGate success
+```
 
 ### How a feature stacks
 
@@ -319,8 +361,8 @@ overnight pull requests mean every merge moves the default branch under the rest
 
 ```mermaid
 flowchart TD
-    gateStart("Work Router<br/>merge-gate route<br/>CI reported, or the hourly<br/>reconcile belt dispatched it") --> gateSubject
-    gateSubject{"subject (rung 4)<br/>Our open PR?<br/>Closes an implement issue?"}
+    gateStart("Work Router<br/>merge-gate route<br/>the merge train dispatched it,<br/>oldest PR first") --> gateSubject
+    gateSubject{"subject (rung 4)<br/>Open PR from this repo,<br/>by the bot or a writer?"}
     gateSubject -.->|no| gateIdle
     gateSubject -->|yes| gateBranch
     gateBranch("Check out the PR branch<br/>the push is fast-forward only,<br/>so never rebase") --> gateFacts
@@ -332,14 +374,14 @@ flowchart TD
     gatePush(("Pushed<br/>CI runs again, gate re-enters"))
     gateFix -.->|"cannot fix"| gateHuman
     gateProtected{"protected_changes (rung 4b)<br/>blast radius from paths, CODEOWNERS<br/>and the size of the code that ships"}
-    gateProtected -.->|"protected path"| gateOwner
+    gateProtected -.->|".github/ path"| gateOwner
     gateProtected -->|"measured low, medium or high"| gateAssess
     gateAssess("Agent (rung 5)<br/>find defects, verify them,<br/>rate recoverability") --> gateDisposition
     gateDisposition{"Disposition<br/>computed in shell from<br/>the facts and the report"}
     gateDisposition -->|"no verified blocker,<br/>radius low or recoverable medium"| gateRootCheck
     gateRootCheck{"PR base is a<br/>stack feature branch<br/>and this PR is the root?"}
     gateRootCheck -->|"child PR: no"| gateMerge
-    gateDisposition -.->|"radius high, protected<br/>or owner path"| gateOwner
+    gateDisposition -.->|"1000+ lines, .github/<br/>or a secret"| gateOwner
     gateDisposition -.->|"fragile, unmet criteria<br/>or low confidence"| gateHuman
     gateDisposition -.->|"CI red or a verified<br/>high finding"| gateBlocked
     gateMerge(("AUTO-MERGE<br/>squash into the PR's base<br/>(main, or the feature branch:<br/>then the child issue closes,<br/>pr-pending removed)"))
@@ -350,8 +392,8 @@ flowchart TD
     gateOwner --> gatePreview
     gatePreview("operation=evidence<br/>screenshots of the head<br/>before the person decides") --> gateApproved
     gateApproved(("Approved by a writer<br/>merge-approved merges<br/>the approved commit"))
-    gateBlocked(("BLOCKED<br/>review + blocked,<br/>the belt does not retry"))
-    gateIdle(("Idle<br/>not ours, or not open"))
+    gateBlocked(("BLOCKED<br/>review + blocked, the train<br/>retries it when main moves"))
+    gateIdle(("Idle<br/>a fork, a stranger,<br/>or not open"))
     gateFix -.->|"attempt 6 of 6"| gateBlocked
 
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033

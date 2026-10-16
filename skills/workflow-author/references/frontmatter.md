@@ -215,12 +215,13 @@ bot as their actor, and no `workflow_run` event arrives for any of them (verifie
 2026-09-06: four human-actor CI runs produced four router runs, three bot-actor runs produced none).
 The merge gate never hears about the verdict, and the bot PR sits open.
 
-Two paths cover the gap. The consumer's CI carries a final `dispatch-merge-gate` job
-(`loops/templates/ci/app-ci-*.yml`) that runs on bot pull requests, folds the other jobs' results
-into a conclusion, and dispatches the router with `operation=merge-gate` using `GITHUB_TOKEN`;
-`workflow_dispatch` is one of the two events that token may raise. The router's hourly
-`reconcile-bot-pr-runs` job is the fallback for anything the hook missed, and it skips a pull request
-whose gate run is already queued or running.
+Two paths cover the gap. The consumer's CI carries a final `dispatch-merge-train` job
+(`loops/templates/ci/app-ci-*.yml`) that runs on every same-repository pull request, folds the
+other jobs' results into a conclusion, and dispatches the router with `operation=merge-train`
+using `GITHUB_TOKEN`; `workflow_dispatch` is one of the two events that token may raise. The
+conclusion travels with the dispatch because the CI run is still in progress when the train reads
+it. The hourly schedule ticks the train as the fallback, and the train never dispatches a second
+gate while one is queued or running.
 
 ### `schedule`
 

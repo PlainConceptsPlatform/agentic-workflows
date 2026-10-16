@@ -37,7 +37,7 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | `triage` | `agent-triage.md` | someone outside the organisation opens an issue | a comment, and either the `refine` label when it passes, the `review` label when it needs a person, or a close when it is genuinely rejected |
 | `refine` | `agent-refine.md` | the `refine` label is added | a refined story wrapped in the repository's own issue template with a Fibonacci estimate, or a temporal draft plus questions for the author, or a split into several right-sized issues |
 | `implement` | `agent-implement.md` | the `implement` label is added | one branch, one pull request, one issue closed |
-| `merge-gate` | `agent-merge-gate.md` | CI reports on a bot pull request | one of `auto-merge`, `human-review`, `owner-review` or `blocked`, or a fix pushed to the same branch; a pull request parked for a person gets its screenshots before the decision |
+| `merge-gate` | `agent-merge-gate.md` | the merge train hands it the oldest open pull request, the bot's or a writer's | one of `auto-merge`, `human-review`, `owner-review` or `blocked`, or a fix pushed to the same branch; a pull request parked for a person gets its screenshots before the decision |
 | `apply-review` | `agent-apply-review.md` | someone comments on a bot pull request or requests changes | the requested changes pushed to that pull request. An approval is not feedback: `merge-approved` merges the approved commit when the gate had parked it for a person |
 | `audit` | `agent-audit.md` | Mondays, or on demand | one issue of findings, labelled `refine` so it gets sized and split |
 | `release` | `agent-release.md` | on demand (`operation=release`) | a `chore(release): vX.Y.Z` pull request with auto-merge; `release-tag.yml` tags it and publishes the GitHub Release once it merges |
@@ -141,17 +141,45 @@ All of it is gated on markers, not labels: a repository whose issues carry no
 `stack-root-branch` / `stack-root-pr` markers runs the flat pipeline above, byte for byte what
 it ran before stacks existed, with no new labels and no new routes firing.
 
-A merge-gate verdict parks the **code** it was given on, not the CI run that prompted it. Both
-paths that dispatch the gate compare the standing verdict against the newest commit on the
-branch: re-run CI as often as you like and the park holds, but push a commit -- which is what
-apply-review and a `remediated` verdict both do -- and the gate decides again, because that is
-new code nobody has ruled on. They used to compare against the CI *finish time*, which made the
-park worthless: any later run on the same commits was newer than the verdict, so the belt
-re-dispatched a pull request a human already owned and handed it a fresh budget of six ~120-minute
-gate runs at the same time. One pull request sat parked for six days while that happened.
+### The merge train
 
-Two labels are the controls a person has: `review` parks anything for a human, and `future`
-holds a refined issue back from implementation until it is removed. A third label, `pr-pending`,
+Open pull requests merge one at a time, the lowest number first, whether the bot or a person
+with write access opened them. The router's `merge-train` job moves the one in front a single
+step and leaves the rest alone:
+
+| The oldest pull request that can move | The train |
+|---|---|
+| CI still running | waits |
+| green but behind its base branch | merges the base in (never rebases), so CI judges it against what it will land on |
+| red, or conflicting | hands it to the merge gate, which repairs and pushes |
+| green and up to date | hands it to the merge gate, which reviews and squash-merges |
+| parked for a person, a draft, or labelled `hold` | passes it by, so it never blocks the line |
+
+It ticks on every merge, every CI completion, after every gate, and hourly as the fallback, so a
+night or a weekend of pull requests drains without anyone merging by hand. Before the train, every
+eligible pull request was sent to the gate at once; each merge then moved the default branch under
+the rest, and a parked verdict never expired, so a batch left on Friday was still waiting on Monday.
+
+Only what is genuinely dangerous to merge unseen waits for a person: a change under `.github/`, a
+secret (a `secrets` file or directory, an `.env` file, a key or certificate), or more than 1000
+changed lines not counting tests, docs, translations and generated code. Auth, identity,
+migrations and infrastructure are review hints now, not stops; a change the agent shows cannot be
+undone, a verified high finding, or low confidence from the agent still parks.
+
+A merge-gate verdict parks the **code** it was given on, not the CI run that prompted it. The train
+compares the standing verdict against the newest commit on the branch: re-run CI as often as you
+like and an owner or human review holds, but push a commit -- which is what apply-review and a
+`remediated` verdict both do -- and the gate decides again, because that is new code nobody has
+ruled on. A `blocked` verdict, or a merge that did not happen, expires when the base branch moves,
+up to `MERGE_TRAIN_MAX_RETRIES` times: the failure may have been the base's.
+
+A consumer CI hands its verdict to the train from its last job (`dispatch-merge-train` in
+`templates/ci`), because GitHub sends no `workflow_run` event for CI a bot started. A CI that still
+dispatches `operation=merge-gate` is treated as the same handover until it is updated.
+
+Three labels are the controls a person has: `review` parks anything for a human, `future`
+holds a refined issue back from implementation until it is removed, and `hold` keeps a pull
+request off the merge train. A third label, `pr-pending`,
 marks issues whose bot PR is open and awaiting merge-gate it is informational only and does
 not route or block anything.
 
@@ -294,7 +322,8 @@ getting it wrong is equally quiet: the belt logs no completed CI run and the pul
 
 The daily and hourly crons (`audit-close`, `cleanup-artifacts`, `reconcile-bot-pr-runs`,
 `housekeeping`, and the optional error report) do not need staggering: they run on
-GitHub-hosted runners and never touch the fleet. The reconcile cron runs hourly at minute 17.
+GitHub-hosted runners and never touch the fleet. The reconcile cron runs hourly at minute 17 and
+ticks the merge train.
 
 The rest of that `env:` block belongs to the janitor and the audit chain, and each value is a
 repository's to change:
@@ -306,7 +335,10 @@ repository's to change:
 | `HOUSEKEEPING_STALE_PR_DAYS` | `3` | a bot pull request older than this with no gate verdict is reported, never closed |
 | `HOUSEKEEPING_DIGEST_TITLE` | `Needs a human` | the one issue listing what needs a person; empty turns the digest off |
 | `AUDIT_STALE_AFTER_DAYS` | `14` | when an unactioned audit report stops blocking the next audit |
-| `MAX_GATE_ATTEMPTS` | `6` | failed merge-gate attempts one pull request head may consume before the belt parks it |
+| `MAX_GATE_ATTEMPTS` | `6` | failed merge-gate attempts one pull request head may consume before the train passes it by |
+| `MERGE_TRAIN_HOLD_LABEL` | `hold` | a pull request with this label stays off the merge train |
+| `MERGE_TRAIN_MAX_RETRIES` | `3` | how often a `blocked` verdict is retried after the base branch moves |
+| `MERGE_TRAIN_DRY_RUN` | `false` | `true` logs the move the train would make and makes none |
 
 ## Consumer prerequisite
 

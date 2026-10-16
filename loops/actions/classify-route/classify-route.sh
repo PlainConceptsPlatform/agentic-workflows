@@ -156,9 +156,9 @@ classify_route() {
         ci_run_id=""
       elif [ "${ACTION:-}" = "closed" ] && [ "${PR_MERGED:-false}" = "true" ]; then
         # A merge is when the change's verification plan describes what the default branch now
-        # does, so the evidence run replays it then. detect-pr-conflicts reacts to this same
-        # event as its own event-gated job, not as a route, so taking the route here costs it
-        # nothing.
+        # does, so the evidence run replays it then. The merge train and land-stack-child react
+        # to this same event as event-gated jobs, not as routes, so taking the route here costs
+        # them nothing.
         if [ "${EVIDENCE_ENABLED:-true}" = "true" ]; then
           route="evidence"
           pr_number="${EVENT_PR_NUMBER:-}"
@@ -171,17 +171,17 @@ classify_route() {
       ;;
 
     workflow_run)
-      # Only a FAILED CI run on an attached pull request auto-dispatches the gate. A green
-      # run reaches the gate through the consumer CI's dispatch-merge-gate job and the
-      # reconcile belt, so routing success here would double-fire the gate for every passing
-      # pull request. GitHub delivers workflow_run only for CI runs whose actor is a human;
-      # a bot pull request's CI never arrives here at all, and the same two paths cover it.
-      if [ "${RUN_CONCLUSION:-}" != "failure" ]; then
-        error="CI concluded '${RUN_CONCLUSION:-}'; the gate auto-triggers only on failure"
+      # A CI verdict on a pull request moves the merge train, green or red. The train, not this
+      # event, decides which pull request the gate takes next: dispatching the gate for this one
+      # directly is what let a night of pull requests race each other for the default branch.
+      # GitHub delivers workflow_run only for CI runs whose actor is a human; a bot-updated pull
+      # request's CI reaches the train through the consumer CI's dispatch job and the schedule.
+      if [ "${RUN_CONCLUSION:-}" != "failure" ] && [ "${RUN_CONCLUSION:-}" != "success" ]; then
+        error="CI concluded '${RUN_CONCLUSION:-}'; only a success or a failure moves the merge train"
       elif is_issue_number "${RUN_PR_NUMBER:-}"; then
-        route="merge-gate"
+        route="merge-train"
         pr_number="${RUN_PR_NUMBER}"
-        ci_conclusion="failure"
+        ci_conclusion="${RUN_CONCLUSION}"
         ci_run_id="${RUN_ID:-}"
       else
         error="CI run has no attached pull request"
@@ -237,7 +237,17 @@ classify_route() {
           fi
           ;;
         merge-gate)
-          if is_issue_number "${INPUT_PR_NUMBER:-}"; then
+          # A consumer CI hands its verdict over with GITHUB_TOKEN, whose dispatches carry
+          # github-actions[bot] as the actor; the train and a person dispatch with other
+          # identities. That handover is a CI completion, so it moves the train rather than
+          # jumping the queue. The CI templates now dispatch merge-train; this keeps a consumer
+          # CI that still dispatches merge-gate in line until it is updated.
+          if is_issue_number "${INPUT_PR_NUMBER:-}" && [ "${ACTOR:-}" = "github-actions[bot]" ]; then
+            route="merge-train"
+            pr_number="${INPUT_PR_NUMBER}"
+            ci_conclusion="${INPUT_CI_CONCLUSION:-}"
+            ci_run_id="${INPUT_CI_RUN_ID:-}"
+          elif is_issue_number "${INPUT_PR_NUMBER:-}"; then
             route="merge-gate"
             pr_number="${INPUT_PR_NUMBER}"
             ci_conclusion="${INPUT_CI_CONCLUSION:-}"
@@ -259,6 +269,17 @@ classify_route() {
         audit)
           route="${OPERATION}"
           trigger_kind="${INPUT_TRIGGER_KIND:-manual}"
+          ;;
+        merge-train)
+          # The train always takes the oldest pull request that can move. A CI handover names its
+          # pull request and verdict because it runs inside that CI run, which still reads as in
+          # progress when the train looks; the verdict stands in for the run's own conclusion.
+          route="merge-train"
+          if is_issue_number "${INPUT_PR_NUMBER:-}"; then
+            pr_number="${INPUT_PR_NUMBER}"
+            ci_conclusion="${INPUT_CI_CONCLUSION:-}"
+            ci_run_id="${INPUT_CI_RUN_ID:-}"
+          fi
           ;;
         audit-close | cleanup-artifacts | reconcile-bot-pr-runs | housekeeping | validate)
           route="${OPERATION}"

@@ -19,6 +19,10 @@ inputs:
     description: Apply push_to_pull_request_branch items.
     required: false
     default: 'false'
+  expected-branch:
+    description: The only branch a push may target. A push naming any other branch is refused. Empty accepts the branch the item names.
+    required: false
+    default: ''
   close-issues:
     description: Apply close_issue items.
     required: false
@@ -73,6 +77,7 @@ runs:
         output-file: ${{ steps.output.outputs.output-file }}
         bundle-file: ${{ steps.output.outputs.bundle-file }}
         token: ${{ inputs.token }}
+        expected-branch: ${{ inputs.expected-branch }}
 
     - name: Close issues
       if: inputs.close-issues == 'true' && steps.output.outputs.item-count != '0'

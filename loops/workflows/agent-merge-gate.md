@@ -2,7 +2,7 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-merge-gate.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
   VERIFY_COMMANDS: ""
-  REPO_RULES: "Review the selected bot pull request for defects and report what you verified. Do not decide the outcome: the workflow computes it from your report and from facts it measured before you ran."
+  REPO_RULES: "Review the selected pull request for defects and report what you verified. Do not decide the outcome: the workflow computes it from your report and from facts it measured before you ran."
   # Where to look first, not what to escalate on. This list used to be the check that decided
   # whether a machine merged without a human, and it decided by category: the prompt told the
   # agent that a match "is not a defect, it is a reason this pull request needs a person". In a
@@ -13,34 +13,35 @@ env:
   # One line: gh-aw joins a multi-line env value onto a single line when it compiles the lock.
   RISK_INDICATORS: "Any diff touching authentication, authorization or session handling. Any change to a calculation or pricing engine, or to code handling money. Any database migration, or a change to an entity or schema. Any change to an audit or event log, or anything that could break its continuity. Any change to a public API contract or a shared library other repositories consume."
   # Paths a bot may change but never merge on its own: an extended regular expression matched
-  # against every changed path in the pull request. The default names this stack's dependency
-  # and toolchain manifests plus everything under a dotted directory, and is wrong for a
-  # repository built on anything else, which is the failure worth knowing about: an unmatched
-  # list protects nothing and reports nothing. A match holds the merge for a human; it does not
-  # stop the agent repairing failed CI on the same files.
-  PROTECTED_PATHS: '^(\.|AGENTS\.md$|ARCHITECTURE\.md$|opencode\.jsonc$|package\.json$|pnpm-lock\.yaml$|Directory\.Packages\.props$|global\.json$)'
+  # against every changed path in the pull request. A match holds the merge for a human; it does
+  # not stop the agent repairing failed CI on the same files.
+  #
+  # Only the automation itself. This list used to hold every dependency manifest, lockfile and
+  # dotted directory as well, and with a size threshold and an owner list as wide it parked most
+  # of a night's pull requests for a person who then merged them by hand, unread, on Monday:
+  # in Pliny-Bot 32 of 40 bot pull requests in two days. What stops a merge now is what is
+  # genuinely dangerous to merge unseen: the workflows, the secrets, and a change too big to
+  # review in one pass.
+  PROTECTED_PATHS: '^\.github/'
   # Paths whose change needs the person who owns them. A match forces OWNER REVIEW REQUIRED and
   # sets blast radius high on its own, whatever the diff's size. CODEOWNERS names who is asked
-  # when the repository has that file; it is never a prerequisite, because a repository without
-  # one must still be able to protect its auth and its infrastructure.
+  # when the repository has that file; it is never a prerequisite.
   #
-  # Matches a path segment or a file stem, in both spellings, because the same default has to
-  # work for `src/auth/`, `src/Api/Identity/` and `AuthEndpoints.cs`. The lowercase-only,
-  # directory-only version this replaced matched nothing at all in a .NET consumer: replayed
-  # against that repository's last eighteen gated pull requests it caught none of them, while
-  # this one catches exactly three and they are the three that deserved an owner (a database
-  # migration, a change to the platform role definitions, and a downstream token service).
-  OWNER_PATHS: '(^|/)([Aa]uth|[Aa]uthn|[Aa]uthz|[Aa]uthentication|[Aa]uthorization|[Ii]dentity|[Ss]ecurity|[Ss]ecrets?|[Mm]igrations|[Ii]nfra|terraform|helm|k8s|deploy)(/|[A-Z][A-Za-z]*\.[a-z]+$)'
+  # Secrets: a `secrets` directory or file, an environment file, a key or a certificate. Code
+  # that handles secrets (a SecretMasker.cs) is not a secret; the review pass reads it like any
+  # other change.
+  OWNER_PATHS: '(^|/)([Ss]ecrets?(/|\.[A-Za-z0-9]+$)|\.env(\.[A-Za-z0-9_-]+)?$|[^/]+\.(pem|pfx|p12|key)$)'
   # Paths worth a second look that do not, alone, need a person. A match raises the floor to
   # medium, and medium with acceptable recoverability still auto-merges. This is the line that
-  # separates "look here" from "stop here", which the old RISK_INDICATORS list could not.
-  SENSITIVE_PATHS: '(^|/)([Dd]omain|entities|[Cc]ontracts)/'
-  # Diff shape. Size and spread are the honest deterministic signal for a change that touches no
-  # path a regex would name: the one pull request in the measured sample that genuinely wanted an
-  # owner matched no sensitive path and was identified by 29 files and ~1600 lines across five
-  # architectural layers.
-  BLAST_HIGH_FILES: "20"
-  BLAST_HIGH_LINES: "800"
+  # separates "look here" from "stop here". Auth, identity, security, migrations and
+  # infrastructure used to stop a merge from here; they are the review pass's to look at now, and
+  # a migration that rewrites data still parks through a `low` recoverability the agent evidences.
+  SENSITIVE_PATHS: '(^|/)([Dd]omain|entities|[Cc]ontracts)/|(^|/)([Aa]uth|[Aa]uthn|[Aa]uthz|[Aa]uthentication|[Aa]uthorization|[Ii]dentity|[Ss]ecurity|[Mm]igrations|[Ii]nfra|terraform|helm|k8s|deploy)(/|[A-Z][A-Za-z]*\.[a-z]+$)'
+  # Diff shape. Lines decide high: a change over a thousand counted lines (tests, docs,
+  # translations and generated code excluded) is too big to merge unseen. A file count alone
+  # never does, so the high file threshold is set out of reach; spread still raises medium.
+  BLAST_HIGH_FILES: "100000"
+  BLAST_HIGH_LINES: "1000"
   BLAST_MEDIUM_FILES: "5"
   BLAST_MEDIUM_LINES: "200"
   # Paths that change no runtime behaviour: tests, docs, specs, translations and generated
@@ -80,14 +81,18 @@ env:
   PARK_AT_UNUSABLE_OUTPUT: "2"
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
   GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
+  # The bots whose pull requests the gate takes, in every spelling GitHub uses for one account.
+  # Any other author needs write access to the repository, as they would to push the branch.
+  TRUSTED_BOTS: "github-actions[bot] app/github-actions platform-devbox[bot]"
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
   GIT_COMMITTER_NAME: "github-actions[bot]"
   GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
 description: |
-  Decides what happens to a bot-authored pull request once CI has reported: merge when the
-  risk assessment is clean, hand to a human when it is not, fix CI when it failed. Called by
-  the Work Router; does not trigger on public events.
+  Decides what happens to a pull request once CI has reported, whether the bot or a person with
+  write access opened it: merge when the risk assessment is clean, hand to a human when it is
+  genuinely dangerous, fix CI or a conflict when there is one. Called by the Work Router, one
+  pull request at a time by its merge train; does not trigger on public events.
 
   In a stack, a child pull request (its base is the feature branch) merges into that feature
   branch and its child issue closes with it; the root pull request is held for a person. The
@@ -154,6 +159,9 @@ jobs:
       found: ${{ steps.subject.outputs.found }}
       pr: ${{ steps.subject.outputs.pr }}
       issue: ${{ steps.subject.outputs.issue }}
+      # Where verdicts, attempts and labels go: the issue, or the pull request when it closes none.
+      record: ${{ steps.subject.outputs.record }}
+      head_ref: ${{ steps.subject.outputs.head-ref }}
       conclusion: ${{ steps.subject.outputs.conclusion }}
       run-id: ${{ steps.subject.outputs.run-id }}
       review_blocked: ${{ steps.review.outputs.review_blocked }}
@@ -174,6 +182,7 @@ jobs:
           ci-run-id: ${{ inputs.ci-run-id }}
           linked-issue: ${{ inputs.linked-issue }}
           require-label: ${{ env.IMPLEMENT_LABEL }}
+          trusted-bots: ${{ env.TRUSTED_BOTS }}
       - name: Block a pull request with requested changes
         id: review
         env:
@@ -354,14 +363,14 @@ jobs:
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           labels: ${{ env.WORKING_LABEL }}
       - name: Flag owner review
         if: needs.protected_changes.outputs.holds_review == 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           labels: |-
             ${{ env.REVIEW_LABEL }}
             ${{ env.OWNER_REVIEW_LABEL }}
@@ -370,7 +379,7 @@ jobs:
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           body: |
             ${{ env.GATE_MARKER }}
             PR #${{ needs.subject.outputs.pr }} changes protected files and cannot be auto-merged.
@@ -439,7 +448,7 @@ jobs:
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           body: |
             Problems found in PR #${{ needs.subject.outputs.pr }}. ${{ steps.conflicts.outputs.has_conflicts == 'true' && 'Merge conflicts detected.' || 'CI failed.' }}
             Bot is working on fixing it.
@@ -473,7 +482,7 @@ jobs:
         uses: ./.github/actions/validate-merge-gate-output
         with:
           output-file: ${{ steps.output.outputs.output-file }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           ci-conclusion: ${{ needs.subject.outputs.conclusion }}
           blast-level: ${{ needs.protected_changes.outputs.level }}
           protected-hit: ${{ needs.protected_changes.outputs.requires_review }}
@@ -511,18 +520,23 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
       - name: Verify pull request closes the source issue
+        if: needs.subject.outputs.issue != ''
         continue-on-error: true
         uses: ./.github/actions/link-pr-to-issue
         with:
           token: ${{ steps.app-token.outputs.token }}
           pr-number: ${{ needs.subject.outputs.pr }}
           issue-number: ${{ needs.subject.outputs.issue }}
+      # The push goes to this pull request's branch or nowhere. A `[bot] ` title prefix used to be
+      # the guard, which a person's pull request does not carry; the branch the subject job read
+      # is the exact one, whoever opened it.
       - name: Apply agent output
         uses: ./.github/actions/apply-agent-output
         with:
           artifact-name: ${{ needs.activation.outputs.artifact_prefix }}agent
           token: ${{ steps.app-token.outputs.token }}
           push-to-branch: 'true'
+          expected-branch: ${{ needs.subject.outputs.head_ref }}
           apply-labels: 'false'
       # GITHUB_TOKEN on purpose: an App-token comment on a pull request is an issue_comment
       # event, and GITHUB_TOKEN raises none. The full assessment lives on the issue, where the
@@ -558,7 +572,7 @@ jobs:
             ${{ needs.protected_changes.outputs.signals }}
             ```
 
-            Findings and verification on the linked issue: #${{ needs.subject.outputs.issue }}. [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            ${{ needs.subject.outputs.issue != '' && format('Findings and verification on the linked issue: #{0}.', needs.subject.outputs.issue) || 'Findings and verification are in the review comment above.' }} [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
             ${{ env.EVIDENCE_BEFORE_REVIEW == 'true' && contains(fromJson('["human-review","owner-review"]'), needs.validate_output.outputs.outcome) && 'Screenshots of this head follow in their own comment if it carries a verification plan. Approving the pull request merges it.' || '' }}
       - name: Merge approved pull request
         if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.stack_root != 'true'
@@ -579,7 +593,7 @@ jobs:
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           body: |
             **Stack root held.** This pull request is the root of a stack: its children merge
             into the feature branch, and it merges into ${{ github.event.repository.default_branch }} only when a person
@@ -589,7 +603,7 @@ jobs:
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           labels: ${{ env.WORKING_LABEL }}
       # `review` goes on for all three parked dispositions, so every board query and every
       # authorize-bot-work handoff that already reads it keeps working. The second label is what
@@ -599,7 +613,7 @@ jobs:
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           labels: |-
             ${{ env.REVIEW_LABEL }}
             ${{ needs.validate_output.outputs.outcome == 'owner-review' && env.OWNER_REVIEW_LABEL || '' }}
@@ -631,7 +645,7 @@ jobs:
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           labels: ${{ env.WORKING_LABEL }}
       # GitHub's closing keywords never fire when a PR merges into a branch other than the
       # default, so a child PR landing on the feature branch leaves its issue open — and
@@ -641,7 +655,7 @@ jobs:
       # and `gh issue close` on an already-closed issue is a harmless no-op, making the
       # step safe to re-run.
       - name: Close the child issue when the pull request landed on a feature branch
-        if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.pr_base != '' && needs.subject.outputs.pr_base != github.event.repository.default_branch
+        if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.issue != '' && needs.subject.outputs.pr_base != '' && needs.subject.outputs.pr_base != github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -668,7 +682,7 @@ jobs:
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           labels: |
             ${{ env.IMPLEMENT_LABEL }}
             ${{ env.WORKING_LABEL }}
@@ -745,18 +759,18 @@ jobs:
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           body: |
             ${{ env.ATTEMPT_MARKER }}
             Attempt ${{ inputs.attempts_so_far || '0' }} of ${{ env.MAX_ATTEMPTS }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
-            This failure parks at ${{ steps.budget.outputs.threshold }}. The issue keeps `implement`; the merge belt will retry.
+            This failure parks at ${{ steps.budget.outputs.threshold }}. The merge train will retry.
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Report the exhausted attempt budget
         if: steps.budget.outputs.park == 'true' && steps.budget.outputs.kind == 'machine'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           body: |
             ${{ env.ATTEMPT_MARKER }}
             Attempt ${{ inputs.attempts_so_far || '0' }} of ${{ steps.budget.outputs.threshold }} on PR #${{ needs.subject.outputs.pr }} ended without an outcome.
@@ -774,7 +788,7 @@ jobs:
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           body: |
             ${{ env.GATE_MARKER }}
             The agent finished on PR #${{ needs.subject.outputs.pr }} but its report could not be
@@ -794,7 +808,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.pr }}
           body: |
-            The merge gate stopped on this pull request and handed it to a person (#${{ needs.subject.outputs.issue }}).
+            The merge gate stopped on this pull request and handed it to a person${{ needs.subject.outputs.issue != '' && format(' (#{0})', needs.subject.outputs.issue) || '' }}.
             ${{ needs.validate_output.outputs.pushed == 'true' && 'The agent pushed a repair that was not applied because its report could not be read. The patch and bundle are in the `agent` artifact of the run below.' || '' }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Label the pull request for review
@@ -812,7 +826,7 @@ jobs:
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           labels: |-
             ${{ env.REVIEW_LABEL }}
             ${{ steps.budget.outputs.kind == 'machine' && env.STALLED_LABEL || '' }}
@@ -822,7 +836,7 @@ jobs:
         uses: ./.github/actions/remove-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.subject.outputs.issue }}
+          issue-number: ${{ needs.subject.outputs.record }}
           labels: ${{ env.WORKING_LABEL }}
 
   agent:
@@ -892,7 +906,7 @@ steps:
     uses: ./.github/actions/load-issue-context
     with:
       token: ${{ github.token }}
-      issue-number: ${{ needs.subject.outputs.issue }}
+      issue-number: ${{ needs.subject.outputs.record }}
       output-path: ${{ env.ISSUE_CONTEXT_PATH }}
   - name: Fetch the diff and any failing job logs
     env:
@@ -934,9 +948,10 @@ safe-outputs:
   # target "*" because these workers are dispatched, not triggered by the pull request:
   # the default "triggering" target has no pull request in context and rejects the push
   # with "requires pull request context", so the agent's fix is computed and discarded.
+  # No title prefix: the gate repairs pull requests people opened as well, and conclude pushes
+  # only to the branch of the pull request the subject job validated.
   push-to-pull-request-branch:
     target: "*"
-    required-title-prefix: "[bot] "
     max-patch-size: 10240
     # A failed bot PR may already contain protected files. Permit a verified repair push,
     # but protected_changes still prevents the later green-CI cycle from auto-merging it.
@@ -955,13 +970,13 @@ safe-outputs:
 timeout-minutes: 120
 ---
 
-1. You are gating pull request **#${{ needs.subject.outputs.pr }}**, which closes issue
-   **#${{ needs.subject.outputs.issue }}**. CI concluded
-   **${{ needs.subject.outputs.conclusion }}**.
+1. You are gating pull request **#${{ needs.subject.outputs.pr }}**${{ needs.subject.outputs.issue != '' && format(', which closes issue **#{0}**', needs.subject.outputs.issue) || ', which closes no issue' }}.
+   CI concluded **${{ needs.subject.outputs.conclusion }}**.
 
-   It has already been confirmed that this is an open pull request we authored, that it closes
-   an issue, and that the issue carries `implement`. Do not re-check any of that, and do not
-   poll for checks: the conclusion above is the answer.
+   It has already been confirmed that this is an open pull request from this repository, opened
+   by the bot or by someone with write access. Do not re-check any of that, and do not poll for
+   checks: the conclusion above is the answer. Who opened it changes nothing below: a person's
+   pull request is repaired, reviewed and merged by the same rules as the bot's.
 
    You are on the pull request branch. Never rebase, reset, amend or otherwise rewrite
    history: the workflow applies your commits as a bundle with a fast-forward-only push and
@@ -969,9 +984,11 @@ timeout-minutes: 120
    `push_to_pull_request_branch` tool's own description recommends rebasing; in this
    repository that advice is wrong. Merge, commit, and let the workflow push.
 
-2. Read `${{ env.ISSUE_CONTEXT_PATH }}`. It contains the issue body and its discussion. The
+2. Read `${{ env.ISSUE_CONTEXT_PATH }}`. It contains the issue body and its discussion, or, for
+   a pull request that closes no issue, the pull request's own description and discussion. The
    acceptance criteria there define what this implementation had to satisfy, and step 5c asks
-   you to check the diff against them.
+   you to check the diff against them. A description with no stated criteria is checked against
+   what it says the change does.
 
 3. Branch on the conclusion.
 
@@ -1225,7 +1242,7 @@ timeout-minutes: 120
    your report and from the facts it measured, and a word it does not recognise parks the pull
    request. Never merge with administrator privileges and never bypass a required check.
 
-8. Emit exactly one `add_comment` targeting issue `${{ needs.subject.outputs.issue }}`,
+8. Emit exactly one `add_comment` targeting item `${{ needs.subject.outputs.record }}`,
    containing, in this order:
 
    1. `${{ env.GATE_MARKER }}`

@@ -1,10 +1,14 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/actions/identify-gate-subject/action.yml. Update with workflows update --force; consumer edits may be overwritten.
 name: Identify gate subject
-description: Confirm the pull request is one we authored, resolve the issue it closes, and check that issue carries the required label.
+description: Confirm the pull request is one the gate may act on, resolve the issue it closes, and check a bot pull request's issue carries the required label.
 inputs:
   token:
     description: GitHub token with issues and pull-requests read access.
     required: true
+  trusted-bots:
+    description: Space-separated bot logins whose pull requests the gate gates. Anyone else needs write access.
+    required: false
+    default: ''
   pr-number:
     description: Pull request number to gate.
     required: true
@@ -21,7 +25,7 @@ inputs:
     required: false
     default: ''
   require-label:
-    description: Label the closing issue must carry. Empty disables the check.
+    description: Label a bot pull request's closing issue must carry. Empty disables the check. A person's pull request needs neither an issue nor the label.
     required: false
     default: ''
 outputs:
@@ -32,8 +36,14 @@ outputs:
     description: Pull request number.
     value: ${{ steps.identify.outputs.pr }}
   issue:
-    description: Issue number the pull request closes.
+    description: Issue number the pull request closes. Empty for a person's pull request that closes none.
     value: ${{ steps.identify.outputs.issue }}
+  record:
+    description: Where the gate writes its verdict and labels. The issue when there is one, otherwise the pull request.
+    value: ${{ steps.identify.outputs.record }}
+  head-ref:
+    description: The pull request's head branch, the only branch the gate may push to.
+    value: ${{ steps.identify.outputs.head-ref }}
   conclusion:
     description: CI conclusion, passed through unchanged or fetched from latest CI run.
     value: ${{ steps.identify.outputs.conclusion }}
@@ -54,6 +64,7 @@ runs:
         CI_RUN_ID: ${{ inputs.ci-run-id }}
         LINKED_ISSUE: ${{ inputs.linked-issue }}
         REQUIRE_LABEL: ${{ inputs.require-label }}
+        TRUSTED_BOTS: ${{ inputs.trusted-bots }}
       run: |
         set -euo pipefail
 
@@ -64,9 +75,30 @@ runs:
         }
 
         pr="$(gh pr view "$PR_NUMBER" --repo "$REPO" \
-          --json state,author,closingIssuesReferences,body)"
+          --json state,author,closingIssuesReferences,body,isCrossRepository,headRefName)"
 
         [ "$(jq -r '.state' <<<"$pr")" = "OPEN" ] || none "PR #$PR_NUMBER is not open"
+
+        # The gate checks out the branch, runs the repository's commands on it and pushes to it,
+        # with secrets. A fork's branch is someone else's code: never.
+        [ "$(jq -r '.isCrossRepository' <<<"$pr")" = "false" ] || none "PR #$PR_NUMBER comes from a fork"
+
+        # A bot this repository trusts, or a person with write access, who could push the same
+        # branch themselves. GraphQL spells a GitHub App `app/<name>`, REST `<name>[bot]`.
+        author="$(jq -r '.author.login' <<<"$pr")"
+        bot=false
+        if [ "$(jq -r '.author.is_bot // false' <<<"$pr")" = "true" ]; then
+          for candidate in "$author" "${author#app/}[bot]"; do
+            case " $TRUSTED_BOTS " in *" $candidate "*) bot=true ;; esac
+          done
+          [ "$bot" = true ] || none "PR #$PR_NUMBER was opened by $author, a bot this repository does not trust"
+        else
+          permission="$(gh api "repos/$REPO/collaborators/$author/permission" --jq '.permission' 2>/dev/null || echo none)"
+          case "$permission" in
+            admin | maintain | write) ;;
+            *) none "PR #$PR_NUMBER was opened by $author, who has $permission access" ;;
+          esac
+        fi
 
         issue="$LINKED_ISSUE"
 
@@ -80,9 +112,14 @@ runs:
             grep -oE '[0-9]+' | head -n 1 || true)"
         fi
 
-        [ -n "$issue" ] || none "PR #$PR_NUMBER does not close a numbered issue"
+        # The bot only opens a pull request for an issue it was given, so one that closes none, or
+        # whose issue lost the label, is not work the gate was handed. A person's pull request is
+        # gated on its own description when it closes nothing.
+        if [ "$bot" = true ]; then
+          [ -n "$issue" ] || none "PR #$PR_NUMBER does not close a numbered issue"
+        fi
 
-        if [ -n "$REQUIRE_LABEL" ]; then
+        if [ "$bot" = true ] && [ -n "$REQUIRE_LABEL" ]; then
           labels="$(gh issue view "$issue" --repo "$REPO" --json labels \
             --jq '[.labels[].name]')"
 
@@ -122,8 +159,10 @@ runs:
           echo "found=true"
           echo "pr=$PR_NUMBER"
           echo "issue=$issue"
+          echo "record=${issue:-$PR_NUMBER}"
+          echo "head-ref=$(jq -r '.headRefName' <<<"$pr")"
           echo "conclusion=$ci_conclusion"
           echo "run-id=$ci_run_id"
         } >> "$GITHUB_OUTPUT"
 
-        echo "PR #$PR_NUMBER closes #$issue; CI concluded $ci_conclusion"
+        echo "PR #$PR_NUMBER by $author closes #${issue:-nothing}; CI concluded $ci_conclusion"

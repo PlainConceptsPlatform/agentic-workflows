@@ -25,6 +25,7 @@ on:
           - triage
           - apply-review
           - merge-gate
+          - merge-train
           - audit
           - audit-close
           - cleanup-artifacts
@@ -79,6 +80,12 @@ jobs:
     uses: ./.github/workflows/agent-merge-gate.lock.yml
     concurrency:
       group: merge-belt
+
+  # The merge train: one step for the oldest open pull request that can move.
+  merge-train:
+    needs: [classify, call-merge-gate]
+    if: always() && needs.classify.outputs.route == 'merge-train'
+    runs-on: ubuntu-latest
 
   merge-approved:
     needs: classify
@@ -157,6 +164,11 @@ describe("stripRouteFromRouter", () => {
     const withoutGate = stripRouteFromRouter(ROUTER_YAML, "merge-gate");
     expect(jobs(withoutGate)).not.toContain("call-merge-gate");
     expect(jobs(withoutGate)).not.toContain("merge-approved");
+    // The train needs call-merge-gate, so it cannot outlive it, and its dispatch operation
+    // would be answered by no job.
+    expect(jobs(withoutGate)).not.toContain("merge-train");
+    expect(options(withoutGate)).not.toContain("merge-train");
+    expect(withoutGate).not.toContain("The merge train: one step");
   });
 
   it("removes the comment that introduces a job, and keeps the job before it intact", () => {
