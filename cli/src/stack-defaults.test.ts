@@ -45,20 +45,13 @@ describe("generateStackDefaults", () => {
     expect(defaults.hasNodeOnly).toBe(true);
   });
 
-  it("returns both .NET and Web verify commands for a full-stack repo", () => {
+  it("returns the repository's own pnpm verify for a full-stack repo", () => {
     const defaults = generateStackDefaults(makeInspection({
       solutionFiles: ["app.slnx"],
       pnpmLockfile: true,
     }));
 
-    expect(defaults.verifyCommands).toContain(".NET");
-    expect(defaults.verifyCommands).toContain("dotnet restore");
-    expect(defaults.verifyCommands).toContain("dotnet build -c Release");
-    expect(defaults.verifyCommands).toContain("dotnet test");
-    expect(defaults.verifyCommands).toContain("Web");
-    expect(defaults.verifyCommands).toContain("pnpm lint");
-    expect(defaults.verifyCommands).toContain("pnpm test");
-    expect(defaults.verifyCommands).toContain("pnpm build");
+    expect(defaults.verifyCommands).toBe("pnpm verify");
     expect(defaults.hasDotnet).toBe(true);
     expect(defaults.hasNodeOnly).toBe(false);
   });

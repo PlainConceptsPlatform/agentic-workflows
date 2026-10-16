@@ -150,6 +150,7 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
       console.error(`Template conflicts found. Re-run with --force to overwrite consumer-owned copies:\n${allConflicts.join("\n")}`);
       return 1;
     }
+    for (const warning of catalog?.warnings ?? []) console.error(`warning: ${warning}`);
     console.log(JSON.stringify({
       command,
       dryRun,
@@ -190,6 +191,7 @@ function summarize(result: CatalogInstallResult) {
     baselines: result.baselines,
     changes: result.changes.filter((change) => change.status !== "unchanged"),
     unchanged: result.changes.filter((change) => change.status === "unchanged").length,
+    ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
   };
 }
 

@@ -1613,6 +1613,13 @@ if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
                                                  human-review "$(gate_items "$(gate_comment assessed)")" success low false false ''
   gate_case "remediating check-diff is accepted" remediated   "$(gate_items "$(gate_comment remediated),${gate_push}")" success low false false fail
 
+  # The verdict line is read by its shape. Pliny-Bot #639 wrote the bold around the whole line,
+  # and the repair it pushed was discarded twice.
+  gate_bold_line='{"type":"add_comment","item_number":7,"body":"## Remediation Report\n\n**Verdict: remediated**\n"}'
+  gate_prose='{"type":"add_comment","item_number":7,"body":"The verdict is remediated, see the push."}'
+  gate_case "a verdict line bolded whole is read" remediated  "$(gate_items "${gate_bold_line},${gate_push}")" failure low
+  gate_case "a verdict in prose is not a verdict" invalid     "$(gate_items "${gate_prose},${gate_push}")" failure low
+
   # The agent's report decides the rest. This is the rule the whole redesign rests on: an
   # unverified finding is a warning whatever severity it claims, so a model cannot fail the gate
   # by asserting something it did not demonstrate, and cannot pass it by understating one it did.

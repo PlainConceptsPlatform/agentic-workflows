@@ -115,6 +115,11 @@ verification, and the merge gate runs it on the pull request head before the age
 failing `check-diff` never auto-merges: the gate agent deletes what it lists and pushes, like a
 CI repair.
 
+Workers verify with the repository's own command. A full-stack (.NET + pnpm) or Node repository
+gets `VERIFY_COMMANDS: "pnpm verify"`, and that script should run what CI blocks on. `update`
+replaces a value the package wrote earlier, keeps one a person wrote, and warns when the
+repository has no `verify` script.
+
 ### Stacked features
 
 When a split's children build on each other rather than standing alone, refine can open a

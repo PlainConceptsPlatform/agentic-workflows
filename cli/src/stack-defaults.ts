@@ -15,8 +15,12 @@ export function generateStackDefaults(inspection: RepositoryInspection): StackDe
   let verifyCommands: string;
   let repoRulesBase: string;
 
+  // A full-stack repository verifies with its own `pnpm verify`, which runs what its CI blocks on.
+  // The command this replaced was prose the agent had to interpret, and the implement worker never
+  // got it at all: it kept the package's dotnet-only line, so bot pull requests shipped with the
+  // web build broken (Pliny-Bot #639).
   if (hasDotnet && hasNode) {
-    verifyCommands = ".NET: dotnet restore && dotnet build -c Release && dotnet test | Web: pnpm lint && pnpm test && pnpm build";
+    verifyCommands = "pnpm verify";
     repoRulesBase = "Full-stack .NET + React/Next.js repository. Follow Clean Architecture layering: API → Application → Domain. Infrastructure implements Application ports. Do not reference EF Core or ASP.NET from Application. Frontend communicates exclusively via HTTP endpoints. Run both .NET and frontend verification.";
   } else if (hasDotnet) {
     verifyCommands = "dotnet restore && dotnet build -c Release --no-restore && dotnet test";
@@ -28,6 +32,15 @@ export function generateStackDefaults(inspection: RepositoryInspection): StackDe
 
   return { verifyCommands, repoRulesBase, hasDotnet, hasNodeOnly };
 }
+
+// Every VERIFY_COMMANDS value the package itself has ever written. A consumer holding one of these
+// never chose it, so an update may replace it with the current default for the stack.
+export const shippedVerifyDefaults: ReadonlySet<string> = new Set([
+  ".NET: dotnet restore && dotnet build -c Release && dotnet test | Web: pnpm lint && pnpm test && pnpm build",
+  "dotnet restore && dotnet build -c Release --no-restore && dotnet test",
+  "dotnet restore && dotnet build -c Release --no-restore && dotnet test -c Release --no-build",
+  "pnpm verify",
+]);
 
 // Only a worker that prints a verification block declares VERIFY_COMMANDS. Adding the key to
 // the others made byte-identical workers read as changed on every update, so a worker without

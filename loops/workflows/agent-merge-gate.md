@@ -455,6 +455,7 @@ jobs:
     outputs:
       valid: ${{ steps.validate.outputs.valid }}
       outcome: ${{ steps.validate.outputs.outcome }}
+      pushed: ${{ steps.validate.outputs.pushed }}
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -783,6 +784,26 @@ jobs:
 
             **Verdict:** human-review
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      # The issue is where the belt reads verdicts, but the pull request is where people look. A
+      # parked pull request with nothing on it reads as abandoned, and a repair the agent pushed
+      # that the gate refused to apply sits in the run artifact where nobody finds it.
+      - name: Tell the pull request it needs a person
+        if: steps.budget.outputs.park == 'true'
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ needs.subject.outputs.pr }}
+          body: |
+            The merge gate stopped on this pull request and handed it to a person (#${{ needs.subject.outputs.issue }}).
+            ${{ needs.validate_output.outputs.pushed == 'true' && 'The agent pushed a repair that was not applied because its report could not be read. The patch and bundle are in the `agent` artifact of the run below.' || '' }}
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Label the pull request for review
+        if: steps.budget.outputs.park == 'true'
+        uses: ./.github/actions/add-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ needs.subject.outputs.pr }}
+          labels: ${{ env.REVIEW_LABEL }}
       # `stalled` means a park the machine caused, and the janitor retries those. An unusable
       # report is a park the machine caused and retrying reproduces it, so it gets `review`
       # alone: the janitor's own rule is retry a failure, report a decision.
@@ -978,6 +999,13 @@ timeout-minutes: 120
    `node .opencode/scripts/check-diff.mjs`
    until it exits 0, then verify, push and report `remediated` as in step 6. An `assessed`
    verdict while it fails blocks the pull request.
+
+   When CI failed as well, repair CI first and `check-diff` second, and verify again after the
+   `check-diff` repair. The two pull in opposite directions: a complexity or coverage gate wants
+   more code and tests, `check-diff` wants fewer lines. Trimming to fit `check-diff` is how a
+   pull request that once passed broke the formatter, Semgrep and the complexity gate on its
+   last commit (Pliny-Bot #633). Never delete a test that covers a branch the change added; if
+   both cannot hold, keep CI green and say so in `reason`.
 
    - **success** → step 4, then step 5 (review the change).
    - **failure** → step 4, then step 6 (CI remediation).

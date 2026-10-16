@@ -457,6 +457,21 @@ jobs:
           if [ "$existing" -gt 0 ]; then
             echo "has-open-pr=true" >> "$GITHUB_OUTPUT"
             echo "::notice::Issue #$ISSUE_NUMBER already has an open bot PR. Skipping implement to prevent duplicates."
+            exit 0
+          fi
+
+          # A person working on the issue rarely writes a closing keyword: Pliny-Bot #633 said
+          # "Implements #627", and an hour later the bot opened #639 for the same issue. Any open
+          # pull request by a person that names the issue in its title, body or branch holds it.
+          human=$(gh pr list --repo "$REPO" --state open --json number,author,title,body,headRefName \
+            --jq "[.[]
+              | select((.author.login | startswith(\"app/\") or endswith(\"[bot]\")) | not)
+              | select(((.title + \"\n\" + (.body // \"\")) | test(\"#${ISSUE_NUMBER}([^0-9]|$)\"))
+                  or (.headRefName | test(\"(issue|gh)[-_/]?${ISSUE_NUMBER}([^0-9]|$)\"; \"i\")))
+              | .number] | first // empty")
+          if [ -n "$human" ]; then
+            echo "has-open-pr=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Open PR #$human by a person names #$ISSUE_NUMBER. Skipping implement so the two do not collide."
           else
             echo "has-open-pr=false" >> "$GITHUB_OUTPUT"
           fi

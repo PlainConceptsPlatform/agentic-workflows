@@ -492,6 +492,48 @@ describe("catalog installation", () => {
     await expect(readFile(workerPath, "utf8")).resolves.toContain("  VERIFY_COMMANDS: \"pnpm test --filter web\"\n");
   });
 
+  // A value the package wrote is not a choice. Every full-stack consumer kept the implement
+  // worker's dotnet-only line, so the bot never built the web app before opening a pull request.
+  it("replaces a VERIFY_COMMANDS the package shipped with the current stack default", async () => {
+    const shipped = "dotnet restore && dotnet build -c Release --no-restore && dotnet test -c Release --no-build";
+    const sourcePath = await createDirectory({
+      "workflows/agent-check.md": worker("  VERIFY_COMMANDS: \"\"\n"),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      "pnpm-lock.yaml": "lockfileVersion: 9\n",
+      "app.slnx": "<Solution />\n",
+      "package.json": "{ \"scripts\": { \"verify\": \"pnpm lint\" } }\n",
+      ".github/workflows/agent-check.md": worker(`  VERIFY_COMMANDS: "${shipped}"\n`, "0.7.0"),
+    });
+    const inspection = await inspectRepository(repositoryPath);
+
+    const result = await installCatalog(repositoryPath, { sourcePath, inspection, packageVersion: "0.7.1", baseline: offline });
+
+    expect(result.changes.find((change) => change.target === ".github/workflows/agent-check.md")).toMatchObject({ status: "updated", updatedDefaults: ["VERIFY_COMMANDS"] });
+    await expect(readFile(join(repositoryPath, ".github/workflows/agent-check.md"), "utf8")).resolves.toContain("  VERIFY_COMMANDS: \"pnpm verify\"\n");
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("warns when VERIFY_COMMANDS runs pnpm verify and package.json has no verify script", async () => {
+    const sourcePath = await createDirectory({
+      "workflows/agent-check.md": worker("  VERIFY_COMMANDS: \"\"\n"),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const repositoryPath = await createDirectory({
+      "pnpm-lock.yaml": "lockfileVersion: 9\n",
+      "package.json": "{ \"scripts\": { \"lint\": \"biome check\" } }\n",
+    });
+    const inspection = await inspectRepository(repositoryPath);
+
+    const result = await installCatalog(repositoryPath, { sourcePath, inspection, packageVersion: "0.7.0" });
+
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("no \"verify\" script");
+  });
+
   it("installs templates only when explicitly selected", async () => {
     const sourcePath = await createDirectory({
       "actions/check/action.yml": "name: Check\n",
