@@ -1,7 +1,7 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-implement.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
-  VERIFY_COMMANDS: "dotnet restore && dotnet build -c Release --no-restore && dotnet test -c Release --no-build"
+  VERIFY_COMMANDS: ""
   REPO_RULES: "Implement only the selected issue. Follow repository documentation and existing conventions. Do not weaken tests, lower coverage thresholds, or bypass checks."
   # Split out of REPO_RULES because one field asked to carry architecture, testing, coverage and
   # conventions together, and measured on 2026-09-07 three of the four consuming repositories had
@@ -740,6 +740,11 @@ timeout-minutes: 180
      on both paths. It must exit 0. It holds the comments and tests you add to the size of the
      change and makes you clean the files you touched; fix every line it lists. The merge gate
      runs it again and does not merge while it fails.
+
+     Anything you change to satisfy `check-diff` is a change: run the verification commands
+     again afterwards, and open the pull request only from a tree where both pass. Do not delete
+     a test that covers a branch you added to fit the budget; the complexity gate in CI measures
+     that coverage.
 
 5. Do not touch `changelog.json`. The workflow records the change itself once the work is on
    the default branch. Every implement used to edit that one file, so two runs whose branches

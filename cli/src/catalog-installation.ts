@@ -8,7 +8,7 @@ import { parse as parseYaml } from "yaml";
 
 import { catalogTemplates, mandatoryFiles, retiredWorkflowFiles, routeNames, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
 import { processRoutes, excludedWorkerFiles } from "./route-processing.js";
-import { generateOpencodeCi, generateOpencodeConfig, generateStackDefaults, injectStackEnv } from "./stack-defaults.js";
+import { generateOpencodeCi, generateOpencodeConfig, generateStackDefaults, injectStackEnv, shippedVerifyDefaults } from "./stack-defaults.js";
 import { mergeRouter, mergeWorker, mirrorRouterLiterals } from "./worker-env.js";
 import { fetchBaseline, hasOwnershipHeader, installedVersion, packageVersion, stampVersion, type BaselineFetcher } from "./package-baseline.js";
 import type { RepositoryInspection } from "./repository-inspection.js";
@@ -47,6 +47,8 @@ export interface CatalogInstallResult {
   readonly baselines: readonly BaselineStatus[];
   readonly upToDate: boolean;
   readonly dryRun: boolean;
+  /** Problems the update cannot fix on its own, for a person to act on. */
+  readonly warnings: readonly string[];
 }
 
 export interface CatalogInstallOptions {
@@ -210,6 +212,7 @@ export async function installCatalog(
     baselines,
     upToDate: updates.length === 0 && removals.length === 0,
     dryRun: options.dryRun ?? false,
+    warnings: await verifyScriptWarnings(repositoryPath, updates, existing),
   };
 
   if (options.dryRun) return result;
@@ -238,16 +241,25 @@ export async function installCatalog(
 // the empty string as the consumer's deliberate choice. All four consuming repositories were in
 // that state, so every merge-gate repair pushed a fix with the verification block interpolating
 // to nothing. An empty value is the absence of a choice, so an update fills it.
+//
+// So is a value the package wrote itself. The implement worker shipped a dotnet-only line, and
+// every full-stack consumer kept it as if someone had chosen it, so the bot never built the web
+// app before opening a pull request. A consumer holding a shipped default gets the current one:
+// its own value is blanked here, which the env merge then reads as no choice.
 function applyStackDefaults(
   files: Map<string, string>,
   inspection: RepositoryInspection,
-  existing: ReadonlyMap<string, unknown>,
+  existing: Map<string, string>,
 ): Map<string, string> {
   const defaults = generateStackDefaults(inspection);
   const result = new Map(files);
   for (const [target, content] of result) {
-    if (isWorker(target) && (!existing.has(target) || hasEmptyVerifyCommands(existing.get(target)))) {
+    const current = existing.get(target);
+    if (isWorker(target) && (current === undefined || hasEmptyVerifyCommands(current))) {
       result.set(target, injectStackEnv(content, defaults));
+    } else if (isWorker(target) && hasShippedVerifyCommands(current, defaults.verifyCommands)) {
+      result.set(target, injectStackEnv(content, defaults));
+      existing.set(target, current.replace(VERIFY_LINE, '  VERIFY_COMMANDS: ""'));
     } else if (target.endsWith("opencode-ci.md")) {
       result.set(target, generateOpencodeCi(content, inspection));
     } else if (target === "opencode.ci.json") {
@@ -257,10 +269,40 @@ function applyStackDefaults(
   return result;
 }
 
+const VERIFY_LINE = /^ {2}VERIFY_COMMANDS: *(.*?) *$/m;
+
 // A worker whose VERIFY_COMMANDS is present but empty. Anything else, including a value the
 // consumer wrote, is left alone.
 function hasEmptyVerifyCommands(current: unknown): boolean {
   return typeof current === "string" && /^ {2}VERIFY_COMMANDS: *(""|'')? *$/m.test(current);
+}
+
+function verifyCommandsOf(content: string): string | undefined {
+  const raw = VERIFY_LINE.exec(content)?.[1];
+  return raw?.replace(/^(["'])(.*)\1$/, "$2");
+}
+
+function hasShippedVerifyCommands(current: string | undefined, replacement: string): current is string {
+  if (current === undefined) return false;
+  const value = verifyCommandsOf(current);
+  return value !== undefined && value !== replacement && shippedVerifyDefaults.has(value);
+}
+
+// `pnpm verify` is only a command if the repository defines it. The update still writes it, since
+// it is the right default, and says what is missing instead of leaving the bot to find out.
+async function verifyScriptWarnings(repositoryPath: string, updates: readonly ContentUpdate[], existing: ReadonlyMap<string, string>): Promise<string[]> {
+  const written = new Map(existing);
+  for (const update of updates) written.set(update.target, update.content);
+  const workers = [...written].filter(([target, content]) => isWorker(target) && /\bpnpm verify\b/.test(verifyCommandsOf(content) ?? ""));
+  if (workers.length === 0) return [];
+  let scripts: Record<string, unknown> = {};
+  try {
+    scripts = (JSON.parse(await readFile(join(repositoryPath, "package.json"), "utf8")) as { scripts?: Record<string, unknown> }).scripts ?? {};
+  } catch {
+    scripts = {};
+  }
+  if (typeof scripts.verify === "string") return [];
+  return [`VERIFY_COMMANDS runs \`pnpm verify\` in ${workers.map(([target]) => target).sort().join(", ")}, but package.json has no "verify" script. Add one that runs what CI blocks on.`];
 }
 
 // Directories that belong wholly to the package. A file here that carries our ownership header

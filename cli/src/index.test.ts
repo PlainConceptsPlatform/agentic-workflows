@@ -23,6 +23,7 @@ const emptyCatalogResult: catalogInstallation.CatalogInstallResult = {
   baselines: [],
   upToDate: true,
   dryRun: false,
+  warnings: [],
 };
 
 function mockInstallers() {

@@ -38,6 +38,9 @@ outputs:
   outcome:
     description: "Disposition: auto-merge, human-review, owner-review, blocked, remediated, or invalid."
     value: ${{ steps.validate.outputs.outcome }}
+  pushed:
+    description: Whether the agent proposed a push to the pull request branch, applied or not.
+    value: ${{ steps.validate.outputs.pushed }}
 runs:
   using: composite
   steps:
@@ -61,6 +64,8 @@ runs:
           "$BLAST_LEVEL" "$PROTECTED_HIT" "$OWNER_HIT" "$CONFIDENCE_THRESHOLD" "$CODE_RULES")"
         echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
         echo "valid=$([ "$outcome" != 'invalid' ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        pushed=$(jq -r '[.items[]? | select(.type == "push_to_pull_request_branch")] | length > 0' "$OUTPUT_FILE" 2>/dev/null || echo false)
+        echo "pushed=$pushed" >> "$GITHUB_OUTPUT"
 
         if [ "$outcome" = 'invalid' ]; then
           echo "::warning::Agent output has no usable merge-gate report. It will not be applied."

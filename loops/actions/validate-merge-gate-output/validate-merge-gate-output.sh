@@ -85,11 +85,17 @@ jq -r \
     # Exactly one comment may carry a verdict. Taking the first of several let a second comment
     # reporting a verified critical finding be discarded, and let a comment with no verdict at
     # all supply the report for a verdict written in another.
-    | [$comments[] | select(.body | test("\\*\\*Verdict:\\*\\*\\s*(assessed|remediated)"; "i"))] as $verdicts
+    #
+    # The line is matched by its shape, not its exact markdown. A model that wrote
+    # `**Verdict: remediated**` for `**Verdict:** remediated` had its pushed repair discarded
+    # twice on the same head (Pliny-Bot #639). The word has to open a line, so prose that
+    # mentions a verdict does not count.
+    | "(^|\\n)[^\\w\\n]*Verdict[^\\w\\n]{0,6}(?<v>assessed|remediated)\\b" as $verdict_line
+    | [$comments[] | select(.body | test($verdict_line; "i"))] as $verdicts
     | if ($verdicts | length) != 1 then "invalid" else
 
       ($verdicts[0].body) as $body
-      | ($body | capture("\\*\\*Verdict:\\*\\*\\s*(?<v>assessed|remediated)"; "i").v | ascii_downcase) as $verdict
+      | ($body | capture($verdict_line; "i").v | ascii_downcase) as $verdict
       | ([$items[] | select(.type == "push_to_pull_request_branch")] | length) as $pushes
 
       # The LAST fenced json block in that comment, because the prompt puts the report last and
