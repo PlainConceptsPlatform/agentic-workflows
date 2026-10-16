@@ -8,6 +8,12 @@ inputs:
   token:
     description: GitHub token with issues:write.
     required: true
+  parent-issue:
+    description: >-
+      The split parent, set only when the run is a split. Each created issue is stamped with the
+      split-parent marker and linked as a sub-issue of it, and temporary ids are resolved.
+    required: false
+    default: ''
 outputs:
   created-count:
     description: Number of issues created.
@@ -15,6 +21,9 @@ outputs:
   first-issue-number:
     description: Issue number of the first issue created, or empty.
     value: ${{ steps.create.outputs.first-issue-number }}
+  created-numbers:
+    description: Space-separated numbers of every issue created, in order.
+    value: ${{ steps.create.outputs.created-numbers }}
 runs:
   using: composite
   steps:
@@ -24,13 +33,23 @@ runs:
       env:
         AGENT_OUTPUT_LIB: ${{ github.action_path }}/../agent-output.cjs
         OUTPUT_FILE: ${{ inputs.output-file }}
+        PARENT_ISSUE: ${{ inputs.parent-issue }}
       with:
         github-token: ${{ inputs.token }}
         script: |
           const { readAgentItems } = require(process.env.AGENT_OUTPUT_LIB);
           const items = readAgentItems(process.env.OUTPUT_FILE, 'create_issue');
+          // Set only for a split. The agent writes `<!-- split-parent: N -->` in every child, but
+          // gh-aw's sanitizer strips HTML comments before agent_output.json is written, so the
+          // marker never reaches this file (Lyceum #45, run 38747143251: three markers in
+          // safeoutputs.jsonl, none in agent_output.json). gh-aw used to link the children as
+          // sub-issues itself; staged, nothing does, and the hand-over found no children. So the
+          // workflow stamps the marker and links the sub-issue here, from a value it owns.
+          const parent = /^[0-9]+$/.test(process.env.PARENT_ISSUE || '') ? Number(process.env.PARENT_ISSUE) : null;
+          const marker = parent ? `<!-- split-parent: ${parent} -->` : '';
 
           const created = [];
+          const temporaryIds = {};
 
           for (const item of items) {
             if (!item.title) {
@@ -38,15 +57,57 @@ runs:
               continue;
             }
 
+            let body = item.body ?? '';
+            if (parent && !body.includes(marker)) body = `${body}\n\n${marker}`;
+
             const { data } = await github.rest.issues.create({
               ...context.repo,
               title: item.title,
-              body: item.body ?? '',
+              body,
             });
 
-            created.push(data.number);
+            created.push({ number: data.number, body });
+            const tid = String(item.temporary_id ?? '').replace(/^#/, '');
+            if (tid) temporaryIds[tid] = data.number;
             core.info(`Created #${data.number}: ${item.title}`);
+
+            if (parent) {
+              try {
+                await github.request('POST /repos/{owner}/{repo}/issues/{issue_number}/sub_issues', {
+                  ...context.repo,
+                  issue_number: parent,
+                  sub_issue_id: data.id,
+                });
+                core.info(`Linked #${data.number} under #${parent}`);
+              } catch (error) {
+                // The marker above is the fallback the hand-over searches, so a failed link is
+                // degraded, not lost.
+                core.warning(`Could not link #${data.number} under #${parent}: ${error.message}`);
+              }
+            }
+          }
+
+          // The agent references siblings by the temporary id it gave them, because their numbers
+          // do not exist until now: "Blocked by #aw_struct_modules". gh-aw resolves these when it
+          // creates the issues; staged, they reached the issues unresolved. Rewrite them in the
+          // children and in the parent's checklist, which was updated before this step ran.
+          const resolve = text => text.replace(/#(aw_[A-Za-z0-9_]+)/g, (whole, id) => (temporaryIds[id] ? `#${temporaryIds[id]}` : whole));
+          if (Object.keys(temporaryIds).length > 0) {
+            for (const issue of created) {
+              const next = resolve(issue.body);
+              if (next !== issue.body) {
+                await github.rest.issues.update({ ...context.repo, issue_number: issue.number, body: next });
+              }
+            }
+            if (parent) {
+              const { data: current } = await github.rest.issues.get({ ...context.repo, issue_number: parent });
+              const next = resolve(current.body ?? '');
+              if (next !== (current.body ?? '')) {
+                await github.rest.issues.update({ ...context.repo, issue_number: parent, body: next });
+              }
+            }
           }
 
           core.setOutput('created-count', String(created.length));
-          core.setOutput('first-issue-number', created.length > 0 ? String(created[0]) : '');
+          core.setOutput('first-issue-number', created.length > 0 ? String(created[0].number) : '');
+          core.setOutput('created-numbers', created.map(issue => issue.number).join(' '));

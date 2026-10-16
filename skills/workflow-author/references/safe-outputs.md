@@ -1,6 +1,6 @@
 # Safe outputs
 
-Verified against gh-aw v0.83.4.
+Verified against gh-aw v0.87.5.
 
 Safe outputs are rung 6: the normal path for every agent-directed write. The agent runs read-only
 and emits structured requests; a separate job validates and applies them.
@@ -337,6 +337,39 @@ The audit workflow uses score-then-select in a single issue: find 5 to 7 problem
 on severity times likelihood times blast radius, then emit one `create_issue` containing every finding
 ranked, with the top 3 refined into user stories in the body. One issue, `max: 1`, and the ranking is
 visible to a human.
+
+### `create-pull-request`
+
+The branch and its base are policy, not agent choice. Two allow-lists make them so:
+
+```yaml
+safe-outputs:
+  create-pull-request:
+    allowed-branches: ["feat/*"]            # what the agent may create as head
+    allowed-base-branches: ["main"]         # what an emitted base may target
+```
+
+The agent emits a `base` item for a stacked child, and the framework validates it against
+`allowed-base-branches` at collection time — a base outside the glob is rejected before anything is
+pushed, so a persuaded prompt cannot land work on an arbitrary line. Without `base` in the payload
+the default branch remains the target, which is why a repo whose agents never emit `base` sees no
+change from this key existing.
+
+The remaining keys, verified on v0.87.5:
+
+| Key | Means |
+|---|---|
+| `draft` | Open as draft |
+| `title-prefix: "[bot] "` | Prepended to the title, and the marker the gate's ownership checks read |
+| `if-no-changes: error` | Fail the item when the agent's commits touch nothing |
+| `max-patch-files` | Cap the files in one patch |
+| `protected-files: allowed` + `allowed-files` | Let the gate, not PR creation, judge protected paths |
+| `preserve-branch-name: true` | Keep the agent's branch name instead of salting it |
+
+`preserve-branch-name` is what a stacked root needs: `feat/<issue>` is a durable integration line
+that children, markers and prompts all address by name, so a salted name would break everything
+that references it. The cost is that the push fails loudly on a name collision, which is the correct
+failure for a durable ref. Normal one-shot workers should leave it off.
 
 ### `add-comment`
 

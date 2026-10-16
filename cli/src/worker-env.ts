@@ -182,9 +182,8 @@ function engineEndpoint(content: string): string | undefined {
 // triage, refine, implement, apply-review and audit on RunnerLandingZone while its merge-gate
 // and release stayed on agents-arc -- the pool was applied to the workers installed at the time
 // and never to the ones added later, and nothing reported the split. The pool is package-owned
-// now: the agent jobs belong on the Azure fleet (agents-arc, runner group `agentic`), and the
-// router and release worker name RunnerLandingZone. The route matrix asserts both, so a repo
-// cannot drift back without a red run. Per the standing rule for this package, anything a
+// now: every job, router and release included, belongs on the Azure fleet (agents-arc, runner
+// group `agentic`). The route matrix asserts it, so a repo cannot drift back without a red run. Per the standing rule for this package, anything a
 // consumer really must vary belongs in `env:` at the top of the file, not in `runs-on`.
 
 // GitHub evaluates no expression in a `workflow_run.workflows:` list or in a `cron:`, so the two

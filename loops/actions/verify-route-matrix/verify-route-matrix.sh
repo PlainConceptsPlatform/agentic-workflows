@@ -1183,19 +1183,21 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
   #
   # Counted on the close shape, not on the words. A bare `state: 'closed'` is also how you ask
   # the API for closed things, and the gate metrics list closed pull requests to find the merges:
-  # counting the string alone reported that listing as a third close. Both real closes state a
+  # counting the string alone reported that listing as a third close. Every real close states a
   # reason, so that is what is counted, and the assertion below keeps the two from drifting apart
-  # by refusing any close that does not.
+  # by refusing any close that does not. The counted set grew with stacks -- a landing child
+  # whose issue close was lost, and a feature issue whose root merged -- and each is named in
+  # the Stacked features section below, so the list here is four, not the original two.
   closes=$(count -cE "state: 'closed', state_reason:" "$HOUSEKEEPING_YML")
   if grep -nE "issues\.update\(.*state: 'closed'" "$HOUSEKEEPING_YML" | grep -qv "state_reason:"; then
     HK_OK=0
     echo "FAIL: housekeeping closes an issue without a state_reason; the close audit counts on it" >&2
   fi
-  if [ "$closes" -eq 2 ]; then
+  if [ "$closes" -eq 4 ]; then
     PASS=$((PASS + 1))
   else
     HK_OK=0
-    echo "FAIL: housekeeping closes issues in ${closes} place(s); only the split parent and its own digest are allowed" >&2
+    echo "FAIL: housekeeping closes issues in ${closes} place(s); the split parent, the stack child, the stack feature and the digest are the four allowed" >&2
   fi
 
   # A retry is a workflow_dispatch, and GitHub starts no workflow run from an event raised
@@ -2334,6 +2336,16 @@ if worker_installed refine; then
     echo "FAIL: the refine refusal never releases bot-working; a refused issue stays reserved with no run behind it" >&2
   fi
 
+  # The split floor: a split child carries a whole stack's machinery (issue, feature branch,
+  # PR into the branch), so a 1- or 2-point slice is a fragment and must be folded into a
+  # sibling instead. The floor must be pinned through the env var the prompt interpolates,
+  # so a consumer cannot lower it below 3 without editing the worker.
+  if ! grep -qF 'MIN_CHILD_POINTS: "3"' "$REFINE_WORKER_MD" \
+    || ! grep -qF 'child estimated below ${{ env.MIN_CHILD_POINTS }}' "$REFINE_WORKER_MD"; then
+    SIZE_GATE_OK=0
+    echo "FAIL: refine allows split children below 3 points; the floor must stay interpolated from MIN_CHILD_POINTS" >&2
+  fi
+
   if [ "$SIZE_GATE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
@@ -2620,8 +2632,10 @@ if [ -f "$APP_ERRORS_MJS" ]; then
   # 3. The field allowlist is what actually holds the line, because a redaction rule filters
   # values and cannot see a field somebody adds next year. Compared as a set, so reordering is
   # fine and an addition is not. run_id is the one that matters: it is unhashed on this
-  # telemetry and joins to a conversation and to a person.
-  expected_fields="exceptionType frames fingerprint firstSeen lastSeen occurrences operationName operations problemId roleName topFrames message category"
+  # telemetry and joins to a conversation and to a person. category, fingerprint, message and
+  # topFrames joined in v0.28.7 to enrich the filed issues (a84928a); they are set-side
+  # fields, never engine telemetry, so the allowlist grows with them.
+  expected_fields="category exceptionType fingerprint firstSeen frames lastSeen message occurrences operationName operations problemId roleName topFrames"
   actual_fields="$(sed -n '/export const FINDING_FIELDS = \[/,/\];/p' "$APP_ERRORS_MJS" |
     grep -oE '"[a-zA-Z]+"' | tr -d '"' | sort | tr '\n' ' ' | sed 's/ $//')"
   if [ "$actual_fields" = "$(echo "$expected_fields" | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')" ]; then
@@ -2662,9 +2676,202 @@ if [ -f "$APP_ERRORS_MJS" ]; then
   if [ "$AE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+echo "── Stacked features ──────────────────────────────────────────────────────"
+
+# Stacks are delivered by marker, not by label: every flat-mode rule still has to hold on a
+# repository that has never seen a marker. The assertions here are grouped as the two halves
+# of that contract. The first says the stack machinery exists and fails closed: an unreadable
+# or missing marker must route a child down the flat path, never dispatch at a branch nobody
+# resolved. The second says the flat path never learned about stacks: the default-path jobs
+# and prompts carry no stack condition that could fire on an issue without markers.
+STACK_OK=1
+st() {
+  grep -qE "$1" "$2" || { STACK_OK=0; echo "FAIL: stacked features ${3}" >&2; }
+}
+# The router's stack job is a block of a derived file, not a file of its own, so its
+# assertions take the block on stdin: handing a multi-line string to grep as a filename
+# fails with "File name too long" and reads as a wiring failure that is not one.
+st_str() {
+  printf '%s' "$2" | grep -qE "$1" || { STACK_OK=0; echo "FAIL: stacked features ${3}" >&2; }
+}
+
+# 1. The resolver. check-stack-branch reads the child's own marker first, then the
+# split-parent chain; both are `|| true` so a flat body (no match) cannot fail the job --
+# call-implement names this job in its needs, so a hard failure would block flat implements.
+CHECK_STACK_JOB=$(sed -n '/^  check-stack-branch:$/,/^  [a-z0-9_-]*:$/p' "$ROUTER_YML")
+if [ -n "$CHECK_STACK_JOB" ]; then
+  st "stack-root-branch: \[\\^ \]\+" "$ROUTER_YML" 'has no marker regex for the feature branch'
+  st_str 'exit 0' "$CHECK_STACK_JOB" 'resolver hard-fails instead of taking the flat path'
+  st_str 'sed .s\|/\|%2F\|g.' "$CHECK_STACK_JOB" 'does not URL-escape the stack branch before the existence check'
+  st_str 'sed -E .s/<!-- stack-root-branch: \(\[\^ \]\+\) -->/\\1/.' "$CHECK_STACK_JOB" 'does not strip the marker syntax off the branch'
+  # The dupe guard: only dispatched stack implements run with head_branch = feat/N, so a
+  # workflow_call (flat) run whose head_branch is the default branch can never match it.
+  st_str 'head_branch == ..\$\{STACK_BRANCH\}..' "$CHECK_STACK_JOB" 'does not detect an in-flight implement on the feature branch'
+  # Dispatch happens on the resolved ref, never on the event SHA. The `gh workflow run`
+  # lives in dispatch-implement, which check-stack-branch gates: the two jobs verify the
+  # branch exists, then hand off. The run needs a fresh App token -- GITHUB_TOKEN can
+  # start no workflow -- and it reads repo-level secrets because a dispatch cannot forward
+  # workflow-call ones, which is the activation prerequisite ownership.md documents.
+  DISPATCH_JOB=$(sed -n '/^  dispatch-implement:$/,/^  [a-z0-9_-]*:$/p' "$ROUTER_YML")
+  if [ -n "$DISPATCH_JOB" ]; then
+    st_str 'gh workflow run agent-implement\.lock\.yml .* --ref "\$STACK_BRANCH"' "$DISPATCH_JOB" 'does not dispatch the stack implement at all'
+    st_str 'create-github-app-token' "$DISPATCH_JOB" 'dispatches with GITHUB_TOKEN, which can start no run'
+    # A child blocked by an open sibling is held, and the sibling's landing releases it. Without
+    # both halves a dependent child cuts from a feature branch that lacks its dependency (Lyceum
+    # #112, dispatched alongside #111), or is held forever.
+    st_str "stack-blocked != 'true'" "$DISPATCH_JOB" 'dispatches a child whose blockers have not landed'
+    st 'name: Hold a child whose blockers have not landed' "$ROUTER_YML" 'never holds a child behind the siblings it is blocked by'
+    st 'state merged --base "\$STACK_BRANCH"' "$ROUTER_YML" 'holds a child behind a blocker whose pull request already landed, which nothing releases again'
+    st 'Released #\$child: everything it was blocked by has landed' "$ROUTER_YML" 'holds blocked children but never releases them'
+  fi
+  # The child's pull request targets the ref the run was dispatched on, taken from the run.
+  # Asking the agent for it failed in practice (Lyceum #72, run 38694942046): it emitted no
+  # base, the handler fell back to the default branch, and a bundle cut from the feature
+  # branch would not replay there. Both halves are checked, because a prompt that asks again
+  # would invite an explicit base that disagrees with the ref.
+  st 'base-branch: \$\{\{ github\.ref_name \}\}' "$IMPLEMENT_WORKER_MD" 'leaves the pull request base to the agent instead of the dispatched ref'
+  if grep -qE 'base="feat/N"|pass `base: "feat/N"`' "$IMPLEMENT_WORKER_MD"; then
+    STACK_OK=0
+    echo "FAIL: stacked features prompt asks the agent for the base again; the run already sets it" >&2
+  fi
+else
+  # check-stack-branch serves only the implement route, so the CLI drops it from a router
+  # that did not install implement. Nothing to assert then, and the section above must not
+  # claim a pass for a job that is legitimately absent.
+  :
+fi
+
+# 2. Completion. The merge of a child PR into a feature branch (base != default branch) is
+# the only event that can mean "one fewer open child". The router block must be idempotent:
+# the announcement carries <!-- stack-complete --> and a re-run that finds it stays silent.
+st 'stack-complete' "$ROUTER_YML" 'has no idempotent completion marker on the root pull request'
+st 'closingIssuesReferences\[0\]\.number // empty' "$ROUTER_YML" 'does not read the child PR to find the closed issue'
+st 'split-parent: \[0-9\]+' "$ROUTER_YML" 'does not walk from the child to its feature issue'
+st 'stack-root-pr: \[0-9\]+' "$ROUTER_YML" 'does not read the root pull request number off the feature issue'
+# gh pr view and gh issue view answer OPEN, not open. An exact lowercase match on their state
+# never matches, which left every root closed and every child done as far as completion knew.
+# The child whose pull request just landed is done even if the gate has not closed its issue yet.
+st '# Landed, though the gate may not have closed its issue yet' "$ROUTER_YML" 'counts the child that just landed as still open, so the stack never reads complete'
+if grep -nE "(gh pr view|gh issue view)[^|]*--json state[^|]*\| *grep -q?x open" "$ROUTER_YML" >/dev/null; then
+  STACK_OK=0
+  echo "FAIL: stacked features compares a GraphQL state (OPEN) to lowercase open; the root and children never read as open" >&2
+fi
+
+# 3. The gate. A child PR that lands on a feature branch closes exactly its own child issue
+# there (GitHub's closing keywords do not fire off the default branch); the root is held
+# for a person with the App token, so anybody reading the timeline can replace it. The
+# marker test on the issue body is what makes both stack-specific and invisible flat.
+if worker_installed merge-gate; then
+  st 'stack-root-pr: \$PR -->' "$MERGE_GATE_WORKER_MD" 'does not test the feature issue for the root marker'
+  st 'needs\.subject\.outputs\.stack_root == .true.' "$MERGE_GATE_WORKER_MD" 'has no root-hold branch before the merge step'
+  # The stack step reads the subject's PR; with no subject it fails on an empty number.
+  gate_stack_step=$(sed -n '/- name: Detect the pull request.s base and its role in a stack/,/run: |/p' "$MERGE_GATE_WORKER_MD")
+  st_str "if: steps.subject.outputs.found == 'true'" "$gate_stack_step" 'runs the stack step without a subject, so a gate dispatched for a held root fails'
+  st '\*\*Stack root held\.\*\*' "$MERGE_GATE_WORKER_MD" 'posts no human-readable hold explanation on the root'
+  st 'gh issue close "\$ISSUE" --repo "\$REPO" --reason completed \|\| true' "$MERGE_GATE_WORKER_MD" 'does not close the child issue when its PR lands off the default branch'
+  st 'needs\.subject\.outputs\.pr_base != .. \&\& needs\.subject\.outputs\.pr_base != github\.event\.repository\.default_branch' "$MERGE_GATE_WORKER_MD" 'gates the child-issue close on the base not being the default branch'
+fi
+
+# 4. The split. Refine creates the feature branch and the held root PR together with the
+# children, then stamps markers on parent and children before any hand-over: the markers are
+# what the resolver, the gate and the janitor read, so no new label exists to move. The root
+# PR body must close the feature issue -- that is what ends the feature when the human merges.
+if worker_installed refine; then
+  REFINE_WORKER_MD="${WORKFLOWS_DIR}/agent-refine.md"
+  st 'allowed-branches: \["feat/\*"\]' "$REFINE_WORKER_MD" 'does not constrain the feature branch name'
+  st 'allowed-base-branches: \["main"\]' "$REFINE_WORKER_MD" 'lets the root target a branch other than the default'
+  st 'preserve-branch-name: true' "$REFINE_WORKER_MD" 'does not preserve the feature branch name on root PR creation'
+  # Refine stages its outputs and applies them itself, and gh-aw opens no pull request while a
+  # worker is staged, not even one marked `staged: false`. The root has to be opened by the
+  # workflow, and the stamp and the hand-over have to read that number, or every child goes flat.
+  st '^  staged: true$' "$REFINE_WORKER_MD" 'no longer stages the body and children for validation before they are applied'
+  st 'name: Open the stack root pull request' "$REFINE_WORKER_MD" 'never opens the root pull request; the staged handler only previews it'
+  st 'PR_NUMBER: \$\{\{ steps\.root\.outputs\.pr_number' "$REFINE_WORKER_MD" 'stamps the stack markers without the root the workflow opened'
+  st 'ROOT_PR: \$\{\{ steps\.root\.outputs\.pr_number' "$REFINE_WORKER_MD" 'hands the children over without the root the workflow opened'
+  st 'stack-root-branch: %s' "$REFINE_WORKER_MD" 'does not stamp the feature branch on the parent issue'
+  st 'Fixes #\$\{\{ inputs\.issue-number \}\}' "$REFINE_WORKER_MD" 'does not make the root PR close the feature issue'
+  # The hand-over stamp: a child handed to implement carries the feature branch marker, so
+  # the resolver reads it off the child body without chasing the chain first.
+  st 'stack-root-branch: %s' "$REFINE_WORKER_MD" 'does not stamp the feature branch on each child at hand-over'
+  # The children have to be found. gh-aw's sanitizer strips HTML comments from agent_output.json,
+  # so the split-parent marker the agent writes never arrives, and staged, nothing links the
+  # children as sub-issues either (Lyceum #45, run 38747143251: three children, none handed over).
+  # The workflow tells the apply which issue the children belong to, and the apply stamps the
+  # marker and links the sub-issue itself.
+  CREATE_ISSUES_ACTION="${HERE}/../create-agent-issues/action.yml"
+  # Dependencies travel as `Blocked by #aw_<id>` lines the apply resolves, never as the
+  # blocked_by field: a value naming two siblings failed the staged preview and threw away a
+  # finished refinement (Lyceum #45, run 38770811334).
+  st 'never set the .blocked_by. field' "$REFINE_WORKER_MD" 'lets the agent express dependencies through blocked_by, which one bad value turns into a lost run'
+  st 'Blocked by #aw_<id>' "$REFINE_WORKER_MD" 'asks for sibling numbers the agent cannot know yet'
+  st 'parent-issue: \$\{\{ needs\.validate_output\.outputs\.outcome == .split.' "$REFINE_WORKER_MD" 'does not tell the apply which issue the split children belong to'
+  st 'issues/\{issue_number\}/sub_issues' "$CREATE_ISSUES_ACTION" 'does not link split children as sub-issues of their parent'
+  st 'split-parent: \$\{parent\}' "$CREATE_ISSUES_ACTION" 'does not stamp the split-parent marker that the sanitizer strips from the agent'
+  # The guard against re-handing a child already handed over: it carries the refined label,
+  # and handing it again would start a second implement on work in flight.
+  st 'grep -qx "\$REFINED_LABEL"' "${WORKFLOWS_DIR}/agent-refine.md" 'does not skip an already-handed-over child'
+fi
+
+# 5. Housekeeping. The janitor's stack section is the backstop for every event the router can
+# miss, and it ran unattended for months before stacks existed. Three of its guardrails are
+# asserted here the way section 3's are. The marker test fails first on a repository without
+# stacks, so the flat cost is one regex per open issue.
+if [ -f "$HOUSEKEEPING_YML" ]; then
+  st 'stack-root-pr: \(\\d\+\)' "$HOUSEKEEPING_YML" 'does not find the feature issues to sweep'
+  st 'implement-pr: \(\\d\+\)' "$HOUSEKEEPING_YML" 'does not read each child pull request number'
+  st "merged_at" "$HOUSEKEEPING_YML" 'does not test whether the child pull request actually landed'
+  # The orphan close: a child whose named PR merged but whose issue never closed is closed
+  # here. Both its closes state a reason, like every other close in the file.
+  if ! grep -qE "github\.rest\.issues\.update\(\{ \.\.\.context\.repo, issue_number: child\.number, state: 'closed', state_reason: 'completed' \}\)" "$HOUSEKEEPING_YML"; then
+    STACK_OK=0
+    echo "FAIL: housekeeping no longer closes an orphaned child whose pull request landed" >&2
+  fi
+  # The flat guarantees. Section 3 must still refuse to close a stack parent (the root PR
+  # closing the feature issue is what ends it, not the sweep), and section 4 must still not
+  # delete a branch whose pull request is open -- an open root PR protects feat/N. The skip
+  # is asserted on its real shape: the marker test inside the issues.some() predicate.
+  st 'stack-root-branch: \\S\+ -->/\.test\(i\.body' "$HOUSEKEEPING_YML" 'no longer skips stack parents in the split-parent close'
+  st "p\.state === 'open'\)\) continue" "$HOUSEKEEPING_YML" 'can delete a feature branch whose root pull request is still open'
+fi
+
+# 6. The compat guarantee, stated as absence. A repository without markers sees none of
+# this: the default path carries no stack condition that could fire. The implement worker's
+# prompt lines that name the markers are conditional on them being present on the issue.
+if worker_installed implement; then
+  # The instruction naming the marker exists (the marker-gated base instruction), and the
+  # flat instruction ("propose against main") is still in place alongside it.
+  st 'stack-root-branch: feat/N -->' "$IMPLEMENT_WORKER_MD" 'does not tell stack children to base their PR on the feature branch'
+  st 'allowed-base-branches:' "$IMPLEMENT_WORKER_MD" 'does not declare the base-branch allowlist for create-pull-request'
+  # The base allowlist denies everything the marker test did not name. main stays first and
+  # unconditional; the feature pattern is additive, never a replacement.
+  if [ "$(count -c '^    allowed-base-branches:' "$IMPLEMENT_WORKER_MD")" -ne 1 ]; then
+    STACK_OK=0
+    echo "FAIL: agent-implement.md declares allowed-base-branches more than once or not at all" >&2
+  fi
+  if ! sed -n '/allowed-base-branches:/,/^  [a-z]/p' "$IMPLEMENT_WORKER_MD" | grep -q '"main"'; then
+    STACK_OK=0
+    echo "FAIL: agent-implement.md allowed-base-branches dropped the default branch" >&2
+  fi
+  # The dispatch trigger must stay optional and marker-gated: a flat implement is a
+  # workflow_call, never a dispatch, so the checkout ternary keys off workflow_dispatch.
+  st 'workflow_dispatch' "$IMPLEMENT_WORKER_MD" 'no longer accepts workflow_dispatch'
+fi
+
+# 7. No stack label anywhere. Stack semantics live in markers on issues and pull requests;
+# a label would have to be moved by the App token to raise events, and every new label is a
+# new consumer-visible surface. Assert the absence of any stack-named label action.
+if grep -nE "add-label .*$|add-labels$" "$ROUTER_YML" "$MERGE_GATE_WORKER_MD" "${WORKFLOWS_DIR}/agent-refine.md" "$IMPLEMENT_WORKER_MD" 2>/dev/null |
+   grep -qiE 'stack'; then
+  STACK_OK=0
+  echo "FAIL: a workflow adds a stack-named label; stack semantics belong to markers" >&2
+fi
+
+if [ "$STACK_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
-  echo "Route matrix: ${PASS} passed"
+  TcMsg="Route matrix: ${PASS} passed"
+  echo "$TcMsg"
 else
   echo "Route matrix: ${PASS} passed, ${FAIL} FAILED" >&2
 fi

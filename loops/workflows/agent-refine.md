@@ -53,6 +53,7 @@ env:
   SPLIT_PARENT_PREFIX: "<!-- split-parent: "
   SPLIT_THRESHOLD: "8"
   MAX_SPLIT_CHILDREN: "6"
+  MIN_CHILD_POINTS: "3"
   INCOMPLETE_COMMENT: "Automated refinement ended without an outcome. The refine label remains for a retry."
   SAFE_OUTPUT_COMMENT_PREFIX: "Refinement update"
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
@@ -396,6 +397,7 @@ jobs:
           update-issues: 'true'
           create-issues: 'true'
           fallback-issue-number: ${{ inputs.issue-number }}
+          parent-issue: ${{ needs.validate_output.outputs.outcome == 'split' && inputs.issue-number || '' }}
       - name: Apply complete refinement labels
         if: needs.validate_output.outputs.outcome == 'complete'
         uses: ./.github/actions/add-issue-labels
@@ -434,6 +436,83 @@ jobs:
             ${{ env.REFINE_LABEL }}
             ${{ env.WORKING_LABEL }}
             ${{ env.REVIEW_LABEL }}
+      # The stack root pull request. Every output in this worker is staged and applied by this
+      # job, and gh-aw's handler opens nothing while the run is staged: a per-output
+      # `staged: false` on create-pull-request compiles into the handler config and is ignored
+      # there (Lyceum #45, run 38740216266: "Pull request creation preview written to step
+      # summary"). So the root is opened here, from the agent's own create_pull_request request,
+      # once the validator has called the run a split. Refine writes no code, so the root carries
+      # none: an empty commit on the default branch's tip, created through the API, which is what
+      # gh-aw's allow-empty would have pushed. Idempotent: an open root on the feature branch is
+      # reused and an existing branch is not recreated, so a retry stamps the same root.
+      - name: Open the stack root pull request
+        id: root
+        if: needs.validate_output.outputs.outcome == 'split'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue-number }}
+          AGENT_OUTPUT: agent-artifact/agent_output.json
+        run: |
+          set -euo pipefail
+          branch="feat/${ISSUE}"
+          item=$(jq -c '[.items[] | select(.type == "create_pull_request")][0] // {}' "$AGENT_OUTPUT")
+          title=$(printf '%s' "$item" | jq -r '.title // empty')
+          body=$(printf '%s' "$item" | jq -r '.body // empty')
+          if [ -z "$title" ]; then
+            title=$(gh issue view "$ISSUE" --repo "$REPO" --json title --jq '.title')
+          fi
+          case "$title" in "[bot] "*) ;; *) title="[bot] ${title}" ;; esac
+          # The root's merge is what ends the feature, so it must close the feature issue.
+          if ! printf '%s' "$body" | grep -qiE "(fixes|closes|resolves) #${ISSUE}([^0-9]|$)"; then
+            body=$(printf '%s\n\nFixes #%s' "$body" "$ISSUE")
+          fi
+
+          existing=$(gh pr list --repo "$REPO" --state open --head "$branch" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Reusing open root #${existing} on ${branch}"
+            echo "pr_number=${existing}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          default=$(gh api "repos/${REPO}" --jq '.default_branch')
+          if ! gh api "repos/${REPO}/git/ref/heads/${branch}" >/dev/null 2>&1; then
+            base_sha=$(gh api "repos/${REPO}/git/ref/heads/${default}" --jq '.object.sha')
+            tree=$(gh api "repos/${REPO}/git/commits/${base_sha}" --jq '.tree.sha')
+            commit=$(gh api "repos/${REPO}/git/commits" -f message="chore: open the stack root for #${ISSUE}" \
+              -f tree="$tree" -f "parents[]=${base_sha}" --jq '.sha')
+            gh api "repos/${REPO}/git/refs" -f ref="refs/heads/${branch}" -f sha="$commit" >/dev/null
+          fi
+          printf '%s' "$body" > /tmp/root-body.md
+          url=$(gh pr create --repo "$REPO" --base "$default" --head "$branch" --title "$title" --body-file /tmp/root-body.md)
+          echo "Opened root ${url} on ${branch}"
+          echo "pr_number=${url##*/}" >> "$GITHUB_OUTPUT"
+      # The stack markers. The feature branch and its root pull request are what every child
+      # builds on and what completion is counted against, so they are recorded on the feature
+      # issue itself, where the child implement runs and the router read them back with no new
+      # service: `<!-- stack-root-branch: ... -->` resolves each child's dispatch ref, and
+      # `<!-- stack-root-pr: ... -->` names the held root. The branch comes from the pull
+      # request itself, never from the name the agent chose, because what reached the remote
+      # is the only truth. Idempotent: old markers are replaced, so a re-split after a
+      # discarded first attempt re-stamps cleanly. Missing markers fail closed -- a child
+      # without them takes the flat path, never a silent feature-branch dispatch.
+      - name: Record the stack root on the issue
+        if: needs.validate_output.outputs.outcome == 'split' && (steps.root.outputs.pr_number != '' || needs.safe_outputs.outputs.created_pr_number != '')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue-number }}
+          PR_NUMBER: ${{ steps.root.outputs.pr_number || needs.safe_outputs.outputs.created_pr_number }}
+        run: |
+          set -euo pipefail
+          branch=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefName --jq '.headRefName')
+          body=$(gh issue view "$ISSUE" --repo "$REPO" --json body --jq '.body // ""')
+          cleaned=$(printf '%s' "$body" | sed -E 's/<!-- stack-root-(branch|pr): [^ ]+ -->//g' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
+          printf '%s\n\n<!-- stack-root-branch: %s -->\n<!-- stack-root-pr: %s -->' "$cleaned" "$branch" "$PR_NUMBER" > /tmp/issue-body.md
+          gh issue edit "$ISSUE" --repo "$REPO" --body-file /tmp/issue-body.md
+          echo "Stamped stack root branch $branch and PR #$PR_NUMBER on issue #$ISSUE"
       # Estimates become labels here rather than in the agent, because labels are workflow-owned
       # state. Children were created moments ago by the same run, so they are labelled together
       # with the parent: each body carries its own marker.
@@ -507,6 +586,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           PARENT: ${{ inputs.issue-number }}
+          ROOT_PR: ${{ steps.root.outputs.pr_number || needs.safe_outputs.outputs.created_pr_number }}
           REFINE_LABEL: ${{ env.REFINE_LABEL }}
           REFINED_LABEL: ${{ env.REFINED_LABEL }}
           IMPLEMENT_LABEL: ${{ env.IMPLEMENT_LABEL }}
@@ -518,6 +598,21 @@ jobs:
             children=$(gh issue list --repo "$REPO" --state open --limit 50 \
               --search "\"<!-- split-parent: ${PARENT} -->\" in:body" --json number --jq '.[].number' || true)
           fi
+
+          # Each child body also carries the resolved feature branch. The implement agent sees
+          # only the child issue's body in its context, never the parent's, so a marker that
+          # lives on the parent alone is invisible to the very prompt that must act on it.
+          # Stamping the branch the root pull request really runs on (headRefName, the same
+          # source of truth the parent marker uses) makes the child self-describing end to
+          # end: the router reads it to resolve the dispatch ref and the agent reads it to set
+          # its pull request base. Idempotent, and skipped entirely when the root pull request
+          # was not created -- without a feature branch there is no stack to describe, and the
+          # child simply takes the flat path.
+          STACK_BRANCH=''
+          if [ -n "$ROOT_PR" ]; then
+            STACK_BRANCH=$(gh pr view "$ROOT_PR" --repo "$REPO" --json headRefName --jq '.headRefName' 2>/dev/null || true)
+          fi
+
           for child in $children; do
             [ "$child" = "$PARENT" ] && continue
             # A child handed over earlier carries the refined label. Handing it again would start
@@ -526,6 +621,12 @@ jobs:
               | grep -qx "$REFINED_LABEL"; then
               echo "#$child was already handed over; leaving it alone"
               continue
+            fi
+            if [ -n "$STACK_BRANCH" ]; then
+              child_body=$(gh issue view "$child" --repo "$REPO" --json body --jq '.body // ""')
+              cleaned=$(printf '%s' "$child_body" | sed -E 's/<!-- stack-root-branch: [^ ]+ -->//g' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
+              printf '%s\n\n<!-- stack-root-branch: %s -->' "$cleaned" "$STACK_BRANCH" > /tmp/child-body.md
+              gh issue edit "$child" --repo "$REPO" --body-file /tmp/child-body.md >/dev/null
             fi
             gh issue edit "$child" --repo "$REPO" \
               --remove-label "$REFINE_LABEL" --remove-label "$IMPLEMENT_LABEL" >/dev/null 2>&1 || true
@@ -744,6 +845,23 @@ safe-outputs:
   # one issue nobody can land; the cap stops a runaway decomposition.
   create-issue:
     max: 6
+  # The stack root. A split story integrates on a feature branch instead of the default
+  # branch: the children land there one by one and the root pull request carries the whole
+  # feature to the default branch once they are done, which is also the human validation
+  # point before main. The branch name is preserved rather than salted because it is a
+  # long-lived integration line that children, markers and prompts all address by name;
+  # a collision with an existing branch fails the push loudly, which is the correct
+  # outcome for a durable ref. The allowed-branches glob must stay in sync with the name
+  # the prompt tells the agent to choose (feat/ plus the parent issue number). Only the
+  # root targets the default branch, so allowed-base-branches admits nothing else.
+  create-pull-request:
+    # Staged like everything else, and opened by the `Open the stack root pull request` step:
+    # gh-aw ignores a per-output `staged: false` while the worker is staged.
+    allowed-branches: ["feat/*"]
+    allowed-base-branches: ["main"]
+    preserve-branch-name: true
+    title-prefix: "[bot] "
+    allow-empty: true
 
 
 # The fleet is two machines, so this clock is also how long a stuck run can hold half of it.
@@ -820,11 +938,24 @@ timeout-minutes: 90
    **If it splits:** write between two and ${{ env.MAX_SPLIT_CHILDREN }} children. Each child is
    a complete refined story wrapped in the same issue form, with its own
    acceptance criteria, its own tests section, and its own estimate of 5 or less. Never write a
-   child estimated at 1: that is a fragment, so fold it into a sibling. Call `create_issue` once
+   child estimated below ${{ env.MIN_CHILD_POINTS }}: that is a fragment, not a story -- the whole
+   stack exists to carry real slices, so fold anything smaller into a sibling and give the
+   sibling the honest combined estimate. Call `create_issue` once
    per child, and in each child body include:
 
    - the line `${{ env.SPLIT_PARENT_PREFIX }}N -->` naming the parent issue number
-   - a `Blocked by #M` line naming any sibling that must land first, when order genuinely matters
+   - a `Blocked by #aw_<id>` line for each sibling that must land first, when order genuinely
+     matters, one line per sibling. Siblings have no numbers yet, so give every child a
+     `temporary_id` of `aw_` plus 3 to 12 letters, digits or underscores (`aw_modules`, not
+     `aw_module_backend`, which gh-aw rejects as too long) and name siblings by it; the workflow rewrites each
+     `#aw_<id>` to the real issue number once the children exist. Write dependencies only as these
+     lines and never set the `blocked_by` field: it takes one reference, and a value naming two
+     rejected the item and discarded the whole refinement (Lyceum #45).
+   - a `Parent feature branch: feat/<parent issue number>` line (for parent #123,
+     `Parent feature branch: feat/123`) naming the branch the whole split integrates on:
+     each child's pull request targets that branch, never the default branch, the children
+     land there one at a time, and only the root pull request carries the finished feature
+     to the default branch
 
    Then call `update_issue` on the parent, replacing its body with a short summary of the whole
    piece of work, the reason it was split, and a checklist linking every child. The parent keeps
@@ -914,7 +1045,23 @@ timeout-minutes: 90
 
     **The story was split.** You estimated ${{ env.SPLIT_THRESHOLD }} or more and found real
     seams. Call `create_issue` once per child, then `update_issue` on the parent with the
-    summary and the checklist, then `add_comment` with `${{ env.REFINE_MARKER }}`, then
+    summary and the checklist. Then open the stack's root pull request, in this order:
+
+    First write the feature's journey as one failing end-to-end test, following the
+    repository's own end-to-end test conventions. That failing test is the specification, not
+    the implementation: write test code only, never the production code that would make it
+    pass. When the repository has no end-to-end test conventions at all, skip the test rather
+    than inventing one -- the root pull request may be proposal-only.
+
+    Then call `create_pull_request` once, with the branch named `feat/` plus the parent issue
+    number -- exactly the name you wrote into every child's `Parent feature branch:` line --
+    a one-line title for the whole feature, and a body carrying that same summary and child
+    checklist plus the closing line `Fixes #${{ inputs.issue-number }}`. Do not pass `base`:
+    the root pull request targets the default branch, and its closing line fires only when it
+    eventually merges there, after every child has landed on the feature branch.
+
+    Finally, call `add_comment` with `${{ env.REFINE_MARKER }}`, then
     `${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}`, then one sentence naming the estimate you gave the
-   whole and how many children you wrote. The children carry the work forward; the parent stays
-   open as their tracker and is never implemented directly.
+    whole, how many children you wrote, and the feature branch they integrate on. The children
+    carry the work forward; the parent stays open as their tracker and is never implemented
+    directly.

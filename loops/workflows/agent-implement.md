@@ -77,8 +77,8 @@ description: |
   Waiting on CI inside this run would hold a runner doing nothing, which is why the gate is
   a separate workflow rather than a later step.
 
-  Router-only worker: triggered exclusively via workflow_call from work-router.yml.
-  Contract input: issue-number.
+  Router-first worker: triggered via workflow_call from work-router.yml, or via workflow_dispatch
+  from the router's stack path (`--ref` = the feature branch). Contract input: issue-number.
 
 name: "Agent: Implement Issue"
 
@@ -91,6 +91,23 @@ imports:
 
 on:
   workflow_call:
+    inputs:
+      issue-number:
+        description: Issue number to implement.
+        required: true
+        type: string
+      attempts_so_far:
+        description: Failed implement runs already made for this issue. Parked when it reaches the cap.
+        required: false
+        type: string
+        default: '0'
+  # Stack dispatch (work-router.yml reads `<!-- stack-root-branch: feat/N -->` on the issue and
+  # runs `gh workflow run agent-implement.lock.yml --ref feat/N`). Under workflow_call
+  # GITHUB_SHA is the router event's SHA -- global default-branch state, not the feature
+  # branch -- which widens the patch window; dispatch pins the SHA to the feature tip and makes
+  # the generator produce exactly-the-child's-commits patches. Workflow-level inputs resolve
+  # identically from both triggers, so every job below reads inputs.issue-number unchanged.
+  workflow_dispatch:
     inputs:
       issue-number:
         description: Issue number to implement.
@@ -619,6 +636,17 @@ safe-outputs:
     protected-files: allowed
     allowed-files:
       - "**"
+    # The pull request targets the branch this run was started on, which is the branch the work
+    # was cut from: `main` when the router calls this worker, `feat/N` when it dispatches a stack
+    # child with `--ref feat/N`. Taken from the run rather than asked of the agent, because the
+    # agent was asked and did not: on Lyceum #72 it emitted branch and title with no base, the
+    # handler fell back to the default branch, and a bundle built on feat/44 could not be replayed
+    # onto main (run 38694942046). A repository with no stack markers is never dispatched, so its
+    # base stays `main` exactly as before.
+    base-branch: ${{ github.ref_name }}
+    allowed-base-branches:
+      - "main"
+      - "feat/*"
 
 # The fleet is two machines, so this clock is also how long a stuck run can hold half of it.
 # 240 went on to every worker at once when the provider was slow, which fixed the deaths and
@@ -728,12 +756,14 @@ timeout-minutes: 180
 
    Choose exactly one:
 
-   - **`safeoutputs/create_pull_request`** , the normal path. Propose a pull request against
-     `main` with the verified changes. Its `body` must close the issue
+   - **`safeoutputs/create_pull_request`** , the normal path. Propose a pull request with the
+     verified changes. Do not pass `base`: the workflow sets it to the branch this run started
+     on, which is the branch you are working from, so a stack child lands on its feature branch
+     without you doing anything. The `body` **must close exactly this issue and nothing else**
      (`Closes #${{ inputs.issue-number }}`) and summarise what changed and why. Its `branch` is
-     the branch you are on, the one named in step 1; do not invent another name. You do not need
-     to check whether a pull request already exists for this issue: the router does that before
-     dispatching you and does not start this workflow when one does.
+     the branch you are on, the one named in step 1; do not invent another name. You do not
+     need to check whether a pull request already exists for this issue: the router does
+     that before dispatching you and does not start this workflow when one does.
    - **`safeoutputs/report_incomplete`** , only when infrastructure or tooling prevents you
      from completing the task, such as a pre-existing build failure you cannot fix. Provide a
      specific `reason`.

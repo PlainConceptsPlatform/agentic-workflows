@@ -342,6 +342,13 @@ for (const file of readdirSync(workflowDirectory)) {
   // pull request as an issue instead of a pull request). Checking out the branch tip at
   // execution time makes the commit parent current main; the implement-global queue
   // already keeps sibling merges out of the window while the agent runs.
+  //
+  // A stack child dispatches this workflow directly (`gh workflow run
+  // agent-implement.lock.yml --ref feat/N`), and there the pin must select the feature
+  // branch tip, not main: github.ref_name is the ref the dispatch named. Under
+  // workflow_call the callee inherits the caller's event, and the router is only ever
+  // dispatched on the default branch, so the dispatch arm of the ternary resolves to
+  // main there too -- flat behavior is byte-identical.
   if (file === "agent-implement.lock.yml") {
     const start = rewritten.indexOf("\n  agent:\n");
     const rest = start === -1 ? "" : rewritten.slice(start + 1);
@@ -351,11 +358,55 @@ for (const file of readdirSync(workflowDirectory)) {
       const span = rewritten.slice(start, end).replace(
         /(uses: actions\/checkout@[^\n]*\n(\s+)with:\n(?:\2  [^\n]+\n)*)/,
         (whole, _block, indent) =>
-          whole.includes("ref:") ? whole : whole + indent + "  ref: ${{ github.event.repository.default_branch }}\n",
+          whole.includes("ref:")
+            ? whole
+            : whole +
+              indent +
+              "  ref: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || github.event.repository.default_branch }}\n",
       );
       rewritten = rewritten.slice(0, start) + span + rewritten.slice(end);
     }
   }
+
+  // update_issue declares no required field, so the safe-outputs MCP server accepts a call
+  // carrying only issue_number and answers success. An agent that drops the body - the
+  // documented way is omitting the trailing `.` so the bridge never reads stdin - loses its
+  // whole story, is told nothing, and goes on to claim completion. add_comment declares body
+  // required and rejects the identical mistake, which is how the agent recovers from it on
+  // the next turn. Measured on Lyceum before this: one refine run in five wrote its story,
+  // the other four ended green with the issue untouched (#44, #59 twice, #62), and Numa #698
+  // reached `refined, implement` still carrying its original form body.
+  //
+  // Only agent-refine calls update_issue, and always to replace the body; labels and status
+  // are workflow-owned and the prompt forbids the agent from touching them, so requiring the
+  // body costs no legitimate call. The check below fails the compile if this stops matching.
+  {
+    const toolStart = rewritten.indexOf('"update_issue": {');
+    if (toolStart !== -1) {
+      const bodyField = rewritten.indexOf('"body": {', toolStart);
+      if (bodyField !== -1) {
+        const insertAt = bodyField + '"body": {'.length;
+        if (!rewritten.slice(insertAt, insertAt + 80).includes('"required": true')) {
+          rewritten = rewritten.slice(0, insertAt) + '\n' + ' '.repeat(20) + '"required": true,' + rewritten.slice(insertAt);
+        }
+      }
+    }
+  }
+
+  // The pull request base belongs to the handler, never to the MCP server. agent-implement sets
+  // base-branch from the dispatched ref so a stack child lands on its feature branch, and gh-aw
+  // writes that base into both configs. The safe-outputs MCP server runs inside the sandbox,
+  // where remote refs are not visible, and given a base it insists on a merge-base against
+  // origin/<base>: on Lyceum #73 it answered "No remote refs available for merge-base
+  // calculation" twice and the run died at max-turns with the code already written (run
+  // 38737284343). With no base it patches from the pinned SHA, which the stack dispatch sets to
+  // the feature tip, and that is exactly the patch the handler then applies onto the base. So
+  // the MCP config loses the base and the handler config keeps it. The check below fails the
+  // compile if this stops matching.
+  rewritten = rewritten.replace(
+    /^([ \t]+GH_AW_SAFE_OUTPUTS_CONFIG: "[^\n]*?)\\"base_branch\\":\\"[^\\"]*\\",/m,
+    "$1",
+  );
 
   // Guard the two rewrites the compiled agent jobs cannot work without. The anchors are
   // upstream template text: when a gh-aw upgrade reshapes either step, the silent
@@ -365,8 +416,31 @@ for (const file of readdirSync(workflowDirectory)) {
     { name: "bundle upload glob", ok: /\n( +)- name: Upload agent artifacts\n\1  if: always\(\)\n\1  continue-on-error: true\n\1  uses: actions\/upload-artifact@[^\n]*\n\1  with:\n\1    name: \$\{\{ needs\.activation\.outputs\.artifact_prefix \}\}agent\n\1    path: \|\n(?:\1      [^\n]*\n)*\1      \/tmp\/gh-aw\/aw-\*\.bundle\n/ },
     { name: "placeholder step intact", ok: /\n( +)- name: Write agent output placeholder if missing\n\1  if: always\(\)\n\1  run: \|\n\1    if \[ ! -f \/tmp\/gh-aw\/agent_output\.json \]; then\n\1      echo '\{"items":\[\]\}' > \/tmp\/gh-aw\/agent_output\.json\n\1    fi\n/ },
     { name: "failed-jobs reporter disabled", ok: /- name: Report failed jobs\n[ \t]*id: report_failed_jobs\n[ \t]*if: false[^\n]*\n/ },
+    // Only agent-refine declares update_issue; the other workers never carry the tool.
+    {
+      name: "update_issue requires a body",
+      ok: lock =>
+        !lock.includes('"update_issue": {') ||
+        /"update_issue": \{[\s\S]{0,3000}?"body": \{\s*\n\s*"required": true,/.test(lock),
+    },
+    // The base reaches the handler and never the MCP server; see the rewrite above. Anchored on
+    // the escaped quotes because allowed_base_branches contains the bare text base_branch.
+    {
+      name: "pull request base stays out of the MCP config",
+      ok: lock => {
+        const mcp = (lock.match(/^[ \t]+GH_AW_SAFE_OUTPUTS_CONFIG: "[^\n]*/m) || [""])[0];
+        const handler = (lock.match(/^[ \t]+GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG: "[^\n]*/m) || [""])[0];
+        if (mcp.includes('\\"base_branch\\"')) return false;
+        // The handler config keeps the expression for Actions to expand before the job starts;
+        // only the MCP config is rewritten to an env reference. Either form is the run's ref.
+        return !file.startsWith("agent-implement") ||
+          handler.includes('\\"base_branch\\":\\"${{ github.ref_name }}\\"') ||
+          handler.includes('\\"base_branch\\":\\"${GITHUB_REF_NAME}\\"');
+      },
+    },
   ]) {
-    if (!check.ok.test(rewritten)) {
+    const passed = typeof check.ok === "function" ? check.ok(rewritten) : check.ok.test(rewritten);
+    if (!passed) {
       process.stderr.write(
         `compile patch "${check.name}" no longer matches in ${file}: the gh-aw template changed. ` +
         `Re-anchor the rewrite in loops/scripts/compile-agent-workflows.mjs, or agent pushes are silently dropped.\n`,

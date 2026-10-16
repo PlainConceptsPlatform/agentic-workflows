@@ -60,6 +60,27 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
       ) or
       .type == "create_issue");
 
+  # A stack split also opens the root pull request: the one pull request refine may open, and
+  # only alongside the children it integrates. Lyceum #45 emitted the parent body, two children
+  # and that root, and was called invalid because a pull request is not a source item, so no
+  # stack split had ever been accepted. Complete and questions keep has_only_source_items, so a
+  # pull request anywhere but a split is still invalid.
+  def root_pr_count:
+    [.items[] | select(.type == "create_pull_request")] | length;
+
+  def has_only_split_items:
+    all(.items[] | select(is_run_signal | not);
+      (
+        .type == "update_issue" and
+        (.item_number == null or (.item_number | tostring) == $issue)
+      ) or
+      (
+        .type == "add_comment" and
+        (.item_number | tostring) == $issue
+      ) or
+      .type == "create_issue" or
+      .type == "create_pull_request");
+
   # The agent saying it did not finish. Survivable when it left real work behind, never
   # when all it left was a comment: a failed run must not be read as a question, or the
   # loop waits for an answer to something nobody asked.
@@ -77,7 +98,15 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
   # complete refinement. A body carrying the draft marker is a temporal draft, not a
   # finished refinement: it only counts as the questions outcome when the matching
   # batched-questions comment is also there.
-  if child_count >= 2 and has_replacement_body and has_only_source_items then "split"
+  #
+  # A comment with no update at all is a question asked before anything was drafted, which
+  # the worker is allowed to do. A comment alongside an update that carries no draft is not:
+  # that is the shape of a run that called update_issue and delivered no body, which Lyceum
+  # #44 produced when the safe-outputs bridge passed 19 bytes instead of the 16,175 the
+  # agent piped in. Requiring the draft unconditionally also rejected the first shape and
+  # kept this branch red for eleven days; the two are told apart by has_update, not by
+  # demanding a draft from both.
+  if child_count >= 2 and has_replacement_body and has_only_split_items and root_pr_count <= 1 then "split"
   elif child_count > 0 then "invalid"
   elif has_replacement_body and (has_draft_body | not) and has_only_source_items then "complete"
   elif has_clarification and ((has_update | not) or has_draft_body) and has_only_source_items

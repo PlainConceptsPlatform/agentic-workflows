@@ -5164,7 +5164,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <path data-edge-from="triage" data-edge-to="closed" data-edge-label="block" data-edge-key="2" data-edge-id="triage-block" data-composition-points="400,56;480,56" d="M 400 56 L 480 56" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="triage" data-edge-to="author" data-edge-label="needs-info" data-edge-key="3" data-edge-id="triage-needsinfo" data-composition-points="400,76;440,76;440,336;480,336" d="M 400 76 L 432 76 Q 440 76 440 84 L 440 328 Q 440 336 448 336 L 480 336" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="write" data-edge-to="refine" data-edge-key="4" data-edge-id="write-refine" data-composition-points="180,146;260,146" d="M 180 146 L 260 146" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="refine" data-edge-to="implement" data-edge-label="5 or less" data-edge-key="5" data-edge-id="refine-impl" data-composition-points="400,149;480,149" d="M 400 149 L 480 149" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="refine" data-edge-to="implement" data-edge-label="3 to 5" data-edge-key="5" data-edge-id="refine-impl" data-composition-points="400,149;480,149" d="M 400 149 L 480 149" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="refine" data-edge-to="split" data-edge-label="8 or more" data-edge-key="6" data-edge-id="refine-split" data-composition-points="260,152.66666666666666;220,152.66666666666666;220,239;180,239" d="M 260 152.66666666666666 L 228 152.66666666666666 Q 220 152.66666666666666 220 160.66666666666666 L 220 231 Q 220 239 212 239 L 180 239" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="split" data-edge-to="refine" data-edge-key="7" data-edge-id="split-refine" data-composition-points="180,253;220,253;220,159.33333333333334;260,159.33333333333334" d="M 180 253 L 212 253 Q 220 253 220 245 L 220 167.33333333333334 Q 220 159.33333333333334 228 159.33333333333334 L 260 159.33333333333334" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="refine" data-edge-to="author" data-edge-label="questions" data-edge-key="8" data-edge-id="refine-author" data-composition-points="400,163;440,163;440,346;480,346" d="M 400 163 L 432 163 Q 440 163 440 171 L 440 338 Q 440 346 448 346 L 480 346" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
@@ -5371,9 +5371,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text x="440" y="196" class="t-messagebus" font-size="8" text-anchor="middle">needs-info</text>
         </g>
 
-        <g data-detail="context" data-edge-from="refine" data-edge-to="implement" data-edge-label="5 or less" data-edge-key="5" data-edge-id="refine-impl">
+        <g data-detail="context" data-edge-from="refine" data-edge-to="implement" data-edge-label="3 to 5" data-edge-key="5" data-edge-id="refine-impl">
           <rect x="413.4" y="129" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="440" y="139" class="t-backend" font-size="8" text-anchor="middle">5 or less</text>
+          <text x="440" y="139" class="t-backend" font-size="8" text-anchor="middle">3 to 5</text>
         </g>
         <g data-detail="context" data-edge-from="refine" data-edge-to="split" data-edge-label="8 or more" data-edge-key="6" data-edge-id="refine-split">
           <rect x="193.4" y="175.83333333333331" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
@@ -5618,7 +5618,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <h3>Main path</h3>
         </div>
         <ul>
-          <li>&bull; refine decides size (5 or less = implement, 8+ = split)</li>
+          <li>&bull; refine decides size (3 to 5 = implement, 8+ = split, anything under 3 folds into a sibling)</li>
           <li>&bull; implement opens one PR, CI runs, merge gate decides</li>
         </ul>
       </div>

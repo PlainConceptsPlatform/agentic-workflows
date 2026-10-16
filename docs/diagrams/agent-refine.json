@@ -335,7 +335,7 @@
       "title": "Size decision",
       "items": [
         "Fibonacci estimate against ESTIMATE_BANDS",
-        "8 or more splits into 2-6 children of 5 or less",
+        "8 or more splits into 2-6 children of 3 to 5 points",
         "Each child walks the pipeline alone"
       ]
     }
