@@ -1776,6 +1776,15 @@ fi
 # that has not run. Refusals are for what the train never hands over (a fork, a stranger, a pull
 # request that is not open), and the train filters those itself.
 if worker_installed merge-gate; then
+  # check-diff exiting 1 is the `fail` the code_rules job reports. Under GitHub's `bash -e` a bare
+  # assignment from it ends the step, so the report is never recorded and the gate burns its
+  # budget on a failure it could have repaired.
+  if grep -qF 'check-diff.mjs --base "$BASE" 2>&1) || code=$?' "$MERGE_GATE_WORKER_MD"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: code_rules must capture check-diff's exit code with || code=\$?; a bare assignment dies under bash -e" >&2
+  fi
   SUBJECT_YML="${HERE}/../identify-gate-subject/action.yml"
   if grep -qE 'does not close a numbered issue|does not carry' "$SUBJECT_YML" || grep -q 'require-label' "$SUBJECT_YML" "$MERGE_GATE_WORKER_MD"; then
     FAIL=$((FAIL + 1))

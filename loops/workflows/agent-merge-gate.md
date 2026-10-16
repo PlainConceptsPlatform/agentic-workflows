@@ -319,8 +319,13 @@ jobs:
             echo "check-diff is not installed (agent-harness 3.2.0 or later ships it), so comments and tests were not checked." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          report=$(node .opencode/scripts/check-diff.mjs --base "$BASE" 2>&1)
-          code=$?
+          # `|| code=$?`, not a bare `code=$?` on the next line. GitHub runs this under `bash -e`,
+          # and `set -uo pipefail` above does not undo it, so a check-diff that exited 1 (the
+          # `fail` this step exists to report) ended the step there: the job failed, the agent
+          # was skipped, and the pull request burned its whole attempt budget on a verdict that
+          # was never recorded (Pliny-Bot #686, six attempts in twenty minutes).
+          code=0
+          report=$(node .opencode/scripts/check-diff.mjs --base "$BASE" 2>&1) || code=$?
           case "$code" in 0) result=pass ;; 1) result=fail ;; *) result=error ;; esac
           delimiter="EOF_$(openssl rand -hex 8)"
           {
