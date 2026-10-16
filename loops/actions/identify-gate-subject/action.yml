@@ -1,6 +1,6 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/actions/identify-gate-subject/action.yml. Update with workflows update --force; consumer edits may be overwritten.
 name: Identify gate subject
-description: Confirm the pull request is one the gate may act on, resolve the issue it closes, and check a bot pull request's issue carries the required label.
+description: Confirm the pull request is one the gate may act on (same repository, opened by a trusted bot or someone with write access) and resolve the open issue it closes, if any.
 inputs:
   token:
     description: GitHub token with issues and pull-requests read access.
@@ -22,10 +22,6 @@ inputs:
     default: ''
   linked-issue:
     description: Issue the pull request closes, when the router already resolved it.
-    required: false
-    default: ''
-  require-label:
-    description: Label a bot pull request's closing issue must carry. Empty disables the check. A person's pull request needs neither an issue nor the label.
     required: false
     default: ''
 outputs:
@@ -66,7 +62,6 @@ runs:
         CONCLUSION: ${{ inputs.ci-conclusion }}
         CI_RUN_ID: ${{ inputs.ci-run-id }}
         LINKED_ISSUE: ${{ inputs.linked-issue }}
-        REQUIRE_LABEL: ${{ inputs.require-label }}
         TRUSTED_BOTS: ${{ inputs.trusted-bots }}
       run: |
         set -euo pipefail
@@ -115,19 +110,16 @@ runs:
             grep -oE '[0-9]+' | head -n 1 || true)"
         fi
 
-        # The bot only opens a pull request for an issue it was given, so one that closes none, or
-        # whose issue lost the label, is not work the gate was handed. A person's pull request is
-        # gated on its own description when it closes nothing.
-        if [ "$bot" = true ]; then
-          [ -n "$issue" ] || none "PR #$PR_NUMBER does not close a numbered issue"
-        fi
-
-        if [ "$bot" = true ] && [ -n "$REQUIRE_LABEL" ]; then
-          labels="$(gh issue view "$issue" --repo "$REPO" --json labels \
-            --jq '[.labels[].name]')"
-
-          if ! jq -e --arg name "$REQUIRE_LABEL" 'index($name)' >/dev/null <<<"$labels"; then
-            none "issue #$issue does not carry $REQUIRE_LABEL (has: $(jq -r 'join(", ")' <<<"$labels"))"
+        # An issue that is already closed is not the work this pull request is for: the feature
+        # landed some other way, and the label on a closed issue says nothing. Comments, labels
+        # and the acceptance criteria then come from the pull request itself. A pull request is
+        # never refused for lacking an issue: the merge train hands the gate every pull request
+        # that can move, and a gate that declines one without a trace is handed it again.
+        if [ -n "$issue" ]; then
+          issue_state="$(gh issue view "$issue" --repo "$REPO" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)"
+          if [ "$issue_state" != OPEN ]; then
+            echo "Issue #$issue is $issue_state; gating the pull request on its own description."
+            issue=""
           fi
         fi
 

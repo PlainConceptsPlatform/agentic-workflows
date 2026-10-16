@@ -27,7 +27,12 @@ set -euo pipefail
 #   HOLD               true when the pull request carries the hold label
 #   REVIEW_DECISION    GitHub's review decision (CHANGES_REQUESTED holds it for its author)
 #   PARK               none, or held when a standing gate verdict covers this head
-#   ATTEMPTS           failed gate attempts on this head; MAX_ATTEMPTS is the budget
+#   ATTEMPTS           failed gate attempts on this head; MAX_ATTEMPTS is the budget. Counts the
+#                      larger of the attempt comments and the gate runs, so a gate that fails
+#                      without a comment still spends it
+#   SILENT_GATE        true when a gate already ran on this head and left no verdict and no attempt
+#                      comment: it declined, or died before it could say so. Handing it the same
+#                      pull request again reproduces that, a hot loop with every tick
 #   MERGEABLE          MERGEABLE, CONFLICTING or UNKNOWN
 #   CI_STATUS          none, or the latest CI run's status (queued, in_progress, completed, ...)
 #   CI_CONCLUSION      that run's conclusion when it completed
@@ -45,6 +50,8 @@ train_move() {
     move=skip; reason="a gate verdict on this head is waiting for a person"
   elif [ "${ATTEMPTS:-0}" -ge "${MAX_ATTEMPTS:-6}" ]; then
     move=skip; reason="its gate attempt budget on this head is spent"
+  elif [ "${SILENT_GATE:-false}" = true ]; then
+    move=skip; reason="its gate already ran on this head and left no verdict or attempt"
   elif [ "${MERGEABLE:-UNKNOWN}" = CONFLICTING ]; then
     # A conflicting pull request has no merge ref, so CI can never run on it: waiting for a
     # verdict would wait forever. Resolving the conflict is the gate's job.
@@ -220,6 +227,14 @@ update_branch() {
   gh api "repos/$REPO/pulls/$pr/update-branch" --method PUT -f expected_head_sha="$head_sha" >/dev/null
 }
 
+# How many gate runs were started for a pull request since a moment, whatever became of them. A
+# run is titled by the router's run-name; this is the one count that does not depend on the gate
+# having written anything.
+gate_run_count() {
+  local pr="$1" since="$2"
+  gh api --paginate "repos/$REPO/actions/workflows/work-router.yml/runs?event=workflow_dispatch&per_page=100"     --jq "[.workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\") | select(.created_at > \"$since\")] | length"     2>/dev/null | awk '{ n += $1 } END { print n + 0 }'
+}
+
 attempt_count() {
   local number="$1" since="$2"
   gh api --paginate "repos/$REPO/issues/$number/comments?per_page=100" \
@@ -332,6 +347,7 @@ for line in "${candidates[@]}"; do
     RETRIES="$retries" MAX_RETRIES="$MAX_RETRIES" STACK_ROOT="$stack_root" train_park)
 
   attempts=0
+  silent_gate=false
   if [ "$park" = none ]; then
     horizon="${head_committed:-1970-01-01T00:00:00Z}"
     # A retried verdict starts a fresh budget from the verdict it retries, not from the head.
@@ -340,6 +356,12 @@ for line in "${candidates[@]}"; do
     if [ -n "$linked_issue" ]; then
       attempts=$((attempts + $(attempt_count "$linked_issue" "$horizon")))
     fi
+    gate_runs=$(gate_run_count "$pr" "$horizon")
+    # Comments say what the gate decided. Runs say it was asked. A run on this head that left no
+    # attempt comment and no verdict is a gate that did nothing, and the next tick must not ask
+    # again: that is the loop.
+    if [ "$gate_runs" -gt 0 ] && [ "$attempts" -eq 0 ]; then silent_gate=true; fi
+    [ "$gate_runs" -le "$attempts" ] || attempts="$gate_runs"
   fi
 
   ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
@@ -372,7 +394,7 @@ for line in "${candidates[@]}"; do
   is_trusted_bot "$author" && trusted_author=true
 
   decision=$(HOLD="$hold" REVIEW_DECISION="$review_decision" PARK="$park" \
-    ATTEMPTS="$attempts" MAX_ATTEMPTS="$MAX_ATTEMPTS" MERGEABLE="$mergeable" \
+    ATTEMPTS="$attempts" MAX_ATTEMPTS="$MAX_ATTEMPTS" SILENT_GATE="$silent_gate" MERGEABLE="$mergeable" \
     CI_STATUS="$ci_status" CI_CONCLUSION="$ci_conclusion" CI_STUCK="$ci_stuck" \
     BEHIND_BY="${behind_by:-0}" TRUSTED_AUTHOR="$trusted_author" train_move)
   move=$(sed -n 's/^move=//p' <<<"$decision")

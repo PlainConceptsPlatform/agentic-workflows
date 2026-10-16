@@ -1771,6 +1771,20 @@ if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
   if [ "$VALIDATOR_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+# The gate takes any pull request the train hands it. A subject check that refuses one without
+# leaving a verdict or an attempt is a loop: the train cannot tell a gate that declined from a gate
+# that has not run. Refusals are for what the train never hands over (a fork, a stranger, a pull
+# request that is not open), and the train filters those itself.
+if worker_installed merge-gate; then
+  SUBJECT_YML="${HERE}/../identify-gate-subject/action.yml"
+  if grep -qE 'does not close a numbered issue|does not carry' "$SUBJECT_YML" || grep -q 'require-label' "$SUBJECT_YML" "$MERGE_GATE_WORKER_MD"; then
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the gate's subject job refuses a pull request for lacking an issue or a label; the train hands it back forever" >&2
+  else
+    PASS=$((PASS + 1))
+  fi
+fi
+
 echo "── Merge gate park ───────────────────────────────────────────────────────"
 
 # A gate verdict parks the code it was given on. The belt used to compare the standing verdict
@@ -1813,6 +1827,10 @@ if worker_installed merge-gate; then
     assert "requested changes keep it off the train" skip "$(move REVIEW_DECISION=CHANGES_REQUESTED CI_STATUS=completed CI_CONCLUSION=success)"
     assert "a parked pull request is passed by, not waited on" skip "$(move PARK=held CI_STATUS=completed CI_CONCLUSION=success)"
     assert "a spent attempt budget is passed by" skip "$(move ATTEMPTS=6 MAX_ATTEMPTS=6 CI_STATUS=completed CI_CONCLUSION=failure)"
+    # The loop that ran Pliny-Bot's gate twenty times on one pull request: the gate declined it
+    # (its issue was closed), left no verdict and no attempt, and every tick handed it back.
+    assert "a gate that ran and left no trace is not asked again" skip "$(move SILENT_GATE=true MERGEABLE=CONFLICTING CI_STATUS=none)"
+    assert "a gate that ran and left no trace is not asked again, green or red" skip "$(move SILENT_GATE=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
     assert "a conflict goes to the gate even with no CI" gate "$(move MERGEABLE=CONFLICTING CI_STATUS=none)"
     assert "running CI is waited on" wait "$(move MERGEABLE=MERGEABLE CI_STATUS=in_progress)"
     assert "CI stuck past the limit is passed by" skip "$(move MERGEABLE=MERGEABLE CI_STATUS=queued CI_STUCK=true)"

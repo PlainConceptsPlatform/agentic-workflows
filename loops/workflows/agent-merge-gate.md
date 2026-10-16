@@ -182,7 +182,6 @@ jobs:
           ci-conclusion: ${{ inputs.ci-conclusion }}
           ci-run-id: ${{ inputs.ci-run-id }}
           linked-issue: ${{ inputs.linked-issue }}
-          require-label: ${{ env.IMPLEMENT_LABEL }}
           trusted-bots: ${{ env.TRUSTED_BOTS }}
       - name: Block a pull request with requested changes
         id: review
