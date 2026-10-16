@@ -1785,6 +1785,16 @@ if worker_installed merge-gate; then
     FAIL=$((FAIL + 1))
     echo "FAIL: code_rules must capture check-diff's exit code with || code=\$?; a bare assignment dies under bash -e" >&2
   fi
+  # A stack child is dispatched on its feature branch, and a dispatched run reads repository secrets
+  # by their own names, not through the router's FORGE_API_KEY mapping. Without the fallback every
+  # stack child died at activation on "Validate CODEX_API_KEY or OPENAI_API_KEY secret".
+  COMPILE_SCRIPT="${HERE}/../../scripts/compile-agent-workflows.mjs"
+  if [ -f "$COMPILE_SCRIPT" ] && ! grep -qF "secrets.OPENAI_API_KEY || secrets.FORGE_API_KEY" "$COMPILE_SCRIPT"; then
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the compile script no longer gives the engine key a FORGE_API_KEY fallback; dispatched stack children cannot start" >&2
+  else
+    PASS=$((PASS + 1))
+  fi
   SUBJECT_YML="${HERE}/../identify-gate-subject/action.yml"
   if grep -qE 'does not close a numbered issue|does not carry' "$SUBJECT_YML" || grep -q 'require-label' "$SUBJECT_YML" "$MERGE_GATE_WORKER_MD"; then
     FAIL=$((FAIL + 1))

@@ -331,7 +331,19 @@ for (const file of readdirSync(workflowDirectory)) {
     // runner rather than the run so a runner keeps its server warm between its own jobs.
     // No double quotes here: the enclosing run: is a double-quoted YAML scalar, so a quote
     // would have to be escaped. The default has no spaces, so bare is safe shell.
-    .replace(/\/tmp\/opencode-data(?!-\$\{\{)/g, () => '/tmp/opencode-data-${{ runner.name }}');
+    .replace(/\/tmp\/opencode-data(?!-\$\{\{)/g, () => '/tmp/opencode-data-${{ runner.name }}')
+    // The engine key falls back to FORGE_API_KEY, the one secret every repository here has. The
+    // router maps it to OPENAI_API_KEY when it CALLS a worker, but a stack child is DISPATCHED on
+    // its feature branch, and a dispatched run reads repository secrets by their own names: with
+    // no OPENAI_API_KEY or CODEX_API_KEY set, activation died on "Validate CODEX_API_KEY or
+    // OPENAI_API_KEY secret" and every stack child in Pliny-Bot failed that way for hours. gh-aw
+    // reads the key in four places, the validation step, the engine env and the redaction list
+    // included, and all of them must see the fallback or the key would run unredacted. The
+    // longest form goes first so the shorter ones do not match inside it.
+    .replaceAll('${{ secrets.CODEX_API_KEY || secrets.OPENAI_API_KEY }}',
+      '${{ secrets.CODEX_API_KEY || secrets.OPENAI_API_KEY || secrets.FORGE_API_KEY }}')
+    .replaceAll('${{ secrets.CODEX_API_KEY }}', '${{ secrets.CODEX_API_KEY || secrets.FORGE_API_KEY }}')
+    .replaceAll('${{ secrets.OPENAI_API_KEY }}', '${{ secrets.OPENAI_API_KEY || secrets.FORGE_API_KEY }}');
 
   let rewritten = patched;
   // A queued implement executes hours after its run was created, but actions/checkout
@@ -415,6 +427,11 @@ for (const file of readdirSync(workflowDirectory)) {
   for (const check of [
     { name: "bundle upload glob", ok: /\n( +)- name: Upload agent artifacts\n\1  if: always\(\)\n\1  continue-on-error: true\n\1  uses: actions\/upload-artifact@[^\n]*\n\1  with:\n\1    name: \$\{\{ needs\.activation\.outputs\.artifact_prefix \}\}agent\n\1    path: \|\n(?:\1      [^\n]*\n)*\1      \/tmp\/gh-aw\/aw-\*\.bundle\n/ },
     { name: "placeholder step intact", ok: /\n( +)- name: Write agent output placeholder if missing\n\1  if: always\(\)\n\1  run: \|\n\1    if \[ ! -f \/tmp\/gh-aw\/agent_output\.json \]; then\n\1      echo '\{"items":\[\]\}' > \/tmp\/gh-aw\/agent_output\.json\n\1    fi\n/ },
+    // Every read of the engine key carries the FORGE_API_KEY fallback; see the rewrite above.
+    {
+      name: "engine key falls back to FORGE_API_KEY",
+      ok: lock => !lock.includes("${{ secrets.OPENAI_API_KEY }}") && !lock.includes("${{ secrets.CODEX_API_KEY }}"),
+    },
     { name: "failed-jobs reporter disabled", ok: /- name: Report failed jobs\n[ \t]*id: report_failed_jobs\n[ \t]*if: false[^\n]*\n/ },
     // Only agent-refine declares update_issue; the other workers never carry the tool.
     {
