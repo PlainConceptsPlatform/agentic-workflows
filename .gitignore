@@ -15,3 +15,5 @@ cli/loops/
 # and the deployed app ran code that existed in no branch.
 runners/scaler-app/publish/
 runners/scaler-app/publish.zip
+
+*.tgz
