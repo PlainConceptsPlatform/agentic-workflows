@@ -162,6 +162,7 @@ jobs:
       # Where verdicts, attempts and labels go: the issue, or the pull request when it closes none.
       record: ${{ steps.subject.outputs.record }}
       head_ref: ${{ steps.subject.outputs.head-ref }}
+      closes: ${{ steps.subject.outputs.closes }}
       conclusion: ${{ steps.subject.outputs.conclusion }}
       run-id: ${{ steps.subject.outputs.run-id }}
       review_blocked: ${{ steps.review.outputs.review_blocked }}
@@ -970,7 +971,7 @@ safe-outputs:
 timeout-minutes: 120
 ---
 
-1. You are gating pull request **#${{ needs.subject.outputs.pr }}**${{ needs.subject.outputs.issue != '' && format(', which closes issue **#{0}**', needs.subject.outputs.issue) || ', which closes no issue' }}.
+1. You are gating pull request **#${{ needs.subject.outputs.pr }}**, which ${{ needs.subject.outputs.closes }}.
    CI concluded **${{ needs.subject.outputs.conclusion }}**.
 
    It has already been confirmed that this is an open pull request from this repository, opened

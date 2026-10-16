@@ -44,6 +44,9 @@ outputs:
   head-ref:
     description: The pull request's head branch, the only branch the gate may push to.
     value: ${{ steps.identify.outputs.head-ref }}
+  closes:
+    description: "What the pull request closes, as the prompt says it: `closes issue #N` or `closes no issue`. gh-aw allows no expression logic in a prompt."
+    value: ${{ steps.identify.outputs.closes }}
   conclusion:
     description: CI conclusion, passed through unchanged or fetched from latest CI run.
     value: ${{ steps.identify.outputs.conclusion }}
@@ -161,6 +164,7 @@ runs:
           echo "issue=$issue"
           echo "record=${issue:-$PR_NUMBER}"
           echo "head-ref=$(jq -r '.headRefName' <<<"$pr")"
+          if [ -n "$issue" ]; then echo "closes=closes issue #$issue"; else echo "closes=closes no issue"; fi
           echo "conclusion=$ci_conclusion"
           echo "run-id=$ci_run_id"
         } >> "$GITHUB_OUTPUT"

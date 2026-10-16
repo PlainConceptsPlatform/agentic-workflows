@@ -77,7 +77,7 @@ train_move() {
         if [ "${CI_STUCK:-false}" = true ]; then
           move=skip; reason="CI has been '${CI_STATUS}' for longer than the train waits"
         else
-          move=wait; reason="CI is ${CI_STATUS}"
+          move="wait"; reason="CI is ${CI_STATUS}"
         fi
         ;;
     esac
