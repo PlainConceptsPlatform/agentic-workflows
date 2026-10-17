@@ -1785,6 +1785,28 @@ if worker_installed merge-gate; then
     FAIL=$((FAIL + 1))
     echo "FAIL: code_rules must capture check-diff's exit code with || code=\$?; a bare assignment dies under bash -e" >&2
   fi
+  # A token written to the runner's global git config outlives the job on a runner that is reused:
+  # rules for revoked tokens pile up for the same prefix and git picks one at random, so the same
+  # gate pushed for one pull request and was refused for the next (Pliny-Bot #716 and #717).
+  PUSH_ACTION="${HERE}/../push-agent-branch/action.yml"
+  if [ -f "$PUSH_ACTION" ] && grep -qE 'git config( --global)? url\.' "$PUSH_ACTION" && ! grep -qF 'git config --local url.' "$PUSH_ACTION"; then
+    FAIL=$((FAIL + 1))
+    echo "FAIL: push-agent-branch writes its token to the global git config, where stale rules from earlier jobs accumulate" >&2
+  elif [ -f "$PUSH_ACTION" ] && grep -qE 'git config --global url\.' "$PUSH_ACTION"; then
+    FAIL=$((FAIL + 1))
+    echo "FAIL: push-agent-branch adds to the global git config; set the rule with --local" >&2
+  else
+    PASS=$((PASS + 1))
+  fi
+  # A conclude that dies leaves no verdict and no attempt comment unless `incomplete` records it,
+  # and the train then reads the run as a gate that did nothing and never offers the pull request
+  # again.
+  if sed -n '/^  incomplete:/,/^    runs-on:/p' "$MERGE_GATE_WORKER_MD" | grep -q "needs.conclude.result == 'failure'"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the gate's incomplete job must record a failed conclude as an attempt, or the train strands the pull request" >&2
+  fi
   # A stack child is dispatched on its feature branch, and a dispatched run reads repository secrets
   # by their own names, not through the router's FORGE_API_KEY mapping. Without the fallback every
   # stack child died at activation on "Validate CODEX_API_KEY or OPENAI_API_KEY secret".

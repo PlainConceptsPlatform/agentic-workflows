@@ -695,8 +695,12 @@ jobs:
             ${{ env.OWNER_REVIEW_LABEL }}
             ${{ env.BLOCKED_LABEL }}
             ${{ env.PR_PENDING_LABEL }}
+  # A conclude that dies (a push refused, a token rejected) is a failed attempt too. Without it
+  # here the run left no verdict and no attempt comment, which the merge train reads as a gate that
+  # did nothing and never offers the pull request again: Pliny-Bot #716 sat stranded that way after
+  # its repair was computed and then lost to a rejected git fetch in conclude.
   incomplete:
-    needs: [subject, protected_changes, agent, safe_outputs, validate_output]
+    needs: [subject, protected_changes, agent, safe_outputs, validate_output, conclude]
     if: >
        always() &&
        needs.subject.outputs.found == 'true' &&
@@ -704,7 +708,8 @@ jobs:
        (
          needs.agent.result != 'success' ||
          needs.safe_outputs.result != 'success' ||
-         needs.validate_output.outputs.valid != 'true'
+         needs.validate_output.outputs.valid != 'true' ||
+         needs.conclude.result == 'failure'
        )
     runs-on: agents-arc
     permissions:

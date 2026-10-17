@@ -24,7 +24,20 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.token }}
       run: |
-        git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+        set -euo pipefail
+        # The runners here outlive their jobs, and `git config --global` outlives the job with
+        # them. This step used to add one `url.<token>.insteadOf` rule per run and never remove it,
+        # so a runner that had pushed before held several rules for the same prefix, each carrying
+        # a token revoked since, and git picks among equal-length matches arbitrarily. The same
+        # gate pushed for one pull request and was refused for the next: "Invalid username or
+        # token", then "Target branch does not exist" because ls-remote exited 128 (Pliny-Bot #716
+        # failed twice that way while #717 pushed in between). Drop every such rule wherever it
+        # lives, and set this run's rule in the checkout only.
+        for scope in --global --local; do
+          git config "$scope" --get-regexp '^url\..*x-access-token.*\.insteadof$' 2>/dev/null |
+            while read -r key _; do git config "$scope" --unset-all "$key" || true; done || true
+        done
+        git config --local url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
     - name: Read pull request branch
       id: request
       shell: bash
