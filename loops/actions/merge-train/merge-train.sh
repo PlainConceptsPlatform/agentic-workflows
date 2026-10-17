@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # Managed by @plainconceptsplatform/workflows. Source: loops/actions/merge-train/merge-train.sh. Update with `workflows update --force`; consumer edits may be overwritten.
-# Move the merge train one step: the oldest open pull request that can move, and only that one.
+# Move the merge train: look at every open pull request, oldest first, and do for each the one
+# thing it needs, with merges one at a time and repairs in parallel.
 #
 # The belt this replaces dispatched the gate for every eligible pull request at once. Each gate
 # then resolved its branch against a default branch the gate ahead of it was about to move, so a
 # night of ten pull requests became ten repairs, ten CI runs and ten more gates after every merge,
-# and a verdict that parked a pull request held it however stale it went. The train keeps one
-# pull request in flight, lowest number first. Everything else waits, untouched, until the one in
-# front of it has merged or been parked for a person.
+# and a verdict that parked a pull request held it however stale it went.
 #
-# One tick does at most one thing:
-#   wait     the front pull request's CI is still running, or a gate is already on the belt
-#   update   it is green but behind the default branch: merge the default branch in, CI reruns
-#   gate     it is green and current, red, or conflicting: the merge gate repairs or merges it
+# What races is a merge, because it moves the default branch under everyone else. A repair (a gate
+# handed red CI) pushes to its own branch and can never merge, so it races nothing. So:
+#   merge    one at a time, the oldest ready pull request first; nothing behind a pull request that
+#            is waiting on its CI, or behind a gate that may merge, merges or is brought up to date
+#   repair   a red or conflicting pull request goes to the gate at once, up to MAX_REPAIRS together
 #   approve  its CI is waiting for approval and a trusted bot opened it
+#   update   it is green but behind the default branch: merge the default branch in, CI reruns
 # A pull request a person has to decide on, or that carries the hold label, is skipped, so it never
 # blocks the line. Ticks come from every merge, every CI completion, every finished gate, and the
 # hourly schedule as the fallback.
@@ -133,6 +134,8 @@ TRUSTED_BOTS="${TRUSTED_BOTS:-}"
 HOLD_LABEL="${HOLD_LABEL:-hold}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-6}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
+MAX_REPAIRS="${MAX_REPAIRS:-1}"
+case "$MAX_REPAIRS" in ''|*[!0-9]*|0) MAX_REPAIRS=1 ;; esac
 STUCK_HOURS="${STUCK_HOURS:-3}"
 DRY_RUN="${DRY_RUN:-false}"
 SELF_RUN_ID="${GITHUB_RUN_ID:-0}"
@@ -175,18 +178,18 @@ can_ride() {
   [ "${WRITE_ACCESS[$login]}" = true ]
 }
 
-# One gate at a time across the repository. A gate dispatched by a tick, by a person or by a
-# consumer CI is a router run titled by run-name; the run this tick belongs to is excluded,
-# because the tick after a gate runs inside the gate's own router run.
-live_gate() {
+# The gates on the belt, one title per line. A gate handed red CI repairs and pushes and cannot
+# merge, so run-name gives it a " (repair)" suffix and the router queues it per pull request;
+# every other gate may merge, and there is one of those at a time across the repository. The run
+# this tick belongs to is excluded: the tick after a gate runs inside the gate's own router run.
+live_gates() {
   local status
   for status in queued in_progress waiting pending requested; do
-    gh api "repos/$REPO/actions/workflows/work-router.yml/runs?status=$status&per_page=100" \
-      --jq ".workflow_runs[]
+    gh api "repos/$REPO/actions/workflows/work-router.yml/runs?status=$status&per_page=100"       --jq ".workflow_runs[]
         | select(.id != $SELF_RUN_ID)
         | select(.display_title | startswith(\"$GATE_TITLE_PREFIX\"))
-        | .display_title" 2>/dev/null | head -1
-  done | head -1
+        | .display_title" 2>/dev/null
+  done | sort -u
 }
 
 # GitHub works mergeability out on demand: the first read of a pull request nobody has opened
@@ -256,7 +259,7 @@ dispatch_gate() {
   # The next tick waits behind this one and must see the gate it started, or it starts a second.
   for _ in $(seq 1 12); do
     if gh api "repos/$REPO/actions/workflows/work-router.yml/runs?event=workflow_dispatch&created=>=$since&per_page=20" \
-      --jq ".workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\") | .id" 2>/dev/null | grep -q .; then
+      --jq ".workflow_runs[] | select(.display_title | startswith(\"$GATE_TITLE_PREFIX$pr\")) | .id" 2>/dev/null | grep -q .; then
       return 0
     fi
     sleep 5
@@ -267,11 +270,21 @@ dispatch_gate() {
 summary "### Merge train"
 summary ""
 
-if gate=$(live_gate) && [ -n "$gate" ]; then
-  echo "A gate is already on the belt (${gate}); the train waits for it."
-  summary "Waiting: \`${gate}\` is on the belt."
-  exit 0
-fi
+live_titles="$(live_gates)"
+live_repairs=$(printf '%s
+' "$live_titles" | grep -c ' (repair)$' || true)
+live_merge=$(printf '%s
+' "$live_titles" | grep -v ' (repair)$' | grep -c . || true)
+live_for_pr() { printf '%s
+' "$live_titles" | grep -qE "PR #$1( \(repair\))?$"; }
+echo "On the belt: ${live_merge} merging gate(s), ${live_repairs} repair(s). Up to ${MAX_REPAIRS} repair(s) at once."
+summary "On the belt: ${live_merge} merging gate(s), ${live_repairs} repair(s); up to ${MAX_REPAIRS} repair(s) at once."
+summary ""
+
+# Once a pull request ahead is waiting on its CI, or a gate that may merge is on the belt, nothing
+# behind it may merge or be brought up to date: the oldest merges first, and one at a time.
+merge_blocked=false
+[ "$live_merge" -eq 0 ] || merge_blocked=true
 
 base_head_date=""
 base_head_date_for() {
@@ -400,26 +413,45 @@ for line in "${candidates[@]}"; do
   move=$(sed -n 's/^move=//p' <<<"$decision")
   reason=$(sed -n 's/^reason=//p' <<<"$decision")
 
+  # A gate is already on this pull request, whatever kind: offering it another would run the same
+  # work twice. It does not hold the line up for the repair kind; a merging gate already does.
+  if [ "$move" != skip ] && live_for_pr "$pr"; then
+    move=skip
+    reason="a gate is already on it"
+  fi
+
   echo "#$pr ($author): $move, $reason."
   summary "| #$pr | $author | $move | $reason |"
 
   case "$move" in
     skip) continue ;;
-    wait) exit 0 ;;
+    wait)
+      # Its CI is running: nothing behind it may merge or be brought up to date first, but the
+      # pull requests behind it that need repair do not wait for anyone.
+      merge_blocked=true
+      continue
+      ;;
     approve)
       act "Approving the CI runs waiting on #$pr." approve_runs "$head_ref"
-      exit 0
+      merge_blocked=true
+      continue
       ;;
     update)
+      if [ "$merge_blocked" = true ]; then
+        echo "  #$pr waits for the pull request ahead of it before it is brought up to date."
+        continue
+      fi
       # Merge, never rebase: the gate's pushes are fast-forward only, and so are a person's.
       if act "Merging $base_ref into #$pr so CI judges it against what it will land on." \
         update_branch "$pr" "$head_sha"; then
-        exit 0
+        merge_blocked=true
+        continue
       fi
       echo "::warning::GitHub could not update #$pr from $base_ref; handing it to the gate."
       act "Dispatching the merge gate for #$pr to bring it up to date." \
         dispatch_gate "$pr" success "${ci_run_id:-}" "$attempts"
-      exit 0
+      merge_blocked=true
+      continue
       ;;
     gate)
       conclusion="${ci_conclusion:-}"
@@ -434,13 +466,30 @@ for line in "${candidates[@]}"; do
         conclusion=$(cut -f2 <<<"$last")
         [ -n "$conclusion" ] || conclusion=failure
       fi
+      if [ "$conclusion" = failure ]; then
+        # A repair: it pushes and can never merge, so it races nothing. Up to MAX_REPAIRS at once.
+        if [ "$live_repairs" -ge "$MAX_REPAIRS" ]; then
+          echo "  #$pr needs a repair; ${live_repairs} already in progress, the limit is ${MAX_REPAIRS}."
+          continue
+        fi
+        act "Dispatching a repair gate for #$pr (CI failed, attempt $((attempts + 1)) of $MAX_ATTEMPTS)." \
+          dispatch_gate "$pr" failure "${ci_run_id:-}" "$attempts"
+        live_repairs=$((live_repairs + 1))
+        continue
+      fi
+      # CI is green on the verdict: this gate may merge, so it goes only when nothing is ahead of it.
+      if [ "$merge_blocked" = true ]; then
+        echo "  #$pr is ready for the gate; it waits for the pull request ahead of it."
+        continue
+      fi
       act "Dispatching the merge gate for #$pr (CI $conclusion, attempt $((attempts + 1)) of $MAX_ATTEMPTS)." \
         dispatch_gate "$pr" "$conclusion" "${ci_run_id:-}" "$attempts"
-      exit 0
+      merge_blocked=true
+      continue
       ;;
   esac
 done
 
-echo "Nothing on the train can move: every open pull request is parked, held or has no CI verdict."
+echo "That is every open pull request this tick could move."
 summary ""
-summary "Nothing can move: every open pull request is parked, held or has no CI verdict."
+summary "Every open pull request was looked at; those that could move have."

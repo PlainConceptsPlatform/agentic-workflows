@@ -837,9 +837,11 @@ safe-outputs:
   # was sent with an incorrect parameter shape (20 bytes, missing body) and was accepted
   # with success by the bridge, consuming the 1-per-run quota". The prompt still says to
   # send the body once.
+  # `title:` lets refine set an English title when the issue was written in another language.
   update-issue:
     target: "*"
     max: 3
+    title:
   add-comment:
   # Split children. An oversized story becomes several implementable ones rather than
   # one issue nobody can land; the cap stops a runaway decomposition.
@@ -975,6 +977,13 @@ timeout-minutes: 90
 
    The visible line is for people and the marker is read by the workflow, which turns it into the
    `sp-N` label. A body without the marker gets no estimate label at all.
+
+   **Everything you write is in English, whatever language the issue was written in.** Bodies,
+   child issues, comments and questions are English. When the title of the issue you are refining
+   is not English, put an English title in the same `update_issue` call as the body, as
+   `{"issue_number":N,"title":"...","body":"..."}`: it carries the same meaning, short, with no
+   language tag. People write issues in their own language, and everything the workflow produces
+   from them (pull requests, commits, the run history) is read by everyone else in English.
 
 7. **One safe-output call per turn.** Never batch multiple safe-output calls into a single
    message: `update_issue`, `create_issue` and `add_comment` each go in their own turn, with

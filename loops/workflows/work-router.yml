@@ -69,7 +69,7 @@ run-name: >-
   && format('Agentics: Merge Train - CI on PR #{0}', inputs.pr-number)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'merge-gate'
-  && format('Agent: Merge Gate - PR #{0}', inputs.pr-number)
+  && format('Agent: Merge Gate - PR #{0}{1}', inputs.pr-number, inputs.ci-conclusion == 'failure' && ' (repair)' || '')
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'merge-train'
   && format('Agentics: Merge Train{0}', '')
@@ -160,6 +160,10 @@ env:
   # "true" logs the move the train would make and makes none. For trying the train on a
   # repository before letting it act.
   MERGE_TRAIN_DRY_RUN: "false"
+  # How many pull requests the merge train may have in repair at once. A repair moves nothing on
+  # the default branch, so repairs of different pull requests do not race; only merges are serial.
+  # 1 repairs one pull request at a time.
+  MERGE_TRAIN_REPAIRS: "1"
   # How many implement runs may work at once. Each queue is FIFO and serial. An issue joins the
   # queue of its split parent when it has one, so the children of one refine never run side by
   # side on the code they share; independent issues spread across the queues. 1 is one queue
@@ -822,8 +826,12 @@ jobs:
     needs: classify
     if: needs.classify.outputs.route == 'merge-gate'
     uses: ./.github/workflows/agent-merge-gate.lock.yml
+    # A gate that was handed red CI repairs and pushes: it can never merge (the validator blocks a
+    # non-success conclusion), so it moves nothing on the default branch and cannot race another
+    # gate. Those run in a group of their own per pull request, in parallel, while everything that
+    # may merge still waits its turn on the one belt.
     concurrency:
-      group: merge-belt
+      group: ${{ needs.classify.outputs.ci-conclusion == 'failure' && format('merge-repair-{0}', needs.classify.outputs.pr-number) || 'merge-belt' }}
       cancel-in-progress: false
       queue: max
     permissions: write-all
@@ -894,6 +902,7 @@ jobs:
           hold-label: ${{ env.MERGE_TRAIN_HOLD_LABEL }}
           max-gate-attempts: ${{ env.MAX_GATE_ATTEMPTS }}
           max-retries: ${{ env.MERGE_TRAIN_MAX_RETRIES }}
+          max-repairs: ${{ env.MERGE_TRAIN_REPAIRS }}
           dry-run: ${{ env.MERGE_TRAIN_DRY_RUN }}
           ci-run-id: ${{ needs.classify.outputs.ci-run-id }}
           ci-conclusion: ${{ needs.classify.outputs.ci-conclusion }}

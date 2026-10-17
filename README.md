@@ -155,7 +155,7 @@ step and leaves the rest alone:
 | green and up to date | hands it to the merge gate, which reviews and squash-merges |
 | parked for a person, a draft, or labelled `hold` | passes it by, so it never blocks the line |
 
-It ticks on every merge, every CI completion, after every gate, and hourly as the fallback, so a
+It ticks on every merge, every CI completion, after every gate, and hourly as the fallback. Merges are one at a time; a red pull request is repaired in parallel with the others (`MERGE_TRAIN_REPAIRS`), because a repair pushes to its own branch and never merges, so a
 night or a weekend of pull requests drains without anyone merging by hand. Before the train, every
 eligible pull request was sent to the gate at once; each merge then moved the default branch under
 the rest, and a parked verdict never expired, so a batch left on Friday was still waiting on Monday.
@@ -339,6 +339,7 @@ repository's to change:
 | `MERGE_TRAIN_HOLD_LABEL` | `hold` | a pull request with this label stays off the merge train |
 | `MERGE_TRAIN_MAX_RETRIES` | `3` | how often a `blocked` verdict is retried after the base branch moves |
 | `MERGE_TRAIN_DRY_RUN` | `false` | `true` logs the move the train would make and makes none |
+| `MERGE_TRAIN_REPAIRS` | `1` | how many pull requests may be in repair at once; a repair never merges so repairs do not race, while merges stay one at a time, oldest first |
 | `IMPLEMENT_PARALLELISM` | `1` | how many implement runs work at once; the children of one refine always share a queue and run one after another |
 
 ## Consumer prerequisite

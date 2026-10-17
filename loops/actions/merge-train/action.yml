@@ -28,6 +28,10 @@ inputs:
     description: How many times a blocked verdict, or a merge that did not happen, is retried after the base branch moves.
     required: false
     default: '3'
+  max-repairs:
+    description: How many pull requests may be in repair at once. Merges stay one at a time.
+    required: false
+    default: '1'
   stuck-hours:
     description: How long the train waits behind a CI run that never finishes before it passes that pull request by.
     required: false
@@ -60,6 +64,7 @@ runs:
         MAX_ATTEMPTS: ${{ inputs.max-gate-attempts }}
         MAX_RETRIES: ${{ inputs.max-retries }}
         STUCK_HOURS: ${{ inputs.stuck-hours }}
+        MAX_REPAIRS: ${{ inputs.max-repairs }}
         DRY_RUN: ${{ inputs.dry-run }}
         HINT_RUN_ID: ${{ inputs.ci-run-id }}
         HINT_CONCLUSION: ${{ inputs.ci-conclusion }}

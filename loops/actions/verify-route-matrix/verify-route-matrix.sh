@@ -696,12 +696,15 @@ if worker_installed merge-gate; then
   # The merge belt is serial for the whole repository: several overnight pull requests
   # mean every merge moves the default branch under the rest, and gates running at once
   # rebase onto bases other gates are about to invalidate. A per-issue group here would
-  # reintroduce that race, so assert the repo-wide lock is the one in use.
-  if grep -A7 'call-merge-gate:' "$ROUTER_YML" | grep -q 'group: merge-belt'; then
+  # reintroduce that race, so assert the repo-wide lock is the one in use. The exception is a gate
+  # handed red CI: it repairs and pushes and can never merge, so it queues per pull request.
+  gate_group="$(sed -n '/^  call-merge-gate:/,/^    permissions:/p' "$ROUTER_YML" | grep 'group:')"
+  if grep -q "'merge-belt'" <<<"$gate_group" &&
+    grep -q "ci-conclusion == 'failure' && format('merge-repair-{0}', needs.classify.outputs.pr-number)" <<<"$gate_group"; then
     PASS=$((PASS + 1))
   else
     FAIL=$((FAIL + 1))
-    echo "FAIL: call-merge-gate must hold the repo-wide merge-belt lock" >&2
+    echo "FAIL: call-merge-gate must queue on merge-belt, and only a gate handed red CI may queue per pull request instead" >&2
   fi
 fi
 
@@ -727,7 +730,9 @@ if worker_installed merge-gate; then
     # One gate at a time, found by the title run-name gives it. The belt looked for a title that
     # run-name had stopped producing, saw no live gate ever, and dispatched #680 five times in
     # an hour onto a belt that runs one gate at a time.
-    gate_title="$(sed -n "s/.*format('\(Agent: Merge Gate - PR #\){0}'.*/\1/p" "$ROUTER_YML" | head -1)"
+    gate_title="$(sed -n "s/.*format('\(Agent: Merge Gate - PR #\){0}{1}'.*/\1/p" "$ROUTER_YML" | head -1)"
+    grep -q "' (repair)'" "$ROUTER_YML" ||
+      { BELT_OK=0; echo "FAIL: run-name must mark a gate handed red CI as a (repair), the train counts them by it" >&2; }
     if [ -z "$gate_title" ] || ! grep -qF "GATE_TITLE_PREFIX=\"${gate_title}\"" "$TRAIN_SH"; then
       BELT_OK=0
       echo "FAIL: the train looks for live gates titled differently from what run-name names them ('${gate_title:-unread}')" >&2
@@ -1857,6 +1862,18 @@ if worker_installed merge-gate; then
   else
     PASS=$((PASS + 1))
   fi
+  # Refine writes in English and may retitle an issue written in another language; without
+  # allow_title on update-issue the title in the call is dropped and the issue keeps its language.
+  REFINE_MD="${WORKFLOWS_DIR}/agent-refine.md"
+  if [ -f "$REFINE_MD" ]; then
+    if sed -n '/^  update-issue:/,/^  add-comment:/p' "$REFINE_MD" | grep -q '^    title:' &&
+      grep -q 'Everything you write is in English' "$REFINE_MD"; then
+      PASS=$((PASS + 1))
+    else
+      FAIL=$((FAIL + 1))
+      echo "FAIL: agent-refine.md must write in English and be allowed to retitle an issue (update-issue title:)" >&2
+    fi
+  fi
   # A token written to the runner's global git config outlives the job on a runner that is reused:
   # rules for revoked tokens pile up for the same prefix and git picks one at random, so the same
   # gate pushed for one pull request and was refused for the next (Pliny-Bot #716 and #717).
@@ -2699,7 +2716,7 @@ if [ "$INPUT_WIRING_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)
 BELT_QUEUE_OK=1
 belt_caller=$(awk '/^  call-merge-gate:/ { found = 1; print; next } found && /^  [a-z]/ { exit } found { print }' "$ROUTER_YML")
 printf '%s
-' "$belt_caller" | grep -qE '^ *group: merge-belt *$' ||
+' "$belt_caller" | grep -qE "^ *group: .*'merge-belt'" ||
   { BELT_QUEUE_OK=0; echo "FAIL: the merge gate is no longer serialised on the merge-belt concurrency group" >&2; }
 printf '%s
 ' "$belt_caller" | grep -qE '^ *queue: max *$' ||
