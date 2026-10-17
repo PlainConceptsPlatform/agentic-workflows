@@ -245,6 +245,8 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
+      # reads the agent job's log and annotations, and re-enters through the router on a retry
+      actions: write
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -433,8 +435,48 @@ jobs:
             ${{ env.IMPLEMENT_MARKER }}
             ${{ env.PATCH_WITHOUT_REQUEST_COMMENT }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-      - name: Flag a run that produced nothing
+      # A run that ends with nothing is not always the agent's verdict. The AI gateway can answer
+      # nothing and end the engine one turn after it began, and the runner's VM can be taken away
+      # mid-job; neither says the work was wrong, and parking them for the janitor cost up to six
+      # hours each (Pliny-Bot #693's first attempt). The shared rule repeats those, and a run that
+      # died young, within the attempt budget.
+      - name: Decide whether an empty run is worth repeating
+        id: empty_retry
         if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true'
+        uses: ./.github/actions/decide-agent-retry
+        with:
+          token: ${{ github.token }}
+          attempts-so-far: ${{ inputs.attempts_so_far || '0' }}
+          park-at: ${{ env.PARK_AT_ATTEMPT }}
+          under-minutes: ${{ env.RETRY_UNDER_MINUTES }}
+      - name: Report the retried empty run
+        if: steps.empty_retry.outputs.retry == 'true'
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            ${{ env.ATTEMPT_MARKER }}
+            Attempt ${{ steps.empty_retry.outputs.next }} of ${{ env.MAX_ATTEMPTS }} ended with nothing after ${{ steps.empty_retry.outputs.minutes }} minutes (${{ steps.empty_retry.outputs.cause }}). That is what a provider or runner outage looks like, not a verdict on the work, so this is being retried.
+            The issue keeps `implement`.
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Send the issue back through the router
+        if: steps.empty_retry.outputs.retry == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+          NEXT: ${{ steps.empty_retry.outputs.next }}
+        run: |
+          set -euo pipefail
+          # The provider recovers in seconds, so pause before re-entering rather than dispatching
+          # back into the same outage.
+          sleep 30
+          gh workflow run work-router.yml --repo "$REPO" --ref "$REF"             -f operation=implement -f issue-number="$ISSUE_NUMBER" -f attempts_so_far="$NEXT"
+          echo "Re-dispatched implement for #$ISSUE_NUMBER as attempt $NEXT."
+      - name: Flag a run that produced nothing
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true' && steps.empty_retry.outputs.retry != 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -443,7 +485,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
       - name: Say the run produced nothing
-        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true'
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true' && steps.empty_retry.outputs.retry != 'true'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -478,36 +520,17 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      # The shared rule, which this worker used to carry its own copy of. It repeats a run that died
+      # young, and now also one that was killed after a long time: the runner's VM taken away
+      # mid-job, or the AI gateway answering nothing and ending the engine one turn after it began.
       - name: Decide whether this failure is worth repeating
         id: decide
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          ATTEMPTS: ${{ inputs.attempts_so_far || '0' }}
-          PARK_AT: ${{ env.PARK_AT_ATTEMPT }}
-          UNDER_MINUTES: ${{ env.RETRY_UNDER_MINUTES }}
-        run: |
-          set -euo pipefail
-          # The agent job belongs to this same run: a called workflow shares the caller's run id.
-          read -r started finished <<<"$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
-            --jq '[.jobs[] | select(.name | endswith("agent"))] | last // empty
-                  | "\(.started_at // "") \(.completed_at // "")"')"
-          minutes=-1
-          if [ -n "${started:-}" ] && [ -n "${finished:-}" ]; then
-            minutes=$(( ( $(date -u -d "$finished" +%s) - $(date -u -d "$started" +%s) ) / 60 ))
-          fi
-          retry=false
-          # An unknown duration is treated as a long run: never retry on a guess.
-          if [ "$minutes" -ge 0 ] && [ "$minutes" -lt "$UNDER_MINUTES" ] && [ "$ATTEMPTS" -lt "$PARK_AT" ]; then
-            retry=true
-          fi
-          {
-            echo "retry=$retry"
-            echo "next=$((ATTEMPTS + 1))"
-            echo "minutes=$minutes"
-          } >> "$GITHUB_OUTPUT"
-          echo "agent job ran for ${minutes}m; attempts so far ${ATTEMPTS}; retry=${retry}"
+        uses: ./.github/actions/decide-agent-retry
+        with:
+          token: ${{ github.token }}
+          attempts-so-far: ${{ inputs.attempts_so_far || '0' }}
+          park-at: ${{ env.PARK_AT_ATTEMPT }}
+          under-minutes: ${{ env.RETRY_UNDER_MINUTES }}
       # The attempt is recorded before any label moves, so a failure in the steps below leaves a
       # run that can be counted rather than an issue released with nothing to show for it.
       - name: Report the failed attempt
@@ -518,7 +541,7 @@ jobs:
           issue-number: ${{ inputs.issue-number }}
           body: |
             ${{ env.ATTEMPT_MARKER }}
-            Attempt ${{ steps.decide.outputs.next }} of ${{ env.MAX_ATTEMPTS }} ended after ${{ steps.decide.outputs.minutes }} minutes, before the run could produce an answer. That is what a provider outage looks like, so this is being retried.
+            Attempt ${{ steps.decide.outputs.next }} of ${{ env.MAX_ATTEMPTS }} ended after ${{ steps.decide.outputs.minutes }} minutes without an answer (${{ steps.decide.outputs.cause }}). That is what a provider or runner outage looks like, not a verdict on the work, so this is being retried.
             The issue keeps `implement`.
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Release the reservation for the retry

@@ -1785,6 +1785,46 @@ if worker_installed merge-gate; then
     FAIL=$((FAIL + 1))
     echo "FAIL: code_rules must capture check-diff's exit code with || code=\$?; a bare assignment dies under bash -e" >&2
   fi
+  # A run killed by its infrastructure is repeated whatever its duration; one the agent got wrong is
+  # not. The two signatures are read from places a tool's output cannot write: GitHub's annotations
+  # for the runner shutdown, and the line above the sandbox teardown for an engine cut off one turn
+  # after it asked the model something (Pliny-Bot #699 and #693's first attempt).
+  CLASSIFY="${HERE}/../decide-agent-retry/classify-failure.sh"
+  if [ -f "$CLASSIFY" ]; then
+    ctmp="$(mktemp -d)"
+    printf '%s
+' '2026-10-16T22:13:03Z > ci-workflow-agent · glm-5-2' '2026-10-16T22:13:05Z the grep printed a line' '2026-10-16T22:13:36Z > ci-workflow-agent · glm-5-2' '2026-10-16T22:13:37Z [INFO] Stopping containers...' >"$ctmp/cutoff.log"
+    printf '%s
+' '2026-10-16T22:13:03Z > ci-workflow-agent · glm-5-2' '2026-10-16T22:13:36Z Done. The pull request is ready.' '2026-10-16T22:13:37Z [INFO] Stopping containers...' >"$ctmp/done.log"
+    printf '%s
+' '2026-10-16T22:13:03Z the log quotes: Process completed with exit code 143 and The runner has received a shutdown signal' '2026-10-16T22:13:04Z Done.' '2026-10-16T22:13:37Z [INFO] Stopping containers...' >"$ctmp/quoted.log"
+    printf '%s
+' 'Process completed with exit code 143.' 'Property x does not exist' >"$ctmp/sigterm.ann"
+    printf '%s
+' 'Process completed with exit code 137.' >"$ctmp/sigkill.ann"
+    printf '%s
+' 'Process completed with exit code 1.' >"$ctmp/plain.ann"
+    assert "an engine stopped one turn after its request is a cut-off" cut-off "$(bash "$CLASSIFY" "$ctmp/cutoff.log" "")"
+    assert "a run that said its piece is not a cut-off" none "$(bash "$CLASSIFY" "$ctmp/done.log" "")"
+    assert "a tool quoting the shutdown text does not count" none "$(bash "$CLASSIFY" "$ctmp/quoted.log" "")"
+    assert "exit 143 in the annotations is a runner shutdown" runner-shutdown "$(bash "$CLASSIFY" "$ctmp/done.log" "$ctmp/sigterm.ann")"
+    assert "exit 137 (an out-of-memory kill) is repeated by nobody" none "$(bash "$CLASSIFY" "$ctmp/done.log" "$ctmp/sigkill.ann")"
+    assert "an ordinary failure is not infrastructure" none "$(bash "$CLASSIFY" "$ctmp/done.log" "$ctmp/plain.ann")"
+    assert "nothing to read classifies as nothing" none "$(bash "$CLASSIFY" "" "")"
+    rm -rf "$ctmp"
+  fi
+  # The implement worker carried its own copy of the retry rule while four other workers used the
+  # shared action, so a rule fixed in one place stayed broken in the other.
+  IMPLEMENT_MD="${WORKFLOWS_DIR}/agent-implement.md"
+  if [ -f "$IMPLEMENT_MD" ]; then
+    uses=$(count -c "uses: ./.github/actions/decide-agent-retry" "$IMPLEMENT_MD")
+    if [ "$uses" -ge 2 ] && ! grep -q 'minutes=$(( ( $(date -u -d "$finished"' "$IMPLEMENT_MD"; then
+      PASS=$((PASS + 1))
+    else
+      FAIL=$((FAIL + 1))
+      echo "FAIL: agent-implement.md must decide a retry through the shared decide-agent-retry action, in both incomplete and conclude" >&2
+    fi
+  fi
   # The router queues implement runs FIFO, so a run waiting an hour behind the one in progress is
   # healthy. The janitor cancelling every pending run over an hour old took every issue queued
   # behind the first out of the queue and left it holding bot-working (Pliny-Bot #706, #644).

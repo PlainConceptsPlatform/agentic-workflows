@@ -25,6 +25,9 @@ outputs:
   minutes:
     description: How long the agent job ran, or -1 when that could not be read.
     value: ${{ steps.decide.outputs.minutes }}
+  cause:
+    description: 'Why a retry was chosen: short-run, runner-shutdown or cut-off. "none" when there is none.'
+    value: ${{ steps.decide.outputs.cause }}
 runs:
   using: composite
   steps:
@@ -32,6 +35,13 @@ runs:
     # run that worked for half an hour and then failed produced an answer that was wrong, and
     # repeating it buys the same wrong answer half an hour later. Duration is what separates them,
     # and it needs no model and no log parsing to read.
+    #
+    # Except when the long run was killed rather than wrong. The VM was deleted under a forty
+    # minute implement (Pliny-Bot #699), and an AI gateway that answered nothing ended another
+    # run one turn after it began (#693's first attempt): neither is a verdict on the work, and
+    # both waited six hours for the janitor. classify-failure.sh reads those two from the job's
+    # annotations and from the line above the sandbox teardown, and they are repeated whatever
+    # the run lasted, within the same attempt budget.
     #
     # Written once here because the rule was in the implement worker alone, and refine, triage and
     # apply-review parked instead -- an Odyssey refine died in three minutes on
@@ -44,15 +54,16 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
         REPO: ${{ github.repository }}
         RUN_ID: ${{ github.run_id }}
+        ACTION_PATH: ${{ github.action_path }}
         ATTEMPTS: ${{ inputs.attempts-so-far }}
         PARK_AT: ${{ inputs.park-at }}
         UNDER_MINUTES: ${{ inputs.under-minutes }}
       run: |
         set -euo pipefail
         # The agent job belongs to this same run: a called workflow shares the caller's run id.
-        read -r started finished <<<"$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+        read -r job_id started finished <<<"$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
           --jq '[.jobs[] | select(.name | endswith("agent"))] | last // empty
-                | "\(.started_at // "") \(.completed_at // "")"')"
+                | "\(.id // "") \(.started_at // "") \(.completed_at // "")"')"
         minutes=-1
         if [ -n "${started:-}" ] && [ -n "${finished:-}" ]; then
           minutes=$(( ( $(date -u -d "$finished" +%s) - $(date -u -d "$started" +%s) ) / 60 ))
@@ -60,13 +71,30 @@ runs:
         attempts="${ATTEMPTS:-0}"
         [ -n "$attempts" ] || attempts=0
         retry=false
+        cause=none
         # An unknown duration is treated as a long run: never retry on a guess.
         if [ "$minutes" -ge 0 ] && [ "$minutes" -lt "$UNDER_MINUTES" ] && [ "$attempts" -lt "$PARK_AT" ]; then
           retry=true
+          cause=short-run
+        fi
+        # A long run is repeated only when it was killed, not when it was wrong. The reads are best
+        # effort: a log or an annotation list that cannot be fetched leaves the run parked, exactly
+        # as before this check existed.
+        if [ "$retry" != true ] && [ "$attempts" -lt "$PARK_AT" ] && [ -n "${job_id:-}" ]; then
+          work="$(mktemp -d)"
+          gh api "repos/$REPO/check-runs/$job_id/annotations" --paginate --jq '.[].message' >"$work/annotations" 2>/dev/null || true
+          gh api "repos/$REPO/actions/jobs/$job_id/logs" >"$work/log" 2>/dev/null || true
+          kind="$(bash "$ACTION_PATH/classify-failure.sh" "$work/log" "$work/annotations" || echo none)"
+          if [ "$kind" != none ]; then
+            retry=true
+            cause="$kind"
+          fi
+          rm -rf "$work"
         fi
         {
           echo "retry=$retry"
           echo "next=$((attempts + 1))"
           echo "minutes=$minutes"
+          echo "cause=$cause"
         } >> "$GITHUB_OUTPUT"
-        echo "agent job ran for ${minutes}m; attempts so far ${attempts}; retry=${retry}"
+        echo "agent job ran for ${minutes}m; attempts so far ${attempts}; retry=${retry}; cause=${cause}"
