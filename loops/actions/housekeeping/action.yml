@@ -71,13 +71,33 @@ runs:
           // timeout. A stuck pending implement or refine run holds a fleet slot that the retry
           // logic below can never free because the run never reaches a terminal state. This
           // cancel runs on a GitHub-hosted runner, so it works even when the fleet is full.
+          //
+          // Only a run with nothing live ahead of it. The router queues implement runs FIFO
+          // (`queue: max`) so that labelling six issues at once implements all six, one after the
+          // other, and each of those takes an hour: the sixth waits five hours legitimately. A
+          // flat one-hour cutoff cancelled every run behind the first, which left its issue
+          // carrying bot-working with no run until the sweep cleared it (Pliny-Bot #706 and #644,
+          // both cancelled while #693 ran). A pending run is stuck when no run of its own kind
+          // ("Agent: Implement", "Agent: Merge Gate") is running or queued to hold the group.
           const stuckCutoff = Date.now() - 3600 * 1000; // 1 hour ago
+          const runKind = (run) => String(run.display_title || '').split(' - ')[0];
+          const liveKinds = new Set();
+          for (const status of ['in_progress', 'queued']) {
+            for (const run of await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'work-router.yml',
+              status, per_page: 50,
+            })) liveKinds.add(runKind(run));
+          }
           let cancelledRuns = 0;
           for (const run of await github.paginate(github.rest.actions.listWorkflowRuns, {
             owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'work-router.yml',
             status: 'pending', per_page: 50,
           })) {
             if (new Date(run.created_at).getTime() > stuckCutoff) continue;
+            if (liveKinds.has(runKind(run))) {
+              core.info(`run #${run.id} (${run.display_title}) waits behind a live ${runKind(run)} run; not stuck`);
+              continue;
+            }
             await act(`cancelling stuck pending run #${run.id} (queued ${new Date(run.created_at).toISOString()})`, async () => {
               await github.rest.actions.cancelWorkflowRun({
                 owner: context.repo.owner, repo: context.repo.repo, run_id: run.id,

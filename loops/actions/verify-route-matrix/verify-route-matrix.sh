@@ -1785,6 +1785,15 @@ if worker_installed merge-gate; then
     FAIL=$((FAIL + 1))
     echo "FAIL: code_rules must capture check-diff's exit code with || code=\$?; a bare assignment dies under bash -e" >&2
   fi
+  # The router queues implement runs FIFO, so a run waiting an hour behind the one in progress is
+  # healthy. The janitor cancelling every pending run over an hour old took every issue queued
+  # behind the first out of the queue and left it holding bot-working (Pliny-Bot #706, #644).
+  if [ -f "${HERE}/../housekeeping/action.yml" ] && ! grep -q "liveKinds" "${HERE}/../housekeeping/action.yml"; then
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the janitor cancels pending runs without checking for a live run of their own kind ahead of them" >&2
+  else
+    PASS=$((PASS + 1))
+  fi
   # A token written to the runner's global git config outlives the job on a runner that is reused:
   # rules for revoked tokens pile up for the same prefix and git picks one at random, so the same
   # gate pushed for one pull request and was refused for the next (Pliny-Bot #716 and #717).
