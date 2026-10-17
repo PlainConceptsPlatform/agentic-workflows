@@ -37,11 +37,12 @@ env:
   # infrastructure used to stop a merge from here; they are the review pass's to look at now, and
   # a migration that rewrites data still parks through a `low` recoverability the agent evidences.
   SENSITIVE_PATHS: '(^|/)([Dd]omain|entities|[Cc]ontracts)/|(^|/)([Aa]uth|[Aa]uthn|[Aa]uthz|[Aa]uthentication|[Aa]uthorization|[Ii]dentity|[Ss]ecurity|[Mm]igrations|[Ii]nfra|terraform|helm|k8s|deploy)(/|[A-Z][A-Za-z]*\.[a-z]+$)'
-  # Diff shape. Lines decide high: a change over a thousand counted lines (tests, docs,
-  # translations and generated code excluded) is too big to merge unseen. A file count alone
-  # never does, so the high file threshold is set out of reach; spread still raises medium.
+  # Diff shape. Lines decide high: a change over ten thousand counted lines (tests, docs,
+  # translations and generated code excluded) is too big to merge unseen. It was a thousand, which
+  # is a normal feature once the tests are left out. A file count alone never decides, so the high
+  # file threshold is set out of reach; spread still raises medium.
   BLAST_HIGH_FILES: "100000"
-  BLAST_HIGH_LINES: "1000"
+  BLAST_HIGH_LINES: "10000"
   BLAST_MEDIUM_FILES: "5"
   BLAST_MEDIUM_LINES: "200"
   # Paths that change no runtime behaviour: tests, docs, specs, translations and generated

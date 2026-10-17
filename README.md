@@ -161,7 +161,7 @@ eligible pull request was sent to the gate at once; each merge then moved the de
 the rest, and a parked verdict never expired, so a batch left on Friday was still waiting on Monday.
 
 Only what is genuinely dangerous to merge unseen waits for a person: a change under `.github/`, a
-secret (a `secrets` file or directory, an `.env` file, a key or certificate), or more than 1000
+secret (a `secrets` file or directory, an `.env` file, a key or certificate), or more than 10000
 changed lines not counting tests, docs, translations and generated code. Auth, identity,
 migrations and infrastructure are review hints now, not stops; a change the agent shows cannot be
 undone, a verified high finding, or low confidence from the agent still parks.

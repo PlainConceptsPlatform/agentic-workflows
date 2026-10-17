@@ -94,7 +94,7 @@ flowchart LR
     gate -->|merge| merged(("Merged"))
     merged -->|"next PR"| train
     gate -.->|"CI failed or conflict"| fix("Fix, push, CI again") --> ci
-    gate -.->|".github, secrets<br/>or 1000+ lines"| human(("Human review"))
+    gate -.->|".github, secrets<br/>or 10000+ lines"| human(("Human review"))
     review("Someone reviews the PR") --> applyReview("apply-review") --> ci
     audit("audit, weekly") -->|"files one issue"| refine
 
@@ -381,7 +381,7 @@ flowchart TD
     gateDisposition -->|"no verified blocker,<br/>radius low or recoverable medium"| gateRootCheck
     gateRootCheck{"PR base is a<br/>stack feature branch<br/>and this PR is the root?"}
     gateRootCheck -->|"child PR: no"| gateMerge
-    gateDisposition -.->|"1000+ lines, .github/<br/>or a secret"| gateOwner
+    gateDisposition -.->|"10000+ lines, .github/<br/>or a secret"| gateOwner
     gateDisposition -.->|"fragile, unmet criteria<br/>or low confidence"| gateHuman
     gateDisposition -.->|"CI red or a verified<br/>high finding"| gateBlocked
     gateMerge(("AUTO-MERGE<br/>squash into the PR's base<br/>(main, or the feature branch:<br/>then the child issue closes,<br/>pr-pending removed)"))
