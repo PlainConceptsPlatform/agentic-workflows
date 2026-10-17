@@ -2271,6 +2271,55 @@ if [ -f "$ERROR_REPORT_YML" ]; then
   # above cannot see stops the job instead of being rendered upstream.
   er 'not in the reportable field list' 'does not check the finding shape at run time'
 
+  # 3b. What the report files and what it leaves as a number. Read back over a month, 320 issues:
+  # 59% were cancelled jobs, 80% carried no diagnosis, 47% re-filed a signature seen before, and
+  # every one was closed as not planned. The decision lives in report-policy.cjs so it can be run
+  # here, and the action has to actually use it.
+  POLICY_CJS="${HERE}/../report-workflow-errors/report-policy.cjs"
+  if [ -f "$POLICY_CJS" ]; then
+    policy_js='
+      const p = require(process.argv[1]);
+      const bad = [];
+      const ok = (cond, what) => { if (!cond) bad.push(what); };
+      ok(p.severityOf("runner-lost-mid-job") === "infra", "a runner lost mid-job is infrastructure");
+      ok(p.severityOf("jq-error") === "package-bug", "a jq error is a package bug");
+      ok(p.severityOf("unrecognised") === "unknown", "an unrecognised cause is unknown");
+      const a = { workflow: "w.yml", step: "one", conclusion: "failure", patternId: "gh-api-403" };
+      const b = { ...a, step: "two" };
+      ok(p.signatureOf(a) === p.signatureOf(b), "one specific cause is one signature whatever the step");
+      const u = { ...a, patternId: "unrecognised" };
+      ok(p.signatureOf(u) !== p.signatureOf({ ...u, step: "two" }), "an unrecognised cause is told apart by its step");
+      const f = (patternId, count, severity) => ({ patternId, count, severity });
+      const r = p.select([f("a", 5, "package-bug"), f("b", 9, "infra"), f("c", 1, "unknown"), f("d", 3, "unknown")], { minOccurrences: 2, maxFindings: 5 });
+      ok(r.file.map((x) => x.patternId).join() === "a,d", "infrastructure and one-off findings are held, the rest filed most frequent first");
+      ok(r.held.length === 2, "two findings held");
+      const many = Array.from({ length: 9 }, (_, i) => f("p" + i, 10 - i, "unknown"));
+      ok(p.select(many, { minOccurrences: 2, maxFindings: 5 }).file.length === 5, "a bad night files at most five");
+      const now = Date.parse("2026-10-17T00:00:00Z");
+      ok(p.isQuiet("2026-10-10T00:00:00Z", now, 30) === true, "an issue closed a week ago keeps its signature quiet");
+      ok(p.isQuiet("2026-08-01T00:00:00Z", now, 30) === false, "an issue closed long ago does not");
+      ok(p.isQuiet(null, now, 30) === false, "no closing date is not quiet");
+      ok(p.parseVersion("# Managed by @plainconceptsplatform/workflows@1.2.3. Source: x") === "1.2.3", "the version has no trailing full stop");
+      ok(p.parseVersion("nothing here") === "unknown", "no version reads as unknown");
+      if (bad.length) { console.error(bad.join("\n")); process.exit(1); }
+    '
+    if node -e "$policy_js" "$POLICY_CJS" 2>/tmp/policy-err; then
+      PASS=$((PASS + 1))
+    else
+      ER_OK=0
+      echo "FAIL: report-policy.cjs decides wrongly:" >&2
+      sed 's/^/  /' /tmp/policy-err >&2
+    fi
+  else
+    ER_OK=0
+    echo "FAIL: report-workflow-errors has no report-policy.cjs" >&2
+  fi
+  er 'policy\.select\(ranked' 'does not filter what it files through the policy'
+  er 'quiet\.cancelledNoStep \+= 1; continue;' 'files cancelled jobs that never reached a failing step'
+  er "patternId === 'log-unavailable'\) \{ quiet\.unreadable \+= 1; continue; \}" 'files jobs whose log could not be read'
+  er 'policy\.isQuiet\(' 'does not keep a recently closed signature quiet'
+  er 'listAnnotations' 'does not read the job annotations, where the runner shutdown is written'
+
   # 4. No model. A model asked to summarise a failure paraphrases whatever the log held, which
   # is the one thing that must not cross the boundary. This job stays deterministic.
   if grep -qiE '(engine:|opencode|safe-outputs|OPENAI_API_KEY)' "$ERROR_REPORT_YML"; then

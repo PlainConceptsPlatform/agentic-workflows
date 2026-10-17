@@ -473,6 +473,33 @@ npx @plainconceptsplatform/workflows@latest add audit
 
 Templates are standalone copies placed in `.github/workflows/`. `app-ci-dotnet-next` provides .NET, SQL Server integration testing, Next.js, and security checks. `app-ci-node-monorepo` provides Node monorepo, web, Electron, Capacitor, E2E, and security checks. `github-release` publishes generated GitHub release notes when a `v*` tag is pushed. `bug-report` and `feature-request` install to `.github/ISSUE_TEMPLATE/` instead of `.github/workflows/`. `opencode.ci.json` is always installed as a mandatory file during catalog install; the `--template opencode.ci.json` command is an advanced option for installing it in isolation. Edit their top-level `env:` defaults or JSON properties after copying.
 
+### What the error report files, and what it only counts
+
+The report used to open one issue for every failure it saw. Over a month that was 320 issues:
+59% were cancelled jobs, 80% carried no diagnosis, 14% were a runner shut down under a job, 47%
+re-filed a signature seen before, and every one was closed as not planned with no comment. It now
+files a defect and counts the rest.
+
+- **Counted in the job summary, never filed:** a cancelled job that never reached a failing step, a
+  job whose log could not be read, and the fleet's own transient causes (a runner lost mid-job,
+  never assigned, a rate limit, the model gateway unreachable, out of disk or memory). Nobody can
+  fix those by editing a workflow, and a trend is visible in a number.
+- **Classified with the job's annotations too.** GitHub writes why a runner went away into the
+  annotations, not the log, so both are matched against the catalogue. The template grants
+  `checks: read` for that.
+- **One cause is one issue.** The job and step are not part of the identity of a specific cause,
+  so a 403 that fails three jobs of the router is one finding. A cause nobody could name is told
+  apart by its step. Each finding carries a severity: `infra`, `package-bug` or `unknown`.
+- **Not before it repeats, and not too many.** A new issue needs `min-occurrences` (default 2) in
+  the window and a run opens at most `max-findings` (default 5), the most frequent first. An issue
+  that is already open is always appended to.
+- **A closed issue stays closed.** A signature closed within `quiet-days` (default 30) opens
+  nothing, whatever the reason it was closed. The search used to look at open issues only.
+
+The decisions live in `loops/actions/report-workflow-errors/report-policy.cjs`, apart from what
+the action reads and writes, and `verify-route-matrix.sh` runs them. Replayed over the 320 issues,
+they would have filed 14.
+
 ### The error report's privacy contract
 
 Every consumer of this package is a private repository, and `agentics-error-report` is the only
@@ -492,9 +519,9 @@ the log happened to contain, which is exactly the thing that must not leave.
 
 **How that is enforced**, rather than intended:
 
-- Only the finding object is rendered into a report, and its eight fields are declared in one
+- Only the finding object is rendered into a report, and its ten fields are declared in one
   list. `verify-route-matrix.sh` compares that list against the fields the code actually sets,
-  and the job re-checks the shape at run time, so a ninth field fails the build and, failing
+  and the job re-checks the shape at run time, so an eleventh field fails the build and, failing
   that, stops the run.
 - A leak scanner reads the finished text and looks for this repository's name, its owner, a
   `github.com` URL, an email address, an absolute path, a token-shaped or commit-shaped blob, an

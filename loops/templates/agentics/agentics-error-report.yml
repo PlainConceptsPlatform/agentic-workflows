@@ -69,6 +69,8 @@ jobs:
       # upstream with a separate token and writes nothing here.
       contents: read
       actions: read
+      # The annotations GitHub writes on a job say why a runner went away; the log does not.
+      checks: read
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

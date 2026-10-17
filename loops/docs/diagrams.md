@@ -709,7 +709,7 @@ the repository it runs in. Every consumer is private, so that is the whole desig
 
 What crosses the boundary is a fixed, enumerable set of facts about workflows **this package ships**:
 their file names, their job and step names, a conclusion, a runner label, a count, and the id of a
-matched entry from a catalogue of sixteen known failure shapes. What never crosses it is free text
+matched entry from a catalogue of sixteen known failure shapes, plus a severity. What never crosses it is free text
 of any kind no log line, no branch name, no issue title, no path, no URL, no number that could be
 looked up. Hence no model: a model asked to summarise a failure paraphrases whatever the log held.
 
@@ -720,8 +720,12 @@ flowchart TB
     erOwned -.->|"no: the name could describe<br/>a product or a customer"| erCount("Counted, never inspected")
     erOwned -->|yes| erState{"Failed, or queued<br/>past 45 minutes?"}
     erState -.->|neither| erCount
-    erState -->|yes| erClassify("Read the log tail,<br/>match the catalogue,<br/>keep only the matched id")
-    erClassify --> erBody("Build the report from<br/>package-owned names,<br/>a conclusion and a count")
+    erState -->|yes| erClassify("Read the log tail and the job annotations,<br/>match the catalogue,<br/>keep only the matched id")
+    erClassify --> erNoise{"Cancelled with no failing step,<br/>log unreadable, or an<br/>infrastructure cause?"}
+    erNoise -.->|yes| erCount
+    erNoise -->|no| erFilter{"Seen at least twice,<br/>within the cap, and not<br/>closed in the last 30 days?"}
+    erFilter -.->|no| erCount
+    erFilter -->|yes| erBody("Build the report from<br/>package-owned names,<br/>a conclusion and a count")
     erBody --> erScan{"Leak scanner:<br/>repo or owner name, a URL,<br/>an email, a path, a token,<br/>an issue number, a ref?"}
     erScan -.->|"anything matches"| erWithhold(("Withheld<br/>nothing filed, run goes red"))
     erScan -->|clean| erToken{"Upstream token<br/>available?"}
@@ -737,7 +741,7 @@ flowchart TB
     classDef idle fill:#f4f4f6,stroke:#5b5b66,stroke-width:2px,color:#2b2b33
     class erCron start
     class erRuns,erClassify,erBody,erFile,erCount action
-    class erOwned,erState,erScan,erToken decision
+    class erOwned,erState,erNoise,erFilter,erScan,erToken decision
     class erWithhold failure
     class erDone success
     class erSummary idle

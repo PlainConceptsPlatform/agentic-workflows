@@ -23,6 +23,20 @@ inputs:
     description: How far back to look for failures.
     required: false
     default: '24'
+  min-occurrences:
+    description: >-
+      A signature seen fewer times than this inside the window does not open a new issue. One
+      occurrence is a blip; an issue that is already open is always appended to.
+    required: false
+    default: '2'
+  max-findings:
+    description: The most issues one run opens, the most frequent first. The rest stay in the job summary.
+    required: false
+    default: '5'
+  quiet-days:
+    description: A signature whose issue was closed within this many days stays quiet, whatever the reason it was closed.
+    required: false
+    default: '30'
   dry-run:
     description: Compute and print the report, file nothing.
     required: false
@@ -43,6 +57,10 @@ runs:
         UPSTREAM_TOKEN: ${{ inputs.upstream-token }}
         UPSTREAM_REPO: ${{ inputs.upstream-repo }}
         LOOKBACK_HOURS: ${{ inputs.lookback-hours }}
+        MIN_OCCURRENCES: ${{ inputs.min-occurrences }}
+        MAX_FINDINGS: ${{ inputs.max-findings }}
+        QUIET_DAYS: ${{ inputs.quiet-days }}
+        POLICY_PATH: ${{ github.action_path }}/report-policy.cjs
         DRY_RUN: ${{ inputs.dry-run }}
       with:
         github-token: ${{ inputs.token }}
@@ -55,6 +73,10 @@ runs:
           // plus the NAME of a matched error pattern from the catalogue below. The final body
           // is checked against a leak scanner and the job fails rather than files if the
           // scanner trips.
+
+          // What to file and what to leave as a number lives in report-policy.cjs, apart from
+          // what this script reads and writes, so it can be run on its own.
+          const policy = require(process.env.POLICY_PATH);
 
           const dryRun = process.env.DRY_RUN === 'true';
           const upstreamToken = process.env.UPSTREAM_TOKEN;
@@ -140,7 +162,7 @@ runs:
             const header = require('node:fs')
               .readFileSync('.github/workflows/work-router.yml', 'utf8')
               .split('\n')[0];
-            packageVersion = /@plainconceptsplatform\/workflows@([0-9][0-9A-Za-z.\-+]*)/.exec(header)?.[1] ?? 'unknown';
+            packageVersion = policy.parseVersion(header);
           } catch {
             core.info('could not read the installed package version from the router header');
           }
@@ -153,15 +175,19 @@ runs:
           // upstream, and every part of it is package-owned or an enumerated value.
           //
           // THE FINDING SHAPE IS THE PRIVACY BOUNDARY. bodyFor() renders a finding, so a field
-          // added here is a field sent to another repository. These eight are all
+          // added here is a field sent to another repository. These ten are all
           // package-owned names or enumerated values; nothing derived from a log, a branch, a
           // path or an issue belongs on this object. The route matrix asserts this exact list,
           // so adding a ninth field fails the build rather than leaking on the next cron.
-          const FINDING_FIELDS = ['workflow', 'job', 'step', 'conclusion', 'patternId', 'count', 'runnerLabels', 'attempts'];
+          const FINDING_FIELDS = ['workflow', 'job', 'step', 'conclusion', 'patternId', 'count', 'runnerLabels', 'attempts', 'severity', 'variants'];
           const findings = new Map();
           let ownedRuns = 0;
           let ownedFailures = 0;
           let skippedForeign = 0;
+          // Things that happened and are worth a number in the job summary, but that nobody can
+          // fix by editing a workflow, so they never open an issue: a cancelled job with no step
+          // that failed, a log that could not be read, and the fleet's own transient causes.
+          const quiet = { cancelledNoStep: 0, unreadable: 0, infra: new Map() };
           let queueWaitTotal = 0;
           let queueWaitCount = 0;
           let queueWaitWorst = 0;
@@ -180,15 +206,7 @@ runs:
             if (['queued', 'waiting', 'pending'].includes(run.status) &&
                 Date.now() - new Date(run.created_at).getTime() > STUCK_AFTER_MS) {
               stuckInQueue += 1;
-              const signature = `${file} · (whole run) · (never started) · queued · runner-never-assigned`;
-              const seen = findings.get(signature) ?? {
-                workflow: file, job: '(whole run)', step: '(never started)',
-                conclusion: 'queued', patternId: 'runner-never-assigned', count: 0,
-                runnerLabels: new Set(), attempts: new Set(),
-              };
-              seen.count += 1;
-              seen.attempts.add(run.run_attempt ?? 1);
-              findings.set(signature, seen);
+              quiet.infra.set('runner-never-assigned', (quiet.infra.get('runner-never-assigned') ?? 0) + 1);
               continue;
             }
 
@@ -217,7 +235,24 @@ runs:
               // package's own words. A `run-name` is not: it interpolates issue titles.
               const stepName = step?.name ?? '(no failing step recorded)';
 
+              // A cancelled job that never reached a failing step is somebody or something
+              // stopping work, not a defect: a superseded run, a job cancelled behind a failed
+              // one. It was 189 of 320 reports and every one said nothing.
+              if (job.conclusion === 'cancelled' && !step) { quiet.cancelledNoStep += 1; continue; }
+
+              // GitHub writes why a runner went away into the job's annotations ("The runner has
+              // received a shutdown signal", exit code 143), not into the log, so they are read
+              // with it. Only the id of a catalogue entry that matches ever leaves.
+              let annotationText = '';
+              try {
+                const notes = await github.paginate(github.rest.checks.listAnnotations, {
+                  ...context.repo, check_run_id: job.id, per_page: 50,
+                });
+                annotationText = notes.map((note) => note.message ?? '').join('\n');
+              } catch { /* annotations are an extra; the log can still classify */ }
+
               let patternId = 'unrecognised';
+              let logRead = true;
               try {
                 const { data: log } = await github.rest.actions.downloadJobLogsForWorkflowRun({
                   ...context.repo, job_id: job.id,
@@ -225,19 +260,32 @@ runs:
                 const text = typeof log === 'string' ? log : Buffer.from(log).toString('utf8');
                 // The tail is where the failure is, and reading less of the log is less to get
                 // wrong. Only the matched entry's id crosses into the report.
-                const tail = text.slice(-20000);
+                const tail = `${annotationText}\n${text.slice(-20000)}`;
                 patternId = CATALOGUE.find((entry) => entry.test.test(tail))?.id ?? 'unrecognised';
               } catch {
-                patternId = 'log-unavailable';
+                logRead = false;
+                patternId = CATALOGUE.find((entry) => entry.test.test(annotationText))?.id ?? 'log-unavailable';
               }
 
-              const signature = `${file} · ${job.name} · ${stepName} · ${job.conclusion} · ${patternId}`;
+              // A log nobody could read says nothing, so it is counted and not filed.
+              if (patternId === 'log-unavailable') { quiet.unreadable += 1; continue; }
+              if (!logRead && policy.severityOf(patternId) === 'infra') {
+                quiet.infra.set(patternId, (quiet.infra.get(patternId) ?? 0) + 1);
+                continue;
+              }
+
+              // One cause is one finding, whichever job tripped on it.
+              const signature = policy.signatureOf({
+                workflow: file, step: stepName, conclusion: job.conclusion, patternId,
+              });
               const seen = findings.get(signature) ?? {
                 workflow: file, job: job.name, step: stepName,
-                conclusion: job.conclusion, patternId, count: 0,
+                conclusion: job.conclusion, patternId: patternId, count: 0,
                 runnerLabels: new Set(), attempts: new Set(),
+                severity: policy.severityOf(patternId), variants: new Set(),
               };
               seen.count += 1;
+              seen.variants.add(`${job.name}|${stepName}`);
               seen.attempts.add(run.run_attempt ?? 1);
               // A pool label is the one value on a finding that the CONSUMER writes, and the
               // installer deliberately preserves theirs across updates (preserveRunnerPool in
@@ -261,6 +309,13 @@ runs:
           const ranked = [...findings.values()].sort((a, b) => b.count - a.count);
           const hours = process.env.LOOKBACK_HOURS;
 
+          // What becomes an issue. Infrastructure causes are a rate, a blip is not worth a
+          // person's time, and a bad night opens a handful of issues rather than forty.
+          const selection = policy.select(ranked, {
+            minOccurrences: Number(process.env.MIN_OCCURRENCES),
+            maxFindings: Number(process.env.MAX_FINDINGS),
+          });
+
           // Enforce the boundary at run time as well as in the build. A field that reached a
           // finding by some path the static check did not see stops the job here rather than
           // being rendered into an issue in another repository.
@@ -273,7 +328,7 @@ runs:
           }
 
           const bodyFor = (finding) => [
-            `<!-- pcp-error-report: ${finding.workflow}|${finding.job}|${finding.step}|${finding.patternId} -->`,
+            `<!-- pcp-error-report: ${policy.markerKey(finding)} -->`,
             '',
             'Filed automatically by the `report-workflow-errors` job in a repository that installs',
             'this package. It carries no information about that repository: only the names this',
@@ -286,6 +341,8 @@ runs:
             `| Failing step | \`${finding.step}\` |`,
             `| Conclusion | \`${finding.conclusion}\` |`,
             `| Classification | \`${finding.patternId}\` |`,
+            `| Severity | \`${finding.severity}\` |`,
+            `| Job and step combinations with this cause | ${finding.variants.size} |`,
             `| Runner labels | ${[...finding.runnerLabels].map((l) => `\`${l}\``).join(', ') || 'not reported'} |`,
             `| Occurrences in the last ${hours}h | ${finding.count} |`,
             `| Re-run attempts involved | ${[...finding.attempts].sort().join(', ')} |`,
@@ -298,8 +355,9 @@ runs:
             `- ${new Date().toISOString().slice(0, 10)}: ${finding.count} in ${hours}h, on \`${packageVersion}\``,
           ].join('\n');
 
-          const titleFor = (finding) =>
-            `${finding.workflow}: ${finding.patternId} in "${finding.step}"`;
+          const titleFor = (finding) => (finding.patternId === 'unrecognised'
+            ? `[${finding.severity}] ${finding.workflow}: ${finding.patternId} in "${finding.step}"`
+            : `[${finding.severity}] ${finding.workflow}: ${finding.patternId}`);
 
           // The scanner. A body that trips it is never filed, and the job goes red so the
           // pattern that produced it gets fixed rather than quietly dropped every night.
@@ -325,6 +383,10 @@ runs:
               'This report does not cover itself: a failure in this job shows up in this repository only.',
               `Runs still queued after 45 minutes, so no runner ever took them: ${stuckInQueue}`,
               `Distinct failure signatures: ${ranked.length}`,
+              `Filed or appended: ${selection.file.length}; held back: ${selection.held.length}`,
+              `Cancelled jobs with no failing step, not reported: ${quiet.cancelledNoStep}`,
+              `Jobs whose log could not be read, not reported: ${quiet.unreadable}`,
+              `Infrastructure causes, counted and not reported: ${[...quiet.infra].map(([id, n]) => `${id} ${n}`).join(', ') || 'none'}`,
               queueWaitCount > 0
                 ? `Runner queue wait: ${Math.round(queueWaitTotal / queueWaitCount)}s mean, ${queueWaitWorst}s worst`
                 : 'Runner queue wait: no jobs started in the window',
@@ -345,7 +407,7 @@ runs:
           // full picture rather than one night at a time.
           const reports = [];
           let leaked = 0;
-          for (const finding of ranked) {
+          for (const finding of selection.file) {
             const title = titleFor(finding);
             const body = bodyFor(finding);
             if (!scan(`${title}\n${body}`, `The report for ${finding.patternId}`)) { leaked += 1; continue; }
@@ -373,10 +435,17 @@ runs:
             let existing;
             try {
               const { data } = await upstream.rest.search.issuesAndPullRequests({
-                q: `repo:${upstreamOwner}/${upstreamName} is:issue is:open in:body "${marker}"`,
-                per_page: 5,
+                q: `repo:${upstreamOwner}/${upstreamName} is:issue in:body "${marker}"`,
+                per_page: 10,
               });
-              existing = data.items.find((item) => (item.body ?? '').includes(marker));
+              const matches = data.items.filter((item) => (item.body ?? '').includes(marker));
+              existing = matches.find((item) => item.state === 'open');
+              // Closing an issue is the answer to it. Without this every bulk close reopened the
+              // whole set the next morning: 150 of 320 reports re-filed a signature seen before.
+              if (!existing && matches.some((item) => policy.isQuiet(item.closed_at, Date.now(), Number(process.env.QUIET_DAYS)))) {
+                core.info(`left alone, an issue for it was closed within ${process.env.QUIET_DAYS} days: ${title}`);
+                continue;
+              }
             } catch (error) {
               core.warning(`could not search upstream for an existing report: HTTP ${error.status ?? '?'}`);
             }
