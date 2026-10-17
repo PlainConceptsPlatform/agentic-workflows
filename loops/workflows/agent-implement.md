@@ -726,6 +726,28 @@ timeout-minutes: 180
    phase skill it names, in order, and do not explore the code yourself where it says a phase
    is skipped.
 
+   **The pipeline is these skill loads, in this order, each a call to the Skill tool.** A run
+   that edits source files without having made them has skipped the pipeline, whatever it
+   wrote instead:
+
+   1. `pc-plan-goal`, then Phase 0 as it describes.
+   2. `pc-plan-propose`, even when the issue is refined. It is what turns the issue into
+      `openspec/changes/<id>/tasks.md` with every task annotated
+      `<!-- agent: <engineer>.<tier>, depends_on: [...], touches: [...] -->`. **You never write
+      `proposal.md` or `tasks.md` yourself.** A hand-written `tasks.md` carries no annotations,
+      and without them `pc-plan-apply` has no workers to spawn, so the whole change is done by
+      you alone, in sequence, on one model. That is the failure this step exists to prevent.
+   3. `pc-plan-apply`. The tasks are implemented by the subagents it spawns, in waves, each on
+      the model tier its annotation names. **In this phase you do not edit source files
+      yourself.** If it stops because a worker cannot be resolved, report that with
+      `report_incomplete`, naming the task and the missing worker; do not do the task yourself
+      to get past it.
+   4. `pc-repo-verify`, then `pc-plan-archive`, as `pc-plan-goal` directs.
+
+   Before the first edit to a source file, check that
+   `openspec/changes/<id>/tasks.md` exists and that its tasks carry the annotation above. If it
+   does not, you have not run `pc-plan-propose`: load it now.
+
    a. `branch` is the output mode this sandbox needs: the branch is kept, nothing is merged and
       nothing is pushed. Without it the skill merges into the local default branch and deletes
       the feature branch, and step 6 below then opens a pull request from a branch that is

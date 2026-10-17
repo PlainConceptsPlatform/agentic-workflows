@@ -1862,6 +1862,20 @@ if worker_installed merge-gate; then
   else
     PASS=$((PASS + 1))
   fi
+  # The implement worker names every phase skill it must load. Left as "load each phase skill",
+  # glm-5-2 loaded pc-plan-goal, wrote proposal.md and tasks.md itself and edited the code alone:
+  # a hand-written tasks.md has no <!-- agent --> annotations, so pc-plan-apply had no subagents
+  # to spawn and the whole change ran on one model, in sequence (Pliny-Bot #693, #699).
+  IMPL_MD="${WORKFLOWS_DIR}/agent-implement.md"
+  if [ -f "$IMPL_MD" ]; then
+    if grep -q 'You never write' "$IMPL_MD" && grep -q '`pc-plan-propose`, even when the issue is refined' "$IMPL_MD" &&
+      grep -q 'In this phase you do not edit source files' "$IMPL_MD" && grep -q '`pc-repo-verify`, then `pc-plan-archive`' "$IMPL_MD"; then
+      PASS=$((PASS + 1))
+    else
+      FAIL=$((FAIL + 1))
+      echo "FAIL: agent-implement.md must name pc-plan-propose, pc-plan-apply, pc-repo-verify and pc-plan-archive and forbid writing tasks.md by hand" >&2
+    fi
+  fi
   # Refine writes in English and may retitle an issue written in another language; without
   # allow_title on update-issue the title in the call is dropped and the issue keeps its language.
   REFINE_MD="${WORKFLOWS_DIR}/agent-refine.md"
