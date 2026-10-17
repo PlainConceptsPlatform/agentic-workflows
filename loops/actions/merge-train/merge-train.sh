@@ -38,6 +38,10 @@ set -euo pipefail
 #   CI_STATUS          none, or the latest CI run's status (queued, in_progress, completed, ...)
 #   CI_CONCLUSION      that run's conclusion when it completed
 #   CI_STUCK           true when that run has been pending longer than the train waits
+#   SAME_AS_MAIN       true when every check that failed on the head also fails on the base branch
+#                      tip: the failure is the base's, and repairing the pull request spends its
+#                      attempts on code that is not at fault (Pliny-Bot, 2026-10-17: a red main
+#                      cost every open pull request its repairs for seven hours)
 #   BEHIND_BY          commits on the base branch the head does not have
 #   TRUSTED_AUTHOR     true when a trusted bot opened it (only those runs are approved)
 train_move() {
@@ -70,7 +74,13 @@ train_move() {
               move=gate; reason="green and up to date"
             fi
             ;;
-          failure) move=gate; reason="CI failed" ;;
+          failure)
+            if [ "${SAME_AS_MAIN:-false}" = true ]; then
+              move="wait"; reason="CI failed, but only on checks that fail on the base branch too; waiting for the base to be fixed"
+            else
+              move=gate; reason="CI failed"
+            fi
+            ;;
           action_required)
             if [ "${TRUSTED_AUTHOR:-false}" = true ]; then
               move=approve; reason="CI is waiting for approval"
@@ -403,12 +413,28 @@ for line in "${candidates[@]}"; do
     fi
   fi
 
+  # What failed on the head, compared with what is failing on the base branch tip. Names are
+  # compared after the last " / ": a check that a reusable workflow runs is "CI / backend" on the
+  # base branch and "backend" on a pull request. Only when every failed check is also failing on
+  # the base is the pull request left alone.
+  same_as_main=false
+  if [ "$ci_status" = completed ] && [ "$ci_conclusion" = failure ] && [ "$park" = none ]; then
+    failed_here=$(gh api "repos/$REPO/commits/$head_sha/check-runs?per_page=100" \
+      --jq '[.check_runs[] | select(.conclusion == "failure") | (.name | sub("^.* / "; ""))] | unique | .[]' 2>/dev/null || true)
+    failed_base=$(gh api "repos/$REPO/commits/$base_ref/check-runs?per_page=100" \
+      --jq '[.check_runs[] | select(.conclusion == "failure") | (.name | sub("^.* / "; ""))] | unique | .[]' 2>/dev/null || true)
+    if [ -n "$failed_here" ] && [ -n "$failed_base" ] &&
+      [ -z "$(comm -23 <(sort <<<"$failed_here") <(sort <<<"$failed_base"))" ]; then
+      same_as_main=true
+    fi
+  fi
+
   trusted_author=false
   is_trusted_bot "$author" && trusted_author=true
 
   decision=$(HOLD="$hold" REVIEW_DECISION="$review_decision" PARK="$park" \
     ATTEMPTS="$attempts" MAX_ATTEMPTS="$MAX_ATTEMPTS" SILENT_GATE="$silent_gate" MERGEABLE="$mergeable" \
-    CI_STATUS="$ci_status" CI_CONCLUSION="$ci_conclusion" CI_STUCK="$ci_stuck" \
+    CI_STATUS="$ci_status" CI_CONCLUSION="$ci_conclusion" CI_STUCK="$ci_stuck" SAME_AS_MAIN="$same_as_main" \
     BEHIND_BY="${behind_by:-0}" TRUSTED_AUTHOR="$trusted_author" train_move)
   move=$(sed -n 's/^move=//p' <<<"$decision")
   reason=$(sed -n 's/^reason=//p' <<<"$decision")

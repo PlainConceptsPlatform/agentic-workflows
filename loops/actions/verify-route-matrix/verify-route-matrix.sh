@@ -1979,6 +1979,11 @@ if worker_installed merge-gate; then
     assert "running CI is waited on" wait "$(move MERGEABLE=MERGEABLE CI_STATUS=in_progress)"
     assert "CI stuck past the limit is passed by" skip "$(move MERGEABLE=MERGEABLE CI_STATUS=queued CI_STUCK=true)"
     assert "red CI goes to the gate" gate "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
+    # A red base branch cost every open Pliny-Bot pull request its repairs for seven hours: the
+    # failures were main's, and the gate spent attempts on code that was not at fault.
+    assert "a failure that is main's too is waited out, not repaired" wait "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure SAME_AS_MAIN=true)"
+    assert "a failure that is not main's still goes to the gate" gate "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure SAME_AS_MAIN=false)"
+    assert "a conflict is still the gate's even when main is red" gate "$(move MERGEABLE=CONFLICTING CI_STATUS=completed CI_CONCLUSION=failure SAME_AS_MAIN=true)"
     assert "green but behind is brought up to date first" update "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success BEHIND_BY=2)"
     assert "green and current goes to the gate" gate "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success BEHIND_BY=0)"
     assert "no CI run is passed by" skip "$(move MERGEABLE=MERGEABLE CI_STATUS=none)"

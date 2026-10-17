@@ -594,6 +594,7 @@ jobs:
           body: |
             ${{ env.IMPLEMENT_MARKER }}
             ${{ env.INCOMPLETE_COMMENT }}
+            What ended: the agent job was **${{ needs.agent.result }}** after ${{ steps.decide.outputs.minutes }} minutes (-1 when that could not be read), and publishing its output was **${{ needs.safe_outputs.result }}**.
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
   agent:
     needs: [eligibility]
