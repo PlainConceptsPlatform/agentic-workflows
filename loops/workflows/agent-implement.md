@@ -185,7 +185,7 @@ jobs:
           fi
 
           # A queued implement run can start long after it was dispatched. If triage concluded
-          # needs-maintainer while this run waited in the implement-global queue, the issue now
+          # needs-maintainer while this run waited in its implement queue, the issue now
           # carries review and the verdict must stand: the reserve step clears review blindly,
           # so eligibility has to catch it first (Pliny-Bot #372).
           if jq -e 'index("review")' >/dev/null <<<"$labels"; then

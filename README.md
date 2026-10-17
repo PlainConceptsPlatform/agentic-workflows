@@ -339,6 +339,7 @@ repository's to change:
 | `MERGE_TRAIN_HOLD_LABEL` | `hold` | a pull request with this label stays off the merge train |
 | `MERGE_TRAIN_MAX_RETRIES` | `3` | how often a `blocked` verdict is retried after the base branch moves |
 | `MERGE_TRAIN_DRY_RUN` | `false` | `true` logs the move the train would make and makes none |
+| `IMPLEMENT_PARALLELISM` | `1` | how many implement runs work at once; the children of one refine always share a queue and run one after another |
 
 ## Consumer prerequisite
 

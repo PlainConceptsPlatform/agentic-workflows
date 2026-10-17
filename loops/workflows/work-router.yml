@@ -160,6 +160,11 @@ env:
   # "true" logs the move the train would make and makes none. For trying the train on a
   # repository before letting it act.
   MERGE_TRAIN_DRY_RUN: "false"
+  # How many implement runs may work at once. Each queue is FIFO and serial. An issue joins the
+  # queue of its split parent when it has one, so the children of one refine never run side by
+  # side on the code they share; independent issues spread across the queues. 1 is one queue
+  # for everything, as before this existed. Raise it only with a fleet that has the VMs.
+  IMPLEMENT_PARALLELISM: "1"
   # Whether a merged pull request's verification plan is replayed and its screenshots archived on
   # the pull request (evidence.yml). It needs nothing configured: the app starts with the root
   # `pnpm run dev`, and a pull request with no plan costs one API call. Set it to "false" for a
@@ -522,7 +527,29 @@ jobs:
       stack-branch: ${{ steps.stack.outputs.stack-branch }}
       stack-in-flight: ${{ steps.inflight.outputs.stack-in-flight }}
       stack-blocked: ${{ steps.blocked.outputs.stack-blocked }}
+      implement-queue: ${{ steps.queue.outputs.queue }}
     steps:
+      # Which implement queue this issue waits in. The children of one refine share a queue,
+      # keyed on their split parent, because they build on each other's code and two of them at
+      # once would each cut from a main the other is about to change. Anything else is keyed on
+      # its own number. A body that cannot be read keys on the issue: a wrong queue only costs
+      # parallelism, never order within a feature.
+      - name: Pick the implement queue
+        id: queue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
+        run: |
+          set -euo pipefail
+          queues="${IMPLEMENT_PARALLELISM:-1}"
+          case "$queues" in ''|*[!0-9]*|0) queues=1 ;; esac
+          body=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')
+          parent=$(printf '%s' "$body" | grep -oE '<!-- split-parent: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
+          key="${parent:-$ISSUE_NUMBER}"
+          queue=$(( key % queues ))
+          echo "queue=$queue" >> "$GITHUB_OUTPUT"
+          echo "#$ISSUE_NUMBER waits in implement queue $queue of $queues (keyed on #$key)."
       - name: Resolve the feature branch from the stack markers
         id: stack
         env:
@@ -645,8 +672,10 @@ jobs:
     needs: [classify, authorize, check-implement-pr, check-stack-branch]
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true' && needs.check-implement-pr.outputs.has-open-pr != 'true' && needs.check-stack-branch.outputs.is-stack != 'true'
     uses: ./.github/workflows/agent-implement.lock.yml
+    # One FIFO queue per IMPLEMENT_PARALLELISM slot, chosen by check-stack-branch: the children of
+    # one refine always share a queue, independent issues spread across them.
     concurrency:
-      group: implement-global
+      group: implement-queue-${{ needs.check-stack-branch.outputs.implement-queue || '0' }}
       cancel-in-progress: false
       # FIFO, up to 100 waiting. Without this the default `queue: single` cancels whatever
       # was pending, so labelling six issues at once implements one and drops the rest.
@@ -1254,7 +1283,7 @@ jobs:
           set -euo pipefail
 
           # Stale reservation sweep. Labelling ten issues at once labels all ten immediately,
-          # because authorize-bot-work is keyed per issue, while implement-global lets exactly
+          # because authorize-bot-work is keyed per issue, while each implement queue lets exactly
           # one run at a time. A queued run that is cancelled therefore leaves its issue
           # carrying bot-working with no run and no pull request: parked, invisible, and not
           # re-triggerable, because classify refuses an issue that is already reserved.

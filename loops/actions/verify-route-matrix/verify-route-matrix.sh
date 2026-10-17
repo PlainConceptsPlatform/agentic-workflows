@@ -1833,6 +1833,21 @@ if worker_installed merge-gate; then
       echo "FAIL: agent-implement.md must decide a retry through the shared decide-agent-retry action, in both incomplete and conclude" >&2
     fi
   fi
+  # Implement runs spread over IMPLEMENT_PARALLELISM queues, but the children of one refine share
+  # a queue keyed on their split parent: they build on each other's code. The queue step's
+  # arithmetic is exercised with the same expression the router runs.
+  if grep -q 'group: implement-queue-${{ needs.check-stack-branch.outputs.implement-queue' "$ROUTER_YML" &&
+    sed -n '/- name: Pick the implement queue/,/- name: Resolve the feature branch/p' "$ROUTER_YML" | grep -q 'key="${parent:-$ISSUE_NUMBER}"'; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: call-implement must queue on check-stack-branch's implement-queue, keyed on the split parent" >&2
+  fi
+  queue_for() { local parent="$1" issue="$2" queues="$3"; case "$queues" in ''|*[!0-9]*|0) queues=1 ;; esac; local key="${parent:-$issue}"; echo $(( key % queues )); }
+  assert "siblings of one refine share a queue" "$(queue_for 690 693 3)" "$(queue_for 690 694 3)"
+  assert "parallelism 1 is one queue for everything" 0 "$(queue_for "" 722 1)"
+  assert "an unset or garbled parallelism is one queue" 0 "$(queue_for "" 725 abc)"
+  assert "independent issues spread across the queues" 1 "$(queue_for "" 724 3)"
   # The router queues implement runs FIFO, so a run waiting an hour behind the one in progress is
   # healthy. The janitor cancelling every pending run over an hour old took every issue queued
   # behind the first out of the queue and left it holding bot-working (Pliny-Bot #706, #644).

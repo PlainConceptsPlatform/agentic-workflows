@@ -352,8 +352,8 @@ for (const file of readdirSync(workflowDirectory)) {
   // every later push became a rebase onto a moved parent, which gh-aw's signed-commit
   // push cannot do (it dies with "cannot rebase: You have unstaged changes" and files the
   // pull request as an issue instead of a pull request). Checking out the branch tip at
-  // execution time makes the commit parent current main; the implement-global queue
-  // already keeps sibling merges out of the window while the agent runs.
+  // execution time makes the commit parent current main; the implement queue, shared by the
+  // children of one refine, keeps sibling merges out of the window while the agent runs.
   //
   // A stack child dispatches this workflow directly (`gh workflow run
   // agent-implement.lock.yml --ref feat/N`), and there the pin must select the feature
