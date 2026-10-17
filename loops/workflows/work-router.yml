@@ -1258,15 +1258,24 @@ jobs:
           # one run at a time. A queued run that is cancelled therefore leaves its issue
           # carrying bot-working with no run and no pull request: parked, invisible, and not
           # re-triggerable, because classify refuses an issue that is already reserved.
+          #
+          # The live runs are read by status, not as the repository's latest hundred runs. Every
+          # comment and label is a router run, so a busy repository pushes an implement that has
+          # waited two hours in the queue out of the latest hundred, and the sweep then cleared
+          # bot-working from issues whose runs were alive and about to start (Pliny-Bot #693 and
+          # #707, both still queued from 07:32). Runs that are not finished are few, whatever
+          # their age.
+          active_runs=$(for status in queued in_progress pending waiting requested; do
+              gh api "repos/$REPO/actions/runs?status=$status&per_page=100" --jq '.workflow_runs[]' 2>/dev/null || true
+            done | jq -s '{workflow_runs: .}')
           gh issue list --repo "$REPO" --label bot-working --state open --limit 100 \
             --json number --jq '.[].number' |
             while IFS= read -r issue; do
               [ -n "$issue" ] || continue
 
-              live=$(gh api "repos/$REPO/actions/runs?per_page=100" \
-                --jq "[.workflow_runs[]
+              live=$(jq "[.workflow_runs[]
                   | select(.status == \"queued\" or .status == \"in_progress\" or .status == \"pending\" or .status == \"waiting\")
-                  | select((.display_title + \" \") | test(\"#${issue}[^0-9]\"))] | length")
+                  | select((.display_title + \" \") | test(\"#${issue}[^0-9]\"))] | length" <<<"$active_runs")
               [ "${live:-0}" -eq 0 ] || continue
 
               has_pr=$(gh pr list --repo "$REPO" --state open --json body \

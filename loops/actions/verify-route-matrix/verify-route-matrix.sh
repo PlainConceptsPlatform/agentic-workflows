@@ -493,6 +493,14 @@ if [ "$BELT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # trailing space, so a number at the end of a body is still followed by a non-digit, and the
 # pattern matches `[^0-9]`. Four quoting layers cannot eat a character class.
 SWEEP_OK=1
+# The live runs come from status-filtered queries. Reading the repository's latest hundred runs of
+# any kind let a long-queued implement fall out of the window, and the sweep cleared bot-working
+# from issues whose runs were alive (Pliny-Bot #693 and #707).
+if grep -q 'gh api "repos/\$REPO/actions/runs?per_page=100"' "$ROUTER_YML" ||
+  ! grep -qF 'actions/runs?status=$status&per_page=100' "$ROUTER_YML"; then
+  SWEEP_OK=0
+  echo "FAIL: the stale-reservation sweep must read live runs by status, not the latest hundred runs" >&2
+fi
 if ! grep -qF 'test(\"#${issue}[^0-9]\")' "$ROUTER_YML"; then
   SWEEP_OK=0
   echo "FAIL: the stale-reservation sweep does not match a run title with a character class; a word boundary there is eaten by bash and jq" >&2
