@@ -132,6 +132,31 @@ runs:
         # both stalled on a human that way while CI was legitimately red and remediable.
         ci_conclusion="$CONCLUSION"
         ci_run_id="$CI_RUN_ID"
+
+        # A verdict from a CI run that judged an older head is not a verdict on this one. The
+        # router carries the run it saw, and the head can move before the gate starts: a repair
+        # pushed, a branch updated from main. Pliny-Bot #729 was blocked and sent to review on a
+        # red run of a commit that two later pushes had already fixed, and the gate's own report
+        # said so. When the run's commit is not the head, the carried verdict is dropped and read
+        # again from the head's own latest run; when that head has no finished run yet, there is
+        # nothing to judge, and the gate steps aside until CI finishes and the train hands the
+        # pull request back.
+        if [ -n "$ci_run_id" ]; then
+          run_sha="$(gh api "repos/$REPO/actions/runs/$ci_run_id" --jq '.head_sha' 2>/dev/null || true)"
+          current_sha="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')"
+          if [ -n "$run_sha" ] && [ "$run_sha" != "$current_sha" ]; then
+            echo "::notice::CI run $ci_run_id judged ${run_sha:0:7}, but the head is ${current_sha:0:7}; reading the verdict again from the head."
+            ci_conclusion=""
+            ci_run_id=""
+            fresh="$(gh api "repos/$REPO/actions/runs?head_sha=$current_sha&per_page=100"               --jq '[.workflow_runs[] | select((.name | ascii_downcase) == "app: ci" or (.name | ascii_downcase) == "ci") | select(.status == "completed")] | sort_by(.created_at) | last')"
+            if [ -z "$fresh" ] || [ "$fresh" = "null" ]; then
+              none "CI has not finished on the current head of PR #$PR_NUMBER; the train hands it back when it has"
+            fi
+            ci_conclusion="$(jq -r '.conclusion // "pending"' <<<"$fresh")"
+            ci_run_id="$(jq -r '.id' <<<"$fresh")"
+          fi
+        fi
+
         if [ -z "$ci_conclusion" ] || [ -z "$ci_run_id" ]; then
           head_sha="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')"
           # A run keeps the name it had when it ran, so a repository whose CI was renamed still

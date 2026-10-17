@@ -2758,6 +2758,11 @@ if worker_installed merge-gate; then
       GATE_RUN_ID_OK=0
       echo "FAIL: identify-gate-subject resolves the CI run only when the conclusion is unknown; a router that passes both gets an empty run ID" >&2
     fi
+    # A verdict from a run that judged an older head is not a verdict on this one (Pliny-Bot #729).
+    grep -Fq '"$run_sha" != "$current_sha"' "$GATE_SUBJECT_ACTION" ||
+      { GATE_RUN_ID_OK=0; echo "FAIL: identify-gate-subject trusts the carried CI run even when it judged an older head" >&2; }
+    grep -Fq 'select(.status == "completed")' "$GATE_SUBJECT_ACTION" ||
+      { GATE_RUN_ID_OK=0; echo "FAIL: identify-gate-subject re-reads a stale verdict without requiring a finished run on the head" >&2; }
   fi
 # Repeating a report the validator refused reproduces it, and every repeat is a fresh agent run
 # holding the repo-wide merge-belt slot. The worker gives that failure a smaller budget than a
