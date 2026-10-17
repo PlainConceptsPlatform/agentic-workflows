@@ -534,3 +534,12 @@ Load these as needed; do not read all of them up front.
 | `references/opencode.md` | The engine, the Forge wiring, the `tools:` trap, budgets, bot PRs, self-hosted runners |
 | `references/diagram.md` | (moved to `skills/workflow-docs/references/diagram.md`) |
 | `references/verify.md` | Compiling, compiling on commit, quietening the agent log, linting, probing an unfamiliar field, debugging a failed run, what static checks cannot catch |
+
+## Test shape in worker prompts
+
+The implement and apply-review prompts state the target shape of tests: a trophy, not a pyramid
+(new tests at the integration or acceptance layer, a plain unit test only for logic with real
+branching, one regression test per bug fix, no tests of constants, defaults or markup).
+`check-diff` enforces size, never shape, so these sentences are the only place the shape reaches the
+agent. Keep them in step with Foundations' testing guidance; `verify-route-matrix.sh` fails when
+they go missing.

@@ -545,6 +545,8 @@ timeout-minutes: 90
    `node .opencode/scripts/check-diff.mjs`.
    It must exit 0: delete the comments and tests it lists. The merge gate runs it too and does not
    merge while it fails.
+   When you have to add a test, put it at the integration layer through the public surface, not as a
+   unit test of internals; a bug fix gets one regression test.
 
 7. Select one review outcome.
 

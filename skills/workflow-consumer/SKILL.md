@@ -174,3 +174,11 @@ Load these as needed; do not read all of them up front.
 | `references/customize.md` | Worker environment editing, values each worker owns, migration from shared config |
 | `references/templates.md` | Optional template choice, what each template does, tailoring guidance |
 | `references/compile.md` | Compilation, lockfiles, CI freshness check, rollback after a bad update |
+
+## Test shape
+
+Workers write tests as a trophy, not a pyramid: mostly integration, a unit test only for logic
+with real branching, one regression test per bug fix. `check-diff` (from agent-harness) limits how
+much test and comment code a change adds, not its shape; the shape comes from the worker prompts
+and from Foundations' testing guidance. A repository that wants a different shape says so in its
+`AGENTS.md`.

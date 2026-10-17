@@ -113,7 +113,10 @@ Comments and tests are measured, not requested. When the repository has agent-ha
 later, implement and apply-review run its `.opencode/scripts/check-diff.mjs` with their
 verification, and the merge gate runs it on the pull request head before the agent starts. A
 failing `check-diff` never auto-merges: the gate agent deletes what it lists and pushes, like a
-CI repair.
+CI repair. The shape of the tests is a trophy, not a pyramid (mostly integration, unit tests only
+for logic with real branching, few E2E); `check-diff` enforces how much a change may add, and the
+guidance on shape lives in Foundations (`backend.mdx`, `frontend.mdx`) and is repeated in the
+implement and apply-review prompts.
 
 Workers verify with the repository's own command. A full-stack (.NET + pnpm) or Node repository
 gets `VERIFY_COMMANDS: "pnpm verify"`, and that script should run what CI blocks on. `update`
