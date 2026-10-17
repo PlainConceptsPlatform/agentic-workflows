@@ -1788,6 +1788,24 @@ fi
 # leaving a verdict or an attempt is a loop: the train cannot tell a gate that declined from a gate
 # that has not run. Refusals are for what the train never hands over (a fork, a stranger, a pull
 # request that is not open), and the train filters those itself.
+# The shape of the tests reaches the agent only through these two prompts (check-diff measures size,
+# never shape), so losing the sentence silently brings the pyramid back.
+if worker_installed implement; then
+  if grep -qF 'Shape what you test like a trophy' "$IMPLEMENT_WORKER_MD"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the implement prompt must state the testing trophy shape" >&2
+  fi
+fi
+if worker_installed apply-review; then
+  if grep -qF 'put it at the integration layer' "${WORKFLOWS_DIR}/agent-apply-review.md"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the apply-review prompt must say new tests go at the integration layer" >&2
+  fi
+fi
 if worker_installed merge-gate; then
   # check-diff exiting 1 is the `fail` the code_rules job reports. Under GitHub's `bash -e` a bare
   # assignment from it ends the step, so the report is never recorded and the gate burns its

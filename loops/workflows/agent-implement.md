@@ -787,6 +787,11 @@ timeout-minutes: 180
      change and makes you clean the files you touched; fix every line it lists. The merge gate
      runs it again and does not merge while it fails.
 
+     Shape what you test like a trophy, not a pyramid: put new tests at the integration or
+     acceptance layer, through the public surface of the code you changed, and write a plain
+     unit test only for logic with real branching. A bug fix gets one regression test. Do not
+     write tests of constants, configured defaults, mocks of your own code or markup attributes.
+
      Anything you change to satisfy `check-diff` is a change: run the verification commands
      again afterwards, and open the pull request only from a tree where both pass. Do not delete
      a test that covers a branch you added to fit the budget; the complexity gate in CI measures
