@@ -803,16 +803,37 @@ timeout-minutes: 180
    code already written.
 
 6. Finish by calling **exactly one** safe-output tool. A run that calls none is a wasted run:
-   the workflow reports a failure and everything you just did is discarded. All safe-output
-   tools are on the `safeoutputs` MCP server, called as `safeoutputs/<tool>` , for example:
+   the workflow reports a failure and everything you just did is discarded. Pliny-Bot #694 spent
+   seventy-eight minutes and sixteen commits on a finished change and ended with nothing: the
+   agent searched for the tool in the `tools` object of the `execute` tool, did not find it
+   there, and concluded it did not exist.
 
-   ```
-   safeoutputs/create_pull_request(title="[bot] Fix X", body="Closes #${{ inputs.issue-number }}\n\n...", branch="${{ env.IMPLEMENT_BRANCH_PREFIX }}${{ inputs.issue-number }}")
-   ```
+   **The safe-output tools are shell commands on your PATH, not entries in `tools`.** The sandbox
+   mounts the `safeoutputs` server as a command-line program. It is not under `tools.*`, `search`
+   does not return it, and an empty result from either says nothing about it. Run it with the
+   bash tool, and run `command -v safeoutputs` there first if you are unsure it is present.
+
+   **Pipe the JSON on stdin, put every parameter inside the JSON, and pass a lone `.` and no
+   flags.** The bridge reads the payload from stdin only when the command line is the tool name
+   followed by `.`. A `--flag` on the line makes it skip stdin and send just the flags, drop the
+   body and still report success. Correct:
+
+   `printf '%s' "$JSON" | safeoutputs create_pull_request .` with
+   `{"title":"[bot] Fix X","body":"Closes #${{ inputs.issue-number }}\n\n...","branch":"${{ env.IMPLEMENT_BRANCH_PREFIX }}${{ inputs.issue-number }}"}`
+
+   `printf '%s' "$JSON" | safeoutputs report_incomplete .` with `{"reason":"..."}`
+
+   `printf '%s' "$JSON" | safeoutputs noop .` with `{"message":"..."}`
+
+   Wrong (the body is silently empty): `safeoutputs create_pull_request --title "..." .`
+
+   If the call fails, read the error and send the whole payload again once. If it fails twice,
+   call `report_incomplete` the same way with the reason; never end the run with finished work
+   and no call.
 
    Choose exactly one:
 
-   - **`safeoutputs/create_pull_request`** , the normal path. Propose a pull request with the
+   - **`create_pull_request`** , the normal path. Propose a pull request with the
      verified changes. Do not pass `base`: the workflow sets it to the branch this run started
      on, which is the branch you are working from, so a stack child lands on its feature branch
      without you doing anything. The `body` **must close exactly this issue and nothing else**
@@ -820,10 +841,10 @@ timeout-minutes: 180
      the branch you are on, the one named in step 1; do not invent another name. You do not
      need to check whether a pull request already exists for this issue: the router does
      that before dispatching you and does not start this workflow when one does.
-   - **`safeoutputs/report_incomplete`** , only when infrastructure or tooling prevents you
+   - **`report_incomplete`** , only when infrastructure or tooling prevents you
      from completing the task, such as a pre-existing build failure you cannot fix. Provide a
      specific `reason`.
-   - **`safeoutputs/noop`** , only when the issue context shows the work is already done and no
+   - **`noop`** , only when the issue context shows the work is already done and no
      changes are needed. Provide a `message` explaining what you found.
 
    Do not manage labels or post comments , the conclude job handles that.

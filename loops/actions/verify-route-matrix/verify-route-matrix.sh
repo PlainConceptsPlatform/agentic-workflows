@@ -2650,6 +2650,20 @@ if worker_installed refine; then
     PASS=$((PASS + 1))
   fi
 fi
+# The implement prompt used to say the safe-output tools are called as `safeoutputs/<tool>(...)`, an
+# MCP function call. The sandbox mounts them as a shell program on PATH instead, and the agent works
+# through an `execute` tool whose `tools` object does not hold them, so it searched there, found
+# nothing and ended Pliny-Bot #694 after seventy-eight minutes and sixteen commits with no pull
+# request. The prompt must show the shell form the refine prompt already uses.
+if worker_installed implement; then
+  IMPLEMENT_SO_MD="${WORKFLOWS_DIR}/agent-implement.md"
+  if grep -qF "safeoutputs create_pull_request ." "$IMPLEMENT_SO_MD"     && grep -qF "safeoutputs report_incomplete ." "$IMPLEMENT_SO_MD"     && ! grep -qF "safeoutputs/create_pull_request(" "$IMPLEMENT_SO_MD"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the implement prompt does not show the safe-output tools as shell commands on PATH; an agent that looks for them in the execute tool ends the run with nothing" >&2
+  fi
+fi
 # The implement prompt tells the agent it is already on its branch and to skip the pc-plan-goal
 # branching phase. That is only true if a step before the agent made the branch, and nothing in the
 # sandbox can do it later: no git credentials, and the prompt forbids the commands. Without the
