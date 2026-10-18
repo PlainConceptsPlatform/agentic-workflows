@@ -28,6 +28,10 @@ inputs:
     description: How many times a blocked verdict, or a merge that did not happen, is retried after the base branch moves.
     required: false
     default: '3'
+  stack-root-automerge:
+    description: A stack root whose children have all landed is merged by the gate like any other pull request, unless its blast radius or a finding sends it to a person. false keeps every root for a human.
+    required: false
+    default: 'true'
   max-repairs:
     description: How many pull requests may be in repair at once. Merges stay one at a time.
     required: false
@@ -69,6 +73,7 @@ runs:
         HOLD_LABEL: ${{ inputs.hold-label }}
         MAX_ATTEMPTS: ${{ inputs.max-gate-attempts }}
         MAX_RETRIES: ${{ inputs.max-retries }}
+        STACK_ROOT_AUTOMERGE: ${{ inputs.stack-root-automerge }}
         STUCK_HOURS: ${{ inputs.stuck-hours }}
         MAIN_RED_WAIT_HOURS: ${{ inputs.main-red-wait-hours }}
         MAX_REPAIRS: ${{ inputs.max-repairs }}

@@ -134,9 +134,11 @@ with `ref:` set to the feature branch, so the same worker that writes flat work 
 work; merge-gate auto-merges children into the feature branch with the risk assessment
 unchanged, and closes each child issue exactly as it does on the default branch.
 
-The root is never auto-merged. When the last child lands, the router's stack-completion check
-announces on the root pull request that the feature is ready; a person merges the root, which
-closes the feature issue. Housekeeping backstops the races around that: a child issue left open
+A root is held while children are still landing. When the last child lands, the router's
+stack-completion check announces on the root pull request that the feature is ready, and the merge
+gate then decides the root like any pull request: it merges itself unless the blast radius, a
+protected path or a finding sends it to a person (`STACK_ROOT_AUTOMERGE: "false"` keeps every root
+for a person). The merge closes the feature issue. Housekeeping backstops the races around that: a child issue left open
 by a lost close is closed when its pull request has merged, and a finished-but-never-announced
 or held-for-days root gets one line in the digest.
 

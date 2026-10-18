@@ -157,6 +157,10 @@ env:
   # How many times a `blocked` verdict, or a merge that did not happen, is retried once the base
   # branch has moved. After that the pull request waits for a person or a new commit.
   MERGE_TRAIN_MAX_RETRIES: "3"
+  # "true" lets a stack root merge itself once every child has landed and CI is green, through the
+  # same gate as any pull request: a change over the blast radius limit, a protected path or an
+  # unresolved finding still goes to a person. "false" keeps every root for a human.
+  MERGE_TRAIN_STACK_ROOT_AUTOMERGE: "true"
   # "true" logs the move the train would make and makes none. For trying the train on a
   # repository before letting it act.
   MERGE_TRAIN_DRY_RUN: "false"
@@ -922,6 +926,7 @@ jobs:
           hold-label: ${{ env.MERGE_TRAIN_HOLD_LABEL }}
           max-gate-attempts: ${{ env.MAX_GATE_ATTEMPTS }}
           max-retries: ${{ env.MERGE_TRAIN_MAX_RETRIES }}
+          stack-root-automerge: ${{ env.MERGE_TRAIN_STACK_ROOT_AUTOMERGE }}
           max-repairs: ${{ env.MERGE_TRAIN_REPAIRS }}
           dry-run: ${{ env.MERGE_TRAIN_DRY_RUN }}
           ci-run-id: ${{ needs.classify.outputs.ci-run-id }}
@@ -1265,7 +1270,7 @@ jobs:
                       if [ "${already:-0}" -gt 0 ]; then
                         echo "Stack #$parent already has a completion announcement; staying silent."
                       else
-                        gh pr comment "$root_pr" --repo "$REPO" --body "Stack complete: all children have merged into the feature branch and CI is green. This root pull request is ready for a human to review and merge into $DEFAULT_BRANCH. $completion_marker"
+                        gh pr comment "$root_pr" --repo "$REPO" --body "Stack complete: all children have merged into the feature branch and CI is green. This root pull request is ready to merge into $DEFAULT_BRANCH: the merge gate decides it next, and a person is asked only when its blast radius or a finding says so. $completion_marker"
                         echo "Stack #$parent complete: announced root PR #$root_pr."
                       fi
                     fi

@@ -2041,6 +2041,8 @@ if worker_installed merge-gate; then
     assert "blocked holds once its retries are spent" held "$(park VERDICT=blocked VERDICT_NEWER=true BASE_MOVED=true RETRIES=3 MAX_RETRIES=3)"
     assert "a merge that did not happen is retried once the base moves" none "$(park VERDICT=auto-merge VERDICT_NEWER=true BASE_MOVED=true RETRIES=1)"
     assert "a stack root is never retried into a merge" held "$(park VERDICT=auto-merge VERDICT_NEWER=true BASE_MOVED=true RETRIES=0 STACK_ROOT=true)"
+    assert "a root whose stack was announced complete gets one more gate run" none "$(park VERDICT=auto-merge VERDICT_NEWER=true BASE_MOVED=false RETRIES=0 STACK_ROOT=true STACK_ROOT_READY=true)"
+    assert "a ready root whose merge failed is held again, not looped" held "$(park VERDICT=owner-review VERDICT_NEWER=true STACK_ROOT=true STACK_ROOT_READY=true)"
 
     assert "hold keeps a pull request off the train" skip "$(move HOLD=true CI_STATUS=completed CI_CONCLUSION=success)"
     assert "requested changes keep it off the train" skip "$(move REVIEW_DECISION=CHANGES_REQUESTED CI_STATUS=completed CI_CONCLUSION=success)"
@@ -2747,6 +2749,20 @@ if worker_installed implement; then
   else
     FAIL=$((FAIL + 1))
     echo "FAIL: the implement prompt does not tell the agent to keep polling when bash moves a command to the background" >&2
+  fi
+fi
+# A stack root merges itself once every child has landed, through the same gate as any pull request.
+# The people it still stops are the gate's own: a blast radius over the limit, a protected path, a
+# finding. The gate must read the router's completion announcement, and the train must give the root
+# one more run after it.
+GATE_MD="${WORKFLOWS_DIR}/agent-merge-gate.md"
+TRAIN_SH="${HERE}/../merge-train/merge-train.sh"
+if worker_installed merge-gate && [ -f "$TRAIN_SH" ]; then
+  if grep -qF 'root_complete=$root_complete' "$GATE_MD"     && grep -qF "needs.subject.outputs.root_complete == 'true'" "$GATE_MD"     && grep -qF 'STACK_ROOT_AUTOMERGE:' "$GATE_MD"     && grep -qF 'STACK_ROOT_READY' "$TRAIN_SH"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: a completed stack root is not merged by the gate and re-run by the train" >&2
   fi
 fi
 # The merge train wakes on a finished CI run only. Pliny-Bot had four green pull requests wait an hour

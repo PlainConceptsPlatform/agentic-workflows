@@ -49,6 +49,9 @@ env:
   # translations and generated code excluded) is too big to merge unseen. It was a thousand, which
   # is a normal feature once the tests are left out. A file count alone never decides, so the high
   # file threshold is set out of reach; spread still raises medium.
+  # "true" lets a stack root merge once every child has landed, through the same blast radius and
+  # findings as any pull request. "false" holds every root for a person.
+  STACK_ROOT_AUTOMERGE: "true"
   BLAST_HIGH_FILES: "100000"
   BLAST_HIGH_LINES: "10000"
   BLAST_MEDIUM_FILES: "5"
@@ -177,6 +180,7 @@ jobs:
       review_blocked: ${{ steps.review.outputs.review_blocked }}
       pr_base: ${{ steps.stack.outputs.pr_base }}
       stack_root: ${{ steps.stack.outputs.stack_root }}
+      root_complete: ${{ steps.stack.outputs.root_complete }}
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -230,18 +234,28 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ steps.subject.outputs.pr }}
           ISSUE: ${{ steps.subject.outputs.issue }}
+          STACK_ROOT_AUTOMERGE: ${{ env.STACK_ROOT_AUTOMERGE }}
         run: |
           set -euo pipefail
           pr_base=$(gh pr view "$PR" --repo "$REPO" --json baseRefName --jq '.baseRefName // ""')
           stack_root=false
+          root_complete=false
           if [ -n "$ISSUE" ]; then
             body=$(gh issue view "$ISSUE" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo "")
             if echo "$body" | grep -q "<!-- stack-root-pr: $PR -->"; then
               stack_root=true
+              # The router announces a stack complete on the root once every child has landed and
+              # CI is green. A root without that comment is still collecting children.
+              if [ "$STACK_ROOT_AUTOMERGE" = true ] \
+                && gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
+                  --jq '.[] | select(.body | contains("<!-- stack-complete -->")) | .id' 2>/dev/null | grep -q .; then
+                root_complete=true
+              fi
             fi
           fi
           echo "pr_base=$pr_base" >> "$GITHUB_OUTPUT"
           echo "stack_root=$stack_root" >> "$GITHUB_OUTPUT"
+          echo "root_complete=$root_complete" >> "$GITHUB_OUTPUT"
 
   # Rung 4b. Everything the merge decision needs that a shell can establish, measured once,
   # before any model reads the diff. The job kept its name and its `requires_review` and
@@ -589,7 +603,7 @@ jobs:
             ${{ needs.subject.outputs.issue != '' && format('Findings and verification on the linked issue: #{0}.', needs.subject.outputs.issue) || 'Findings and verification are in the review comment above.' }} [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
             ${{ env.EVIDENCE_BEFORE_REVIEW == 'true' && contains(fromJson('["human-review","owner-review"]'), needs.validate_output.outputs.outcome) && 'Screenshots of this head follow in their own comment if it carries a verification plan. Approving the pull request merges it.' || '' }}
       - name: Merge approved pull request
-        if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.stack_root != 'true'
+        if: needs.validate_output.outputs.outcome == 'auto-merge' && (needs.subject.outputs.stack_root != 'true' || needs.subject.outputs.root_complete == 'true')
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -603,7 +617,7 @@ jobs:
       # what a reader needs: the gate held the root, children merge into the feature branch,
       # and a human merges the root when the stack completes.
       - name: Hold a stack root for a human merge
-        if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.stack_root == 'true'
+        if: needs.validate_output.outputs.outcome == 'auto-merge' && needs.subject.outputs.stack_root == 'true' && needs.subject.outputs.root_complete != 'true'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}

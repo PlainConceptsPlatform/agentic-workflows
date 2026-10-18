@@ -114,14 +114,19 @@ train_move() {
 #   BASE_MOVED         true when the base branch has a commit newer than the verdict
 #   RETRIES            blocked or failed-merge verdicts already given on this head
 #   MAX_RETRIES        how many of those the train retries before leaving it to a person
-#   STACK_ROOT         true for a stack's root pull request, which a person always merges
+#   STACK_ROOT         true for a stack's root pull request, which a person merges unless it is ready
+#   STACK_ROOT_READY   true for a root whose stack was announced complete after the last verdict, with
+#                      STACK_ROOT_AUTOMERGE on: the train gives it one more gate run, which merges it
+#                      unless the blast radius or a finding says a person must
 train_park() {
   local park=none
   if [ "${VERDICT_NEWER:-false}" = true ]; then
     case "${VERDICT:-}" in
       remediated | "") park=none ;;
       blocked | auto-merge)
-        if [ "${STACK_ROOT:-false}" = true ]; then
+        if [ "${STACK_ROOT:-false}" = true ] && [ "${STACK_ROOT_READY:-false}" = true ]; then
+          park=none
+        elif [ "${STACK_ROOT:-false}" = true ]; then
           park=held
         elif [ "${BASE_MOVED:-false}" = true ] && [ "${RETRIES:-0}" -lt "${MAX_RETRIES:-3}" ]; then
           park=none
@@ -360,15 +365,23 @@ for line in "${candidates[@]}"; do
   fi
 
   stack_root=false
+  stack_root_ready=false
   if [ "$verdict_newer" = true ] && [ -n "$linked_issue" ]; then
     if gh issue view "$linked_issue" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null |
       grep -q "<!-- stack-root-pr: $pr -->"; then
       stack_root=true
+      if [ "${STACK_ROOT_AUTOMERGE:-false}" = true ]; then
+        announced_at=$(gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" \
+          --jq '.[] | select(.body | contains("<!-- stack-complete -->")) | .created_at' 2>/dev/null | sort | tail -1)
+        if [ -n "$announced_at" ] && [ "$announced_at" \> "$verdict_at" ]; then
+          stack_root_ready=true
+        fi
+      fi
     fi
   fi
 
   park=$(VERDICT="$verdict" VERDICT_NEWER="$verdict_newer" BASE_MOVED="$base_moved" \
-    RETRIES="$retries" MAX_RETRIES="$MAX_RETRIES" STACK_ROOT="$stack_root" train_park)
+    RETRIES="$retries" MAX_RETRIES="$MAX_RETRIES" STACK_ROOT="$stack_root" STACK_ROOT_READY="$stack_root_ready" train_park)
 
   attempts=0
   silent_gate=false

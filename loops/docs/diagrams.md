@@ -184,9 +184,10 @@ flowchart TD
 
 The stack exists only in markers on the issues — `stack-root-branch` and `stack-root-pr` on the
 feature issue, `stack-root-branch` stamped on each child at hand-over — so a repository with none
-of them runs exactly the pipeline above and nothing else. The root is never auto-merged: a person
-merges it after every child has landed and the feature branch is green, which is the point where
-the feature's own acceptance journey, not one child's scope, is the thing being verified.
+of them runs exactly the pipeline above and nothing else. The root is held while children land.
+Once every child has landed and the feature branch is green, the gate decides it like any pull
+request and merges it, unless the blast radius, a protected path or a finding sends it to a person
+(`STACK_ROOT_AUTOMERGE: "false"` restores a human merge for every root).
 
 ---
 
@@ -385,7 +386,7 @@ flowchart TD
     gateDisposition -.->|"fragile, unmet criteria<br/>or low confidence"| gateHuman
     gateDisposition -.->|"CI red or a verified<br/>high finding"| gateBlocked
     gateMerge(("AUTO-MERGE<br/>squash into the PR's base<br/>(main, or the feature branch:<br/>then the child issue closes,<br/>pr-pending removed)"))
-    gateRootCheck -->|"yes: the root"| gateHeld(("HELD<br/>stack root never auto-merges,<br/>a person merges it once every<br/>child has landed and it is green"))
+    gateRootCheck -->|"yes: the root"| gateHeld(("HELD<br/>stack root waits for its children,<br/>then merges like any pull request<br/>unless the gate sends it to a person"))
     gateHuman(("HUMAN REVIEW<br/>review label,<br/>implement label kept"))
     gateOwner(("OWNER REVIEW<br/>review + owner-review,<br/>CODEOWNERS asked when named"))
     gateHuman --> gatePreview
