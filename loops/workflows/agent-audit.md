@@ -1,6 +1,11 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-audit.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
+  # The model this worker's own session runs on. opencode.ci.json's `model` is the cheap default
+  # every agent without its own model falls back to; the lead is where a wrong call costs a run,
+  # so it names its model here. `model:` below only satisfies the compiler. A repository may
+  # change it to any model its opencode.ci.json declares.
+  AGENT_LEAD_MODEL: "forge/quasar-438b"
   REPO_RULES: "Read-only repository audit. Report only reproducible, actionable defects with evidence. Do not modify files, commit, push, or run write operations."
   # Split out of REPO_RULES, which carried both the read-only discipline above and the list
   # below. All four consuming repositories had customised the list and none could touch it
@@ -67,7 +72,7 @@ engine:
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
-model: openai/glm-5-2
+model: openai/quasar-438b
 
 max-turns: 300
 max-turn-cache-misses: 3000

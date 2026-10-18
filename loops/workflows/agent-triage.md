@@ -1,6 +1,11 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-triage.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
+  # The model this worker's own session runs on. opencode.ci.json's `model` is the cheap default
+  # every agent without its own model falls back to; the lead is where a wrong call costs a run,
+  # so it names its model here. `model:` below only satisfies the compiler. A repository may
+  # change it to any model its opencode.ci.json declares.
+  AGENT_LEAD_MODEL: "forge/quasar-438b"
   REPO_RULES: "Triage issues opened by outside collaborators. Assess template completeness, security risk, change size, danger level, duplicates, clarity, reproducibility, acceptance criteria, and cross-cutting impact. When the request names specific people, email addresses, or business entities as the thing the code acts on, judge where that data is meant to live: business data that belongs in the database or a settings page is a design decision, not a wording detail, and it must not be left for the implementer to decide by hardcoding it. Do not implement code. Do not modify the issue body."
   # What a product owner may ask for, and what has to become a maintainer-owned technical
   # proposal instead. This is business policy, so it belongs to the repository rather than to
@@ -412,7 +417,7 @@ engine:
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
-model: openai/glm-5-2
+model: openai/quasar-438b
 max-turns: 120
 max-turn-cache-misses: 3000
 max-ai-credits: 5000

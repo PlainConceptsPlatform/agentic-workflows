@@ -1,6 +1,11 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-implement.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
+  # The model this worker's own session runs on. opencode.ci.json's `model` is the cheap default
+  # every agent without its own model falls back to; the lead is where a wrong call costs a run,
+  # so it names its model here. `model:` below only satisfies the compiler. A repository may
+  # change it to any model its opencode.ci.json declares.
+  AGENT_LEAD_MODEL: "forge/quasar-438b"
   VERIFY_COMMANDS: ""
   REPO_RULES: "Implement only the selected issue. Follow repository documentation and existing conventions. Do not weaken tests, lower coverage thresholds, or bypass checks."
   # Split out of REPO_RULES because one field asked to carry architecture, testing, coverage and
@@ -622,7 +627,7 @@ engine:
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
-model: openai/glm-5-2
+model: openai/quasar-438b
 
 max-turns: 300
 max-turn-cache-misses: 3000
@@ -740,6 +745,15 @@ timeout-minutes: 180
    wrote instead:
 
    1. `pc-plan-goal`, then Phase 0 as it describes.
+
+   **Propose and archive run in the `planner` agent, not in this session.** Spawn it with the
+   task tool (`subagent_type: planner`) and a prompt that names the skill to load
+   (`pc-plan-propose` or `pc-plan-archive`), the issue context path above, the branch, and that it
+   runs in autonomous mode with no one to ask. `planner` runs on the repository's plan model, which
+   is stronger than this session's, and these two steps decide the whole change. Wait for it in the
+   same turn, then continue with the next phase yourself. Only when no `planner` agent exists
+   (agent-harness older than 3.4.0) load the skill here instead.
+
    2. `pc-plan-propose`, even when the issue is refined. It is what turns the issue into
       `openspec/changes/<id>/tasks.md` with every task annotated
       `<!-- agent: <engineer>.<tier>, depends_on: [...], touches: [...] -->`. **You never write
@@ -757,7 +771,7 @@ timeout-minutes: 180
       yourself.** If it stops because a worker cannot be resolved, report that with
       `report_incomplete`, naming the task and the missing worker; do not do the task yourself
       to get past it.
-   4. `pc-repo-verify`, then `pc-plan-archive`, as `pc-plan-goal` directs.
+   4. `pc-repo-verify`, then `pc-plan-archive` in `planner`, as `pc-plan-goal` directs.
 
    Before the first edit to a source file, check that
    `openspec/changes/<id>/tasks.md` exists and that its tasks carry the annotation above. If it

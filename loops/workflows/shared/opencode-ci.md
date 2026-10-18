@@ -195,6 +195,12 @@ pre-agent-steps:
         merged=$(jq -S . "$FRAGMENT")
       fi
 
+      # The worker's lead model, from its env. gh-aw leaves OPENCODE_MODEL empty, so without this
+      # every worker's session would run on opencode.ci.json's default.
+      if [ -n "${AGENT_LEAD_MODEL:-}" ]; then
+        merged=$(printf '%s' "$merged" | jq --arg model "$AGENT_LEAD_MODEL" '.agents["ci-workflow-agent"].model = $model')
+      fi
+
       printf '%s\n' "$merged" > "$CONFIG"
 
       # A tracked config now differs from HEAD, so the agent sees it in `git diff`, takes it for
@@ -210,5 +216,5 @@ pre-agent-steps:
       # `$existing * $base`. Base wins on conflicting keys, but it defines neither `model`
       # nor this provider, so both survive and `awf-proxy` is added alongside.
       echo "Wrote $CONFIG from $FRAGMENT:"
-      jq -r '"  model: \(.model // "unset")", "  plugins: \(.plugins // [] | join(", "))", "  providers: \(.providers // {} | keys | join(", "))"' "$CONFIG"
+      jq -r '"  model: \(.model // "unset")", "  lead: \(.agents["ci-workflow-agent"].model // "the default")", "  plugins: \(.plugins // [] | join(", "))", "  providers: \(.providers // {} | keys | join(", "))"' "$CONFIG"
 ---

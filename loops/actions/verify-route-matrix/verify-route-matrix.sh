@@ -1799,6 +1799,35 @@ if worker_installed implement; then
     echo "FAIL: the implement prompt must verify once on the final tree, ask for coarse tasks and work in few turns" >&2
   fi
 fi
+# gh-aw leaves OPENCODE_MODEL empty, so every lead ran on opencode.ci.json's one model. Each worker
+# names its own in AGENT_LEAD_MODEL, the merge step writes it onto ci-workflow-agent, and the model
+# it names, like every tier model in harness.json, has to be declared in opencode.ci.json or the
+# run dies at its first turn on "model not found".
+LEAD_OK=1
+# A consumer has it at its root; this package keeps the template beside the workflows.
+CI_JSON="${HERE}/../../../opencode.ci.json"
+[ -f "$CI_JSON" ] || CI_JSON="${HERE}/../../templates/opencode/opencode.ci.json"
+for route in refine implement triage apply-review merge-gate audit release; do
+  worker_md="${WORKFLOWS_DIR}/agent-${route}.md"
+  [ -f "$worker_md" ] || continue
+  lead=$(sed -n 's/^  AGENT_LEAD_MODEL: "\(.*\)"$/\1/p' "$worker_md")
+  if [ -z "$lead" ]; then
+    LEAD_OK=0; echo "FAIL: agent-${route} names no AGENT_LEAD_MODEL, so its session runs on the cheap default" >&2; continue
+  fi
+  if [ -f "$CI_JSON" ] && ! jq -e --arg p "${lead%%/*}" --arg m "${lead#*/}" '.providers[$p].models[$m]' "$CI_JSON" > /dev/null; then
+    LEAD_OK=0; echo "FAIL: agent-${route} leads on ${lead}, which opencode.ci.json does not declare" >&2
+  fi
+done
+if [ -f "${WORKFLOWS_DIR}/agent-refine.md" ] && grep -q '^  AGENT_LEAD_MODEL: "forge/carina' "${WORKFLOWS_DIR}/agent-refine.md"; then
+  LEAD_OK=0; echo "FAIL: refine must never lead on carina" >&2
+fi
+if ! grep -qF 'jq --arg model "$AGENT_LEAD_MODEL"' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
+  LEAD_OK=0; echo "FAIL: the CI config merge must write AGENT_LEAD_MODEL onto ci-workflow-agent" >&2
+fi
+if worker_installed implement && ! grep -qF 'subagent_type: planner' "$IMPLEMENT_WORKER_MD"; then
+  LEAD_OK=0; echo "FAIL: the implement prompt must run propose and archive in the planner agent" >&2
+fi
+if [ "$LEAD_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # The shape of the tests reaches the agent only through these two prompts (check-diff measures size,
 # never shape), so losing the sentence silently brings the pyramid back.
 if worker_installed implement; then

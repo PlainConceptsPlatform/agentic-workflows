@@ -16,7 +16,7 @@ engine:
   env:
     OPENAI_BASE_URL: ${{ vars.FORGE_API_URL }}
 
-model: openai/glm-5-2
+model: openai/quasar-438b
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
@@ -58,8 +58,10 @@ them decides anything.
 
 | Layer | Value | What it does |
 |---|---|---|
-| gh-aw `model:` | `openai/glm-5-2` | Satisfies the compiler's provider validation. Nothing else. |
-| `opencode.ci.json` `model` | `forge/glm-5-2` | The model OpenCode actually loads |
+| gh-aw `model:` | `openai/quasar-438b` | Satisfies the compiler's provider validation. Nothing else. |
+| worker `env:` `AGENT_LEAD_MODEL` | `forge/quasar-438b` (refine: `forge/glm-5-3`) | The model the worker's own session runs on. The CI merge step writes it onto `ci-workflow-agent` |
+| `opencode.ci.json` `model` | `forge/carina-60b` | The cheap default for every agent with no model of its own |
+| `harness.json` `models` | `plainconcepts/<model>` per tier | The models of the tier subagents and of `planner`; `opencode.ci.json` declares the `plainconcepts` provider so they resolve in CI |
 | `opencode.ci.json` `provider.forge.api` | `{env:FORGE_API_URL}` | Where the request goes |
 | `engine.args: ["--model", ...]` | discarded | The compiler drops it. See below |
 

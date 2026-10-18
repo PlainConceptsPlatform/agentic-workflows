@@ -1,6 +1,11 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-apply-review.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
+  # The model this worker's own session runs on. opencode.ci.json's `model` is the cheap default
+  # every agent without its own model falls back to; the lead is where a wrong call costs a run,
+  # so it names its model here. `model:` below only satisfies the compiler. A repository may
+  # change it to any model its opencode.ci.json declares.
+  AGENT_LEAD_MODEL: "forge/quasar-438b"
   # Printed by the prompt as the verification block. Consumers set their own commands.
   VERIFY_COMMANDS: ""
   REPO_RULES: "Apply only actionable outstanding reviewer feedback to the selected bot pull request. Make minimal changes that address each comment. Preserve architecture and do not weaken tests. Run full verification after changes."
@@ -406,7 +411,7 @@ engine:
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
-model: openai/glm-5-2
+model: openai/quasar-438b
 
 max-turns: 300
 max-turn-cache-misses: 3000
