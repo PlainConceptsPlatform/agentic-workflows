@@ -1002,8 +1002,8 @@ safe-outputs:
 # 240 went on to every worker at once when the provider was slow, which fixed the deaths and
 # made every worker equally expensive to hang. These numbers are per worker: enough headroom
 # for a slow gateway on the work it actually does, and not four hours for a run that reads one
-# issue. Turns remain the guard against a confused agent looping; for a custom model the credit
-# ceiling is models.dev fallback pricing and guards nothing.
+# issue. Turns remain the guard against a confused agent looping; the credit ceiling meters the
+# Forge models at Multiverse's list prices, set in shared/opencode-ci.md.
 #
 # Reads CI failure evidence and may fix, verify and re-push, so it can do implement's work on a smaller diff.
 timeout-minutes: 120

@@ -13,6 +13,33 @@ description: |
   shared baseline in the consumer copy. The merge step below is package-owned and required
   for the agent to resolve its provider and its models.
 
+# AI credits prices for the Forge models, so the AWF proxy can meter them against max-ai-credits
+# instead of refusing them ("Model ... has no AI credits pricing", Atlas #2016). gh-aw maps this to
+# apiProxy.providers in the AWF config, the operator overlay the proxy checks before its curated
+# table and its models.dev snapshot. Without it glm-5-2 was metered at models.dev's glm-5 rate by
+# prefix match, and carina-60b, quasar-438b and qwen-3-8-27b had no price at all.
+#
+# Rates are Multiverse's public list prices for the CompactifAI API, the provider Forge serves these
+# from: https://docs.compactif.ai/pricing/ (also on https://multiversecomputing.com/compactifai/api),
+# read 2026-10-18. Values are USD per token (the page's $/1M divided by 1e6); the proxy bills one AI
+# credit per $0.01. Where the page shows no cached rate, prompt caching is off for that model and
+# every input token is billed at the input rate, so cache_read equals input instead of the proxy's
+# 10%-of-input default. The key is `openai` because Forge is the proxy's openai target.
+models:
+  providers:
+    openai:
+      models:
+        carina-60b:
+          cost: { input: "0.00000005", cache_read: "0.00000005", output: "0.0000002" }
+        qwen-3-8-27b:
+          cost: { input: "0.0000004", cache_read: "0.0000004", output: "0.000002" }
+        glm-5-2:
+          cost: { input: "0.0000011", cache_read: "0.00000022", output: "0.0000035" }
+        glm-5-3:
+          cost: { input: "0.0000011", cache_read: "0.00000022", output: "0.0000035" }
+        quasar-438b:
+          cost: { input: "0.0000006", cache_read: "0.0000006", output: "0.0000018" }
+
 # Consumer repositories should add stack-specific steps (NuGet cache, dotnet restore,
 # OpenSpec, Playwright, etc.) after the shared baseline. The merge step at the end is
 # package-owned and required for the agent to resolve its provider and models. Do not
@@ -182,9 +209,10 @@ pre-agent-steps:
     # worker's prompt does not load, and has never run in CI; it stays off until it does.
     #
     # The tier models come from AGENT_TIER_MODEL when a worker sets it. The AWF proxy refuses
-    # a model it has no AI credits price for, and harness.json names carina-60b and
-    # quasar-438b, which it has none for (Atlas #2016), so CI pins every tier to one priced
-    # model through the gitignored per-user override the plugin reads first.
+    # a model it has no AI credits price for; harness.json names carina-60b and quasar-438b,
+    # which had none until the `models.providers` prices at the top of this file (Atlas #2016).
+    # CI still pins every tier to one model, through the gitignored per-user override the
+    # plugin reads first, until a run on the newly priced models has passed.
     run: |
       set -euo pipefail
       if [ ! -f .opencode/package.json ]; then
