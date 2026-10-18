@@ -781,6 +781,26 @@ timeout-minutes: 180
 
      Never open a pull request that does not pass them.
 
+     **Run every command in the foreground and wait for it in the same turn. Never move a command
+     to the background and never end a turn to wait for it.** This run is not interactive: nothing
+     resumes you. A turn that ends with text and no tool call ends the whole run, and the work is
+     discarded. Pliny-Bot #750 started `pnpm verify` in the background, wrote "I'll be resumed with
+     its result" and stopped: the run ended green with eight commits and no pull request, and #694
+     lost seventy-eight minutes the same way. The bash tool cuts a command at 120 seconds unless you
+     pass a `timeout` (milliseconds, up to 600000). Give a long command that timeout, and when it is
+     still too long, run it in parts (lint, typecheck, web tests, web build, dotnet build, dotnet test)
+     so every part finishes inside one call. The only valid way to end the run is the safe-output
+     call in step 6.
+
+     **Two things the unit tests do not catch, and CI will.** When you add a dependency, take the
+     latest released version and run the repository's audit for it (`pnpm audit --audit-level high`
+     for the web, `dotnet list package --vulnerable` for the backend): Pliny-Bot #752 added a PDF
+     library at a version with two critical and eight high advisories and the dependency scan
+     blocked it. When you register a new service, interface or handler, run at least one test that
+     boots the whole application, not only unit tests: Pliny-Bot #753 registered an interface for
+     one engine only, the application could not start under the others and every integration test
+     failed.
+
      When `.opencode/scripts/check-diff.mjs` exists, also run
      `node .opencode/scripts/check-diff.mjs`
      on both paths. It must exit 0. It holds the comments and tests you add to the size of the

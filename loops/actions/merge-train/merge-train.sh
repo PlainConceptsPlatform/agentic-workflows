@@ -453,6 +453,20 @@ for line in "${candidates[@]}"; do
   move=$(sed -n 's/^move=//p' <<<"$decision")
   reason=$(sed -n 's/^reason=//p' <<<"$decision")
 
+  # A repair gate dispatched for red CI is moot once CI on the head is green: its job was to make
+  # that run pass. Left alone it keeps the pull request marked as having a gate, so the train
+  # skipped four green Pliny-Bot pull requests with "a gate is already on it" until it was cancelled
+  # by hand. Cancel it and let the pull request move.
+  if { [ "$move" = gate ] || [ "$move" = update ]; } && [ "$ci_status" = completed ] && [ "$ci_conclusion" = success ] &&
+    printf '%s\n' "$live_titles" | grep -qE "PR #${pr} \(repair\)$"; then
+    for run_id in $(gh api "repos/$REPO/actions/workflows/work-router.yml/runs?per_page=100" \
+      --jq ".workflow_runs[] | select(.status != \"completed\" and (.display_title | endswith(\"PR #${pr} (repair)\"))) | .id" 2>/dev/null); do
+      act "Cancelling the repair gate $run_id on #$pr: its CI is green." \
+        gh api -X POST "repos/$REPO/actions/runs/$run_id/cancel" --silent
+    done
+    live_titles=$(printf '%s\n' "$live_titles" | grep -vE "PR #${pr} \(repair\)$" || true)
+  fi
+
   # A gate is already on this pull request, whatever kind: offering it another would run the same
   # work twice. It does not hold the line up for the repair kind; a merging gate already does.
   if [ "$move" != skip ] && live_for_pr "$pr"; then

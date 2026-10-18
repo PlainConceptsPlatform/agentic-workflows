@@ -499,6 +499,21 @@ runs:
             }
           }
 
+          // The merge train wakes when a CI run finishes. When a gate it was waiting on ends without
+          // one, or is cancelled, nothing calls it again and every pull request sits until the next
+          // CI event: Pliny-Bot had four green pull requests waiting on that for the better part of an
+          // hour. The hourly sweep is the heartbeat. A dispatch of the router by the workflow token is
+          // allowed to start a run, and a tick with nothing to do costs one short job.
+          const openPulls = pulls.filter((pr) => !pr.draft);
+          if (openPulls.length > 0) {
+            await act(`dispatching a merge train tick: ${openPulls.length} pull request(s) are open`, () =>
+              github.rest.actions.createWorkflowDispatch({
+                ...context.repo, workflow_id: 'work-router.yml',
+                ref: context.payload.repository?.default_branch ?? 'main',
+                inputs: { operation: 'merge-train' },
+              }));
+          }
+
           await core.summary
             .addHeading('Housekeeping', 2)
             .addList([

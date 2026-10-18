@@ -2669,6 +2669,32 @@ if worker_installed implement; then
     echo "FAIL: the implement prompt does not show the safe-output tools as shell commands on PATH; an agent that looks for them in the execute tool ends the run with nothing" >&2
   fi
 fi
+# The implement run is not interactive, so a turn that ends in text ends the run. Pliny-Bot #750 moved
+# `pnpm verify` to the background, said it would be resumed with the result and stopped: eight commits,
+# no pull request. The prompt must forbid backgrounding and waiting, and name the remedy.
+if worker_installed implement; then
+  IMPLEMENT_FG_MD="${WORKFLOWS_DIR}/agent-implement.md"
+  if grep -qF "Run every command in the foreground and wait for it in the same turn" "$IMPLEMENT_FG_MD"     && grep -qF "never end a turn to wait for it" "$IMPLEMENT_FG_MD"     && grep -qF "timeout" "$IMPLEMENT_FG_MD"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the implement prompt does not forbid running commands in the background and ending the turn to wait for them" >&2
+  fi
+fi
+# The merge train wakes on a finished CI run only. Pliny-Bot had four green pull requests wait an hour
+# because a repair gate dispatched for red CI kept them marked as having a gate, and nothing called the
+# train again once it was cancelled. The hourly sweep is now a heartbeat, and a repair gate whose CI has
+# turned green is cancelled by the train itself.
+HK_YML="${HERE}/../housekeeping/action.yml"
+TRAIN_SH_HB="${HERE}/../merge-train/merge-train.sh"
+if [ -f "$HK_YML" ] && [ -f "$TRAIN_SH_HB" ]; then
+  if grep -qF "operation: 'merge-train'" "$HK_YML"     && grep -qF "createWorkflowDispatch" "$HK_YML"     && grep -qF "its CI is green" "$TRAIN_SH_HB"     && grep -qF 'live_titles=$(printf' "$TRAIN_SH_HB"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the merge train has no heartbeat from housekeeping, or does not cancel a repair gate whose CI turned green" >&2
+  fi
+fi
 # The implement prompt tells the agent it is already on its branch and to skip the pc-plan-goal
 # branching phase. That is only true if a step before the agent made the branch, and nothing in the
 # sandbox can do it later: no git credentials, and the prompt forbids the commands. Without the
