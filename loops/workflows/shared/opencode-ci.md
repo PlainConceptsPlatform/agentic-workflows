@@ -165,6 +165,45 @@ pre-agent-steps:
   - name: Install workspace dependencies
     run: pnpm install --frozen-lockfile
 
+  - name: Cache the agent-harness plugins' dependencies
+    uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+    with:
+      path: .opencode/node_modules
+      key: opencode-plugins-${{ runner.os }}-${{ hashFiles('.opencode/package.json') }}
+
+  - name: Install the agent-harness plugins' dependencies
+    # The harness plugins under .opencode/plugins import @opencode/plugin, which lives in
+    # .opencode/node_modules, and that directory is gitignored. Without it OpenCode logs
+    # "failed to load plugin ... Cannot find package '@opencode/plugin'" and goes on: no tier
+    # workers, no planner, no concurrency cap. Every CI run until 1.6.23 ran that way, so
+    # pc-plan-apply spawned the untiered base engineers on the session's model.
+    #
+    # Two of the three run here. pc-system-reminders gates shell and edits on skills a CI
+    # worker's prompt does not load, and has never run in CI; it stays off until it does.
+    #
+    # The tier models come from AGENT_TIER_MODEL when a worker sets it. The AWF proxy refuses
+    # a model it has no AI credits price for, and harness.json names carina-60b and
+    # quasar-438b, which it has none for (Atlas #2016), so CI pins every tier to one priced
+    # model through the gitignored per-user override the plugin reads first.
+    run: |
+      set -euo pipefail
+      if [ ! -f .opencode/package.json ]; then
+        echo "No .opencode/package.json: agent-harness is not installed, nothing to load"; exit 0
+      fi
+      if [ ! -d .opencode/node_modules/@opencode/plugin ]; then
+        (cd .opencode && npm install --no-audit --no-fund --no-package-lock --ignore-scripts --loglevel=error)
+      fi
+      if [ -f .opencode/plugins/pc-system-reminders.js ]; then
+        rm .opencode/plugins/pc-system-reminders.js
+        # Tracked, so hide the deletion: an agent that sees it in `git status` restores it.
+        git update-index --skip-worktree .opencode/plugins/pc-system-reminders.js 2>/dev/null || true
+      fi
+      if [ -n "${AGENT_TIER_MODEL:-}" ]; then
+        jq -n --arg m "$AGENT_TIER_MODEL" '{models: {plan: $m, build: $m, fast: $m}}' > .opencode/harness.user.json
+      fi
+      echo "Harness plugins: $(ls .opencode/plugins | tr '\n' ' ')"
+      echo "Tier models: $(jq -c '.models' .opencode/harness.user.json 2>/dev/null || jq -c '.models' .opencode/harness.json)"
+
   - name: Merge the CI-only OpenCode provider into opencode.jsonc
     run: |
       set -euo pipefail

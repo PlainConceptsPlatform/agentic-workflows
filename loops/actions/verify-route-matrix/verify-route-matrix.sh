@@ -1828,6 +1828,23 @@ if worker_installed implement && ! grep -qF 'subagent_type: planner' "$IMPLEMENT
   LEAD_OK=0; echo "FAIL: the implement prompt must run propose and archive in the planner agent" >&2
 fi
 if [ "$LEAD_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+# The harness plugins only load with .opencode/node_modules installed; without it every CI run
+# spawned untiered workers on the session's model. And the tier model a worker pins has to be one
+# opencode.ci.json declares, under the provider name harness.json uses.
+PLUGINS_OK=1
+if ! grep -qF "(cd .opencode && npm install" "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
+  PLUGINS_OK=0; echo "FAIL: the CI setup must install .opencode's dependencies or the harness plugins never load" >&2
+fi
+for route in refine implement triage apply-review merge-gate audit release; do
+  worker_md="${WORKFLOWS_DIR}/agent-${route}.md"
+  [ -f "$worker_md" ] || continue
+  tier=$(sed -n 's/^  AGENT_TIER_MODEL: "\(.*\)"$/\1/p' "$worker_md")
+  [ -n "$tier" ] || continue
+  if [ -f "$CI_JSON" ] && ! jq -e --arg p "${tier%%/*}" --arg m "${tier#*/}" '.providers[$p].models[$m]' "$CI_JSON" > /dev/null; then
+    PLUGINS_OK=0; echo "FAIL: agent-${route} pins its tiers to ${tier}, which opencode.ci.json does not declare" >&2
+  fi
+done
+if [ "$PLUGINS_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # The shape of the tests reaches the agent only through these two prompts (check-diff measures size,
 # never shape), so losing the sentence silently brings the pyramid back.
 if worker_installed implement; then

@@ -6,6 +6,9 @@ env:
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
   AGENT_LEAD_MODEL: "forge/glm-5-2"
+  # The model every harness tier (plan, build, fast) runs on in CI, planner included. Unset,
+  # the tiers take harness.json, whose models the AWF proxy may not price.
+  AGENT_TIER_MODEL: "plainconcepts/glm-5-2"
   # Printed by the prompt as the verification block. Consumers set their own commands.
   VERIFY_COMMANDS: ""
   REPO_RULES: "Apply only actionable outstanding reviewer feedback to the selected bot pull request. Make minimal changes that address each comment. Preserve architecture and do not weaken tests. Run full verification after changes."

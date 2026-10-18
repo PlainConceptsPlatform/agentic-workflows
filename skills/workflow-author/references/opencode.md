@@ -80,6 +80,20 @@ OpenAI-compatible one is enough to get past validation. The real routing is done
 A repository needs a provider matching its gateway configuration and the CI merge step that
 installs it. The merge fragment lives in the consumer repository, not in this package's source.
 
+### The harness plugins need `.opencode/node_modules`
+
+agent-harness ships three OpenCode plugins under `.opencode/plugins/`, and each imports
+`@opencode/plugin`, which `.opencode/package.json` declares and `.opencode/node_modules` holds. That
+directory is gitignored, so a fresh checkout has none, and OpenCode 2 does not fail on it: it logs
+`failed to load plugin ... Cannot find package '@opencode/plugin'` to its own log file and runs on.
+Every CI run up to 1.6.22 ran without the plugins, so `pc-subagent-tiers` never wrote the tier
+workers or `planner`, and pc-plan-apply spawned the base engineers on the session's model. A local
+checkout without the install behaves the same.
+
+The shared setup installs and caches it, pins every tier to `AGENT_TIER_MODEL` through the
+gitignored `.opencode/harness.user.json`, and leaves `pc-system-reminders` out until it has run in
+CI, because it gates shell and edits on skills the worker prompts do not load.
+
 ### A model needs a price in the AWF proxy
 
 The proxy meters every model against `max-ai-credits` and refuses a request for one with no AI credits

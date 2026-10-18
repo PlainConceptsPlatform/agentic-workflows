@@ -6,6 +6,9 @@ env:
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
   AGENT_LEAD_MODEL: "forge/glm-5-2"
+  # The model every harness tier (plan, build, fast) runs on in CI, planner included. Unset,
+  # the tiers take harness.json, whose models the AWF proxy may not price.
+  AGENT_TIER_MODEL: "plainconcepts/glm-5-2"
   VERIFY_COMMANDS: ""
   REPO_RULES: "Implement only the selected issue. Follow repository documentation and existing conventions. Do not weaken tests, lower coverage thresholds, or bypass checks."
   # Split out of REPO_RULES because one field asked to carry architecture, testing, coverage and

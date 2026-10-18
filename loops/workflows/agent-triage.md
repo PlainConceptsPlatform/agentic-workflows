@@ -6,6 +6,9 @@ env:
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
   AGENT_LEAD_MODEL: "forge/glm-5-2"
+  # The model every harness tier (plan, build, fast) runs on in CI, planner included. Unset,
+  # the tiers take harness.json, whose models the AWF proxy may not price.
+  AGENT_TIER_MODEL: "plainconcepts/glm-5-2"
   REPO_RULES: "Triage issues opened by outside collaborators. Assess template completeness, security risk, change size, danger level, duplicates, clarity, reproducibility, acceptance criteria, and cross-cutting impact. When the request names specific people, email addresses, or business entities as the thing the code acts on, judge where that data is meant to live: business data that belongs in the database or a settings page is a design decision, not a wording detail, and it must not be left for the implementer to decide by hardcoding it. Do not implement code. Do not modify the issue body."
   # What a product owner may ask for, and what has to become a maintainer-owned technical
   # proposal instead. This is business policy, so it belongs to the repository rather than to
