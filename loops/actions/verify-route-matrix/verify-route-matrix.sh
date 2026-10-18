@@ -2738,6 +2738,17 @@ if worker_installed implement; then
     echo "FAIL: the implement prompt does not forbid running commands in the background and ending the turn to wait for them" >&2
   fi
 fi
+# The bash tool moves any command past its timeout to the background and says so. Pliny-Bot #774 took
+# that for an end, wrote "I'll wait for the verify command" and stopped after sixty-seven minutes. The
+# prompt must say that the message is not the end and to poll with tool calls.
+if worker_installed implement; then
+  if grep -qF 'answers "moved to the background"' "${WORKFLOWS_DIR}/agent-implement.md"     && grep -qF "sleep 40; tail -n 15" "${WORKFLOWS_DIR}/agent-implement.md"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the implement prompt does not tell the agent to keep polling when bash moves a command to the background" >&2
+  fi
+fi
 # The merge train wakes on a finished CI run only. Pliny-Bot had four green pull requests wait an hour
 # because a repair gate dispatched for red CI kept them marked as having a gate, and nothing called the
 # train again once it was cancelled. The hourly sweep is now a heartbeat, and a repair gate whose CI has

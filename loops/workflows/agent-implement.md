@@ -844,6 +844,16 @@ timeout-minutes: 180
      so every part finishes inside one call. The only valid way to end the run is the safe-output
      call in step 6.
 
+     **If the bash tool answers "moved to the background", the run is not over and you are not
+     waiting: keep going with tool calls.** It does that to any command that passes its timeout, even
+     when you passed none, and Pliny-Bot #774 ended that way on `pnpm verify --quick` after
+     sixty-seven minutes with no pull request. Poll it: call bash with `sleep 40; tail -n 15` on the
+     command's output file, again and again, until the output shows its exit status, and only then
+     go on. Each of those calls is a tool call, so the turn never ends. To avoid it from the start,
+     run a command that may pass two minutes as
+     `(<command>) > /tmp/step.log 2>&1; echo "exit status $?" >> /tmp/step.log` with the bash tool's
+     `timeout` at 600000, and read `/tmp/step.log` afterwards.
+
      **Two things the unit tests do not catch, and CI will.** When you add a dependency, take the
      latest released version and run the repository's audit for it (`pnpm audit --audit-level high`
      for the web, `dotnet list package --vulnerable` for the backend): Pliny-Bot #752 added a PDF
