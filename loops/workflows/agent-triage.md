@@ -314,6 +314,10 @@ jobs:
       issues: write
       # the retry re-enters through the router, which is a workflow_dispatch
       actions: write
+      # decide-agent-retry reads why the agent job died from its annotations, and the annotations API needs this scope.
+      # Without it the read fails quietly, a runner shut down mid-job (exit code 143) reads as no cause,
+      # and the issue is parked for a person instead of being run again (Pliny-Bot #750).
+      checks: read
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

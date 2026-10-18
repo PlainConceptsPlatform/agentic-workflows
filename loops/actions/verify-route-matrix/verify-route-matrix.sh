@@ -2721,6 +2721,26 @@ if [ -f "$CLOUD_INIT_YML" ] && [ -f "${WORKFLOWS_DIR}/agent-implement.md" ]; the
     echo "FAIL: the runner job cap (${cap:-unset} s in cloud-init.yaml) is not above the longest agent timeout (${longest:-?} min); a long agent job would be killed by the VM" >&2
   fi
 fi
+# decide-agent-retry reads why an agent job died from the job's annotations, and the annotations API needs
+# `checks: read`. Without it the read fails quietly (`2>/dev/null || true`), a runner shut down mid-job
+# (exit code 143) reads as no cause, and the issue is parked for a person instead of being run again:
+# Pliny-Bot #750 died at 44 minutes with exactly that annotation and was flagged for review.
+RETRY_PERM_OK=1
+for worker in "${WORKFLOWS_DIR}"/agent-*.md; do
+  [ -f "$worker" ] || continue
+  grep -q "decide-agent-retry" "$worker" || continue
+  missing="$(awk '
+    function flush() { if (job != "" && uses && !checks) printf "%s ", job }
+    /^  [a-z_]+:$/ { flush(); job = $1; uses = 0; checks = 0; next }
+    /decide-agent-retry/ { uses = 1 }
+    /^      checks: read$/ { checks = 1 }
+    END { flush() }' "$worker")"
+  if [ -n "${missing// /}" ]; then
+    RETRY_PERM_OK=0
+    echo "FAIL: ${worker##*/}: job(s) ${missing}use decide-agent-retry without checks: read, so a runner shutdown reads as no cause" >&2
+  fi
+done
+if [ "$RETRY_PERM_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # The implement prompt tells the agent it is already on its branch and to skip the pc-plan-goal
 # branching phase. That is only true if a step before the agent made the branch, and nothing in the
 # sandbox can do it later: no git credentials, and the prompt forbids the commands. Without the
