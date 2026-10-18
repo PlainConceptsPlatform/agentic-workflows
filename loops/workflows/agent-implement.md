@@ -5,7 +5,7 @@ env:
   # every agent without its own model falls back to; the lead is where a wrong call costs a run,
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
-  AGENT_LEAD_MODEL: "forge/quasar-438b"
+  AGENT_LEAD_MODEL: "forge/glm-5-2"
   VERIFY_COMMANDS: ""
   REPO_RULES: "Implement only the selected issue. Follow repository documentation and existing conventions. Do not weaken tests, lower coverage thresholds, or bypass checks."
   # Split out of REPO_RULES because one field asked to carry architecture, testing, coverage and
@@ -627,7 +627,7 @@ engine:
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
-model: openai/quasar-438b
+model: openai/glm-5-2
 
 max-turns: 300
 max-turn-cache-misses: 3000

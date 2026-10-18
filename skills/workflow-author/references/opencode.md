@@ -58,9 +58,9 @@ them decides anything.
 
 | Layer | Value | What it does |
 |---|---|---|
-| gh-aw `model:` | `openai/quasar-438b` | Satisfies the compiler's provider validation. Nothing else. |
-| worker `env:` `AGENT_LEAD_MODEL` | `forge/quasar-438b` (refine: `forge/glm-5-3`) | The model the worker's own session runs on. The CI merge step writes it onto `ci-workflow-agent` |
-| `opencode.ci.json` `model` | `forge/carina-60b` | The cheap default for every agent with no model of its own |
+| gh-aw `model:` | `openai/glm-5-2` | Satisfies the compiler's provider validation. Nothing else. |
+| worker `env:` `AGENT_LEAD_MODEL` | `forge/glm-5-2` (see the pricing note below) | The model the worker's own session runs on. The CI merge step writes it onto `ci-workflow-agent` |
+| `opencode.ci.json` `model` | `forge/glm-5-2` | The default for every agent with no model of its own |
 | `harness.json` `models` | `plainconcepts/<model>` per tier | The models of the tier subagents and of `planner`; `opencode.ci.json` declares the `plainconcepts` provider so they resolve in CI |
 | `opencode.ci.json` `provider.forge.api` | `{env:FORGE_API_URL}` | Where the request goes |
 | `engine.args: ["--model", ...]` | discarded | The compiler drops it. See below |
@@ -79,6 +79,15 @@ OpenAI-compatible one is enough to get past validation. The real routing is done
 
 A repository needs a provider matching its gateway configuration and the CI merge step that
 installs it. The merge fragment lives in the consumer repository, not in this package's source.
+
+### A model needs a price in the AWF proxy
+
+The proxy meters every model against `max-ai-credits` and refuses a request for one with no AI credits
+price: `Model "carina-60b" has no AI credits pricing and no default pricing is configured`. Pliny-Bot
+#694 died in its first turn on it after the leads moved to Carina and Quasar. `glm-5-2` is priced;
+`carina-60b`, `quasar-438b` and `glm-5-3` are declared in `opencode.ci.json` and stay unused until the
+proxy has a price for them (`apiProxy.defaultAiCreditsPricing` in the AWF config, or the pricing table).
+Until then change `AGENT_LEAD_MODEL` and `model` only to a model that has run in CI before.
 
 ### `engine.args` is discarded, so do not reach for it
 

@@ -418,7 +418,7 @@ engine:
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
-model: openai/quasar-438b    # Provider segment must be `openai`. Compiler only: the session's model is env AGENT_LEAD_MODEL. See references/opencode.md.
+model: openai/glm-5-2       # Provider segment must be `openai`. Compiler only: the session's model is env AGENT_LEAD_MODEL. See references/opencode.md.
 
 max-turns: 300
 max-turn-cache-misses: 3000  # Forge has no prompt cache; every turn is a miss.

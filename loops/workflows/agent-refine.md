@@ -5,7 +5,7 @@ env:
   # every agent without its own model falls back to; the lead is where a wrong call costs a run,
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
-  AGENT_LEAD_MODEL: "forge/glm-5-3"
+  AGENT_LEAD_MODEL: "forge/glm-5-2"
   REPO_RULES: "Refine only the selected issue into a grounded, implementation-ready user story. Read repository documentation for domain context. Write acceptance criteria that match existing patterns. Where a story or its open questions decide how business data (named people, roles, addresses) is stored, resolve it toward the repository's convention for that data -- a database entity or a settings entry -- and record that choice in the acceptance criteria; do not carry a person's name or email address into the story as something the code reads from a constant. Do not implement code. Do not use web search or web fetch tools. The issue body already contains the research that motivated it; derive your domain context from the repository's own code and documentation only."
   # The estimate decides whether a story gets split, and the prompt tells the agent these bands
   # come from this repository's own merged pull requests. They have to actually come from it, or
@@ -812,7 +812,7 @@ engine:
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
-model: openai/glm-5-3
+model: openai/glm-5-2
 # 150 rather than 500. With a four-hour clock this is the loop guard, and the worst
 # observed run used 44 turns, so this leaves better than three times the worst case.
 max-turns: 150
