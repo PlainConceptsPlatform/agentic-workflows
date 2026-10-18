@@ -32,6 +32,12 @@ inputs:
     description: How many pull requests may be in repair at once. Merges stay one at a time.
     required: false
     default: '1'
+  main-red-wait-hours:
+    description: >-
+      How long the train waits for a base branch whose checks fail the same way as a pull request's
+      before it stops waiting and repairs the pull request anyway.
+    required: false
+    default: '2'
   stuck-hours:
     description: How long the train waits behind a CI run that never finishes before it passes that pull request by.
     required: false
@@ -64,6 +70,7 @@ runs:
         MAX_ATTEMPTS: ${{ inputs.max-gate-attempts }}
         MAX_RETRIES: ${{ inputs.max-retries }}
         STUCK_HOURS: ${{ inputs.stuck-hours }}
+        MAIN_RED_WAIT_HOURS: ${{ inputs.main-red-wait-hours }}
         MAX_REPAIRS: ${{ inputs.max-repairs }}
         DRY_RUN: ${{ inputs.dry-run }}
         HINT_RUN_ID: ${{ inputs.ci-run-id }}

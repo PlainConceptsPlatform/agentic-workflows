@@ -146,6 +146,7 @@ MAX_ATTEMPTS="${MAX_ATTEMPTS:-6}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
 MAX_REPAIRS="${MAX_REPAIRS:-1}"
 case "$MAX_REPAIRS" in ''|*[!0-9]*|0) MAX_REPAIRS=1 ;; esac
+MAIN_RED_WAIT_HOURS="${MAIN_RED_WAIT_HOURS:-2}"
 STUCK_HOURS="${STUCK_HOURS:-3}"
 DRY_RUN="${DRY_RUN:-false}"
 SELF_RUN_ID="${GITHUB_RUN_ID:-0}"
@@ -423,9 +424,22 @@ for line in "${candidates[@]}"; do
       --jq '[.check_runs[] | select(.conclusion == "failure") | (.name | sub("^.* / "; ""))] | unique | .[]' 2>/dev/null || true)
     failed_base=$(gh api "repos/$REPO/commits/$base_ref/check-runs?per_page=100" \
       --jq '[.check_runs[] | select(.conclusion == "failure") | (.name | sub("^.* / "; ""))] | unique | .[]' 2>/dev/null || true)
+    # How long the base has been red: the oldest failing check on its tip. The wait is bounded,
+    # because waiting for a base nobody fixes starves every pull request behind it. Pliny-Bot's
+    # main was red from 19:30 and the train waited until morning, ten hours, saying nothing.
+    red_since=$(gh api "repos/$REPO/commits/$base_ref/check-runs?per_page=100" \
+      --jq '[.check_runs[] | select(.conclusion == "failure") | .completed_at] | min // empty' 2>/dev/null || true)
+    red_for_hours=0
+    if [ -n "$red_since" ]; then
+      red_for_hours=$(( (now_epoch - $(iso_epoch "$red_since")) / 3600 ))
+    fi
     if [ -n "$failed_here" ] && [ -n "$failed_base" ] &&
       [ -z "$(comm -23 <(sort <<<"$failed_here") <(sort <<<"$failed_base"))" ]; then
-      same_as_main=true
+      if [ "$red_for_hours" -lt "${MAIN_RED_WAIT_HOURS:-2}" ]; then
+        same_as_main=true
+      else
+        echo "::warning::$base_ref has been red for ${red_for_hours}h on the same checks as #$pr; the train no longer waits for it and repairs #$pr."
+      fi
     fi
   fi
 

@@ -2002,6 +2002,11 @@ if worker_installed merge-gate; then
     assert "a failure that is main's too is waited out, not repaired" wait "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure SAME_AS_MAIN=true)"
     assert "a failure that is not main's still goes to the gate" gate "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure SAME_AS_MAIN=false)"
     assert "a conflict is still the gate's even when main is red" gate "$(move MERGEABLE=CONFLICTING CI_STATUS=completed CI_CONCLUSION=failure SAME_AS_MAIN=true)"
+    # The wait for a red base is bounded. Pliny-Bot's main was red from 19:30 and the train waited
+    # on it until morning, saying nothing, while five pull requests sat with their repairs unspent.
+    grep -q 'MAIN_RED_WAIT_HOURS' "$TRAIN_SH" && grep -q 'red_for_hours' "$TRAIN_SH" &&
+      grep -q 'main-red-wait-hours' "${HERE}/../merge-train/action.yml" ||
+      { FAIL=$((FAIL + 1)); echo "FAIL: the merge train waits on a red base branch with no time limit" >&2; }
     assert "green but behind is brought up to date first" update "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success BEHIND_BY=2)"
     assert "green and current goes to the gate" gate "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success BEHIND_BY=0)"
     assert "no CI run is passed by" skip "$(move MERGEABLE=MERGEABLE CI_STATUS=none)"
