@@ -98,10 +98,31 @@ CI, because it gates shell and edits on skills the worker prompts do not load.
 
 The proxy meters every model against `max-ai-credits` and refuses a request for one with no AI credits
 price: `Model "carina-60b" has no AI credits pricing and no default pricing is configured`. Pliny-Bot
-#694 died in its first turn on it after the leads moved to Carina and Quasar. `glm-5-2` is priced;
-`carina-60b`, `quasar-438b` and `glm-5-3` are declared in `opencode.ci.json` and stay unused until the
-proxy has a price for them (`apiProxy.defaultAiCreditsPricing` in the AWF config, or the pricing table).
-Until then change `AGENT_LEAD_MODEL` and `model` only to a model that has run in CI before.
+#694 died in its first turn on it after the leads moved to Carina and Quasar.
+
+The prices live in `shared/opencode-ci.md` under `models.providers.openai.models`, which gh-aw compiles
+to `apiProxy.providers` in the AWF config. The proxy checks that overlay first, then its curated table,
+then its bundled models.dev snapshot, then `apiProxy.defaultAiCreditsPricing` (frontmatter
+`models.default-ai-credits-pricing`, one rate for every unknown model). The key is `openai` because Forge
+is the proxy's `openai` target. Rates are USD per token, and one AI credit is $0.01, so the default
+`max-ai-credits: 5000` is $50 a run.
+
+Use Multiverse's public list prices (https://docs.compactif.ai/pricing/), the provider Forge serves these
+models from. Where that page shows no cached rate, caching is off and `cache_read` must equal `input`;
+left out, the proxy bills cached tokens at 10% of input. A new Forge model needs its row there before a
+worker or `AGENT_TIER_MODEL` names it.
+
+| Forge id | Input $/1M | Cached input $/1M | Output $/1M |
+|---|---|---|---|
+| `carina-60b` | 0.05 | no caching | 0.20 |
+| `qwen-3-8-27b` | 0.40 | no caching | 2.00 |
+| `glm-5-2` | 1.10 | 0.22 | 3.50 |
+| `glm-5-3` | 1.10 | 0.22 | 3.50 |
+| `quasar-438b` | 0.60 | no caching | 1.80 |
+
+Before these prices `glm-5-2` was the only model that ran, metered by prefix match at models.dev's `glm-5`
+rate. Change `AGENT_LEAD_MODEL`, `model` and `AGENT_TIER_MODEL` to a newly priced model once one CI run
+on it has passed.
 
 ### `engine.args` is discarded, so do not reach for it
 
