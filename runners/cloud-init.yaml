@@ -16,6 +16,12 @@ write_files:
     content: |
       SCALER_URL=https://agentrunner-scaler-01.azurewebsites.net
       VM_TOKEN=__VM_TOKEN__
+      # The cap on one job. The default in job.sh is 5400 (90 minutes), and every implement that ran
+      # longer was killed by it: no log, no pull request, the agent job reported as failed after exactly
+      # 90 minutes (Pliny-Bot #694, #726 and #750 on 2026-10-18, hours of runner time each). The
+      # workflows allow an implement 180 minutes, so the cap is set above that. Keep this value above
+      # the largest timeout-minutes of any agent job; verify-route-matrix.sh asserts it.
+      RUNNER_JOB_TIMEOUT=11400
   - path: /opt/runner/job.sh
     permissions: "0700"
     content: |

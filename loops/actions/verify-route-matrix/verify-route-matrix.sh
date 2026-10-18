@@ -2707,6 +2707,20 @@ if grep -qF "implement-queue-" "$ROUTER_YML" 2>/dev/null; then
     echo "FAIL: the implement queue is chosen by the issue number modulo the queue count, which puts independent issues in one queue" >&2
   fi
 fi
+# The runner VM kills any job that outlives RUNNER_JOB_TIMEOUT, whatever the workflow allows. The default
+# of 90 minutes killed three Pliny-Bot implements that the workflow had given 180: no log, no pull request.
+# The cap in cloud-init has to stay above the longest agent job, or the workflow's own timeout is decoration.
+CLOUD_INIT_YML="${HERE}/../../../runners/cloud-init.yaml"
+if [ -f "$CLOUD_INIT_YML" ] && [ -f "${WORKFLOWS_DIR}/agent-implement.md" ]; then
+  cap="$(sed -n 's/^ *RUNNER_JOB_TIMEOUT=\([0-9][0-9]*\)$/\1/p' "$CLOUD_INIT_YML" | tail -1)"
+  longest="$(grep -hoE '^timeout-minutes: [0-9]+' "${WORKFLOWS_DIR}"/agent-*.md | grep -oE '[0-9]+' | sort -n | tail -1)"
+  if [ -n "$cap" ] && [ -n "$longest" ] && [ "$cap" -gt $((longest * 60)) ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the runner job cap (${cap:-unset} s in cloud-init.yaml) is not above the longest agent timeout (${longest:-?} min); a long agent job would be killed by the VM" >&2
+  fi
+fi
 # The implement prompt tells the agent it is already on its branch and to skip the pc-plan-goal
 # branching phase. That is only true if a step before the agent made the branch, and nothing in the
 # sandbox can do it later: no git credentials, and the prompt forbids the commands. Without the
