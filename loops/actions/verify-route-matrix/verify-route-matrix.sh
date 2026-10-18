@@ -2695,6 +2695,18 @@ if [ -f "$HK_YML" ] && [ -f "$TRAIN_SH_HB" ]; then
     echo "FAIL: the merge train has no heartbeat from housekeeping, or does not cancel a repair gate whose CI turned green" >&2
   fi
 fi
+# The implement queue was the issue's key modulo the number of queues, so three independent issues whose
+# numbers were multiples of three (Pliny-Bot #726, #750 and #694 under #690) shared queue zero and ran in
+# series behind a three-hour run. The queue is now the key's place among the keys of the issues waiting for
+# an implement, and the children of one refine still share a key.
+if grep -qF "implement-queue-" "$ROUTER_YML" 2>/dev/null; then
+  if grep -qF 'place=$index' "$ROUTER_YML"     && grep -qF 'queue=$(( place % queues ))' "$ROUTER_YML"     && ! grep -qF 'queue=$(( key % queues ))' "$ROUTER_YML"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the implement queue is chosen by the issue number modulo the queue count, which puts independent issues in one queue" >&2
+  fi
+fi
 # The implement prompt tells the agent it is already on its branch and to skip the pc-plan-goal
 # branching phase. That is only true if a step before the agent made the branch, and nothing in the
 # sandbox can do it later: no git credentials, and the prompt forbids the commands. Without the

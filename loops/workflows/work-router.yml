@@ -551,9 +551,29 @@ jobs:
           body=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')
           parent=$(printf '%s' "$body" | grep -oE '<!-- split-parent: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
           key="${parent:-$ISSUE_NUMBER}"
-          queue=$(( key % queues ))
+
+          # The queue is the key's place among the keys of every issue waiting for an implement, not
+          # the key modulo the number of queues. Three independent issues whose numbers were all
+          # multiples of three (Pliny-Bot #726, #750 and #694, whose parent is #690) landed in queue
+          # zero together and ran one after another behind a three-hour run while two queues sat
+          # empty. A place among the waiting keys puts independent issues in different queues, and
+          # the children of one refine, which share a key, still share one.
+          waiting=$(
+            { printf '%s\n' "$key"
+              gh issue list --repo "$REPO" --label "implement" --state open --limit 100 --json number,body \
+                --jq '.[] | ((.body // "") | capture("<!-- split-parent: (?<p>[0-9]+) -->").p) // (.number | tostring)' \
+                2>/dev/null || true
+            } | grep -E '^[0-9]+$' | sort -un
+          )
+          place=0
+          index=0
+          for candidate in $waiting; do
+            [ "$candidate" = "$key" ] && place=$index
+            index=$((index + 1))
+          done
+          queue=$(( place % queues ))
           echo "queue=$queue" >> "$GITHUB_OUTPUT"
-          echo "#$ISSUE_NUMBER waits in implement queue $queue of $queues (keyed on #$key)."
+          echo "#$ISSUE_NUMBER waits in implement queue $queue of $queues (keyed on #$key, place $place among $index waiting)."
       - name: Resolve the feature branch from the stack markers
         id: stack
         env:
