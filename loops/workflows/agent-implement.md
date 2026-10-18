@@ -746,6 +746,12 @@ timeout-minutes: 180
       `proposal.md` or `tasks.md` yourself.** A hand-written `tasks.md` carries no annotations,
       and without them `pc-plan-apply` has no workers to spawn, so the whole change is done by
       you alone, in sequence, on one model. That is the failure this step exists to prevent.
+      Ask it for few, coarse tasks: one task per area of files, the tests for that code in the
+      same task, and no task whose only job is to repair what an earlier task broke. Five tasks
+      in three waves cover most issues. Every task is a fresh worker that rereads the code it
+      needs before it edits anything, one to three minutes each: Pliny-Bot #751 split a small
+      web feature into twelve tasks and spent fifteen of its twenty-two minutes in them, and
+      #696 ended with a twelve-minute task that fixed the test doubles the earlier tasks broke.
    3. `pc-plan-apply`. The tasks are implemented by the subagents it spawns, in waves, each on
       the model tier its annotation names. **In this phase you do not edit source files
       yourself.** If it stops because a worker cannot be resolved, report that with
@@ -775,6 +781,12 @@ timeout-minutes: 180
        Adhere to ${{ env.REPO_RULES }}, ${{ env.ARCHITECTURE_RULES }} and
        ${{ env.TESTING_RULES }}.
 
+   **WORK IN FEW TURNS**, on both paths. Every turn is a model call of three to twenty
+   seconds, and the turns, not the commands, are most of a run. Read a file whole, or in
+   ranges of a few hundred lines, once; never eight or fifteen lines at a time. Put
+   independent reads and searches in the same turn. Leave whitespace and line endings to the
+   formatter instead of inspecting them with `hexdump` or `cat -A`.
+
    **DECISIVE IMPLEMENTATION**, on both paths. When a design choice is ambiguous, pick the most
    standard interpretation and implement it immediately. Do not deliberate between options for
    more than one turn. Do not ask clarifying questions the issue author expects you to use good
@@ -788,6 +800,21 @@ timeout-minutes: 180
      ```
 
      Never open a pull request that does not pass them.
+
+     **Run them once, on the final tree.** They are slow: Pliny-Bot's `pnpm verify` is about
+     twenty minutes of work on this runner. `pc-plan-apply` runs them in its verify step, and
+     that run is this one: do not run them again when nothing changed since. Order the end of
+     the run so the last run is the only one: first `check-diff` below, which takes seconds, and
+     fix what it lists; then these commands. While you work, check with the narrowest command
+     that covers what you changed (build the project you edited, run the test files you
+     edited, typecheck the web app), not with these. Pliny-Bot #694 ran three typechecks and
+     three test runs of its own before it reached the full verification at minute forty-one.
+
+     A test that cannot start in this sandbox (it needs Docker, a database or a host the
+     firewall blocks) and fails the same way on the default branch is not yours to fix: say so
+     in the pull request and move on, CI runs it with the service. Pliny-Bot #696 spent its
+     turns on 365 integration tests that could not start here because Testcontainers found an
+     empty Docker configuration.
 
      **Run every command in the foreground and wait for it in the same turn. Never move a command
      to the background and never end a turn to wait for it.** This run is not interactive: nothing
@@ -811,7 +838,7 @@ timeout-minutes: 180
 
      When `.opencode/scripts/check-diff.mjs` exists, also run
      `node .opencode/scripts/check-diff.mjs`
-     on both paths. It must exit 0. It holds the comments and tests you add to the size of the
+     on both paths, before the commands above. It must exit 0. It holds the comments and tests you add to the size of the
      change and makes you clean the files you touched; fix every line it lists. The merge gate
      runs it again and does not merge while it fails.
 
@@ -820,8 +847,9 @@ timeout-minutes: 180
      unit test only for logic with real branching. A bug fix gets one regression test. Do not
      write tests of constants, configured defaults, mocks of your own code or markup attributes.
 
-     Anything you change to satisfy `check-diff` is a change: run the verification commands
-     again afterwards, and open the pull request only from a tree where both pass. Do not delete
+     Anything you change to satisfy `check-diff` is a change: run it again, and run the
+     verification commands only after it passes, so they run on the tree you ship. Open the
+     pull request only from a tree where both pass. Do not delete
      a test that covers a branch you added to fit the budget; the complexity gate in CI measures
      that coverage.
 

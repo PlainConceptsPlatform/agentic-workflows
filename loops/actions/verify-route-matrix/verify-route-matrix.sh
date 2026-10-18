@@ -1788,6 +1788,17 @@ fi
 # leaving a verdict or an attempt is a loop: the train cannot tell a gate that declined from a gate
 # that has not run. Refusals are for what the train never hands over (a fork, a stranger, a pull
 # request that is not open), and the train filters those itself.
+# The implement run is mostly model turns and repeated verification: Pliny-Bot #694 reached its
+# full verification at minute forty-one after six scoped runs, and #751 spent fifteen of twenty-two
+# minutes in twelve tiny worker tasks. These sentences are what keep a run near twenty minutes.
+if worker_installed implement; then
+  if grep -qF 'Run them once, on the final tree.' "$IMPLEMENT_WORKER_MD"     && grep -qF 'on both paths, before the commands above.' "$IMPLEMENT_WORKER_MD"     && grep -qF 'Ask it for few, coarse tasks' "$IMPLEMENT_WORKER_MD"     && grep -qF 'WORK IN FEW TURNS' "$IMPLEMENT_WORKER_MD"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the implement prompt must verify once on the final tree, ask for coarse tasks and work in few turns" >&2
+  fi
+fi
 # The shape of the tests reaches the agent only through these two prompts (check-diff measures size,
 # never shape), so losing the sentence silently brings the pyramid back.
 if worker_installed implement; then
