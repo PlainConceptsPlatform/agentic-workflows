@@ -2835,6 +2835,13 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: merge gate agents share one repository-wide concurrency group" >&2
 fi
+# The gate resolves conflicts by taking hunks apart, not by keeping one side or both.
+if grep -qF 'A conflict is not always two additions.' "${WORKFLOWS_DIR}/agent-merge-gate.md"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the merge gate prompt must say a conflict is not always two additions" >&2
+fi
 # An empty AGENT_TIER_MODEL must remove an override a reused runner kept from an earlier job.
 if grep -qF 'rm -f .opencode/harness.user.json' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   PASS=$((PASS + 1))

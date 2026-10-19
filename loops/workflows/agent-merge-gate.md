@@ -1101,6 +1101,17 @@ timeout-minutes: 120
     use `--ours`, `--theirs`, or a blanket conflict-marker deletion without reviewing the
     intended behavior from both sides, and never rebase: the push is fast-forward only.
 
+    A conflict is not always two additions. When one side deleted what the other still edits (a
+    removed module, a retired block of translations), keeping the deleting side wholesale drops
+    everything the pull request put inside that block, and keeping both brings the deleted code
+    back. Take such a hunk apart: keep what the pull request added that still has a home, drop only
+    what the base retired. After resolving a locale file or any other keyed file, list the keys the
+    pull request added (its tip against its merge base) and confirm each still exists, then build
+    and run the tests that use them. Pliny-Bot #837 lost its approval card strings this way and
+    failed on a missing label. Two pull requests that each passed CI can also break the base
+    together, one deleting a namespace the other still uses; only a green run on the current base
+    says a merge is safe.
+
     Scope verification to the files the merge touched: pass changed file paths to
     lint/format tools instead of running them repository-wide (see step 6's scoped
     verification guidance).
