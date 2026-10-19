@@ -282,7 +282,7 @@ jobs:
       # every step below treats the rescued pull request as the one the agent opened.
       - name: Rebase a patch the base moved under
         id: rescue
-        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '' && contains(needs.agent.outputs.output_types, 'create_pull_request')
+        if: needs.safe_outputs.outputs.created_pr_number == '' && contains(needs.agent.outputs.output_types, 'create_pull_request')
         uses: ./.github/actions/rebase-stale-patch
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -399,7 +399,7 @@ jobs:
       # said "nothing landed" and neither could be acted on, while #175's run had produced more
       # output than the run that succeeded in the same hour.
       - name: Flag a request that was not applied
-        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && contains(needs.agent.outputs.output_types, 'create_pull_request')
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && contains(needs.agent.outputs.output_types, 'create_pull_request') && steps.rescue.outputs.rescued != 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -408,7 +408,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
       - name: Say the request was not applied
-        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && contains(needs.agent.outputs.output_types, 'create_pull_request')
+        if: needs.safe_outputs.outputs.created_pr_number == '' && (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '0' || needs.safe_outputs.outputs.process_safe_outputs_items_succeeded == '') && contains(needs.agent.outputs.output_types, 'create_pull_request') && steps.rescue.outputs.rescued != 'true'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
