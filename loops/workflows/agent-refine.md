@@ -9,6 +9,8 @@ env:
   # Empty: every harness tier (plan, build, fast) runs on the model harness.json names, as on a
   # developer's machine. Set it only to pin all tiers to one model, which the proxy must price.
   AGENT_TIER_MODEL: ""
+  # The fast tier alone, while the CI's Forge account is not granted carina-60b.
+  AGENT_FAST_MODEL: "plainconcepts/glm-5-2"
   REPO_RULES: "Refine only the selected issue into a grounded, implementation-ready user story. Read repository documentation for domain context. Write acceptance criteria that match existing patterns. Where a story or its open questions decide how business data (named people, roles, addresses) is stored, resolve it toward the repository's convention for that data -- a database entity or a settings entry -- and record that choice in the acceptance criteria; do not carry a person's name or email address into the story as something the code reads from a constant. Do not implement code. Do not use web search or web fetch tools. The issue body already contains the research that motivated it; derive your domain context from the repository's own code and documentation only."
   # The estimate decides whether a story gets split, and the prompt tells the agent these bands
   # come from this repository's own merged pull requests. They have to actually come from it, or

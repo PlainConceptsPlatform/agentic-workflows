@@ -9,6 +9,8 @@ env:
   # Empty: every harness tier (plan, build, fast) runs on the model harness.json names, as on a
   # developer's machine. Set it only to pin all tiers to one model, which the proxy must price.
   AGENT_TIER_MODEL: ""
+  # The fast tier alone, while the CI's Forge account is not granted carina-60b.
+  AGENT_FAST_MODEL: "plainconcepts/glm-5-2"
   REPO_RULES: "Read-only repository audit. Report only reproducible, actionable defects with evidence. Do not modify files, commit, push, or run write operations."
   # Split out of REPO_RULES, which carried both the read-only discipline above and the list
   # below. All four consuming repositories had customised the list and none could touch it

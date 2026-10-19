@@ -9,6 +9,8 @@ env:
   # Empty: every harness tier (plan, build, fast) runs on the model harness.json names, as on a
   # developer's machine. Set it only to pin all tiers to one model, which the proxy must price.
   AGENT_TIER_MODEL: ""
+  # The fast tier alone, while the CI's Forge account is not granted carina-60b.
+  AGENT_FAST_MODEL: "plainconcepts/glm-5-2"
   REPO_RULES: "Triage issues opened by outside collaborators. Assess template completeness, security risk, change size, danger level, duplicates, clarity, reproducibility, acceptance criteria, and cross-cutting impact. When the request names specific people, email addresses, or business entities as the thing the code acts on, judge where that data is meant to live: business data that belongs in the database or a settings page is a design decision, not a wording detail, and it must not be left for the implementer to decide by hardcoding it. Do not implement code. Do not modify the issue body."
   # What a product owner may ask for, and what has to become a maintainer-owned technical
   # proposal instead. This is business policy, so it belongs to the repository rather than to

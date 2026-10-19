@@ -9,6 +9,8 @@ env:
   # Empty: every harness tier (plan, build, fast) runs on the model harness.json names, as on a
   # developer's machine. Set it only to pin all tiers to one model, which the proxy must price.
   AGENT_TIER_MODEL: ""
+  # The fast tier alone, while the CI's Forge account is not granted carina-60b.
+  AGENT_FAST_MODEL: "plainconcepts/glm-5-2"
   VERIFY_COMMANDS: ""
   REPO_RULES: "Review the selected pull request for defects and report what you verified. Do not decide the outcome: the workflow computes it from your report and from facts it measured before you ran."
   # Where to look first, not what to escalate on. This list used to be the check that decided

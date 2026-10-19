@@ -231,6 +231,10 @@ pre-agent-steps:
       # or the tiers stay pinned (Pliny-Bot #774 ran on glm-5-2 after the pin was dropped).
       if [ -n "${AGENT_TIER_MODEL:-}" ]; then
         jq -n --arg m "$AGENT_TIER_MODEL" '{models: {plan: $m, build: $m, fast: $m}}' > .opencode/harness.user.json
+      elif [ -n "${AGENT_FAST_MODEL:-}" ]; then
+        # One tier only: the CI's Forge account is not granted carina-60b, which harness.json
+        # names for fast work, so that tier alone moves to a model the account has.
+        jq -n --arg m "$AGENT_FAST_MODEL" '{models: {fast: $m}}' > .opencode/harness.user.json
       else
         rm -f .opencode/harness.user.json
       fi

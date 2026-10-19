@@ -9,6 +9,8 @@ env:
   # Empty: every harness tier (plan, build, fast) runs on the model harness.json names, as on a
   # developer's machine. Set it only to pin all tiers to one model, which the proxy must price.
   AGENT_TIER_MODEL: ""
+  # The fast tier alone, while the CI's Forge account is not granted carina-60b.
+  AGENT_FAST_MODEL: "plainconcepts/glm-5-2"
   VERIFY_COMMANDS: ""
   REPO_RULES: "Implement only the selected issue. Follow repository documentation and existing conventions. Do not weaken tests, lower coverage thresholds, or bypass checks."
   # Split out of REPO_RULES because one field asked to carry architecture, testing, coverage and
