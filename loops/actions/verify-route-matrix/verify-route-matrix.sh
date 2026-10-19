@@ -2787,6 +2787,8 @@ fi
 # No prompt rule stopped the model ending a turn in text; the compiled engine command continues the
 # session when no safe output exists. Pliny-Bot #771 passed verify and exited with nothing delivered.
 COMPILE_MJS="${HERE}/../../scripts/compile-agent-workflows.mjs"
+# In a consumer the action sits under .github/ and the script at the repository root.
+[ -f "$COMPILE_MJS" ] || COMPILE_MJS="${HERE}/../../../scripts/compile-agent-workflows.mjs"
 if [ -f "$COMPILE_MJS" ] && grep -qF 'opencode run --continue' "$COMPILE_MJS"   && grep -qF 'gh-aw/safeoutputs/outputs.jsonl' "$COMPILE_MJS"; then
   PASS=$((PASS + 1))
 else
