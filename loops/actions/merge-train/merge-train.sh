@@ -444,7 +444,14 @@ for line in "${candidates[@]}"; do
       --jq '[.check_runs[] | select(.conclusion == "failure") | .completed_at] | min // empty' 2>/dev/null || true)
     red_for_hours=0
     if [ -n "$red_since" ]; then
-      red_for_hours=$(( (now_epoch - $(iso_epoch "$red_since")) / 3600 ))
+      # A date that does not parse reads as epoch 0, which made main "red for 497899h" and ended the
+      # wait at once (Pliny-Bot repaired five pull requests for failures main had too). No date, no claim.
+      red_epoch=$(iso_epoch "$red_since")
+      if [ "$red_epoch" -gt 0 ]; then
+        red_for_hours=$(( (now_epoch - red_epoch) / 3600 ))
+      else
+        echo "::warning::Could not read when $base_ref went red ('$red_since'); waiting for it as if it just did."
+      fi
     fi
     if [ -n "$failed_here" ] && [ -n "$failed_base" ] &&
       [ -z "$(comm -23 <(sort <<<"$failed_here") <(sort <<<"$failed_base"))" ]; then

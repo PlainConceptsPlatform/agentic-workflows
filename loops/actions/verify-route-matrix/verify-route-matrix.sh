@@ -2821,6 +2821,13 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: implement flags an issue stalled next to the pull request it just opened" >&2
 fi
+# A date the train cannot parse must not read as "main has been red since 1970".
+if grep -qF 'Could not read when $base_ref went red' "${HERE}/../merge-train/merge-train.sh"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the merge train treats an unparsable red-since date as an endless red main" >&2
+fi
 # An empty AGENT_TIER_MODEL must remove an override a reused runner kept from an earlier job.
 if grep -qF 'rm -f .opencode/harness.user.json' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   PASS=$((PASS + 1))
