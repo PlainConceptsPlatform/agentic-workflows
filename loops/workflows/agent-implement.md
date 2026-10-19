@@ -243,7 +243,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
   conclude:
-    needs: [agent, safe_outputs]
+    needs: [activation, agent, safe_outputs]
     if: >
       always() &&
       needs.agent.result == 'success' &&
@@ -276,13 +276,27 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
+      # gh-aw pushes onto the base as it is when the run ends; a base that moved under a long run
+      # makes the commits not apply and the work is filed as an issue. A plain rebase applies most
+      # of them (Pliny-Bot #787 and #794 were rebased by hand in minutes), so it is tried here, and
+      # every step below treats the rescued pull request as the one the agent opened.
+      - name: Rebase a patch the base moved under
+        id: rescue
+        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '' && contains(needs.agent.outputs.output_types, 'create_pull_request')
+        uses: ./.github/actions/rebase-stale-patch
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          run-id: ${{ github.run_id }}
+          artifact: ${{ needs.activation.outputs.artifact_prefix }}agent
+          issue-number: ${{ inputs.issue-number }}
+          default-branch: ${{ github.event.repository.default_branch }}
       - name: Verify PR closes the source issue
-        if: needs.safe_outputs.outputs.created_pr_number != ''
+        if: needs.safe_outputs.outputs.created_pr_number != '' || steps.rescue.outputs.rescued == 'true'
         continue-on-error: true
         uses: ./.github/actions/link-pr-to-issue
         with:
           token: ${{ steps.app-token.outputs.token }}
-          pr-number: ${{ needs.safe_outputs.outputs.created_pr_number }}
+          pr-number: ${{ needs.safe_outputs.outputs.created_pr_number || steps.rescue.outputs.pr-number }}
           issue-number: ${{ inputs.issue-number }}
       # GitHub only stores the PR-to-issue direction (Closes #N); the reverse lookup is a
       # body-text search. Stamping hidden markers on the issue makes issue-to-branch exact:
@@ -290,13 +304,13 @@ jobs:
       # the branch without guessing. Old markers are replaced, so a re-implement after a
       # closed pull request re-stamps cleanly.
       - name: Record the pull request and branch on the issue
-        if: needs.safe_outputs.outputs.created_pr_number != ''
+        if: needs.safe_outputs.outputs.created_pr_number != '' || steps.rescue.outputs.rescued == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           ISSUE: ${{ inputs.issue-number }}
-          PR_NUMBER: ${{ needs.safe_outputs.outputs.created_pr_number }}
+          PR_NUMBER: ${{ needs.safe_outputs.outputs.created_pr_number || steps.rescue.outputs.pr-number }}
         run: |
           set -euo pipefail
           branch=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefName --jq '.headRefName')
@@ -306,14 +320,14 @@ jobs:
           gh issue edit "$ISSUE" --repo "$REPO" --body-file /tmp/issue-body.md
           echo "Stamped PR #$PR_NUMBER and branch $branch on issue #$ISSUE"
       - name: Mark issue as having a pull request pending
-        if: needs.safe_outputs.outputs.created_pr_number != ''
+        if: needs.safe_outputs.outputs.created_pr_number != '' || steps.rescue.outputs.rescued == 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.PR_PENDING_LABEL }}
       - name: Reconcile the new bot pull request
-        if: needs.safe_outputs.outputs.created_pr_number != ''
+        if: needs.safe_outputs.outputs.created_pr_number != '' || steps.rescue.outputs.rescued == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -354,7 +368,7 @@ jobs:
       # comment exists to prevent (Odyssey #226). Distinguish them the same way the steps below
       # do: gate on whether the agent actually asked for a pull request.
       - name: Flag a patch that could not be pushed
-        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '' && contains(needs.agent.outputs.output_types, 'create_pull_request')
+        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '' && contains(needs.agent.outputs.output_types, 'create_pull_request') && steps.rescue.outputs.rescued != 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -363,7 +377,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
       - name: Say where the patch went
-        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '' && contains(needs.agent.outputs.output_types, 'create_pull_request')
+        if: needs.safe_outputs.outputs.created_pr_number == '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '' && contains(needs.agent.outputs.output_types, 'create_pull_request') && steps.rescue.outputs.rescued != 'true'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}

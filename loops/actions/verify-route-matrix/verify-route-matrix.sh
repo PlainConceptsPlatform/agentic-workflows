@@ -2790,6 +2790,18 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: the compiled engine command does not continue a session that delivered nothing" >&2
 fi
+# A patch the base moved under is rebased and opened as a pull request before anyone is asked: Pliny-Bot
+# #787 and #794 sat as issues until rebased by hand. The rescue must run before the pull request steps,
+# and the push-failure flags must stay quiet when it worked.
+IMPL_MD="${WORKFLOWS_DIR}/agent-implement.md"
+if worker_installed implement; then
+  if grep -qF 'uses: ./.github/actions/rebase-stale-patch' "$IMPL_MD"     && grep -qF "steps.rescue.outputs.rescued == 'true'" "$IMPL_MD"     && grep -qF "&& steps.rescue.outputs.rescued != 'true'" "$IMPL_MD"     && [ -f "${HERE}/../rebase-stale-patch/rebase-stale-patch.sh" ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: implement does not rebase a patch its base moved under before parking it" >&2
+  fi
+fi
 # A stack root merges itself once every child has landed, through the same gate as any pull request.
 # The people it still stops are the gate's own: a blast radius over the limit, a protected path, a
 # finding. The gate must read the router's completion announcement, and the train must give the root

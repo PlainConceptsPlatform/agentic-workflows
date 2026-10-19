@@ -1,0 +1,41 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/rebase-stale-patch/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Rebase a stale agent patch
+description: When an agent's patch no longer applies because its base branch moved, rebase the run's bundle onto the base and open the pull request the agent asked for. A real conflict is left for a person.
+inputs:
+  token:
+    description: App token that can push a branch, open a pull request and close an issue.
+    required: true
+  run-id:
+    description: The workflow run whose agent artifact holds the bundle.
+    required: true
+  artifact:
+    description: Name of the agent artifact, with the run's artifact prefix.
+    required: true
+  issue-number:
+    description: The issue the agent worked on.
+    required: true
+  default-branch:
+    description: Base used when the issue is not part of a stack.
+    required: true
+outputs:
+  rescued:
+    description: '"true" when a pull request was opened from the rebased bundle.'
+    value: ${{ steps.rebase.outputs.rescued }}
+  pr-number:
+    description: The pull request opened, or empty.
+    value: ${{ steps.rebase.outputs.pr_number }}
+runs:
+  using: composite
+  steps:
+    - name: Rebase the bundle and open its pull request
+      id: rebase
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        DOWNLOAD_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        RUN_ID: ${{ inputs.run-id }}
+        ARTIFACT: ${{ inputs.artifact }}
+        ISSUE: ${{ inputs.issue-number }}
+        DEFAULT_BRANCH: ${{ inputs.default-branch }}
+      run: bash "${{ github.action_path }}/rebase-stale-patch.sh"
