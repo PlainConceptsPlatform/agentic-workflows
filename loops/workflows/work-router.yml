@@ -756,10 +756,17 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           STACK_BRANCH: ${{ needs.check-stack-branch.outputs.stack-branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
           ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
           ATTEMPTS: ${{ needs.classify.outputs.attempts }}
         run: |
           set -euo pipefail
+          # A dispatch on the feature ref runs the feature branch's own copy of the workflows, so a
+          # branch cut before a workflow fix keeps running the old one: Pliny-Bot #774 ran every
+          # tier on glm-5-2 from feat/767 after main had dropped the pin. Bring the default branch
+          # in first. A conflict (409) leaves the branch as it is; the run still goes ahead.
+          code=$(gh api -X POST "repos/$REPO/merges" -f base="$STACK_BRANCH" -f head="$DEFAULT_BRANCH"             -f commit_message="chore: bring $DEFAULT_BRANCH into $STACK_BRANCH before a child runs"             --silent -i 2>/dev/null | head -1 | awk '{print $2}' || true)
+          echo "Merged $DEFAULT_BRANCH into $STACK_BRANCH: HTTP ${code:-unknown} (201 merged, 204 up to date, 409 conflict)"
           gh workflow run agent-implement.lock.yml --repo "$REPO" --ref "$STACK_BRANCH" \
             -f issue-number="$ISSUE_NUMBER" \
             -f attempts_so_far="$ATTEMPTS"

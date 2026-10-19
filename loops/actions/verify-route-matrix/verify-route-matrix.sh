@@ -2816,6 +2816,14 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: housekeeping does not announce a stack whose children all closed outside the router" >&2
 fi
+# A stack child runs the feature branch's copy of the workflows, so the router brings the default
+# branch in before it dispatches one.
+if grep -qF 'bring $DEFAULT_BRANCH into $STACK_BRANCH before a child runs' "${WORKFLOWS_DIR}/work-router.yml"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: stack children run the feature branch's stale workflows" >&2
+fi
 # A stack root merges itself once every child has landed, through the same gate as any pull request.
 # The people it still stops are the gate's own: a blast radius over the limit, a protected path, a
 # finding. The gate must read the router's completion announcement, and the train must give the root
