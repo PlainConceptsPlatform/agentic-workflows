@@ -6,9 +6,10 @@ env:
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
   AGENT_LEAD_MODEL: "forge/glm-5-3"
-  # Empty: every harness tier (plan, build, fast) runs on the model harness.json names, as on a
-  # developer's machine. Set it only to pin all tiers to one model, which the proxy must price.
-  AGENT_TIER_MODEL: ""
+  # Every harness tier (plan, build, fast) on one model the CI's Forge account is granted.
+  # harness.json names quasar-438b and carina-60b, which that account is not granted: Pliny-Bot
+  # #823's build tasks failed on quasar. Empty runs the tiers harness.json names.
+  AGENT_TIER_MODEL: "plainconcepts/glm-5-2"
   # The fast tier alone, while the CI's Forge account is not granted carina-60b.
   AGENT_FAST_MODEL: "plainconcepts/glm-5-2"
   REPO_RULES: "Refine only the selected issue into a grounded, implementation-ready user story. Read repository documentation for domain context. Write acceptance criteria that match existing patterns. Where a story or its open questions decide how business data (named people, roles, addresses) is stored, resolve it toward the repository's convention for that data -- a database entity or a settings entry -- and record that choice in the acceptance criteria; do not carry a person's name or email address into the story as something the code reads from a constant. Do not implement code. Do not use web search or web fetch tools. The issue body already contains the research that motivated it; derive your domain context from the repository's own code and documentation only."

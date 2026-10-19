@@ -2807,6 +2807,13 @@ if worker_installed implement; then
     echo "FAIL: implement does not rebase a patch its base moved under before parking it" >&2
   fi
 fi
+# The subagent monitor never sees a CI child finish and denies every spawn after the cap.
+if grep -qF 'for plugin in pc-system-reminders pc-subagent-monitor' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the CI setup must remove pc-subagent-monitor in CI" >&2
+fi
 # An empty AGENT_TIER_MODEL must remove an override a reused runner kept from an earlier job.
 if grep -qF 'rm -f .opencode/harness.user.json' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   PASS=$((PASS + 1))

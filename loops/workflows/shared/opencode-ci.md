@@ -221,11 +221,16 @@ pre-agent-steps:
       if [ ! -d .opencode/node_modules/@opencode/plugin ]; then
         (cd .opencode && npm install --no-audit --no-fund --no-package-lock --ignore-scripts --loglevel=error)
       fi
-      if [ -f .opencode/plugins/pc-system-reminders.js ]; then
-        rm .opencode/plugins/pc-system-reminders.js
-        # Tracked, so hide the deletion: an agent that sees it in `git status` restores it.
-        git update-index --skip-worktree .opencode/plugins/pc-system-reminders.js 2>/dev/null || true
-      fi
+      # pc-subagent-monitor frees a slot only on a child's idle or completed event, which a CI
+      # run never emits: after agents.maxConcurrent tasks it denied every spawn and Pliny-Bot
+      # #823 stopped half done. Off in CI until the plugin sees a child finish.
+      for plugin in pc-system-reminders pc-subagent-monitor; do
+        if [ -f ".opencode/plugins/${plugin}.js" ]; then
+          rm ".opencode/plugins/${plugin}.js"
+          # Tracked, so hide the deletion: an agent that sees it in `git status` restores it.
+          git update-index --skip-worktree ".opencode/plugins/${plugin}.js" 2>/dev/null || true
+        fi
+      done
       # The runners are reused VMs and keep the workspace's ignored files between jobs, so an
       # override an earlier run wrote is still there; an empty AGENT_TIER_MODEL has to remove it
       # or the tiers stay pinned (Pliny-Bot #774 ran on glm-5-2 after the pin was dropped).

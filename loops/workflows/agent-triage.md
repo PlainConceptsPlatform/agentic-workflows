@@ -5,10 +5,11 @@ env:
   # every agent without its own model falls back to; the lead is where a wrong call costs a run,
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
-  AGENT_LEAD_MODEL: "forge/quasar-438b"
-  # Empty: every harness tier (plan, build, fast) runs on the model harness.json names, as on a
-  # developer's machine. Set it only to pin all tiers to one model, which the proxy must price.
-  AGENT_TIER_MODEL: ""
+  AGENT_LEAD_MODEL: "forge/glm-5-2"
+  # Every harness tier (plan, build, fast) on one model the CI's Forge account is granted.
+  # harness.json names quasar-438b and carina-60b, which that account is not granted: Pliny-Bot
+  # #823's build tasks failed on quasar. Empty runs the tiers harness.json names.
+  AGENT_TIER_MODEL: "plainconcepts/glm-5-2"
   # The fast tier alone, while the CI's Forge account is not granted carina-60b.
   AGENT_FAST_MODEL: "plainconcepts/glm-5-2"
   REPO_RULES: "Triage issues opened by outside collaborators. Assess template completeness, security risk, change size, danger level, duplicates, clarity, reproducibility, acceptance criteria, and cross-cutting impact. When the request names specific people, email addresses, or business entities as the thing the code acts on, judge where that data is meant to live: business data that belongs in the database or a settings page is a design decision, not a wording detail, and it must not be left for the implementer to decide by hardcoding it. Do not implement code. Do not modify the issue body."
