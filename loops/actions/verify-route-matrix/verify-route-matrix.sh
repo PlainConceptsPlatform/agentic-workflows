@@ -2781,6 +2781,15 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: a cancelled agent run is retried or parked as stalled" >&2
 fi
+# No prompt rule stopped the model ending a turn in text; the compiled engine command continues the
+# session when no safe output exists. Pliny-Bot #771 passed verify and exited with nothing delivered.
+COMPILE_MJS="${HERE}/../../scripts/compile-agent-workflows.mjs"
+if [ -f "$COMPILE_MJS" ] && grep -qF 'opencode run --continue' "$COMPILE_MJS"   && grep -qF 'gh-aw/safeoutputs/outputs.jsonl' "$COMPILE_MJS"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the compiled engine command does not continue a session that delivered nothing" >&2
+fi
 # A stack root merges itself once every child has landed, through the same gate as any pull request.
 # The people it still stops are the gate's own: a blast radius over the limit, a protected path, a
 # finding. The gate must read the router's completion announcement, and the train must give the root

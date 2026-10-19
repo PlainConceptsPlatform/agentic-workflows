@@ -3,6 +3,14 @@
 const OPENCODE_VERSION = '2.0.22'
 const OPENCODE_PACKAGE = '@opencode/cli'
 
+const OPENCODE_NUDGE =
+  '; rc=$?; for nudge in 1 2; do [ -s "${RUNNER_TEMP}/gh-aw/safeoutputs/outputs.jsonl" ] && break; ' +
+  'echo "No safe output yet, continuing the session ($nudge of 2)"; ' +
+  'OPENCODE_DISABLE_MODELS_FETCH=1 opencode run --continue --print-logs --log-level info ' +
+  '"Your last message ended without a tool call, so nothing has been delivered and this run is about to end. ' +
+  'Do not explain or plan: continue the task now and finish with the safe-output call the task names."; ' +
+  'rc=$?; done; exit $rc'
+
 // The install the compiled locks carry, shared so both rewrite sites emit exactly
 // the same command.
 //
@@ -153,6 +161,11 @@ for (const file of readdirSync(workflowDirectory)) {
     //     "Invalid value for flag --log-level", aborting before the agent runs.
     //     The old upper-case spelling was valid in v1 and is not in v2.
     .replace(/opencode run(?: --print-logs)? --log-level (?:DEBUG|ERROR|INFO|debug|error|info)/g, "OPENCODE_DISABLE_MODELS_FETCH=1 opencode run --print-logs --log-level info")
+    // A turn that ends in text ends `opencode run`, whatever the text promised, and no prompt rule
+    // stopped glm-5-2 doing it: Pliny-Bot #771 passed verify, wrote "let me discover the exact
+    // safeoutputs command" and exited with nothing delivered. When no safe output exists yet, the
+    // same session is continued, twice at most, and told to finish.
+    .replace(/("\$\(cat \/tmp\/gh-aw\/aw-prompts\/prompt\.txt\)")'/g, (_, prompt) => prompt + OPENCODE_NUDGE + "'")
     .replace(/GH_AW_INFO_MODEL: "[^"]*"/g, 'GH_AW_INFO_MODEL: "per-agent"')
     .replace(/OPENCODE_MODEL: [^\n]+/g, "OPENCODE_MODEL: ''")
     .replace(/GH_AW_INFO_MODEL_COSTS: '[^']*'/g, 'GH_AW_INFO_MODEL_COSTS: \'{"providers":{}}\'')
