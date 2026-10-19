@@ -242,11 +242,24 @@ pre-agent-steps:
       echo "Tier models: $(jq -c '.models' .opencode/harness.user.json 2>/dev/null || jq -c '.models' .opencode/harness.json)"
 
   - name: Merge the CI-only OpenCode provider into opencode.jsonc
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
     run: |
       set -euo pipefail
 
       CONFIG=opencode.jsonc
       FRAGMENT=opencode.ci.json
+
+      # The default branch's copy wins over the checkout's. A pull request branch cut before a
+      # model change keeps the old default: Pliny-Bot's gate on #836 ran forge/carina-60b,
+      # which the CI account is not granted, hours after main had moved off it.
+      if curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw" \
+          "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/contents/${FRAGMENT}?ref=${DEFAULT_BRANCH}" \
+          -o "${RUNNER_TEMP}/opencode.ci.json" && jq -e . "${RUNNER_TEMP}/opencode.ci.json" > /dev/null; then
+        FRAGMENT="${RUNNER_TEMP}/opencode.ci.json"
+        echo "Using $DEFAULT_BRANCH's opencode.ci.json"
+      fi
 
       [ -f "$FRAGMENT" ] || { echo "::error::$FRAGMENT is missing from the checkout"; exit 1; }
 

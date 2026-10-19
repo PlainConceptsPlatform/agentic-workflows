@@ -1824,6 +1824,9 @@ fi
 if ! grep -qF 'jq --arg model "$AGENT_LEAD_MODEL"' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   LEAD_OK=0; echo "FAIL: the CI config merge must write AGENT_LEAD_MODEL onto ci-workflow-agent" >&2
 fi
+if ! grep -qF 'contents/${FRAGMENT}?ref=${DEFAULT_BRANCH}' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
+  LEAD_OK=0; echo "FAIL: the CI config merge must read opencode.ci.json from the default branch" >&2
+fi
 if worker_installed implement && ! grep -qF 'subagent_type: planner' "$IMPLEMENT_WORKER_MD"; then
   LEAD_OK=0; echo "FAIL: the implement prompt must run propose and archive in the planner agent" >&2
 fi
