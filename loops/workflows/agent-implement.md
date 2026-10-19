@@ -5,10 +5,10 @@ env:
   # every agent without its own model falls back to; the lead is where a wrong call costs a run,
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
-  AGENT_LEAD_MODEL: "forge/glm-5-2"
-  # The model every harness tier (plan, build, fast) runs on in CI, planner included. Unset,
-  # the tiers take harness.json, whose models the AWF proxy may not price.
-  AGENT_TIER_MODEL: "plainconcepts/glm-5-2"
+  AGENT_LEAD_MODEL: "forge/quasar-438b"
+  # Empty: every harness tier (plan, build, fast) runs on the model harness.json names, as on a
+  # developer's machine. Set it only to pin all tiers to one model, which the proxy must price.
+  AGENT_TIER_MODEL: ""
   VERIFY_COMMANDS: ""
   REPO_RULES: "Implement only the selected issue. Follow repository documentation and existing conventions. Do not weaken tests, lower coverage thresholds, or bypass checks."
   # Split out of REPO_RULES because one field asked to carry architecture, testing, coverage and
@@ -777,12 +777,12 @@ timeout-minutes: 180
       `proposal.md` or `tasks.md` yourself.** A hand-written `tasks.md` carries no annotations,
       and without them `pc-plan-apply` has no workers to spawn, so the whole change is done by
       you alone, in sequence, on one model. That is the failure this step exists to prevent.
-      Ask it for few, coarse tasks: one task per area of files, the tests for that code in the
-      same task, and no task whose only job is to repair what an earlier task broke. Five tasks
-      in three waves cover most issues. Every task is a fresh worker that rereads the code it
-      needs before it edits anything, one to three minutes each: Pliny-Bot #751 split a small
-      web feature into twelve tasks and spent fifteen of its twenty-two minutes in them, and
-      #696 ended with a twelve-minute task that fixed the test doubles the earlier tasks broke.
+      Let it plan the way it plans on a developer's machine: tasks that do not depend on each
+      other run in the same wave, in parallel, each on its tier's model. Keep the tests for code
+      in the same task as the code, and no task whose only job is to repair what an earlier task
+      broke (#696 ended with a twelve-minute task that fixed the test doubles the earlier ones
+      broke). A chain of tasks that each wait for the last is the slow shape: Pliny-Bot #794 ran
+      four workers in three waves, one at a time, for twenty-six of its fifty-nine minutes.
    3. `pc-plan-apply`. The tasks are implemented by the subagents it spawns, in waves, each on
       the model tier its annotation names. **In this phase you do not edit source files
       yourself.** If it stops because a worker cannot be resolved, report that with

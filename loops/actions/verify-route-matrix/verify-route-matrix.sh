@@ -1792,11 +1792,11 @@ fi
 # full verification at minute forty-one after six scoped runs, and #751 spent fifteen of twenty-two
 # minutes in twelve tiny worker tasks. These sentences are what keep a run near twenty minutes.
 if worker_installed implement; then
-  if grep -qF 'Run them once, on the final tree.' "$IMPLEMENT_WORKER_MD"     && grep -qF 'on both paths, before the commands above.' "$IMPLEMENT_WORKER_MD"     && grep -qF 'Ask it for few, coarse tasks' "$IMPLEMENT_WORKER_MD"     && grep -qF 'WORK IN FEW TURNS' "$IMPLEMENT_WORKER_MD"; then
+  if grep -qF 'Run them once, on the final tree.' "$IMPLEMENT_WORKER_MD"     && grep -qF 'on both paths, before the commands above.' "$IMPLEMENT_WORKER_MD"     && grep -qF 'tasks that do not depend on each' "$IMPLEMENT_WORKER_MD"     && grep -qF 'WORK IN FEW TURNS' "$IMPLEMENT_WORKER_MD"; then
     PASS=$((PASS + 1))
   else
     FAIL=$((FAIL + 1))
-    echo "FAIL: the implement prompt must verify once on the final tree, ask for coarse tasks and work in few turns" >&2
+    echo "FAIL: the implement prompt must verify once on the final tree, let independent tasks run in parallel and work in few turns" >&2
   fi
 fi
 # gh-aw leaves OPENCODE_MODEL empty, so every lead ran on opencode.ci.json's one model. Each worker

@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "forge/glm-5-2",
+  "model": "forge/carina-60b",
   "default_agent": "ci-workflow-agent",
   "agents": {
     "ci-workflow-agent": {

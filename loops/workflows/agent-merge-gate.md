@@ -5,10 +5,10 @@ env:
   # every agent without its own model falls back to; the lead is where a wrong call costs a run,
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
-  AGENT_LEAD_MODEL: "forge/glm-5-2"
-  # The model every harness tier (plan, build, fast) runs on in CI, planner included. Unset,
-  # the tiers take harness.json, whose models the AWF proxy may not price.
-  AGENT_TIER_MODEL: "plainconcepts/glm-5-2"
+  AGENT_LEAD_MODEL: "forge/quasar-438b"
+  # Empty: every harness tier (plan, build, fast) runs on the model harness.json names, as on a
+  # developer's machine. Set it only to pin all tiers to one model, which the proxy must price.
+  AGENT_TIER_MODEL: ""
   VERIFY_COMMANDS: ""
   REPO_RULES: "Review the selected pull request for defects and report what you verified. Do not decide the outcome: the workflow computes it from your report and from facts it measured before you ran."
   # Where to look first, not what to escalate on. This list used to be the check that decided
