@@ -773,7 +773,7 @@ jobs:
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
       - name: Flag for human review
-        if: steps.decide.outputs.retry != 'true'
+        if: steps.decide.outputs.retry != 'true' && steps.decide.outputs.cause != 'cancelled'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -782,7 +782,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
       - name: Report missing refinement outcome
-        if: steps.decide.outputs.retry != 'true'
+        if: steps.decide.outputs.retry != 'true' && steps.decide.outputs.cause != 'cancelled'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}

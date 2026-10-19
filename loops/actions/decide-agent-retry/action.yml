@@ -61,9 +61,9 @@ runs:
       run: |
         set -euo pipefail
         # The agent job belongs to this same run: a called workflow shares the caller's run id.
-        read -r job_id started finished <<<"$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+        read -r job_id started finished conclusion <<<"$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
           --jq '[.jobs[] | select(.name | endswith("agent"))] | last // empty
-                | "\(.id // "") \(.started_at // "") \(.completed_at // "")"')"
+                | "\(.id // "") \(.started_at // "") \(.completed_at // "") \(.conclusion // "")"')"
         minutes=-1
         if [ -n "${started:-}" ] && [ -n "${finished:-}" ]; then
           minutes=$(( ( $(date -u -d "$finished" +%s) - $(date -u -d "$started" +%s) ) / 60 ))
@@ -90,6 +90,14 @@ runs:
             cause="$kind"
           fi
           rm -rf "$work"
+        fi
+        # A cancelled agent job is a person or a newer run taking the work back, not an outage.
+        # Pliny-Bot #816: refine was cancelled by hand and its label removed, then this step read
+        # the eight-minute run as a provider failure, sent it back through the router and parked
+        # the issue as stalled.
+        if [ "${conclusion:-}" = cancelled ]; then
+          retry=false
+          cause=cancelled
         fi
         {
           echo "retry=$retry"

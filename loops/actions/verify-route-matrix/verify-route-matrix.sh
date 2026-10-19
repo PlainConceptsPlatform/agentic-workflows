@@ -2772,6 +2772,15 @@ if worker_installed merge-gate; then
     echo "FAIL: a gate agent that produced nothing is sent to a person instead of being retried" >&2
   fi
 fi
+# A cancelled agent job is work taken back, not an outage: no retry, no stalled flag. Pliny-Bot #816 was
+# cancelled by hand, re-dispatched as "a provider outage" and parked as stalled.
+DECIDE_YML="${HERE}/../decide-agent-retry/action.yml"
+if [ -f "$DECIDE_YML" ] && grep -qF 'cause=cancelled' "$DECIDE_YML"   && grep -qF "steps.decide.outputs.cause != 'cancelled'" "${WORKFLOWS_DIR}/agent-refine.md"   && grep -qF "steps.decide.outputs.cause != 'cancelled'" "${WORKFLOWS_DIR}/agent-implement.md"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: a cancelled agent run is retried or parked as stalled" >&2
+fi
 # A stack root merges itself once every child has landed, through the same gate as any pull request.
 # The people it still stops are the gate's own: a blast radius over the limit, a protected path, a
 # finding. The gate must read the router's completion announcement, and the train must give the root
