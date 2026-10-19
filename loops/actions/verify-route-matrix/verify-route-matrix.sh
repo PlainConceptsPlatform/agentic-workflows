@@ -2828,6 +2828,13 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: the merge train treats an unparsable red-since date as an endless red main" >&2
 fi
+# Every merge gate agent used to share one group, so a merging gate waited behind repairs.
+if grep -qF 'gh-aw-opencode-agent-merge-gate-${{ inputs.pr-number }}' "${WORKFLOWS_DIR}/agent-merge-gate.md"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: merge gate agents share one repository-wide concurrency group" >&2
+fi
 # An empty AGENT_TIER_MODEL must remove an override a reused runner kept from an earlier job.
 if grep -qF 'rm -f .opencode/harness.user.json' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   PASS=$((PASS + 1))

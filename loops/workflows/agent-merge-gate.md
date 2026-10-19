@@ -898,6 +898,13 @@ secrets:
 engine:
   id: opencode
   version: "1.2.14"
+  # One agent per pull request and kind, not one per repository. gh-aw's default group made every
+  # gate's agent job wait behind every other: Pliny-Bot's merging gate for #835 sat pending behind
+  # three repair agents for #846 to #848. The router already serialises what may merge (merge-belt)
+  # and keeps a pull request's repairs in a line of their own.
+  concurrency:
+    group: "gh-aw-opencode-agent-merge-gate-${{ inputs.pr-number }}-${{ inputs.ci-conclusion }}"
+    queue: max
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
