@@ -311,7 +311,17 @@ runs:
               });
               const told = comments.find((c) => (c.body ?? '').includes('<!-- stack-complete -->'));
               if (!told) {
-                needsHuman.push({ kind: 'stack-ready', issue, pull: root, waited: age(issue.updated_at) });
+                // The router announces a finished stack when a child's pull request merges into it.
+                // A child closed any other way (by hand, or by this sweep) never raised that event,
+                // and Pliny-Bot #781 sat finished with no announcement, which is what the merge train
+                // waits for before it lets the root merge. Announce it here; the root's own gate and
+                // CI still decide whether it merges.
+                await act(`#${rootPr}: announcing the finished stack of #${issue.number}`, async () => {
+                  await github.rest.issues.createComment({
+                    ...context.repo, issue_number: rootPr,
+                    body: `Stack complete: every child of #${issue.number} has landed on the feature branch. This root pull request is ready to merge into ${context.payload.repository?.default_branch ?? 'main'}: the merge gate decides it next, and a person is asked only when its blast radius or a finding says so. <!-- stack-complete -->`,
+                  });
+                });
               } else if (age(told.created_at) > stalePrMs) {
                 needsHuman.push({ kind: 'stack-held', issue, pull: root, waited: age(told.created_at) });
               }

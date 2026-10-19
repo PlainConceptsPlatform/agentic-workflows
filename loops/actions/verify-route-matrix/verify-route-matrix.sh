@@ -2809,6 +2809,13 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: a stale harness.user.json on a reused runner keeps every tier pinned" >&2
 fi
+# A stack whose last child closed outside the router is announced by housekeeping, or its root waits.
+if grep -qF "announcing the finished stack" "${HERE}/../housekeeping/action.yml"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: housekeeping does not announce a stack whose children all closed outside the router" >&2
+fi
 # A stack root merges itself once every child has landed, through the same gate as any pull request.
 # The people it still stops are the gate's own: a blast radius over the limit, a protected path, a
 # finding. The gate must read the router's completion announcement, and the train must give the root
