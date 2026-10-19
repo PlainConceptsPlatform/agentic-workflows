@@ -851,8 +851,8 @@ timeout-minutes: 180
      command's output file, again and again, until the output shows its exit status, and only then
      go on. Each of those calls is a tool call, so the turn never ends. To avoid it from the start,
      run a command that may pass two minutes as
-     `(<command>) > /tmp/step.log 2>&1; echo "exit status $?" >> /tmp/step.log` with the bash tool's
-     `timeout` at 600000, and read `/tmp/step.log` afterwards.
+     `(<command>) > /tmp/gh-aw/agent/step.log 2>&1; echo "exit status $?" >> /tmp/gh-aw/agent/step.log` with the bash tool's
+     `timeout` at 600000, and read `/tmp/gh-aw/agent/step.log` afterwards.
 
      **Two things the unit tests do not catch, and CI will.** When you add a dependency, take the
      latest released version and run the repository's audit for it (`pnpm audit --audit-level high`

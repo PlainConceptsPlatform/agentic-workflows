@@ -493,6 +493,7 @@ jobs:
       valid: ${{ steps.validate.outputs.valid }}
       outcome: ${{ steps.validate.outputs.outcome }}
       pushed: ${{ steps.validate.outputs.pushed }}
+      empty: ${{ steps.validate.outputs.empty }}
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -769,6 +770,7 @@ jobs:
           AGENT_RESULT: ${{ needs.agent.result }}
           SAFE_RESULT: ${{ needs.safe_outputs.result }}
           OUTPUT_VALID: ${{ needs.validate_output.outputs.valid }}
+          OUTPUT_EMPTY: ${{ needs.validate_output.outputs.empty }}
           PARK_AT_ATTEMPT: ${{ env.PARK_AT_ATTEMPT }}
           PARK_AT_UNUSABLE_OUTPUT: ${{ env.PARK_AT_UNUSABLE_OUTPUT }}
         run: |
@@ -776,8 +778,12 @@ jobs:
           attempts=${ATTEMPTS:-0}
           # The agent ran, published, and produced something the validator refused. Repeating
           # that reproduces it; a person reading the comment costs less than three more runs
-          # holding the merge belt.
-          if [ "$AGENT_RESULT" = success ] && [ "$SAFE_RESULT" = success ] && [ "$OUTPUT_VALID" != true ]; then
+          # holding the merge belt. An agent that produced nothing at all is not that: it quit,
+          # as the Pliny-Bot gate did on #801 after one line of text and twenty-three seconds,
+          # twice, and went to a person with no finding. That is a machine failure and gets the
+          # machine budget.
+          if [ "$AGENT_RESULT" = success ] && [ "$SAFE_RESULT" = success ] && [ "$OUTPUT_VALID" != true ] \
+            && [ "${OUTPUT_EMPTY:-false}" != true ]; then
             threshold="$PARK_AT_UNUSABLE_OUTPUT"
             kind=unusable
           else

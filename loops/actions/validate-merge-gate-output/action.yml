@@ -41,6 +41,9 @@ outputs:
   pushed:
     description: Whether the agent proposed a push to the pull request branch, applied or not.
     value: ${{ steps.validate.outputs.pushed }}
+  empty:
+    description: Whether the agent produced no safe output at all, which is a run that quit, not a report that was refused.
+    value: ${{ steps.validate.outputs.empty }}
 runs:
   using: composite
   steps:
@@ -66,6 +69,8 @@ runs:
         echo "valid=$([ "$outcome" != 'invalid' ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
         pushed=$(jq -r '[.items[]? | select(.type == "push_to_pull_request_branch")] | length > 0' "$OUTPUT_FILE" 2>/dev/null || echo false)
         echo "pushed=$pushed" >> "$GITHUB_OUTPUT"
+        items=$(jq -r '[.items[]?] | length' "$OUTPUT_FILE" 2>/dev/null || echo 0)
+        echo "empty=$([ "${items:-0}" = 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
         if [ "$outcome" = 'invalid' ]; then
           echo "::warning::Agent output has no usable merge-gate report. It will not be applied."

@@ -2762,6 +2762,16 @@ if [ -f "$PLATFORM_DEFAULTS_MD" ]; then
     echo "FAIL: the shared worker defaults do not say that a text-only turn ends the run" >&2
   fi
 fi
+# A gate agent that produced no output at all quit; it did not write a report the validator refused.
+# It gets the machine budget, not the two-strike human-review of an unusable report.
+if worker_installed merge-gate; then
+  if grep -qF 'OUTPUT_EMPTY: ${{ needs.validate_output.outputs.empty }}' "${WORKFLOWS_DIR}/agent-merge-gate.md"     && grep -qF '[ "${OUTPUT_EMPTY:-false}" != true ]' "${WORKFLOWS_DIR}/agent-merge-gate.md"     && grep -qF 'echo "empty=' "${HERE}/../validate-merge-gate-output/action.yml"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: a gate agent that produced nothing is sent to a person instead of being retried" >&2
+  fi
+fi
 # A stack root merges itself once every child has landed, through the same gate as any pull request.
 # The people it still stops are the gate's own: a blast radius over the limit, a protected path, a
 # finding. The gate must read the router's completion announcement, and the train must give the root
