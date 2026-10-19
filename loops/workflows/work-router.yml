@@ -134,7 +134,7 @@ env:
   # times it tries before leaving the issue to a person. Only machine failures are retried; a
   # verdict the agent reached on purpose is reported and never re-run, because re-running a
   # decision reproduces it.
-  HOUSEKEEPING_RETRY_AFTER_HOURS: "6"
+  HOUSEKEEPING_RETRY_AFTER_HOURS: "1"
   HOUSEKEEPING_MAX_RETRIES: "3"
   # A bot pull request older than this with no merge-gate verdict at all is reported, never
   # closed: the janitor deletes branches and labels, never someone's work.
