@@ -2802,6 +2802,13 @@ if worker_installed implement; then
     echo "FAIL: implement does not rebase a patch its base moved under before parking it" >&2
   fi
 fi
+# An empty AGENT_TIER_MODEL must remove an override a reused runner kept from an earlier job.
+if grep -qF 'rm -f .opencode/harness.user.json' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: a stale harness.user.json on a reused runner keeps every tier pinned" >&2
+fi
 # A stack root merges itself once every child has landed, through the same gate as any pull request.
 # The people it still stops are the gate's own: a blast radius over the limit, a protected path, a
 # finding. The gate must read the router's completion announcement, and the train must give the root

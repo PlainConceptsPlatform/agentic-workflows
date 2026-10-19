@@ -226,8 +226,13 @@ pre-agent-steps:
         # Tracked, so hide the deletion: an agent that sees it in `git status` restores it.
         git update-index --skip-worktree .opencode/plugins/pc-system-reminders.js 2>/dev/null || true
       fi
+      # The runners are reused VMs and keep the workspace's ignored files between jobs, so an
+      # override an earlier run wrote is still there; an empty AGENT_TIER_MODEL has to remove it
+      # or the tiers stay pinned (Pliny-Bot #774 ran on glm-5-2 after the pin was dropped).
       if [ -n "${AGENT_TIER_MODEL:-}" ]; then
         jq -n --arg m "$AGENT_TIER_MODEL" '{models: {plan: $m, build: $m, fast: $m}}' > .opencode/harness.user.json
+      else
+        rm -f .opencode/harness.user.json
       fi
       echo "Harness plugins: $(ls .opencode/plugins | tr '\n' ' ')"
       echo "Tier models: $(jq -c '.models' .opencode/harness.user.json 2>/dev/null || jq -c '.models' .opencode/harness.json)"
