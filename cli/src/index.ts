@@ -6,6 +6,7 @@ import { formatCatalog, listCatalog, searchCatalog } from "./catalog-listing.js"
 import { packageVersion } from "./package-baseline.js";
 import { routeNames, templateNames, type RouteName, type TemplateName } from "./workflow-catalog.js";
 import { runInteractive } from "./tui.js";
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -293,7 +294,17 @@ function fail(message: string): number {
   return 1;
 }
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// pnpm installs the package behind a symlink: argv[1] is the link and import.meta.url the real file,
+// so a plain comparison never matched and the installed CLI exited silently, --version included.
+function realPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+if (process.argv[1] !== undefined && realPath(process.argv[1]) === realPath(fileURLToPath(import.meta.url))) {
   void run(process.argv.slice(2)).then((exitCode) => {
     process.exitCode = exitCode;
   });
