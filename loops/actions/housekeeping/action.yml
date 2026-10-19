@@ -214,6 +214,47 @@ runs:
             retried += 1;
           }
 
+          // 1b. Release held children. The router holds a stack child while a `Blocked by #N` sibling is
+          // open and the landing of that sibling releases it. When the stack's root merged first, or the
+          // sibling landed on the default branch, no landing event ever comes: Pliny-Bot kept eight
+          // children held for a day behind issues that had been closed for hours. A sweep that finds
+          // every blocker closed sends the child back through the router, which no longer holds it.
+          // Once per issue: the router decides, and a child it holds again must not be dispatched on
+          // every sweep.
+          const RELEASE_MARKER = '<!-- housekeeping-release -->';
+          let released = 0;
+          for (const issue of issues) {
+            if (issue.pull_request) continue;
+            const labels = names(issue);
+            if (!labels.includes('implement')) continue;
+            if (['bot-working', 'stalled', 'review', 'pr-pending'].some((l) => labels.includes(l))) continue;
+            const thread = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo, issue_number: issue.number, per_page: 100,
+            });
+            if (!thread.some((c) => (c.body ?? '').includes('<!-- stack-held -->'))) continue;
+            if (thread.some((c) => (c.body ?? '').includes(RELEASE_MARKER))) continue;
+            const blockers = [...new Set([...(issue.body ?? '').matchAll(/blocked by #(\d+)/gi)].map((m) => Number(m[1])))];
+            let stillOpen = 0;
+            for (const number of blockers) {
+              const blocker = await github.rest.issues.get({ ...context.repo, issue_number: number })
+                .then((r) => r.data).catch(() => null);
+              if (blocker && blocker.state === 'open') stillOpen += 1;
+            }
+            if (stillOpen > 0) continue;
+            await act(`#${issue.number}: releasing a held child, every blocker is closed`, async () => {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: issue.number,
+                body: `${RELEASE_MARKER}\nEvery issue this one was blocked by is closed, so it is going back through the router.`,
+              });
+              await github.rest.actions.createWorkflowDispatch({
+                ...context.repo, workflow_id: 'work-router.yml',
+                ref: context.payload.repository.default_branch,
+                inputs: { operation: 'implement', 'issue-number': String(issue.number) },
+              });
+            });
+            released += 1;
+          }
+
           // 2. Strands. pr-pending says a pull request is open and waiting; when that pull request
           // closed without merging, nothing ever took the label off.
           for (const issue of issues) {

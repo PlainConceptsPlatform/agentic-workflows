@@ -2842,6 +2842,13 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: the merge gate prompt must say a conflict is not always two additions" >&2
 fi
+# a held stack child whose blockers all closed is sent back through the router by the janitor.
+if grep -qF 'releasing a held child, every blocker is closed' "${HERE}/../housekeeping/action.yml"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the janitor does not release a held child whose blockers all closed" >&2
+fi
 # An empty AGENT_TIER_MODEL must remove an override a reused runner kept from an earlier job.
 if grep -qF 'rm -f .opencode/harness.user.json' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   PASS=$((PASS + 1))
