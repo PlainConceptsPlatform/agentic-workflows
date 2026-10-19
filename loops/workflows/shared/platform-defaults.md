@@ -22,6 +22,19 @@ safe-outputs:
   threat-detection: false
 ---
 
+## These runs are not interactive
+
+- Nothing resumes you. A turn that ends with text and no tool call ends the whole run, and the work
+  is discarded, whatever the text promised. "I'll read the context files first." as a last message
+  is a finished run: the Pliny-Bot merge gate did exactly that on #801, ended in twenty-three
+  seconds with exit code 0 and no outcome, and was retried twice before the pull request was handed
+  to a person for nothing.
+- So every message you write carries a tool call until the last one, which is the safe-output call
+  the task names. Say what you are about to do and do it in the same message. Never announce a step
+  and stop, never wait for a command, a reviewer or a "next turn".
+- A command the bash tool reports as moved to the background is still running: poll its output file
+  with tool calls (`sleep 40; tail -n 15 <file>`) until it shows an exit status, then go on.
+
 ## Verification, for every worker that builds or pushes
 
 - Scope every check to the files you changed. This is the runner, not a preference: a

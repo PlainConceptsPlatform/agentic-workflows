@@ -2751,6 +2751,17 @@ if worker_installed implement; then
     echo "FAIL: the implement prompt does not tell the agent to keep polling when bash moves a command to the background" >&2
   fi
 fi
+# Every worker is told that a turn ending in text ends the run. The Pliny-Bot merge gate said "I'll read
+# the required context files first." and exited cleanly after twenty-three seconds, twice on one head.
+PLATFORM_DEFAULTS_MD="${WORKFLOWS_DIR}/shared/platform-defaults.md"
+if [ -f "$PLATFORM_DEFAULTS_MD" ]; then
+  if grep -qF "A turn that ends with text and no tool call ends the whole run" "$PLATFORM_DEFAULTS_MD"     && grep -qF "every message you write carries a tool call" "$PLATFORM_DEFAULTS_MD"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the shared worker defaults do not say that a text-only turn ends the run" >&2
+  fi
+fi
 # A stack root merges itself once every child has landed, through the same gate as any pull request.
 # The people it still stops are the gate's own: a blast radius over the limit, a protected path, a
 # finding. The gate must read the router's completion announcement, and the train must give the root
