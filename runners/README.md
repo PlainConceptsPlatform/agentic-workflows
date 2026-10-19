@@ -9,7 +9,7 @@ scaled by a small .NET app instead of workflows. Cost beats latency by design.
 GitHub org webhook (workflow_job) ──► agentrunner-scaler-01 (App Service, .NET)
                                             │  policy + ledger
                                             ▼
-                              agentrunner-vmss-01 (VMSS, Uniform, D2ads_v5,
+                              agentrunner-vmss-01 (VMSS, Uniform, D4ads_v5,
                               ephemeral OS disk, public IP per VM, capacity 0 at rest)
                                             │  cloud-init: one job at a time, reused
                                             ▼
@@ -53,8 +53,9 @@ app rides on for free.
 
 ## Cost
 
-- VM compute: $0 at rest; ~$0.115/h per running VM (D2ads_v5, ephemeral OS disk =
-  no disk cost). Worst case 2 VMs 24/7 ≈ **$168/mo**.
+- VM compute: $0 at rest; ~$0.23/h per running VM (D4ads_v5, ephemeral OS disk =
+  no disk cost). On D2ads_v5 the fleet cost about $300/mo; 4 vCPU and 16 GiB roughly double
+  that, for builds and tests that no longer saturate two cores.
 - Scaler app: $0 extra (shares the existing AgentMemory B1 plan, ~$13/mo total).
 - Public IPs: billed only while a VM exists, ≈ $6/mo worst case.
 - **Worst case ≈ $187/mo, under the $200 target. Normal expected: $10–25/mo.**
