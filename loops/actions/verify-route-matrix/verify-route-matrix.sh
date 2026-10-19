@@ -2814,6 +2814,13 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: the CI setup must remove pc-subagent-monitor in CI" >&2
 fi
+# a published pull request is never flagged stalled, whatever the agent job's own result.
+if grep -A8 '^  incomplete:' "$IMPLEMENT_WORKER_MD" | grep -qF "needs.safe_outputs.outputs.created_pr_number == ''"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: implement flags an issue stalled next to the pull request it just opened" >&2
+fi
 # An empty AGENT_TIER_MODEL must remove an override a reused runner kept from an earlier job.
 if grep -qF 'rm -f .opencode/harness.user.json' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   PASS=$((PASS + 1))

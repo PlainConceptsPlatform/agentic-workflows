@@ -525,9 +525,13 @@ jobs:
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
   incomplete:
     needs: [agent, safe_outputs, eligibility]
+    # A published pull request is an outcome whatever the agent job's own result: Pliny-Bot #765
+    # opened #844 after 64 minutes, the agent job read as failed, and this job released the issue
+    # and flagged it stalled next to its open pull request.
     if: >
       always() &&
       needs.eligibility.outputs.eligible == 'true' &&
+      needs.safe_outputs.outputs.created_pr_number == '' &&
       (
         needs.agent.result != 'success' ||
         needs.safe_outputs.result != 'success'
