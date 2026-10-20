@@ -2879,6 +2879,13 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: implement tests only what it changed is missing from the prompt" >&2
 fi
+# A conflicting pull request is gated on its carried verdict: CI cannot run on a head with no merge ref.
+if grep -qF '[ "$conflicting" != CONFLICTING ]' "${HERE}/../identify-gate-subject/action.yml"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the gate waits for CI on a conflicting pull request, which never gets a run" >&2
+fi
 # An empty AGENT_TIER_MODEL must remove an override a reused runner kept from an earlier job.
 if grep -qF 'rm -f .opencode/harness.user.json' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   PASS=$((PASS + 1))

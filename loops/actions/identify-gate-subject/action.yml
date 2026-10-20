@@ -144,7 +144,11 @@ runs:
         if [ -n "$ci_run_id" ]; then
           run_sha="$(gh api "repos/$REPO/actions/runs/$ci_run_id" --jq '.head_sha' 2>/dev/null || true)"
           current_sha="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')"
-          if [ -n "$run_sha" ] && [ "$run_sha" != "$current_sha" ]; then
+          # A conflicting pull request has no merge ref, so CI never runs on its head: the gate keeps
+          # the carried verdict and resolves the conflict. Pliny-Bot #862 was handed to the gate and
+          # declined every five minutes for an hour waiting for a run that could not start.
+          conflicting="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || true)"
+          if [ -n "$run_sha" ] && [ "$run_sha" != "$current_sha" ] && [ "$conflicting" != CONFLICTING ]; then
             echo "::notice::CI run $ci_run_id judged ${run_sha:0:7}, but the head is ${current_sha:0:7}; reading the verdict again from the head."
             ci_conclusion=""
             ci_run_id=""
@@ -154,6 +158,8 @@ runs:
             fi
             ci_conclusion="$(jq -r '.conclusion // "pending"' <<<"$fresh")"
             ci_run_id="$(jq -r '.id' <<<"$fresh")"
+          elif [ "$conflicting" = CONFLICTING ]; then
+            echo "::notice::PR #$PR_NUMBER conflicts with its base, so CI cannot run on its head; the gate resolves the conflict."
           fi
         fi
 
