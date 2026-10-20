@@ -181,6 +181,33 @@ update runs in full straight away, and labels and re-runs a light green run that
 date. Turn it on with the repository variable `CI_DEPTH_TIERED=true`; the router passes the same
 variable to the train, so one switch covers both sides. Leave it unset and nothing changes.
 
+### Merge queue
+
+With GitHub's merge queue on the default branch, GitHub orders, builds and merges, and the loops stop
+doing it by hand. It replaces tiered CI's `ci-full` label and re-run, and the train's updates.
+
+- The merge gate approves the pull request with a review (so a ruleset's required approval is the
+  gate's) and enqueues it through GraphQL `enqueuePullRequest` (`land-pull-request`). A person's
+  approval of a pull request the gate handed over is enqueued the same way. A base branch without a
+  queue is merged directly, as before.
+- The train no longer waits for the pull request ahead, updates branches or asks for a deeper CI. It
+  skips pull requests in the queue, and treats one the queue ejected after its head was pushed as
+  red, handing the gate the failed `merge_group` run to repair from.
+- Stacked pull requests enter the queue only through `PUT /pulls/{n}/merge-async`, which refuses a
+  GitHub App today ("Enqueuer is not authorized to merge"): a person adds a stack to the queue.
+
+To turn it on in a repository:
+
+1. The CI workflow runs on `merge_group` as well as `pull_request`, and its heavy jobs add
+   `(github.event_name != 'pull_request' || vars.MERGE_QUEUE != 'true')` to their `if:`, so a pull
+   request runs the light checks and the merge group runs everything. A job named `Full CI` needs the
+   heavy jobs and fails when any failed; the queue requires it. The CI templates carry all of this.
+2. A ruleset on the default branch with `merge_queue` (squash, build concurrency 1 to 2 to keep CI
+   low), `required_status_checks` with `Full CI`, and `pull_request` with one required approval.
+3. The bot's GitHub App has the repository permission `Merge queues: write`.
+4. The repository variable `MERGE_QUEUE=true`: the router passes it to the train, and gates run one
+   per pull request instead of on the single merge belt.
+
 ## Compile and verify
 
 Compile in the consumer repository:

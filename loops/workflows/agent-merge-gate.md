@@ -610,16 +610,24 @@ jobs:
 
             ${{ needs.subject.outputs.issue != '' && format('Findings and verification on the linked issue: #{0}.', needs.subject.outputs.issue) || 'Findings and verification are in the review comment above.' }} [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
             ${{ env.EVIDENCE_BEFORE_REVIEW == 'true' && contains(fromJson('["human-review","owner-review"]'), needs.validate_output.outputs.outcome) && 'Screenshots of this head follow in their own comment if it carries a verification plan. Approving the pull request merges it.' || '' }}
-      - name: Merge approved pull request
+      - name: Read the head to land
+        id: landing_head
         if: needs.validate_output.outputs.outcome == 'auto-merge' && (needs.subject.outputs.stack_root != 'true' || needs.subject.outputs.root_complete == 'true')
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR: ${{ needs.subject.outputs.pr }}
-        run: |
-          set -euo pipefail
-          head_sha=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq '.headRefOid')
-          gh pr merge "$PR" --repo "$REPO" --squash --match-head-commit "$head_sha"
+        run: echo "sha=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq '.headRefOid')" >> "$GITHUB_OUTPUT"
+      # Into the base branch's merge queue when it has one (approved first, so a ruleset's required
+      # approval is the gate's), otherwise merged as before.
+      - name: Merge approved pull request
+        if: needs.validate_output.outputs.outcome == 'auto-merge' && (needs.subject.outputs.stack_root != 'true' || needs.subject.outputs.root_complete == 'true')
+        uses: ./.github/actions/land-pull-request
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          pr: ${{ needs.subject.outputs.pr }}
+          head-sha: ${{ steps.landing_head.outputs.sha }}
+          approve: 'true'
       # The root's own gate run stops here: children may still be landing on the feature
       # branch, and the merge decision for main belongs to a person. The comment says only
       # what a reader needs: the gate held the root, children merge into the feature branch,

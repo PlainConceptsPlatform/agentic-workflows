@@ -2886,6 +2886,17 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: the gate waits for CI on a conflicting pull request, which never gets a run" >&2
 fi
+# Merge queue: the train hands the queue what it can, repairs what the queue ejects, and the gate lands
+# through the queue when the base branch has one.
+if grep -qF 'queue_ejection_run' "${HERE}/../merge-train/merge-train.sh" &&
+  grep -qF "merge-queue: \${{ vars.MERGE_QUEUE || 'false' }}" "${WORKFLOWS_DIR}/work-router.yml" &&
+  grep -qF 'enqueuePullRequest' "${HERE}/../land-pull-request/land-pull-request.sh" &&
+  grep -qF 'uses: ./.github/actions/land-pull-request' "${WORKFLOWS_DIR}/agent-merge-gate.md"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the merge queue path is incomplete" >&2
+fi
 # An empty AGENT_TIER_MODEL must remove an override a reused runner kept from an earlier job.
 if grep -qF 'rm -f .opencode/harness.user.json' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   PASS=$((PASS + 1))

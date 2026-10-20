@@ -862,7 +862,7 @@ jobs:
     # gate. Those run in a group of their own per pull request, in parallel, while everything that
     # may merge still waits its turn on the one belt.
     concurrency:
-      group: ${{ needs.classify.outputs.ci-conclusion == 'failure' && format('merge-repair-{0}', needs.classify.outputs.pr-number) || 'merge-belt' }}
+      group: ${{ needs.classify.outputs.ci-conclusion == 'failure' && format('merge-repair-{0}', needs.classify.outputs.pr-number) || (vars.MERGE_QUEUE == 'true' && format('merge-gate-{0}', needs.classify.outputs.pr-number) || 'merge-belt') }}
       cancel-in-progress: false
       queue: max
     permissions: write-all
@@ -940,6 +940,7 @@ jobs:
           ci-conclusion: ${{ needs.classify.outputs.ci-conclusion }}
           # Repository variable, read by the repository's CI as well: one switch for both sides.
           ci-depth-tiered: ${{ vars.CI_DEPTH_TIERED || 'false' }}
+          merge-queue: ${{ vars.MERGE_QUEUE || 'false' }}
 
   # The decision the gate parked for: a person with write access approves a pull request the
   # gate handed to them (human-review or owner-review), and the bot merges the commit they
@@ -1014,8 +1015,9 @@ jobs:
             --jq '[.workflow_runs[] | select(.name == env.CI_WORKFLOW_NAME)] | sort_by(.created_at) | last | .conclusion // ""')
           [ "$ci" = success ] || skip "$CI_WORKFLOW_NAME on ${head_sha:0:7} is '${ci:-not run}'"
 
-          gh pr merge "$PR" --repo "$REPO" --squash --match-head-commit "$head_sha"
-          echo "merged=true" >> "$GITHUB_OUTPUT"
+          # Into the merge queue where the base branch has one, merged otherwise.
+          landed=$(HEAD_SHA="$head_sha" GITHUB_OUTPUT=/dev/stdout bash ./.github/actions/land-pull-request/land-pull-request.sh | sed -n 's/^landed=//p' | tail -1)
+          if [ -n "$landed" ]; then echo "merged=true" >> "$GITHUB_OUTPUT"; fi
       - name: Clear the issue's labels
         if: steps.merge.outputs.merged == 'true' && needs.classify.outputs.linked-issue != ''
         env:

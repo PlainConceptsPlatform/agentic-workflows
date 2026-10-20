@@ -227,6 +227,28 @@ deepen_ci() {
   gh run rerun "$run" --repo "$REPO" >/dev/null 2>&1
 }
 
+# Where a pull request stands in its base branch's merge queue: QUEUED, AWAITING_CHECKS, LOCKED,
+# UNMERGEABLE or MERGEABLE, or empty when it is not in one.
+queue_state() {
+  local pr="$1"
+  gh api graphql -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){mergeQueueEntry{state}}}}' \
+    -f o="${REPO%%/*}" -f n="${REPO#*/}" -F p="$pr" \
+    --jq '.data.repository.pullRequest.mergeQueueEntry.state // ""' 2>/dev/null || true
+}
+
+# The failed merge-group CI run behind the queue's last ejection of a pull request since its head
+# was pushed, or nothing. The queue names its branches gh-readonly-queue/<base>/pr-<number>-<sha>.
+queue_ejection_run() {
+  local pr="$1" since="$2" removed
+  removed=$(gh api --paginate "repos/$REPO/issues/$pr/timeline?per_page=100" \
+    --jq '.[] | select(.event == "removed_from_merge_queue") | .created_at' 2>/dev/null | sort | tail -1)
+  [ -n "$removed" ] || return 0
+  [ -z "$since" ] || [ "$removed" \> "$since" ] || return 0
+  gh api "repos/$REPO/actions/runs?event=merge_group&per_page=100" \
+    --jq "[.workflow_runs[] | select(.name == env.CI_WORKFLOW_NAME and .conclusion == \"failure\"
+            and (.head_branch | test(\"/pr-$pr-\")))] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || true
+}
+
 is_trusted_bot() {
   case " $TRUSTED_BOTS " in *" $1 "*) return 0 ;; esac
   return 1
@@ -379,6 +401,9 @@ fi
 
 for line in "${candidates[@]}"; do
   IFS=$'\t' read -r pr author head_sha head_ref base_ref hold <<<"$line"
+  # With GitHub's merge queue (MERGE_QUEUE) the queue orders, builds and merges: nothing here waits
+  # for the pull request ahead, brings a branch up to date or asks for a deeper CI.
+  [ "${MERGE_QUEUE:-false}" = true ] && merge_blocked=false
 
   if ! can_ride "$author"; then
     echo "#$pr: opened by $author, who has no write access; not on the train."
@@ -473,6 +498,23 @@ for line in "${candidates[@]}"; do
       --jq '[.jobs[] | select((.name | test("(^|/ )Full CI$")) and .conclusion == "success")] | length' 2>/dev/null || echo "")
     [ "$full_jobs" = 0 ] && ci_shallow=true
   fi
+  if [ "${MERGE_QUEUE:-false}" = true ]; then
+    # The pull request's own CI is the light one; the full CI runs on the queue's merge group.
+    ci_shallow=false
+    if [ "$(queue_state "$pr")" != "" ]; then
+      echo "#$pr ($author): skip, it is in the merge queue."
+      summary "| #$pr | $author | skip | in the merge queue |"
+      continue
+    fi
+    # The queue ejected it after this head was pushed: the merge group's CI failed on it, or it
+    # conflicted with what was ahead. That run is the verdict the gate repairs from; the pull
+    # request's own green light CI says nothing about it.
+    if ejected_run=$(queue_ejection_run "$pr" "${head_committed:-}"); [ -n "$ejected_run" ]; then
+      ci_run_id="$ejected_run"
+      ci_status=completed
+      ci_conclusion=failure
+    fi
+  fi
   ci_stuck=false
   if [ "$ci_status" != none ] && [ "$ci_status" != completed ] && [ -n "${ci_created:-}" ]; then
     [ $((now_epoch - $(iso_epoch "$ci_created"))) -lt $((STUCK_HOURS * 3600)) ] || ci_stuck=true
@@ -482,7 +524,7 @@ for line in "${candidates[@]}"; do
   behind_by=0
   if [ "$park" = none ] && [ "$hold" != true ] && [ "$review_decision" != CHANGES_REQUESTED ]; then
     mergeable=$(mergeable_state "$pr")
-    if [ "$ci_status" = completed ] && [ "$ci_conclusion" = success ]; then
+    if [ "$ci_status" = completed ] && [ "$ci_conclusion" = success ] && [ "${MERGE_QUEUE:-false}" != true ]; then
       behind_by=$(gh api "repos/$REPO/compare/$base_ref...$head_sha" --jq '.behind_by' 2>/dev/null || echo 0)
     fi
   fi

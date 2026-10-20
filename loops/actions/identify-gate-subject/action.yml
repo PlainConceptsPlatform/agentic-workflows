@@ -148,6 +148,10 @@ runs:
           # the carried verdict and resolves the conflict. Pliny-Bot #862 was handed to the gate and
           # declined every five minutes for an hour waiting for a run that could not start.
           conflicting="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || true)"
+          # A merge-queue run is built on the queue's own branch, so its commit is never the head;
+          # it is the verdict when the train hands over a pull request the queue ejected.
+          run_event="$(gh api "repos/$REPO/actions/runs/$ci_run_id" --jq '.event' 2>/dev/null || true)"
+          [ "$run_event" != merge_group ] || run_sha="$current_sha"
           if [ -n "$run_sha" ] && [ "$run_sha" != "$current_sha" ] && [ "$conflicting" != CONFLICTING ]; then
             echo "::notice::CI run $ci_run_id judged ${run_sha:0:7}, but the head is ${current_sha:0:7}; reading the verdict again from the head."
             ci_conclusion=""

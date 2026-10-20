@@ -1,0 +1,43 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/land-pull-request/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Land pull request
+description: >-
+  Land one pull request the gate or a person approved: into the base branch's merge queue when it
+  has one, otherwise by merging it. The head must still be the commit that was judged.
+
+inputs:
+  token:
+    description: App token with pull-requests and contents write, plus merge queues write where a queue is on.
+    required: true
+  pr:
+    description: The pull request number.
+    required: true
+  head-sha:
+    description: The head commit that was judged. Landing is refused once the branch has moved.
+    required: true
+  approve:
+    description: "'true' to approve the pull request first, so a ruleset's required approval is met by the gate."
+    required: false
+    default: 'false'
+  approval-body:
+    description: The review body that goes with the approval.
+    required: false
+    default: Approved by the merge gate.
+
+outputs:
+  landed:
+    description: "'merged', 'enqueued', or empty when nothing happened."
+    value: ${{ steps.land.outputs.landed }}
+
+runs:
+  using: composite
+  steps:
+    - id: land
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ inputs.pr }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        APPROVE: ${{ inputs.approve }}
+        APPROVAL_BODY: ${{ inputs.approval-body }}
+      run: bash "${GITHUB_ACTION_PATH}/land-pull-request.sh"

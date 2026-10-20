@@ -3,6 +3,8 @@ name: "App: CI"
 
 on:
   pull_request:
+  # GitHub's merge queue builds the base plus the pull requests ahead; the full CI runs there.
+  merge_group:
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
@@ -61,7 +63,7 @@ concurrency:
 jobs:
   api:
     name: API (.NET)
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || vars.MERGE_QUEUE != 'true')
     runs-on: agents-arc
     timeout-minutes: 30
     services:
@@ -168,7 +170,7 @@ jobs:
 
   web:
     name: Web (Next.js)
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || vars.MERGE_QUEUE != 'true')
     runs-on: agents-arc
     timeout-minutes: 15
     steps:
@@ -279,6 +281,23 @@ jobs:
           # On a tag that already has a GitHub Release the action attaches the SBOM to it, which
           # needs contents: write this workflow does not have, and fails the run that gates deploy.
           upload-release-assets: false
+
+  # The merge queue requires this check. On a pull request with MERGE_QUEUE on, the heavy jobs are
+  # skipped and the full CI runs on the merge group instead; skipped counts as passed.
+  full-ci:
+    name: Full CI
+    needs: [api, web]
+    if: always()
+    runs-on: agents-arc
+    timeout-minutes: 5
+    steps:
+      - name: Every heavy job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            case "$result" in failure | cancelled | timed_out) echo "A heavy job ended $result."; exit 1 ;; esac
+          done
 
   # Hands this run's verdict to the router's merge train, which decides whether this pull request
   # is the one in front and what it needs. A pull request opened or updated with a bot token gets
