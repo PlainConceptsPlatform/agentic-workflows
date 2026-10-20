@@ -201,15 +201,24 @@ act() {
   "$@"
 }
 
-# Tiered CI: start the full CI on a pull request's branch. The CI workflow is found by its name,
-# so a repository needs no extra setting, and runs from the branch, which is up to date with its base
-# by the time the train asks (it only deepens a pull request that is next in line and not behind).
-dispatch_full_ci() {
-  local ref="$1" file
-  file=$(gh api "repos/$REPO/actions/workflows?per_page=100" \
-    --jq '.workflows[] | select(.name == env.CI_WORKFLOW_NAME) | .path' 2>/dev/null | head -1)
-  [ -n "$file" ] || return 1
-  gh workflow run "${file##*/}" --repo "$REPO" --ref "$ref" >/dev/null 2>&1
+# Tiered CI: the label that asks a pull request's CI for the full depth. The CI's depth job reads the
+# pull request's labels at run time, so a re-run of the same pull_request run turns full: the event and
+# its context stay the pull request's, which the scope, mutation and coverage jobs rely on (a separate
+# workflow_dispatch run would lose it, and mutation runs on pull_request events only).
+CI_FULL_LABEL="ci-full"
+
+mark_full_ci() {
+  local pr="$1"
+  gh label create "$CI_FULL_LABEL" --repo "$REPO" --color 0E8A16 \
+    --description "The CI runs at full depth on this pull request (set by the merge train)" >/dev/null 2>&1 || true
+  gh api -X POST "repos/$REPO/issues/$pr/labels" -f "labels[]=$CI_FULL_LABEL" >/dev/null 2>&1
+}
+
+deepen_ci() {
+  local pr="$1" run="$2"
+  [ -n "$run" ] || return 1
+  mark_full_ci "$pr" || return 1
+  gh run rerun "$run" --repo "$REPO" >/dev/null 2>&1
 }
 
 is_trusted_bot() {
@@ -572,7 +581,7 @@ for line in "${candidates[@]}"; do
         echo "  #$pr waits for the pull request ahead of it before its full CI runs."
         continue
       fi
-      if act "Starting the full CI on #$pr, which is next in line." dispatch_full_ci "$head_ref"; then
+      if act "Running the full CI on #$pr, which is next in line." deepen_ci "$pr" "${ci_run_id:-}"; then
         merge_blocked=true
         continue
       fi
@@ -585,6 +594,11 @@ for line in "${candidates[@]}"; do
       if [ "$merge_blocked" = true ]; then
         echo "  #$pr waits for the pull request ahead of it before it is brought up to date."
         continue
+      fi
+      # Next in line: with tiered CI the run this update starts is the one that decides, so it runs full.
+      if [ "${CI_DEPTH_TIERED:-false}" = true ]; then
+        act "Asking for the full CI on #$pr before it is brought up to date." mark_full_ci "$pr" ||
+          echo "::warning::Could not label #$pr for the full CI; its update runs the light checks."
       fi
       # Merge, never rebase: the gate's pushes are fast-forward only, and so are a person's.
       if act "Merging $base_ref into #$pr so CI judges it against what it will land on." \

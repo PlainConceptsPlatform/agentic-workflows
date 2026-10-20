@@ -2865,7 +2865,7 @@ else
 fi
 # Tiered CI: the train deepens a light green run instead of gating it, and never gates a light run.
 if grep -qF 'move=deepen' "${HERE}/../merge-train/merge-train.sh" &&
-  grep -qF 'dispatch_full_ci "$head_ref"' "${HERE}/../merge-train/merge-train.sh" &&
+  grep -qF 'deepen_ci "$pr" "${ci_run_id:-}"' "${HERE}/../merge-train/merge-train.sh" &&
   grep -qF "ci-depth-tiered: \${{ vars.CI_DEPTH_TIERED || 'false' }}" "${WORKFLOWS_DIR}/work-router.yml"; then
   PASS=$((PASS + 1))
 else

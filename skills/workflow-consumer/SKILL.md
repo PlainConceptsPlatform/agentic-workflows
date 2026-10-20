@@ -160,11 +160,14 @@ and up to date. The train never gates a light run.
 The repository's CI workflow (the one `CI_WORKFLOW_NAME` names) carries it, because the workflow is
 the repository's:
 
-1. `workflow_dispatch:` among its triggers: the train starts the full run on the pull request's branch.
-2. Every heavy job (build and tests, coverage, mutation, end-to-end) adds the full-depth condition to
-   its `if:`:
-   `github.event_name != 'pull_request' || github.event.pull_request.user.type != 'Bot' || vars.CI_DEPTH_TIERED != 'true'`.
+1. A `depth` job that outputs `full=true` unless the run is a bot's pull request with
+   `vars.CI_DEPTH_TIERED == 'true'` and no `ci-full` label. It reads the labels from the API at run
+   time (`gh pr view <n> --json labels`), not from the event payload, because the train asks for the
+   full run by adding `ci-full` and re-running the same run, and a re-run keeps the old payload.
    People's pull requests, pushes to the default branch, tags and schedules always run in full.
+2. Every heavy job (build and tests, coverage, mutation, end-to-end) needs `depth` and adds
+   `needs.depth.outputs.full == 'true'` to its `if:`. The run stays a `pull_request` run, so scope,
+   mutation and coverage jobs keep their pull request context.
 3. A job named exactly `Full CI` that needs the heavy jobs, runs `if: always()` with that same
    condition, and fails when any of them failed or was cancelled. The train reads it to tell a full
    run from a light one.
@@ -173,8 +176,10 @@ the repository's:
 5. `concurrency` with `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`, keyed on the
    pull request, so a newer push cancels the older run.
 
-Turn it on with the repository variable `CI_DEPTH_TIERED=true`; the router passes the same variable to
-the train, so one switch covers both sides. Leave it unset and nothing changes.
+The train labels a pull request `ci-full` when it brings it up to date as next in line, so that
+update runs in full straight away, and labels and re-runs a light green run that is already up to
+date. Turn it on with the repository variable `CI_DEPTH_TIERED=true`; the router passes the same
+variable to the train, so one switch covers both sides. Leave it unset and nothing changes.
 
 ## Compile and verify
 
