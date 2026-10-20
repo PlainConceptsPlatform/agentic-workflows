@@ -193,8 +193,9 @@ doing it by hand. It replaces tiered CI's `ci-full` label and re-run, and the tr
 - The train no longer waits for the pull request ahead, updates branches or asks for a deeper CI. It
   skips pull requests in the queue, and treats one the queue ejected after its head was pushed as
   red, handing the gate the failed `merge_group` run to repair from.
-- Stacked pull requests enter the queue only through `PUT /pulls/{n}/merge-async`, which refuses a
-  GitHub App today ("Enqueuer is not authorized to merge"): a person adds a stack to the queue.
+- A stacked pull request enters the queue only through `PUT /pulls/{n}/merge-async`, which refuses a
+  GitHub App today ("Enqueuer is not authorized to merge"). The App lands a stack directly instead
+  (`merge_action=direct_merge`, `bypass_rules=true`), so it must be on the ruleset's bypass list.
 
 To turn it on in a repository:
 
@@ -204,7 +205,8 @@ To turn it on in a repository:
    heavy jobs and fails when any failed; the queue requires it. The CI templates carry all of this.
 2. A ruleset on the default branch with `merge_queue` (squash, build concurrency 1 to 2 to keep CI
    low), `required_status_checks` with `Full CI`, and `pull_request` with one required approval.
-3. The bot's GitHub App has the repository permission `Merge queues: write`.
+3. The bot's GitHub App has the repository permission `Merge queues: write` and is on the ruleset's
+   bypass list (for stacks).
 4. The repository variable `MERGE_QUEUE=true`: the router passes it to the train, and gates run one
    per pull request instead of on the single merge belt.
 

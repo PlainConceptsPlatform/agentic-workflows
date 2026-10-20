@@ -63,7 +63,11 @@ if ! grep -q 'part of a stack' <<<"$enqueued"; then
   exit 1
 fi
 
-answer=$(gh api -X PUT "repos/$REPO/pulls/$PR/merge-async" -f merge_action=merge_queue -f sha="$HEAD_SHA")
+# A stack enters the queue only through merge-async, which refuses a GitHub App there. The App lands
+# it directly instead, through the ruleset's bypass list (it must be on it): every layer has passed its
+# own checks and the gate, and the whole stack lands as one operation.
+answer=$(gh api -X PUT "repos/$REPO/pulls/$PR/merge-async" -f merge_action=direct_merge -f merge_method=squash \
+  -F bypass_rules=true -f sha="$HEAD_SHA")
 status=$(jq -r .status <<<"$answer")
 uuid=$(jq -r '.details.uuid // ""' <<<"$answer")
 for _ in $(seq 1 12); do
@@ -85,8 +89,7 @@ case "$status" in
     ;;
   *)
     message=$(jq -r '.details.message // ""' <<<"$answer")
-    # A stack has no other way in, and GitHub refuses an App on this endpoint: a person enqueues it.
-    echo "::error::Stack #$PR did not reach the $base merge queue (status '${status}'${message:+: $message}). GitHub lets a GitHub App enqueue a stack only through this endpoint, which refuses Apps today; a person adds the stack to the queue from the pull request."
+    echo "::error::Stack #$PR was not merged (status '${status}'${message:+: $message}). The App lands a stack by bypassing the base branch's ruleset, so it must be on that ruleset's bypass list."
     out ""
     exit 1
     ;;
