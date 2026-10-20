@@ -161,6 +161,28 @@ SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
 now_epoch=$(date -u +%s)
 iso_epoch() { date -u -d "$1" +%s 2>/dev/null || echo 0; }
 
+# The failing jobs of the CI run on a commit, read from the Actions API. The App behind the train's token
+# can dispatch workflows but may not read check runs (403 "Resource not accessible by integration"): the
+# check-runs calls then returned the same error text for the head and for the base, "what fails here" was
+# always a subset of "what fails on the base", and every red pull request was left waiting. Nothing is
+# printed, and the status is non-zero, when the run cannot be read, so the caller claims nothing.
+ci_runs_for_sha() {
+  local sha="$1" runs
+  # Every completed run on the commit, not only the CI workflow's: on the default branch the CI runs inside the
+  # deploy workflow. Extra failures on the base are harmless, the rule only asks that the pull request's own
+  # failures are among them.
+  runs=$(gh api "repos/$REPO/actions/runs?head_sha=$sha&per_page=100"     --jq '.workflow_runs[] | select(.status == "completed") | .id' 2>/dev/null) || return 1
+  [ -n "$runs" ] || return 1
+  printf '%s
+' "$runs"
+}
+
+ci_failed_jobs() {
+  local run="$1"
+  gh api "repos/$REPO/actions/runs/$run/jobs?per_page=100" \
+    --jq '.jobs[] | select(.conclusion == "failure") | [(.name | sub("^.* / "; "")), .completed_at] | @tsv' 2>/dev/null
+}
+
 summary() { printf '%s\n' "$*" >>"$SUMMARY"; }
 
 # Every write goes through this, so a dry run is honest: there is no second path that forgets.
@@ -433,15 +455,27 @@ for line in "${candidates[@]}"; do
   # the base is the pull request left alone.
   same_as_main=false
   if [ "$ci_status" = completed ] && [ "$ci_conclusion" = failure ] && [ "$park" = none ]; then
-    failed_here=$(gh api "repos/$REPO/commits/$head_sha/check-runs?per_page=100" \
-      --jq '[.check_runs[] | select(.conclusion == "failure") | (.name | sub("^.* / "; ""))] | unique | .[]' 2>/dev/null || true)
-    failed_base=$(gh api "repos/$REPO/commits/$base_ref/check-runs?per_page=100" \
-      --jq '[.check_runs[] | select(.conclusion == "failure") | (.name | sub("^.* / "; ""))] | unique | .[]' 2>/dev/null || true)
-    # How long the base has been red: the oldest failing check on its tip. The wait is bounded,
-    # because waiting for a base nobody fixes starves every pull request behind it. Pliny-Bot's
-    # main was red from 19:30 and the train waited until morning, ten hours, saying nothing.
-    red_since=$(gh api "repos/$REPO/commits/$base_ref/check-runs?per_page=100" \
-      --jq '[.check_runs[] | select(.conclusion == "failure") | .completed_at] | min // empty' 2>/dev/null || true)
+    failed_here=""
+    failed_base=""
+    red_since=""
+    base_sha=$(gh api "repos/$REPO/commits/$base_ref" --jq .sha 2>/dev/null || true)
+    here_jobs=$(ci_failed_jobs "${ci_run_id:-0}" || true)
+    failed_here=$(cut -f1 <<<"$here_jobs" | sort -u)
+    # A base tip with no completed CI run (a stack branch's tip is a merge commit nothing ran on) says
+    # nothing about the base: the pull request is judged on its own failures.
+    if [ -n "$base_sha" ] && base_runs=$(ci_runs_for_sha "$base_sha"); then
+      base_jobs=""
+      for base_run in $base_runs; do
+        base_jobs="$base_jobs$(ci_failed_jobs "$base_run" || true)"$'
+'
+      done
+      base_jobs=$(grep -v '^$' <<<"$base_jobs" || true)
+      failed_base=$(cut -f1 <<<"$base_jobs" | sort -u)
+      # How long the base has been red: the oldest failing job on its tip. The wait is bounded,
+      # because waiting for a base nobody fixes starves every pull request behind it. Pliny-Bot's
+      # main was red from 19:30 and the train waited until morning, ten hours, saying nothing.
+      red_since=$(cut -f2 <<<"$base_jobs" | sort | head -1)
+    fi
     red_for_hours=0
     if [ -n "$red_since" ]; then
       # A date that does not parse reads as epoch 0, which made main "red for 497899h" and ended the
