@@ -20,7 +20,7 @@ concurrency:
 jobs:
   cli:
     name: CLI
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -92,7 +92,7 @@ jobs:
 
   workflows:
     name: Workflow sources
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -198,7 +198,10 @@ jobs:
       - name: Shellcheck
         run: |
           set -euo pipefail
-          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          # agents-arc has no passwordless sudo, so the release binary goes in the job's temp dir.
+          curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz |
+            tar -xJ -C "$RUNNER_TEMP"
+          export PATH="$RUNNER_TEMP/shellcheck-v0.10.0:$PATH"
           find loops/actions -name '*.sh' -print0 | xargs -0 shellcheck -x
           echo "shellcheck clean"
 
@@ -241,7 +244,7 @@ jobs:
 
   runner-image-pins:
     name: Runner image pins
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -284,7 +287,7 @@ jobs:
 
   diagrams:
     name: Diagrams
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

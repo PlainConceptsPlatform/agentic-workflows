@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   build-image:
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     steps:
       - uses: actions/checkout@v4
 

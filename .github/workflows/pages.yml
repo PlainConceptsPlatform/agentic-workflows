@@ -25,7 +25,7 @@ concurrency:
 jobs:
   deploy:
     name: Deploy to GitHub Pages
-    runs-on: ubuntu-latest
+    runs-on: agents-arc
     environment: github-pages
     timeout-minutes: 5
     steps:
