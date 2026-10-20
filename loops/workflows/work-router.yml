@@ -938,6 +938,8 @@ jobs:
           dry-run: ${{ env.MERGE_TRAIN_DRY_RUN }}
           ci-run-id: ${{ needs.classify.outputs.ci-run-id }}
           ci-conclusion: ${{ needs.classify.outputs.ci-conclusion }}
+          # Repository variable, read by the repository's CI as well: one switch for both sides.
+          ci-depth-tiered: ${{ vars.CI_DEPTH_TIERED || 'false' }}
 
   # The decision the gate parked for: a person with write access approves a pull request the
   # gate handed to them (human-review or owner-review), and the bot merges the commit they

@@ -70,6 +70,8 @@ train_move() {
           success)
             if [ "${BEHIND_BY:-0}" -gt 0 ]; then
               move=update; reason="green but ${BEHIND_BY} commit(s) behind its base branch"
+            elif [ "${CI_SHALLOW:-false}" = true ]; then
+              move=deepen; reason="green on the light checks only; the full CI has not run on this head"
             else
               move=gate; reason="green and up to date"
             fi
@@ -197,6 +199,17 @@ act() {
   echo "$what"
   summary "**Next move:** $what"
   "$@"
+}
+
+# Tiered CI: start the full CI on a pull request's branch. The CI workflow is found by its name,
+# so a repository needs no extra setting, and runs from the branch, which is up to date with its base
+# by the time the train asks (it only deepens a pull request that is next in line and not behind).
+dispatch_full_ci() {
+  local ref="$1" file
+  file=$(gh api "repos/$REPO/actions/workflows?per_page=100" \
+    --jq '.workflows[] | select(.name == env.CI_WORKFLOW_NAME) | .path' 2>/dev/null | head -1)
+  [ -n "$file" ] || return 1
+  gh workflow run "${file##*/}" --repo "$REPO" --ref "$ref" >/dev/null 2>&1
 }
 
 is_trusted_bot() {
@@ -435,6 +448,16 @@ for line in "${candidates[@]}"; do
       success | failure) ci_status=completed; ci_conclusion="$HINT_CONCLUSION" ;;
     esac
   fi
+  # Tiered CI (CI_DEPTH_TIERED): a bot's push runs the light checks and the full CI runs once, when the
+  # pull request is next in line. Pliny-Bot spent two thirds of its pull request CI on heads that were
+  # replaced before they merged. A green run without a successful "Full CI" job was light and says
+  # nothing about the tests. When the jobs cannot be read the run is taken as full, as before.
+  ci_shallow=false
+  if [ "${CI_DEPTH_TIERED:-false}" = true ] && [ "$ci_status" = completed ] && [ "$ci_conclusion" = success ] && [ -n "${ci_run_id:-}" ]; then
+    full_jobs=$(gh api "repos/$REPO/actions/runs/$ci_run_id/jobs?per_page=100" \
+      --jq '[.jobs[] | select((.name | test("(^|/ )Full CI$")) and .conclusion == "success")] | length' 2>/dev/null || echo "")
+    [ "$full_jobs" = 0 ] && ci_shallow=true
+  fi
   ci_stuck=false
   if [ "$ci_status" != none ] && [ "$ci_status" != completed ] && [ -n "${ci_created:-}" ]; then
     [ $((now_epoch - $(iso_epoch "$ci_created"))) -lt $((STUCK_HOURS * 3600)) ] || ci_stuck=true
@@ -503,7 +526,7 @@ for line in "${candidates[@]}"; do
   decision=$(HOLD="$hold" REVIEW_DECISION="$review_decision" PARK="$park" \
     ATTEMPTS="$attempts" MAX_ATTEMPTS="$MAX_ATTEMPTS" SILENT_GATE="$silent_gate" MERGEABLE="$mergeable" \
     CI_STATUS="$ci_status" CI_CONCLUSION="$ci_conclusion" CI_STUCK="$ci_stuck" SAME_AS_MAIN="$same_as_main" \
-    BEHIND_BY="${behind_by:-0}" TRUSTED_AUTHOR="$trusted_author" train_move)
+    BEHIND_BY="${behind_by:-0}" TRUSTED_AUTHOR="$trusted_author" CI_SHALLOW="$ci_shallow" train_move)
   move=$(sed -n 's/^move=//p' <<<"$decision")
   reason=$(sed -n 's/^reason=//p' <<<"$decision")
 
@@ -542,6 +565,20 @@ for line in "${candidates[@]}"; do
     approve)
       act "Approving the CI runs waiting on #$pr." approve_runs "$head_ref"
       merge_blocked=true
+      continue
+      ;;
+    deepen)
+      if [ "$merge_blocked" = true ]; then
+        echo "  #$pr waits for the pull request ahead of it before its full CI runs."
+        continue
+      fi
+      if act "Starting the full CI on #$pr, which is next in line." dispatch_full_ci "$head_ref"; then
+        merge_blocked=true
+        continue
+      fi
+      # Never a gate on the light run: it could merge code no test has run on. The pull request is
+      # skipped this tick and the line moves on, so one that cannot be deepened does not stop the rest.
+      echo "::warning::Could not start the full CI on #$pr; it is skipped this tick."
       continue
       ;;
     update)

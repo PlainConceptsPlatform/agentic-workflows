@@ -839,6 +839,16 @@ timeout-minutes: 180
 
      Never open a pull request that does not pass them.
 
+     **Test only what you changed; CI tests the rest.** In this run, run the tests that cover the
+     code you touched and nothing wider: the test files you added or edited, and the tests next to
+     the code you changed (web: `pnpm exec vitest related --run <changed files>`; .NET:
+     `dotnet test <the test project> --filter <the test classes>`). Do not run integration,
+     end-to-end, mutation or coverage suites here, and do not run the whole test suite to be safe:
+     the repository's CI runs all of it on your pull request before anything merges, on a runner
+     that has the database and the browsers this sandbox lacks. The verification commands above are
+     the repository's quick check for that reason. A full suite in the agent is the slowest part of
+     a run and repeats what CI does anyway.
+
      **Run them once, on the final tree.** They are slow: Pliny-Bot's `pnpm verify` is about
      twenty minutes of work on this runner. `pc-plan-apply` runs them in its verify step, and
      that run is this one: do not run them again when nothing changed since. Order the end of

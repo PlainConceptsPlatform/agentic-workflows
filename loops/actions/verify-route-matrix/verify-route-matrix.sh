@@ -2863,6 +2863,22 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: the gate measures a stack child's comments and tests against the default branch" >&2
 fi
+# Tiered CI: the train deepens a light green run instead of gating it, and never gates a light run.
+if grep -qF 'move=deepen' "${HERE}/../merge-train/merge-train.sh" &&
+  grep -qF 'dispatch_full_ci "$head_ref"' "${HERE}/../merge-train/merge-train.sh" &&
+  grep -qF "ci-depth-tiered: \${{ vars.CI_DEPTH_TIERED || 'false' }}" "${WORKFLOWS_DIR}/work-router.yml"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the merge train does not ask for the full CI before gating a light run" >&2
+fi
+# The implement agent tests only what it changed; the repository's CI runs the full suite.
+if grep -qF 'Test only what you changed; CI tests the rest.' "${WORKFLOWS_DIR}/agent-implement.md"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: implement tests only what it changed is missing from the prompt" >&2
+fi
 # An empty AGENT_TIER_MODEL must remove an override a reused runner kept from an earlier job.
 if grep -qF 'rm -f .opencode/harness.user.json' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   PASS=$((PASS + 1))

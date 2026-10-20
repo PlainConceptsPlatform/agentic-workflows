@@ -50,6 +50,10 @@ inputs:
     description: Decide and report the move without making it.
     required: false
     default: 'false'
+  ci-depth-tiered:
+    description: "true when the repository's CI runs only light checks on a bot's push and the full CI when the train asks (repository variable CI_DEPTH_TIERED)."
+    required: false
+    default: 'false'
   ci-run-id:
     description: A CI run that handed its verdict over from inside itself, and so still reads as in progress.
     required: false
@@ -78,6 +82,7 @@ runs:
         MAIN_RED_WAIT_HOURS: ${{ inputs.main-red-wait-hours }}
         MAX_REPAIRS: ${{ inputs.max-repairs }}
         DRY_RUN: ${{ inputs.dry-run }}
+        CI_DEPTH_TIERED: ${{ inputs.ci-depth-tiered }}
         HINT_RUN_ID: ${{ inputs.ci-run-id }}
         HINT_CONCLUSION: ${{ inputs.ci-conclusion }}
       run: bash "${GITHUB_ACTION_PATH}/merge-train.sh"

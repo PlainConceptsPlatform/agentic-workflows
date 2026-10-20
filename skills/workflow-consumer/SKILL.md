@@ -149,6 +149,33 @@ The merge gate now runs on all open, non-draft pull requests from this repositor
 regardless of whether the author is a bot or a human. The `identify-gate-subject`
 action previously rejected human-authored PRs; that check has been removed.
 
+### Tiered CI
+
+A bot pull request is updated against its base every time something ahead of it merges, so its CI
+runs again and again before it merges: in Pliny-Bot two thirds of the pull request CI ran on heads
+that were replaced. With tiered CI a bot's push runs the light checks only (scanners, SBOM) and the
+full CI (build, tests, coverage) runs once, when the merge train finds the pull request next in line
+and up to date. The train never gates a light run.
+
+The repository's CI workflow (the one `CI_WORKFLOW_NAME` names) carries it, because the workflow is
+the repository's:
+
+1. `workflow_dispatch:` among its triggers: the train starts the full run on the pull request's branch.
+2. Every heavy job (build and tests, coverage, mutation, end-to-end) adds the full-depth condition to
+   its `if:`:
+   `github.event_name != 'pull_request' || github.event.pull_request.user.type != 'Bot' || vars.CI_DEPTH_TIERED != 'true'`.
+   People's pull requests, pushes to the default branch, tags and schedules always run in full.
+3. A job named exactly `Full CI` that needs the heavy jobs, runs `if: always()` with that same
+   condition, and fails when any of them failed or was cancelled. The train reads it to tell a full
+   run from a light one.
+4. The job that dispatches the merge gate dispatches `operation=merge-train` instead when the run was
+   light and green, so the train can ask for the full run.
+5. `concurrency` with `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`, keyed on the
+   pull request, so a newer push cancels the older run.
+
+Turn it on with the repository variable `CI_DEPTH_TIERED=true`; the router passes the same variable to
+the train, so one switch covers both sides. Leave it unset and nothing changes.
+
 ## Compile and verify
 
 Compile in the consumer repository:
