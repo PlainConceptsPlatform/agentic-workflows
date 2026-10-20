@@ -337,7 +337,11 @@ jobs:
       - name: Check the comments and tests it adds
         id: check
         env:
-          BASE: origin/${{ github.event.repository.default_branch || 'main' }}
+          # The branch the pull request merges into, not the default branch: for a stack child that is the
+          # feature branch. Against the default branch the base is the merge-base with it, which holds every
+          # sibling already landed in the stack, so Pliny-Bot #853 (2 tests of its own) was held for 28 against
+          # a budget of 26 that the parent's work had already spent.
+          BASE: origin/${{ needs.subject.outputs.pr_base || github.event.repository.default_branch || 'main' }}
         run: |
           set -uo pipefail
           if [ ! -f .opencode/scripts/check-diff.mjs ]; then

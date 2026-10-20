@@ -2856,6 +2856,13 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: the merge train compares failures through check runs its App cannot read" >&2
 fi
+# the gate measures check-diff against the branch the pull request merges into, not the default branch.
+if grep -qF "needs.subject.outputs.pr_base || github.event.repository.default_branch" "${WORKFLOWS_DIR}/agent-merge-gate.md"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the gate measures a stack child's comments and tests against the default branch" >&2
+fi
 # An empty AGENT_TIER_MODEL must remove an override a reused runner kept from an earlier job.
 if grep -qF 'rm -f .opencode/harness.user.json' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   PASS=$((PASS + 1))
