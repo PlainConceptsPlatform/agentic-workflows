@@ -171,8 +171,8 @@ the repository's:
 3. A job named exactly `Full CI` that needs the heavy jobs, runs `if: always()` with that same
    condition, and fails when any of them failed or was cancelled. The train reads it to tell a full
    run from a light one.
-4. The job that dispatches the merge gate dispatches `operation=merge-train` instead when the run was
-   light and green, so the train can ask for the full run.
+4. The job that hands the verdict to the router needs `Full CI` too, so the train can read it. The
+   handover already moves the train, which asks for the full run itself.
 5. `concurrency` with `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`, keyed on the
    pull request, so a newer push cancels the older run.
 

@@ -218,6 +218,12 @@ deepen_ci() {
   local pr="$1" run="$2"
   [ -n "$run" ] || return 1
   mark_full_ci "$pr" || return 1
+  # A CI handover reaches the train from inside the run, and a run still going cannot be re-run.
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    [ "$(gh api "repos/$REPO/actions/runs/$run" --jq .status 2>/dev/null)" = completed ] && break
+    sleep 10
+  done
   gh run rerun "$run" --repo "$REPO" >/dev/null 2>&1
 }
 
