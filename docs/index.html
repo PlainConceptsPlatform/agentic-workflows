@@ -84,8 +84,12 @@
       border-bottom: 1px solid var(--border);
     }
     .bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 56px; }
-    .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; text-decoration: none; }
+    .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; }
+    .brand a { text-decoration: none; }
+    .brand-home { display: inline-flex; align-items: center; gap: 10px; color: var(--muted-foreground); transition: color .15s; }
+    .brand-home:hover { color: var(--foreground); }
     .brand svg { width: 24px; height: 24px; }
+    .brand-sep { color: var(--border); font-weight: 400; }
     .nav { display: flex; align-items: center; gap: 4px; }
     .nav a.link { padding: 6px 10px; border-radius: var(--radius); font-size: 14px; color: var(--muted-foreground); text-decoration: none; transition: color .15s, background-color .15s; }
     .nav a.link:hover { color: var(--foreground); background: var(--muted); }
@@ -103,6 +107,8 @@
     .hero { padding: 80px 0 0; max-width: 672px; }
     .hero h1 { text-wrap: balance; font-size: 48px; line-height: 1; letter-spacing: -0.025em; font-weight: 700; }
     .hero p { margin-top: 24px; font-size: 18px; line-height: 28px; color: var(--muted-foreground); }
+    .hero p a { color: var(--primary); text-decoration: none; }
+    .hero p a:hover { text-decoration: underline; }
     .actions { margin-top: 32px; display: flex; flex-wrap: wrap; gap: 12px; }
     .btn {
       display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 20px;
@@ -217,6 +223,7 @@
     @media (max-width: 600px) {
       .container { padding: 0 16px; }
       .nav a.link { display: none; }
+      .brand-home .label { display: none; }
       .hero { padding-top: 48px; }
       .hero h1 { font-size: 36px; }
       .hero p { font-size: 16px; line-height: 24px; }
@@ -235,10 +242,14 @@
 <body>
   <header>
     <div class="container bar">
-      <a class="brand" href="./">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="2" fill="#2f69ff"/><rect x="6" y="6" width="12" height="12" rx="1" fill="var(--background)"/></svg>
-        Agentic Workflows
-      </a>
+      <nav class="brand" aria-label="Breadcrumb">
+        <a class="brand-home" href="https://platform.plainconcepts.com" aria-label="Platform Foundations">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="2" fill="#2f69ff"/><rect x="6" y="6" width="12" height="12" rx="1" fill="var(--background)"/></svg>
+          <span class="label">Platform Foundations</span>
+        </a>
+        <span class="brand-sep" aria-hidden="true">/</span>
+        <a href="./" aria-current="page">Agentic Workflows</a>
+      </nav>
       <nav class="nav" aria-label="Main">
         <a class="link" href="#router">Router</a>
         <a class="link" href="#workers">Workers</a>
@@ -258,7 +269,7 @@
   <main class="container">
     <div class="hero">
       <h1>Issues in, merged pull requests out</h1>
-      <p>Agentic Workflows are reusable GitHub Actions loops from Plain Concepts Platform. One router turns every GitHub event into one route, and seven agent workers carry an issue from opened to merged. Every route is drawn here.</p>
+      <p>Agentic Workflows are reusable GitHub Actions loops from <a href="https://platform.plainconcepts.com">Plain Concepts Platform</a>. One router turns every GitHub event into one route, and seven agent workers carry an issue from opened to merged. Every route is drawn here.</p>
       <div class="actions">
         <a class="btn" href="#workers">See the workers</a>
         <a class="btn btn--outline" href="#install">Install</a>

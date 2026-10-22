@@ -53,6 +53,10 @@ icon, a title and a muted line). Keep it that restrained. The theme is stored un
 diagram.
 
 - `<title>Agentic Workflows diagrams</title>`
+- platform.plainconcepts.com is the main site and this page is part of it: always link it. The
+  header is a breadcrumb (logo and "Platform Foundations" linking https://platform.plainconcepts.com,
+  then "Agentic Workflows"), the hero names Plain Concepts Platform as a link to it, and the footer
+  links it again.
 - Sections, in order:
   - **The router**: an event picker beside the path it takes (classify, authorize, route, worker),
     linking `diagrams/router.html` and the worker's diagram
