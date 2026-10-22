@@ -45,7 +45,7 @@ present, lowercased.
 
 ## Index page (`docs/index.html`)
 
-Hand-authored, one file, no framework and no build step. It follows platform.plainconcepts.dev
+Hand-authored, one file, no framework and no build step. It follows platform.plainconcepts.com
 closely: the Outfit typeface, its light and dark tokens, a centred column about 1000px wide, a 48px
 title, 20px section headings with a muted paragraph, and bordered cards (6px radius, a 16px blue
 icon, a title and a muted line). Keep it that restrained. The theme is stored under the same
@@ -53,10 +53,13 @@ icon, a title and a muted line). Keep it that restrained. The theme is stored un
 diagram.
 
 - `<title>Agentic Workflows diagrams</title>`
-- platform.plainconcepts.dev is the main site and this page is part of it: always link it. The
-  header is a breadcrumb (logo and "Platform Foundations" linking https://platform.plainconcepts.dev,
+- platform.plainconcepts.com is the main site and this page is part of it: always link it. The
+  header is a breadcrumb (logo and "Platform Foundations" linking https://platform.plainconcepts.com,
   then "Agentic Workflows"), the hero names Plain Concepts Platform as a link to it, and the footer
-  links it again.
+  links it again. The footer also links the sibling sites, Agent Harness
+  (https://harness.platform.plainconcepts.dev) and Project Health
+  (https://health.platform.plainconcepts.dev); this site's own address is
+  https://workflows.platform.plainconcepts.dev.
 - Sections, in order:
   - **The router**: an event picker beside the path it takes (classify, authorize, route, worker),
     linking `diagrams/router.html` and the worker's diagram
