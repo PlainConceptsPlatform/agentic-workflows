@@ -45,31 +45,31 @@ present, lowercased.
 
 ## Index page (`docs/index.html`)
 
-Hand-authored, one file, no framework and no build step. It follows the Plain Concepts Platform look
-(platform.plainconcepts.com): the Outfit typeface, the `--pc-blue-*` and neutral tokens, light and dark
-themes. The theme is stored under the same `archify-theme` key the diagrams read, so a choice made on
-the landing page carries into every diagram.
+Hand-authored, one file, no framework and no build step. It follows platform.plainconcepts.com
+closely: the Outfit typeface, its light and dark tokens, a centred column about 1000px wide, a 48px
+title, 20px section headings with a muted paragraph, and bordered cards (6px radius, a 16px blue
+icon, a title and a muted line). Keep it that restrained. The theme is stored under the same
+`archify-theme` key the diagrams read, so a choice made on the landing page carries into every
+diagram.
 
 - `<title>Agentic Workflows diagrams</title>`
-- The same four groups, each its own section:
-  - **Router**: the hero holds the Work Router fragment (pick an event, see the route it takes) and
-    links `diagrams/router.html`; the "Everything around the seven workers" table links
-    `diagrams/router.html` and `diagrams/route-chain.html`
-  - **Workers**: the "Seven workers" pills, one link per `agent-*.html` in `diagrams.md` order. Each
-    pill loads that worker's diagram into the embedded viewer and shows a one-line fact taken from the
-    worker's intro in `diagrams.md`
-  - **Infrastructure**: `housekeeping.html`, `agentics-app-errors.html`, `agentics-error-report.html`
-    in the same table
+- Sections, in order:
+  - **The router**: an event picker beside the path it takes (classify, authorize, route, worker),
+    linking `diagrams/router.html` and the worker's diagram
+  - **From issue to merge**: four cards for triage, refine, implement and the merge gate, linking
+    `diagrams/route-chain.html`
+  - **Seven workers**: tabs, one link per `agent-*.html` in `diagrams.md` order, over one embedded
+    viewer; each tab loads that worker's diagram and a one-line fact from its intro in `diagrams.md`
+  - **Router and infrastructure**: the router embedded beside cards for `route-chain.html`,
+    `housekeeping.html`, `agentics-app-errors.html` and `agentics-error-report.html`
   - **Docs**: `ownership.md`, `self-hosted-runners.md` and `release.md`, linked on GitHub so they
     render (Pages serves `.md` raw because of `.nojekyll`)
-- The "From issue to merge" strip shows one sample issue at four stages. It is illustrative content;
-  keep it in step with the route chain when triage, refine, implement or the merge gate change.
-- Inline CSS and script. Every link works without the script; the script only adds the router
-  fragment, the worker switcher, entrances and the theme toggle, all with a reduced-motion fallback.
+  - **Install**: the `npx @plainconceptsplatform/workflows` command and the agent-harness
+    prerequisite
+- Inline CSS and script. Every link works without the script.
 
-Update `index.html` when a worker is added or removed: the router fragment's routes, the worker list,
-its `facts` and `names` entries in the script, and the footer columns. The link text is the section
-header from `diagrams.md` (e.g. "agent-triage.md" becomes "Triage").
+Update `index.html` when a worker is added or removed: the router's routes, the worker tabs and
+their `workers` entries in the script, and the cards that name it.
 
 ### Embedded diagrams
 
