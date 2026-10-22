@@ -91,7 +91,9 @@ node .agents/skills/archify/bin/archify.mjs guide "<scenario>" --json
    best count, stop and report the unresolved diagnostics truthfully.
 5. Keep the JSON IR at `docs/diagrams/<worker-stem>.json` so the next refresh can edit instead of
    starting from scratch.
-6. Update `docs/index.html` if a new worker was added or a worker was removed.
+6. Refresh the landing page captures in `docs/assets/diagrams/` with
+   `scripts/capture-diagrams.mjs` (see `references/site.md`), and update `docs/index.html` if a new
+   worker was added or a worker was removed.
 
 ### Naming convention
 
@@ -143,9 +145,11 @@ The `<worker-stem>` is the section header minus `.md` (if present), lowercased.
 
 ## Site assembly
 
-`docs/index.html` is a single hand-authored page that links to each `docs/diagrams/<worker>.html`,
-the router, and the route-chain view. It also links the two existing docs (`docs/ownership.md`,
-`docs/self-hosted-runners.md`). The archify-rendered HTML files are standalone and need no wrapper.
+`docs/index.html` is a single hand-authored page in the Plain Concepts Platform look that links to
+each `docs/diagrams/<worker>.html`, the router, and the route-chain view, shows each diagram's capture
+from `docs/assets/diagrams/`, and links the docs (`ownership.md`, `self-hosted-runners.md`,
+`release.md`) on GitHub. `references/site.md` describes its structure. The archify-rendered HTML
+files are standalone and need no wrapper.
 
 ## Setup
 

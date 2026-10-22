@@ -11,6 +11,9 @@ changes. The site is a derived view of the canonical Mermaid source in
 docs/
   .nojekyll                  disables Jekyll; raw HTML/MD serves as-is
   index.html                 hand-authored landing page; links to every diagram
+  assets/diagrams/
+    <worker-stem>-dark.webp   capture of each diagram, dark theme, for the landing page
+    <worker-stem>-light.webp  the same capture, light theme
   ownership.md                (existing) consumer-facing ownership doc
   self-hosted-runners.md      (existing) self-hosted runner doc
   diagrams/
@@ -45,20 +48,44 @@ present, lowercased.
 
 ## Index page (`docs/index.html`)
 
-Hand-authored. No JavaScript framework, no build step. Structure:
+Hand-authored, one file, no framework and no build step. It follows the Plain Concepts Platform look
+(platform.plainconcepts.com): the Outfit typeface, the `--pc-blue-*` and neutral tokens, light and dark
+themes. The theme is stored under the same `archify-theme` key the diagrams read, so a choice made on
+the landing page carries into every diagram.
 
 - `<title>Agentic Workflows diagrams</title>`
-- One `<section>` per logical group:
-  - **Router**: links to `diagrams/router.html` and `diagrams/route-chain.html`
-  - **Workers**: one `<li>` per `agent-*.html`, in the same order as `diagrams.md`
-  - **Infrastructure**: `housekeeping.html`, `agentics-app-errors.html`,
-    `agentics-error-report.html`
-  - **Docs**: links to `ownership.md` and `self-hosted-runners.md`
-- Minimal CSS, inline. The page is tiny.
-- Each archify-rendered HTML file has its own theme switcher and viewer; no wrapper needed.
+- The same four groups, each its own section:
+  - **Router**: the hero holds the Work Router fragment (pick an event, see the route it takes) and
+    links `diagrams/router.html`; the "Everything around the seven workers" table links
+    `diagrams/router.html` and `diagrams/route-chain.html`
+  - **Workers**: the "Seven workers" list, one link per `agent-*.html` in `diagrams.md` order. Each
+    name swaps in that worker's capture from `assets/diagrams/` and a one-line fact taken from the
+    worker's intro in `diagrams.md`
+  - **Infrastructure**: `housekeeping.html`, `agentics-app-errors.html`, `agentics-error-report.html`
+    in the same table
+  - **Docs**: `ownership.md`, `self-hosted-runners.md` and `release.md`, linked on GitHub so they
+    render (Pages serves `.md` raw because of `.nojekyll`)
+- The "From issue to merge" strip shows one sample issue at four stages. It is illustrative content;
+  keep it in step with the route chain when triage, refine, implement or the merge gate change.
+- Inline CSS and script. Every link works without the script; the script only adds the router
+  fragment, the worker switcher, entrances and the theme toggle, all with a reduced-motion fallback.
 
-Update `index.html` when a worker is added or removed. The link text is the section header from
-`diagrams.md` (e.g. "agent-triage.md" becomes "Agent Triage").
+Update `index.html` when a worker is added or removed: the router fragment's routes, the worker list,
+its `facts` and `names` entries in the script, and the footer columns. The link text is the section
+header from `diagrams.md` (e.g. "agent-triage.md" becomes "Triage").
+
+### Diagram captures
+
+After any archify HTML changes, refresh the captures so the landing page shows the current diagram.
+Serve `docs/` locally and run, with every stem from the naming table:
+
+```bash
+node skills/workflow-docs/scripts/capture-diagrams.mjs http://localhost:8765/diagrams docs/assets/diagrams router route-chain agent-triage agent-refine agent-implement agent-merge-gate agent-apply-review agent-audit agent-release housekeeping agentics-app-errors agentics-error-report
+```
+
+It needs Node 22+ and Chrome (set `CHROME` when it is not in the default location). It writes
+`<stem>-dark.webp` and `<stem>-light.webp` at twice the SVG's viewBox size. Delete both captures when
+a worker is removed.
 
 ## `.nojekyll`
 
