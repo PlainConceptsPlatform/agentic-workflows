@@ -25,14 +25,15 @@ concurrency:
 jobs:
   build-and-deploy:
     name: Build and deploy
-    runs-on: agents-arc
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
-        # agents-arc's runner user cannot write /usr/share/dotnet; the SDK is in the tool cache.
+        # The SDK goes in the tool cache rather than /usr/share/dotnet, which a non-root runner
+        # user cannot write.
         env:
           DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
