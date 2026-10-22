@@ -27,6 +27,7 @@ head_ref=$(jq -r .headRefName <<<"$pr_json")
 
 owner=${REPO%%/*}
 name=${REPO#*/}
+# shellcheck disable=SC2016
 queue=$(gh api graphql -f query='query($o:String!,$n:String!,$b:String!){repository(owner:$o,name:$n){mergeQueue(branch:$b){id}}}' \
   -f o="$owner" -f n="$name" -f b="$base" --jq '.data.repository.mergeQueue.id // ""' 2>/dev/null || true)
 
@@ -50,6 +51,7 @@ pr_id=$(gh pr view "$PR" --repo "$REPO" --json id --jq .id)
 # GraphQL first: the asynchronous merge endpoint refuses a GitHub App with "Enqueuer is not
 # authorized to merge" (Agentic-Workflow-Dogfood, 2026-10-20), while enqueuePullRequest takes the
 # same token. A stacked pull request refuses GraphQL and only the asynchronous endpoint takes it.
+# shellcheck disable=SC2016
 enqueued=$(gh api graphql -f query='mutation($id:ID!,$sha:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$sha}){mergeQueueEntry{state}}}' \
   -f id="$pr_id" -f sha="$HEAD_SHA" 2>&1 || true)
 if grep -q '"mergeQueueEntry":{' <<<"$enqueued"; then

@@ -76,6 +76,7 @@ fi
 git push --quiet "$remote" "HEAD:refs/heads/${rescued_branch}"
 
 grep -qiE "(closes|fixes|resolves) #${ISSUE}\b" "$work/body.md" || printf '\n\nCloses #%s\n' "$ISSUE" >> "$work/body.md"
+# shellcheck disable=SC2016
 printf '\n\nRebased onto `%s` by the workflow: the agent'"'"'s commits no longer applied after `%s` moved during the run.\n' \
   "$base" "$base" >> "$work/body.md"
 [[ "$title" == "[bot] "* ]] || title="[bot] $title"

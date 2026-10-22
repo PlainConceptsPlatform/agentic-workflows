@@ -219,8 +219,7 @@ deepen_ci() {
   [ -n "$run" ] || return 1
   mark_full_ci "$pr" || return 1
   # A CI handover reaches the train from inside the run, and a run still going cannot be re-run.
-  local i
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
     [ "$(gh api "repos/$REPO/actions/runs/$run" --jq .status 2>/dev/null)" = completed ] && break
     sleep 10
   done
@@ -231,6 +230,7 @@ deepen_ci() {
 # UNMERGEABLE or MERGEABLE, or empty when it is not in one.
 queue_state() {
   local pr="$1"
+  # shellcheck disable=SC2016
   gh api graphql -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){mergeQueueEntry{state}}}}' \
     -f o="${REPO%%/*}" -f n="${REPO#*/}" -F p="$pr" \
     --jq '.data.repository.pullRequest.mergeQueueEntry.state // ""' 2>/dev/null || true
