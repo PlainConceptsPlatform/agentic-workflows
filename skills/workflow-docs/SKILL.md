@@ -144,7 +144,7 @@ The `<worker-stem>` is the section header minus `.md` (if present), lowercased.
 
 ## Site assembly
 
-`docs/index.html` is a single hand-authored page in the platform.plainconcepts.com style that links to
+`docs/index.html` is a single hand-authored page in the platform.plainconcepts.dev style that links to
 each `docs/diagrams/<worker>.html`, the router, and the route-chain view, embeds the diagrams
 themselves in archify's `?embed=1` mode, and links the docs (`ownership.md`, `self-hosted-runners.md`,
 `release.md`) on GitHub. `references/site.md` describes its structure. The archify-rendered HTML
