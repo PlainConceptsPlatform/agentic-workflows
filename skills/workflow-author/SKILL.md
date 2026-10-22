@@ -137,8 +137,10 @@ expensive thing to get wrong. See the trap table below.
 
 ## The determinism ladder
 
-Every decision sits on one of seven rungs. Push each decision to the lowest rung that can hold it.
-Lower is cheaper, faster, reproducible, and auditable.
+A rung is a step on a ladder. Every decision sits on one of seven rungs. Push each decision to the
+lowest rung that can hold it. Lower is cheaper, faster, reproducible, and auditable. The ladder and
+its rungs are this repository's vocabulary, not gh-aw's: gh-aw supplies the mechanisms (`on.steps`,
+`steps:`, `jobs:`, `safe-outputs:`), and the ladder orders them by cost.
 
 ```
 RUNG                     LIVES IN   COSTS         DECIDES                   PROMPT CAN READ IT

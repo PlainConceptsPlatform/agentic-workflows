@@ -23,7 +23,9 @@ Every diagram uses the same shapes and the same palette, so reading one teaches 
 | Dotted arrow | the unhappy path |
 
 Each worker diagram also names the rung each stage sits on, from the determinism ladder in
-`skills/workflow-author`: the lower the rung, the cheaper and more reproducible the decision.
+`skills/workflow-author`: the lower the rung, the cheaper and more reproducible the decision. A
+rung is a step on that ladder, numbered 0 to 6 from the router's trigger to the safe outputs. The
+term is ours, not gh-aw's, so it does not appear in the gh-aw documentation.
 
 ---
 
