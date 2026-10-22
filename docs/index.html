@@ -245,54 +245,32 @@
     .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); display: inline-block; }
     .dot--run { background: #fbc740; }
 
-    /* Workers: object on a disc */
+    /* Workers: the chosen worker's diagram, large enough to read */
     .workers { margin-top: var(--gap-section); }
-    .workers-grid {
-      display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: clamp(24px, 3vw, 56px);
-      align-items: end;
-    }
-    .worker-list { list-style: none; margin: 0; padding: 0; }
-    .worker-list h2 { font-size: clamp(28px, 2.9vw, 44px); line-height: 1.15; color: var(--muted); font-weight: 600; letter-spacing: -0.02em; margin-bottom: 8px; }
+    .workers-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 24px 48px; }
+    .workers-head h2 { font-size: var(--step-head); }
+    .workers-head p { font-size: var(--step-body); max-width: 44ch; }
+    .worker-list { list-style: none; margin: 40px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
     .worker-list a {
-      display: inline-block; text-decoration: none;
-      font-size: clamp(28px, 2.9vw, 44px); line-height: 1.15; font-weight: 600; letter-spacing: -0.02em;
-      color: var(--muted);
-      transition: color .2s, transform .25s var(--ease);
+      display: inline-flex; align-items: center; min-height: 48px; padding: 0 22px;
+      border-radius: var(--pill); background: var(--surface-2);
+      font-size: 17px; font-weight: 600; text-decoration: none;
+      transition: background-color .18s, color .18s, transform .18s var(--ease);
     }
-    .worker-list a:hover { color: var(--ink); transform: translateX(6px); }
-    .worker-list a[aria-current="true"] { color: var(--ink); }
-    .worker-list a[aria-current="true"]::after {
-      content: ""; display: inline-block; width: .5em; height: .3em; margin-left: .3em; vertical-align: middle;
-      border-radius: var(--pill); background: var(--accent);
+    .worker-list a:hover { background: var(--tint); transform: translateY(-2px); }
+    .worker-list a[aria-current="true"] { background: var(--accent); color: var(--accent-ink); }
+    .showcase {
+      margin-top: 16px; border-radius: var(--round);
+      background: #090f1f; /* archify's dark ground, so the embed has no visible edge */
     }
-    .showcase { position: relative; padding-top: 10%; }
-    .disc {
-      position: absolute; left: 4%; right: 0; top: 18%; bottom: 0;
-      border-radius: var(--pill); background: var(--stage);
-      transition: background-color .3s;
-    }
-    .shot-frame {
-      position: relative; margin: 0 auto; width: 88%;
-      aspect-ratio: 16 / 9; display: grid; place-items: center;
-    }
-    .shot {
-      position: absolute; inset: 0; display: grid; place-items: center;
-      opacity: 0; transition: opacity .3s var(--ease);
-    }
-    .shot.is-on { opacity: 1; }
-    .shot img {
-      max-height: 100%; width: auto; max-width: 100%;
-      border-radius: 22px; background: var(--ui);
-      animation: drift 14s ease-in-out infinite alternate;
-    }
-    @keyframes drift { from { transform: scale(1); } to { transform: scale(1.025); } }
+    [data-theme="light"] .showcase { background: #ffffff; }
+    .showcase iframe, .more-figure iframe { display: block; width: 100%; border: 0; aspect-ratio: var(--ratio, 3); background: transparent; }
+    .showcase { padding: clamp(8px, 2vw, 32px); }
     .worker-fact {
-      position: relative; display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 16px 32px;
-      margin: 28px 4% 0 auto; padding: 0 clamp(28px, 4vw, 64px) clamp(28px, 4vw, 48px);
-      color: #fff;
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 40px;
+      margin-top: 28px;
     }
-    .worker-fact p { font-size: var(--step-body); max-width: 46ch; }
-    .worker-fact a { color: #fff; font-weight: 600; white-space: nowrap; }
+    .worker-fact p { font-size: var(--step-lead); line-height: 1.4; max-width: 52ch; }
 
     /* Everything else: statement, table pushed right */
     .more { margin-top: var(--gap-section); }
@@ -300,7 +278,8 @@
     .more h2 span { display: block; padding-left: 3vw; }
     .more-grid { margin-top: 96px; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 0 24px; align-items: end; }
     .more-figure { grid-column: 1 / span 6; margin: 0; }
-    .more-figure img { width: 100%; border-radius: var(--round); background: var(--ui); }
+    .more-figure iframe { --ratio: 1040 / 610; border-radius: var(--round); background: #090f1f; padding: 8px; }
+    [data-theme="light"] .more-figure iframe { background: #ffffff; }
     .more-figure figcaption { margin-top: 12px; font-size: var(--step-small); color: var(--muted); }
     .more-name { grid-column: 7; align-self: start; font-size: var(--step-small); color: var(--muted); padding-top: 4px; }
     .table { grid-column: 8 / span 5; align-self: start; }
@@ -375,7 +354,6 @@
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
       .js [data-reveal] { opacity: 1; transform: none; transition: none; }
-      .shot img { animation: none; }
       *, *::before, *::after { transition-duration: .01ms !important; }
     }
 
@@ -390,9 +368,6 @@
       .journey { grid-template-columns: repeat(2, 1fr); }
       .field { min-height: 64svh; }
       .field:nth-child(3) { padding-left: var(--gutter); }
-      .workers-grid { grid-template-columns: 1fr; min-height: 0; }
-      .worker-list { display: flex; flex-wrap: wrap; gap: 4px 24px; align-items: baseline; }
-      .worker-list h2 { width: 100%; }
       .more-grid { margin-top: 56px; display: flex; flex-direction: column-reverse; gap: 48px; }
       .more-name { display: none; }
       .foot-col { grid-column: span 4; }
@@ -416,13 +391,9 @@
       .field, .field:nth-child(n) { min-height: 0; padding: 36px var(--gutter); gap: 28px; }
       .field h2 { font-size: 32px; }
       .card-slot { justify-items: start; }
-      .worker-list { gap: 2px 18px; }
-      .worker-list h2 { font-size: 26px; }
-      .worker-list a { font-size: 24px; }
-      .showcase { padding-top: 0; margin-top: 16px; }
-      .disc { left: -8px; right: -8px; top: 24%; border-radius: 120px; }
-      .shot-frame { width: 96%; aspect-ratio: 16 / 9; }
-      .worker-fact { margin: 20px 0 0; padding: 0 28px 36px; }
+      .worker-list { margin-top: 28px; }
+      .worker-list a { min-height: 44px; padding: 0 16px; font-size: 16px; }
+      .worker-fact p { font-size: 18px; }
       .more h2 { font-size: 9.5vw; }
       .more h2 span { padding-left: 0; }
       .table a { grid-template-columns: 1fr; gap: 2px; padding-block: 10px; }
@@ -554,25 +525,25 @@
     </section>
 
     <section id="workers" class="workers wrap" aria-labelledby="workers-title">
-      <div class="workers-grid">
-        <ul class="worker-list" data-reveal>
-          <li><h2 id="workers-title">Seven workers</h2></li>
-          <li><a href="diagrams/agent-triage.html" data-worker="agent-triage" aria-current="true">Triage</a></li>
-          <li><a href="diagrams/agent-refine.html" data-worker="agent-refine">Refine</a></li>
-          <li><a href="diagrams/agent-implement.html" data-worker="agent-implement">Implement</a></li>
-          <li><a href="diagrams/agent-merge-gate.html" data-worker="agent-merge-gate">Merge gate</a></li>
-          <li><a href="diagrams/agent-apply-review.html" data-worker="agent-apply-review">Apply review</a></li>
-          <li><a href="diagrams/agent-audit.html" data-worker="agent-audit">Audit</a></li>
-          <li><a href="diagrams/agent-release.html" data-worker="agent-release">Release</a></li>
-        </ul>
-        <div class="showcase" data-reveal style="--d:120ms">
-          <div class="disc" aria-hidden="true"></div>
-          <div class="shot-frame" data-shots></div>
-          <div class="worker-fact">
-            <p data-fact>The front door for issues opened by people with read-only access. Four outcomes, and only one of them closes anything.</p>
-            <a data-fact-link href="diagrams/agent-triage.html">Open the interactive diagram &#8599;</a>
-          </div>
-        </div>
+      <div class="workers-head" data-reveal>
+        <h2 id="workers-title">Seven workers</h2>
+        <p>Each one has its own diagram. Pick a worker to see how its run branches, and open it to pan, search and trace.</p>
+      </div>
+      <ul class="worker-list" data-reveal style="--d:80ms">
+        <li><a href="diagrams/agent-triage.html" data-worker="agent-triage" aria-current="true">Triage</a></li>
+        <li><a href="diagrams/agent-refine.html" data-worker="agent-refine">Refine</a></li>
+        <li><a href="diagrams/agent-implement.html" data-worker="agent-implement">Implement</a></li>
+        <li><a href="diagrams/agent-merge-gate.html" data-worker="agent-merge-gate">Merge gate</a></li>
+        <li><a href="diagrams/agent-apply-review.html" data-worker="agent-apply-review">Apply review</a></li>
+        <li><a href="diagrams/agent-audit.html" data-worker="agent-audit">Audit</a></li>
+        <li><a href="diagrams/agent-release.html" data-worker="agent-release">Release</a></li>
+      </ul>
+      <div class="showcase" data-reveal style="--d:140ms">
+        <iframe data-diagram src="diagrams/agent-triage.html?embed=1" style="--ratio: 1320 / 430" title="Agent Triage diagram" loading="lazy"></iframe>
+      </div>
+      <div class="worker-fact" data-reveal style="--d:200ms">
+        <p data-fact>The front door for issues opened by people with read-only access. Four outcomes, and only one of them closes anything.</p>
+        <a class="btn" data-fact-link href="diagrams/agent-triage.html">Open the diagram &#8599;</a>
       </div>
     </section>
 
@@ -580,8 +551,7 @@
       <h2 id="more-title" data-reveal>Everything around <span>the seven workers</span></h2>
       <div class="more-grid">
         <figure class="more-figure" data-reveal>
-          <img class="theme-light-only" src="assets/diagrams/router-light.webp" width="2080" height="1220" alt="The Work Router diagram: one GitHub event is classified, authorized and routed to one worker" loading="lazy">
-          <img class="theme-dark-only" src="assets/diagrams/router-dark.webp" width="2080" height="1220" alt="The Work Router diagram: one GitHub event is classified, authorized and routed to one worker" loading="lazy">
+          <iframe data-diagram src="diagrams/router.html?embed=1" title="Work Router diagram" loading="lazy"></iframe>
           <figcaption>The router, where every trigger arrives.</figcaption>
         </figure>
         <p class="more-name" aria-hidden="true">Pages</p>
@@ -676,10 +646,12 @@
       root.classList.add('js');
       var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+      var themeHooks = [];
       document.querySelector('[data-theme-toggle]').addEventListener('click', function () {
         var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
         root.setAttribute('data-theme', next);
         try { localStorage.setItem('archify-theme', next); } catch (_) {}
+        themeHooks.forEach(function (hook) { hook(); });
       });
 
       // Router: each event's path through the router diagram.
@@ -746,36 +718,31 @@
         'agent-audit': 'The only worker that creates work rather than consuming it. Read-only: it files an issue and changes nothing.',
         'agent-release': 'Manual dispatch only. The agent writes prose; deterministic jobs do everything irreversible, and nothing reaches main except through a pull request.'
       };
-      var names = {
-        'agent-triage': 'Agent Triage', 'agent-refine': 'Agent Refine', 'agent-implement': 'Agent Implement',
-        'agent-merge-gate': 'Agent Merge Gate', 'agent-apply-review': 'Agent Apply Review', 'agent-audit': 'Agent Audit', 'agent-release': 'Agent Release'
+      var diagrams = {
+        'agent-triage': ['Agent Triage', '1320 / 430'], 'agent-refine': ['Agent Refine', '1980 / 520'],
+        'agent-implement': ['Agent Implement', '1980 / 340'], 'agent-merge-gate': ['Agent Merge Gate', '1980 / 430'],
+        'agent-apply-review': ['Agent Apply Review', '1410 / 500'], 'agent-audit': ['Agent Audit', '1240 / 540'],
+        'agent-release': ['Agent Release', '1400 / 450']
       };
-      var frame = document.querySelector('[data-shots]');
+      // The archify pages read ?embed=1 and ?theme=, so the embeds follow this page's theme.
+      function embedSrc(href) { return href.split('?')[0] + '?embed=1&theme=' + root.getAttribute('data-theme'); }
+      function syncEmbeds() {
+        document.querySelectorAll('iframe[data-diagram]').forEach(function (f) { f.src = embedSrc(f.getAttribute('src')); });
+      }
+      syncEmbeds();
+      themeHooks.push(syncEmbeds);
+      var stage = document.querySelector('.showcase iframe');
       var fact = document.querySelector('[data-fact]');
       var factLink = document.querySelector('[data-fact-link]');
-      var shots = {};
-      Object.keys(facts).forEach(function (stem, i) {
-        var wrap = document.createElement('div');
-        wrap.className = 'shot' + (i === 0 ? ' is-on' : '');
-        ['light', 'dark'].forEach(function (theme) {
-          var img = document.createElement('img');
-          img.className = 'theme-' + theme + '-only';
-          img.src = 'assets/diagrams/' + stem + '-' + theme + '.webp';
-          img.alt = names[stem] + ' diagram';
-          img.loading = 'lazy';
-          img.decoding = 'async';
-          wrap.appendChild(img);
-        });
-        frame.appendChild(wrap);
-        shots[stem] = wrap;
-      });
       document.querySelectorAll('[data-worker]').forEach(function (a) {
         a.addEventListener('click', function (e) {
           if (e.metaKey || e.ctrlKey || e.shiftKey) return;
           e.preventDefault();
           var stem = a.dataset.worker;
           document.querySelectorAll('[data-worker]').forEach(function (b) { b.setAttribute('aria-current', b === a ? 'true' : 'false'); });
-          Object.keys(shots).forEach(function (k) { shots[k].classList.toggle('is-on', k === stem); });
+          stage.style.setProperty('--ratio', diagrams[stem][1]);
+          stage.title = diagrams[stem][0] + ' diagram';
+          stage.src = embedSrc(a.getAttribute('href'));
           fact.textContent = facts[stem];
           factLink.href = a.getAttribute('href');
         });
