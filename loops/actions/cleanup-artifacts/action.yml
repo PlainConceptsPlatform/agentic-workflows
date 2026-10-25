@@ -1,12 +1,23 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/actions/cleanup-artifacts/action.yml. Update with workflows update --force; consumer edits may be overwritten.
 name: Clean up artifacts
-description: Delete workflow artifacts older than the configured retention period.
+description: >-
+  Delete workflow artifacts older than the configured retention period, delete Actions caches
+  that belong to finished pull requests or to idle non-default branches, and warn when the
+  repository's Actions storage passes a threshold.
 inputs:
   token:
     description: GitHub token with actions write access.
     required: true
   artifact-retention-days:
     description: Retention period in days. Invalid or empty values use 3.
+    required: false
+    default: ''
+  cache-idle-days:
+    description: Days a non-default-branch cache may go unused before it is deleted. Invalid or empty values use 3.
+    required: false
+    default: ''
+  storage-warn-gb:
+    description: Cache plus artifact size, in GB, above which the run warns. Invalid or empty values use 5.
     required: false
     default: ''
 runs:
@@ -87,5 +98,94 @@ runs:
           } else if (failed.length > 0) {
             core.warning(
               `${failed.length} artifact(s) survived this run and will be retried tomorrow: ${names}`,
+            );
+          }
+
+    - name: Delete stale caches and report storage
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        CACHE_IDLE_DAYS: ${{ inputs.cache-idle-days }}
+        STORAGE_WARN_GB: ${{ inputs.storage-warn-gb }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          // Caches are the bigger half of Actions storage: every pull request leaves one per key
+          // under refs/pull/N/merge and nothing ever reads it again once the PR is closed. GitHub
+          // only evicts at 10 GB per repository, so without this the account fills up first.
+          const parse = (value, fallback) => {
+            const n = Number.parseFloat(value);
+            return Number.isFinite(n) && n > 0 ? n : fallback;
+          };
+          const idleDays = parse(process.env.CACHE_IDLE_DAYS, 3);
+          const warnGb = parse(process.env.STORAGE_WARN_GB, 5);
+          const idleCutoff = new Date(Date.now() - idleDays * 24 * 60 * 60 * 1000);
+
+          const { data: repo } = await github.rest.repos.get({ ...context.repo });
+          const defaultRef = `refs/heads/${repo.default_branch}`;
+
+          const caches = await github.paginate(github.rest.actions.getActionsCacheList, {
+            ...context.repo,
+            per_page: 100,
+          });
+
+          const prState = new Map();
+          const isClosedPr = async (ref) => {
+            const match = /^refs\/pull\/(\d+)\//.exec(ref);
+            if (!match) return false;
+            const number = Number(match[1]);
+            if (!prState.has(number)) {
+              try {
+                const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: number });
+                prState.set(number, pr.state === 'closed');
+              } catch (error) {
+                prState.set(number, error.status === 404);
+              }
+            }
+            return prState.get(number);
+          };
+
+          let deleted = 0;
+          let freed = 0;
+          const failed = [];
+          for (const cache of caches) {
+            if (cache.ref === defaultRef) continue;
+            const idle = new Date(cache.last_accessed_at) < idleCutoff;
+            if (!idle && !(await isClosedPr(cache.ref))) continue;
+            try {
+              await github.rest.actions.deleteActionsCacheById({ ...context.repo, cache_id: cache.id });
+              deleted += 1;
+              freed += cache.size_in_bytes;
+            } catch (error) {
+              failed.push(`${cache.key} (${error.status || error.message})`);
+            }
+          }
+
+          const gb = (bytes) => (bytes / 1e9).toFixed(2);
+          const { data: usage } = await github.rest.actions.getActionsCacheUsage({ ...context.repo });
+          const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+            ...context.repo,
+            per_page: 100,
+          });
+          const artifactBytes = artifacts
+            .filter((artifact) => !artifact.expired)
+            .reduce((sum, artifact) => sum + artifact.size_in_bytes, 0);
+          const totalBytes = usage.active_caches_size_in_bytes + artifactBytes;
+
+          await core.summary
+            .addHeading('Cache cleanup and storage', 2)
+            .addList([
+              `Caches deleted: ${deleted} (${gb(freed)} GB) - closed PRs or idle more than ${idleDays} days`,
+              `Caches failed to delete: ${failed.length}`,
+              `Cache storage now: ${gb(usage.active_caches_size_in_bytes)} GB in ${usage.active_caches_count} caches`,
+              `Artifact storage: ${gb(artifactBytes)} GB`,
+              `Warning threshold: ${warnGb} GB`,
+            ])
+            .write();
+
+          if (failed.length > 0) core.warning(`${failed.length} cache(s) could not be deleted: ${failed.join(', ')}`);
+          if (totalBytes > warnGb * 1e9) {
+            core.warning(
+              `Actions storage for this repository is ${gb(totalBytes)} GB (caches ${gb(usage.active_caches_size_in_bytes)} GB, ` +
+                `artifacts ${gb(artifactBytes)} GB), above ${warnGb} GB. Check cache keys and artifact retention-days.`,
             );
           }

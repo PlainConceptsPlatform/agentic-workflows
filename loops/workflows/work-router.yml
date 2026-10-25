@@ -1423,6 +1423,7 @@ jobs:
     permissions:
       contents: read
       actions: write
+      pull-requests: read
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1432,6 +1433,8 @@ jobs:
         with:
           token: ${{ github.token }}
           artifact-retention-days: ${{ vars.ARTIFACT_RETENTION_DAYS }}
+          cache-idle-days: ${{ vars.CACHE_IDLE_DAYS }}
+          storage-warn-gb: ${{ vars.ACTIONS_STORAGE_WARN_GB }}
 
   # The janitor. Deterministic, no model: it retries work the machine stalled on, clears the state
   # a dead run stranded, deletes branches whose pull request is finished, and keeps one issue
