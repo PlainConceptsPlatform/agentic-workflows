@@ -33,6 +33,11 @@ app rides on for free.
   write and re-verified after each one; a watchdog forces capacity back down if it
   ever reads more than 2. A third VM is never created automatically.
 - Jobs beyond capacity wait in the GitHub queue on purpose.
+- The scaler never deletes a VM whose runner GitHub reports busy, and deletes nothing
+  while the runner list cannot be read. Scale-down deletes chosen VMs the scaler last
+  heard idle, instead of lowering capacity and letting Azure pick one (which could be
+  the VM running a job). Only the VM itself (`/vm/done`) or a `Failed` instance skips
+  the check.
 - One VM runs **one job at a time** on its own local Docker Engine; two agentic
   workflows never share a VM. A VM serves **consecutive** jobs rather than one, and
   resets Docker state between them, then retires after 5 minutes idle (2 minutes if

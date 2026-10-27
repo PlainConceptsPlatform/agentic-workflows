@@ -351,6 +351,49 @@ async Task<int> GitHubRunnerCount()
     catch (Exception e) { log.LogWarning("runner count error: {m}", e.Message); return -1; }
 }
 
+// Online runners by name, with whether each is running a job. Null when any page fails:
+// a VM's work cannot be judged from a partial or missing list, so callers that would
+// delete on it must hold instead. An empty list read as "no runners" is how a busy VM
+// used to be deleted mid-job.
+async Task<Dictionary<string, bool>?> OnlineRunners()
+{
+    var runners = new Dictionary<string, bool>();
+    var url = $"https://api.github.com/orgs/{ghOrg}/actions/runners?per_page=100";
+    for (var page = 1; ; page++)
+    {
+        var node = await GetJson($"{url}&page={page}");
+        if (node?["runners"] is not JsonArray list) return null;
+        foreach (var r in list)
+            if (r?["status"]?.GetValue<string>() == "online" && r["name"]?.GetValue<string>() is string n)
+                runners[n] = r["busy"]?.GetValue<bool>() == true;
+        if (list.Count < 100) return runners;
+    }
+}
+
+bool RunsJob(Dictionary<string, bool> runners, string vm) =>
+    runners.Any(r => r.Value && r.Key.StartsWith($"i{vm}-"));
+
+// Every deletion the scaler decides on its own goes through here; /vm/done (the VM asking)
+// and Failed instances do not. A VM whose runner GitHub reports busy is never deleted, and
+// nothing is deleted while that cannot be read.
+async Task<bool> DeleteUnlessBusy(string vm, string why)
+{
+    var runners = await OnlineRunners();
+    if (runners is null)
+    {
+        log.LogWarning("not deleting VM {vm} ({why}): the runner list could not be read", vm, why);
+        return false;
+    }
+    if (RunsJob(runners, vm))
+    {
+        log.LogWarning("not deleting VM {vm} ({why}): its runner is running a job", vm, why);
+        return false;
+    }
+    log.LogWarning("deleting VM {vm} ({why})", vm, why);
+    await DeleteInstance(vm);
+    return true;
+}
+
 // ---- policy ----
 // Demand is workflow sessions, not raw jobs: a run with 13 sequential jobs needs one VM,
 // not thirteen. Sessions = active leases + labelled workflows still unclaimed. Unlabelled
@@ -415,8 +458,23 @@ async Task Evaluate(string reason)
             var leased = leasesByKey.Count;
             if (inProgress == 0 && leased == 0)
             {
-                log.LogInformation("scale-down: active={a} > desired={d} with no jobs in flight and no leases; capacity -> {d}", active, desired, desired);
-                await SetCapacity(desired);
+                // The ledger can be wrong (a lost in_progress webhook), and a capacity drop lets
+                // Azure pick the VM. So the scaler picks: only VMs it last heard idle or asking
+                // for work, whose runner GitHub does not report busy.
+                var surplus = active - desired;
+                var quiet = instances
+                    .Where(i => i.State == "Succeeded" && !leasesByVm.ContainsKey(i.Id)
+                                && vmHeartbeat.TryGetValue(i.Id, out var hb)
+                                && hb.State is "idle" or "requesting-jit"
+                                && DateTimeOffset.UtcNow - hb.Last < HeartbeatStale)
+                    .Select(i => i.Id)
+                    .ToList();
+                log.LogInformation("scale-down: active={a} > desired={d} with no jobs in flight and no leases; {n} quiet VM(s)", active, desired, quiet.Count);
+                foreach (var vm in quiet)
+                {
+                    if (surplus <= 0) break;
+                    if (await DeleteUnlessBusy(vm, "scale-down")) surplus--;
+                }
             }
             else
             {
@@ -1024,30 +1082,10 @@ _ = Task.Run(async () =>
                 // online (busy) runner; a VM between jobs polls /vm/jit every 15s. A VM with
                 // neither is dead — release its lease even if the run still has queued jobs,
                 // so the run is served by a fresh VM instead of deadlocking behind a zombie.
-                var online = new HashSet<string>();
-                try
-                {
-                    var url = $"https://api.github.com/orgs/{ghOrg}/actions/runners?per_page=100";
-                    while (url is not null)
-                    {
-                        using var req = new HttpRequestMessage(HttpMethod.Get, url);
-                        req.Headers.Authorization = new("Bearer", ghPat);
-                        req.Headers.Accept.ParseAdd("application/vnd.github+json");
-                        req.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
-                        var resp = await http.SendAsync(req);
-                        if (!resp.IsSuccessStatusCode) break;
-                        var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync())!;
-                        foreach (var rr in node["runners"] as JsonArray ?? [])
-                            if (rr?["status"]?.GetValue<string>() == "online" && rr?["name"]?.GetValue<string>() is string nm)
-                                online.Add(nm);
-                        IEnumerable<string>? lh = null;
-                        resp.Headers.TryGetValues("Link", out lh);
-                        var lk = lh?.FirstOrDefault() ?? "";
-                        var mt = System.Text.RegularExpressions.Regex.Match(lk, "<([^>]+)>; rel=\"next\"");
-                        url = mt.Success ? mt.Groups[1].Value : null;
-                    }
-                }
-                catch (Exception e) { log.LogWarning("online runner fetch failed: {m}", e.Message); }
+                // Unknown (null) is not "no runners": nothing is judged unhealthy on it.
+                var runnerList = await OnlineRunners();
+                if (runnerList is null) log.LogWarning("online runner fetch failed; no VM is judged dead this sweep");
+                var online = runnerList?.Keys.ToHashSet() ?? [];
 
                 var now = DateTimeOffset.UtcNow;
                 foreach (var (vm, lease) in leasesByVm.ToList())
@@ -1068,7 +1106,7 @@ _ = Task.Run(async () =>
                     // deadline. A VM we no longer trust as owner we also delete as worker, so it
                     // cannot return and split-brain the run.
                     var stuckReset = hb is not null && hb.State == "resetting" && now - hb.StateSince > ResetDeadline;
-                    var unhealthy = (!hasRunner && livenessStale) || stuckReset;
+                    var unhealthy = runnerList is not null && ((!hasRunner && livenessStale) || stuckReset);
                     if (gone || expired || idle)
                     {
                         log.LogWarning("releasing lease {l} from {vm} (gone={g} expired={e} idle={i})", lease.AffinityLabel, vm, gone, expired, idle);
@@ -1076,10 +1114,12 @@ _ = Task.Run(async () =>
                     }
                     else if (unhealthy)
                     {
-                        log.LogWarning("lease {l} on unhealthy VM {vm} (runner={r} hb={s} stuckReset={x}); releasing and deleting VM", lease.AffinityLabel, vm, hasRunner, hb?.State ?? "none", stuckReset);
-                        lock (leaseLock) ReleaseLocked(lease);
-                        vmHeartbeat.TryRemove(vm, out _);
-                        await DeleteInstance(vm);
+                        log.LogWarning("lease {l} on unhealthy VM {vm} (runner={r} hb={s} stuckReset={x})", lease.AffinityLabel, vm, hasRunner, hb?.State ?? "none", stuckReset);
+                        if (await DeleteUnlessBusy(vm, "unhealthy lease holder"))
+                        {
+                            lock (leaseLock) ReleaseLocked(lease);
+                            vmHeartbeat.TryRemove(vm, out _);
+                        }
                     }
                 }
                 // A VM with a heartbeat but no lease that went silent with no runner is a zombie
@@ -1088,11 +1128,10 @@ _ = Task.Run(async () =>
                 {
                     if (leasesByVm.ContainsKey(vm)) continue;
                     if (!alive.Contains(vm)) { vmHeartbeat.TryRemove(vm, out _); continue; }
-                    if (now - h.Last > HeartbeatStale && !online.Any(n => n.StartsWith($"i{vm}-")))
+                    if (runnerList is not null && now - h.Last > HeartbeatStale && !online.Any(n => n.StartsWith($"i{vm}-")))
                     {
-                        log.LogWarning("zombie VM {vm} (heartbeat stale, no runner); deleting", vm);
-                        vmHeartbeat.TryRemove(vm, out _);
-                        await DeleteInstance(vm);
+                        if (await DeleteUnlessBusy(vm, "zombie: heartbeat stale, no runner"))
+                            vmHeartbeat.TryRemove(vm, out _);
                     }
                 }
             }
@@ -1143,7 +1182,7 @@ _ = Task.Run(async () =>
                             log.LogWarning("zombie detection: {n} active VM(s) but 0 runners on GitHub for {s:F0}s; deleting all instances",
                                 active.Count, sinceActivity.TotalSeconds);
                             foreach (var inst in active)
-                                await DeleteInstance(inst.Id);
+                                await DeleteUnlessBusy(inst.Id, "zombie: no runners on GitHub");
                             fruitlessCycles = 0;
                             // Do NOT clear the queued ledger. Those entries came from real
                             // GitHub webhooks for jobs that are genuinely waiting. Deleting
