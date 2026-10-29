@@ -190,6 +190,9 @@ of them runs exactly the pipeline above and nothing else. The root is held while
 Once every child has landed and the feature branch is green, the gate decides it like any pull
 request and merges it, unless the blast radius, a protected path or a finding sends it to a person
 (`STACK_ROOT_AUTOMERGE: "false"` restores a human merge for every root).
+With `UNATTENDED: "true"` a feature blocked by another waits for that feature's root to merge;
+the router's `stack-landed` job then brings the default branch into its branch, releases its
+children and opens an Unattended report issue.
 
 ---
 

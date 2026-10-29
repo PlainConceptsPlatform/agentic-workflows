@@ -146,6 +146,25 @@ All of it is gated on markers, not labels: a repository whose issues carry no
 `stack-root-branch` / `stack-root-pr` markers runs the flat pipeline above, byte for byte what
 it ran before stacks existed, with no new labels and no new routes firing.
 
+### Unattended
+
+`UNATTENDED: "true"`, set on both the router and the merge gate, is for a repository that is left
+to work alone: the people refine and answer questions by day, the pipeline builds by night.
+
+- The merge gate merges a pull request whose only reason for a person is a judgement call: agent
+  confidence under the threshold, acceptance criteria reported unmet, a change reported hard to
+  undo. Its comment names what was accepted. A measured fact still stops the merge: CI, a
+  verified critical or high finding, a protected or owner path, a high blast radius, a failing
+  check-diff, anything the workflow could not measure.
+- Features chain. A feature issue blocked by another (GitHub's "blocked by" relation, or a
+  `Blocked by #N` line in its body) keeps its children held until that feature's stack root merges.
+  The router's `stack-landed` job then merges the default branch into the waiting feature's branch,
+  releases its children, and opens an **Unattended report** issue listing the pull requests that
+  merged, labelled `needs-human` when any merged on a judgement call. A branch that will not merge
+  cleanly keeps its feature held and labels it `needs-human`.
+
+With `"false"`, the default, none of this runs.
+
 ### The merge train
 
 Open pull requests merge one at a time, the lowest number first, whether the bot or a person

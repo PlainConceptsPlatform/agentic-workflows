@@ -19,7 +19,7 @@
 # Usage:
 #   validate-merge-gate-output.sh OUTPUT_FILE ISSUE CI_CONCLUSION \
 #                                 BLAST_LEVEL PROTECTED_HIT OWNER_HIT CONFIDENCE_THRESHOLD \
-#                                 CODE_RULES
+#                                 CODE_RULES [UNATTENDED]
 
 set -euo pipefail
 
@@ -37,6 +37,12 @@ confidence_threshold="${7-0.8}"
 # pass, fail or absent (the repository has no check-diff). An empty value is a job that did not
 # report, and like every other unmeasured fact it goes to a person.
 code_rules="${8-absent}"
+# "true" lets a pull request whose only reason for a person is a judgement call merge anyway: low
+# agent confidence, acceptance criteria reported unmet, or a change reported hard to undo. The
+# facts that stop a merge stay: CI, verified critical or high findings, protected and owner paths,
+# a high blast radius, a failing check-diff and anything the workflow could not measure. The
+# caller records what was accepted so a person can read it afterwards.
+unattended="${9-false}"
 
 # An empty measured level is not a low-risk pull request, it is a job that did not report. The
 # defaults above exist for a caller that genuinely has nothing to say; an empty string arriving
@@ -61,7 +67,7 @@ jq -r \
   --arg protected "$protected_hit" \
   --arg owner "$owner_hit" \
   --arg threshold "$confidence_threshold" \
-  --arg code "$code_rules" '
+  --arg code "$code_rules"   --arg unattended "$unattended" '
 
   def level_rank: {"low": 0, "medium": 1, "high": 2}[.];
   def is_bool: type == "boolean";
@@ -161,9 +167,10 @@ jq -r \
                   # pull request goes to a person rather than through on a default.
                   elif $protected != "false" or $owner != "false" then "human-review"
                   elif $code != "pass" and $code != "absent" then "human-review"
-                  elif $level == 1 and $recoverability == "low" then "human-review"
-                  elif ($report | has("acceptanceCriteriaMet")) and $report.acceptanceCriteriaMet == false then "human-review"
-                  elif $confidence < ($threshold | tonumber) then "human-review"
+                  elif ($level == 1 and $recoverability == "low")
+                    or (($report | has("acceptanceCriteriaMet")) and $report.acceptanceCriteriaMet == false)
+                    or $confidence < ($threshold | tonumber)
+                  then (if $unattended == "true" then "auto-merge" else "human-review" end)
                   else "auto-merge"
                   end
               end

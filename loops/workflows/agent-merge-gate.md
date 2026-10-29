@@ -66,6 +66,14 @@ env:
   # Agent confidence below which the pull request goes to a human. The agent reports the number;
   # this decides what it means.
   CONFIDENCE_THRESHOLD: "0.8"
+  # "true" is for a repository that is left to work alone, overnight or across a stack of features.
+  # A pull request whose only reason for a person is a judgement call (agent confidence under the
+  # threshold, acceptance criteria reported unmet, a change reported hard to undo) then merges, and
+  # the pull request and the stack's final report name what was accepted. What still stops a merge
+  # is what was measured, not judged: CI, a verified critical or high finding, a protected or owner
+  # path, a high blast radius, a failing check-diff and anything the workflow could not measure.
+  # "false" sends every one of them to a person.
+  UNATTENDED: "false"
   # Replay the verification plan when the gate hands the pull request to a person, so the
   # reviewer sees the screenshots before deciding. "false" leaves evidence to the merge.
   EVIDENCE_BEFORE_REVIEW: "true"
@@ -501,6 +509,7 @@ jobs:
       outcome: ${{ steps.validate.outputs.outcome }}
       pushed: ${{ steps.validate.outputs.pushed }}
       empty: ${{ steps.validate.outputs.empty }}
+      flags: ${{ steps.validate.outputs.flags }}
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -525,6 +534,7 @@ jobs:
           owner-hit: ${{ needs.protected_changes.outputs.owner_hit }}
           confidence-threshold: ${{ env.CONFIDENCE_THRESHOLD }}
           code-rules: ${{ needs.code_rules.outputs.result }}
+          unattended: ${{ env.UNATTENDED }}
   conclude:
     needs: [activation, subject, protected_changes, agent, safe_outputs, validate_output]
     # `protected_changes.result == 'success'` is stated rather than relied on. GitHub skips a job
@@ -599,6 +609,9 @@ jobs:
             | Files / lines | ${{ needs.protected_changes.outputs.files_changed }} / ${{ needs.protected_changes.outputs.lines_changed }} counted, ${{ needs.protected_changes.outputs.files_total }} / ${{ needs.protected_changes.outputs.lines_total }} in the diff |
             | Protected paths | ${{ needs.protected_changes.outputs.requires_review == 'true' && 'yes' || 'no' }} |
             | Owner paths | ${{ needs.protected_changes.outputs.owner_hit == 'true' && 'yes' || 'no' }} |
+            ${{ needs.validate_output.outputs.flags != ''
+              && format('| Accepted unattended | {0} |', needs.validate_output.outputs.flags)
+              || '' }}
             ${{ needs.validate_output.outputs.outcome == 'owner-review'
               && format('| Required owners | `{0}` |', needs.protected_changes.outputs.required_owners != '' && needs.protected_changes.outputs.required_owners || 'none configured, see the matched paths above')
               || '' }}

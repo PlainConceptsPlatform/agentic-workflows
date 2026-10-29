@@ -31,7 +31,14 @@ inputs:
     description: "check-diff result on the pull request: pass, fail or absent. Empty means it did not report."
     required: false
     default: absent
+  unattended:
+    description: "true lets a judgement call (low confidence, unmet acceptance criteria, hard to undo) merge instead of going to a person. Facts the workflow measured still hold the pull request."
+    required: false
+    default: 'false'
 outputs:
+  flags:
+    description: "What an unattended merge accepted, on one line, for the pull request and the final report. Empty when nothing was."
+    value: ${{ steps.validate.outputs.flags }}
   valid:
     description: Whether the output produced a usable disposition.
     value: ${{ steps.validate.outputs.valid }}
@@ -59,13 +66,29 @@ runs:
         OWNER_HIT: ${{ inputs.owner-hit }}
         CONFIDENCE_THRESHOLD: ${{ inputs.confidence-threshold }}
         CODE_RULES: ${{ inputs.code-rules }}
+        UNATTENDED: ${{ inputs.unattended }}
       run: |
         set -euo pipefail
 
         outcome="$(bash "${{ github.action_path }}/validate-merge-gate-output.sh" \
           "$OUTPUT_FILE" "$ISSUE_NUMBER" "$CI_CONCLUSION" \
-          "$BLAST_LEVEL" "$PROTECTED_HIT" "$OWNER_HIT" "$CONFIDENCE_THRESHOLD" "$CODE_RULES")"
+          "$BLAST_LEVEL" "$PROTECTED_HIT" "$OWNER_HIT" "$CONFIDENCE_THRESHOLD" "$CODE_RULES" "$UNATTENDED")"
         echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+
+        # What the unattended merge let through, named so the person reading the report later knows
+        # where to look. It is read from the same report the decision used, never from the prose.
+        flags=""
+        if [ "$UNATTENDED" = true ] && [ "$outcome" = auto-merge ]; then
+          flags=$(jq -r --arg threshold "$CONFIDENCE_THRESHOLD" --arg blast "$BLAST_LEVEL" '
+            [.items[]? | select(.type == "add_comment") | .body | strings
+              | [scan("```json\\s*(.*?)```"; "m") | .[0]] | last | select(. != null) | fromjson?] | last // {}
+            | [ (if (.confidence // 1) < ($threshold | tonumber) then "confidence \(.confidence)" else empty end),
+                (if .acceptanceCriteriaMet == false then "acceptance criteria reported unmet" else empty end),
+                (if ((.recoverability // "") | ascii_downcase) == "low" then "hard to undo" else empty end),
+                (if $blast == "medium" then "medium blast radius" else empty end) ]
+            | join("; ")' "$OUTPUT_FILE" 2>/dev/null || true)
+        fi
+        echo "flags=$flags" >> "$GITHUB_OUTPUT"
         echo "valid=$([ "$outcome" != 'invalid' ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
         pushed=$(jq -r '[.items[]? | select(.type == "push_to_pull_request_branch")] | length > 0' "$OUTPUT_FILE" 2>/dev/null || echo false)
         echo "pushed=$pushed" >> "$GITHUB_OUTPUT"

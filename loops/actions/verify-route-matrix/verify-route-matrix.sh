@@ -1608,10 +1608,10 @@ if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
 
   gate_case() {
     local name="$1" want="$2" json="$3" conclusion="$4"
-    local blast="${5:-low}" protected="${6:-false}" owner="${7:-false}" code="${8-pass}"
+    local blast="${5:-low}" protected="${6:-false}" owner="${7:-false}" code="${8-pass}" unattended="${9:-false}"
     printf '%s' "$json" > "$gate_fixture"
     local got
-    got=$(bash "$GATE_VALIDATOR" "$gate_fixture" 7 "$conclusion" "$blast" "$protected" "$owner" 0.8 "$code" 2>&1)
+    got=$(bash "$GATE_VALIDATOR" "$gate_fixture" 7 "$conclusion" "$blast" "$protected" "$owner" 0.8 "$code" "$unattended" 2>&1)
     if [ "$got" != "$want" ]; then
       VALIDATOR_OK=0
       echo "FAIL: the merge-gate validator called '${name}' ${got}, expected ${want}" >&2
@@ -1680,6 +1680,21 @@ if [ -f "$GATE_VALIDATOR" ] && worker_installed merge-gate; then
                                                  human-review "$(gate_items "$(gate_comment assessed "$gate_unmet")")" success low
   gate_case "confidence below the threshold needs a person" \
                                                  human-review "$(gate_items "$(gate_comment assessed "$gate_unsure")")" success low
+
+  # Unattended, a judgement call merges and is reported; a measured fact still stops the merge.
+  gate_case "unattended, low confidence merges"  auto-merge   "$(gate_items "$(gate_comment assessed "$gate_unsure")")" success low false false pass true
+  gate_case "unattended, an unmet criterion merges" \
+                                                 auto-merge   "$(gate_items "$(gate_comment assessed "$gate_unmet")")" success low false false pass true
+  gate_case "unattended, medium risk that cannot be undone merges" \
+                                                 auto-merge   "$(gate_items "$(gate_comment assessed "$gate_fragile")")" success medium false false pass true
+  gate_case "unattended, a verified critical finding still blocks" \
+                                                 blocked      "$(gate_items "$(gate_comment assessed "$gate_verified")")" success low false false pass true
+  gate_case "unattended, a protected path still needs the owner" \
+                                                 owner-review "$(gate_items "$(gate_comment assessed "$gate_unsure")")" success low true false pass true
+  gate_case "unattended, a high blast radius still needs the owner" \
+                                                 owner-review "$(gate_items "$(gate_comment assessed "$gate_unsure")")" success high false false pass true
+  gate_case "unattended, a check-diff that did not report still needs a person" \
+                                                 human-review "$(gate_items "$(gate_comment assessed "$gate_unsure")")" success low false false '' true
 
   # The agent may raise the measured blast radius when it sees something the path rules could
   # not. It may never lower it, which is the only direction that can turn a person's review into
