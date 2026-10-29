@@ -542,6 +542,7 @@ jobs:
       stack-branch: ${{ steps.stack.outputs.stack-branch }}
       stack-in-flight: ${{ steps.inflight.outputs.stack-in-flight }}
       stack-blocked: ${{ steps.blocked.outputs.stack-blocked }}
+      flat-blocked: ${{ steps.flatblocked.outputs.flat-blocked }}
       implement-queue: ${{ steps.queue.outputs.queue }}
     steps:
       # Which implement queue this issue waits in. The children of one refine share a queue,
@@ -695,6 +696,38 @@ jobs:
             gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file /tmp/held.md >/dev/null || true
           fi
 
+      # Unattended, a feature refine did not split takes the flat path, which has no stack to wait
+      # in. Blocked by a feature that has not landed, it would build on a default branch without
+      # that feature. It is held the same way a child is, and stack-landed releases it.
+      - name: Hold an unsplit feature whose blockers have not landed
+        id: flatblocked
+        if: steps.stack.outputs.is-stack != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
+        run: |
+          set -euo pipefail
+          echo "flat-blocked=false" >> "$GITHUB_OUTPUT"
+          [ "${UNATTENDED:-false}" = true ] || exit 0
+          waiting=""
+          for b in $( { gh api "repos/$REPO/issues/$ISSUE_NUMBER/dependencies/blocked_by" --jq '.[].number' 2>/dev/null || true
+                        gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
+                          | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' || true
+                      } | sort -u ); do
+            gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open || continue
+            waiting="$waiting #$b"
+          done
+          [ -n "$waiting" ] || exit 0
+          echo "::notice::#$ISSUE_NUMBER is blocked by$waiting, not yet landed; holding it."
+          echo "flat-blocked=true" >> "$GITHUB_OUTPUT"
+          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label bot-working >/dev/null 2>&1 || true
+          marker='<!-- stack-held -->'
+          if ! gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null | grep -qF "$marker"; then
+            printf '%s\nHeld until%s have landed on the default branch: this feature builds on them. It keeps `implement` and is released when they merge.\n' "$marker" "$waiting" > /tmp/held.md
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file /tmp/held.md >/dev/null || true
+          fi
+
       - name: Detect an in-flight implement on the feature branch
         id: inflight
         if: steps.stack.outputs.is-stack == 'true'
@@ -720,7 +753,7 @@ jobs:
 
   call-implement:
     needs: [classify, authorize, check-implement-pr, check-stack-branch]
-    if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true' && needs.check-implement-pr.outputs.has-open-pr != 'true' && needs.check-stack-branch.outputs.is-stack != 'true'
+    if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true' && needs.check-implement-pr.outputs.has-open-pr != 'true' && needs.check-stack-branch.outputs.is-stack != 'true' && needs.check-stack-branch.outputs.flat-blocked != 'true'
     uses: ./.github/workflows/agent-implement.lock.yml
     # One FIFO queue per IMPLEMENT_PARALLELISM slot, chosen by check-stack-branch: the children of
     # one refine always share a queue, independent issues spread across them.
@@ -1444,6 +1477,20 @@ jobs:
               gh issue edit "$child" --repo "$REPO" --add-label implement >/dev/null
               echo "Released #$child of feature #$feature."
             done
+          done
+
+          # A feature refine did not split waits on the issue itself, held by check-stack-branch with
+          # `implement` kept. It cuts from the default branch, which now has what it waited on.
+          flat=$(gh issue list --repo "$REPO" --state open --label implement --limit 200 \
+            --json number,labels,body \
+            --jq '.[] | select([.labels[].name] | index("bot-working") | not)
+                      | select(.body | test("<!-- split-parent: [0-9]+ -->") | not) | .number')
+          for issue in $flat; do
+            depends_on_parent "$issue" || continue
+            [ -z "$(blockers_of "$issue")" ] || { echo "#$issue still waits on other work."; continue; }
+            gh issue edit "$issue" --repo "$REPO" --remove-label implement >/dev/null 2>&1 || true
+            gh issue edit "$issue" --repo "$REPO" --add-label implement >/dev/null
+            echo "Released unsplit feature #$issue."
           done
 
           # The report: what merged without a person, and what the gate noted on the way. One issue
