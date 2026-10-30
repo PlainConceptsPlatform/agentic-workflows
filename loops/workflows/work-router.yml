@@ -684,7 +684,12 @@ jobs:
                             gh issue view "$feature" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
                               | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' || true
                           } | sort -u ); do
-                gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open || continue
+                # A feature's own children are not what the feature waits on. Refine's tracker lists them
+                # in the feature body as "#N ... Blocked by #M", and reading those lines as the feature's
+                # blockers held every child behind its siblings, and the first one behind itself.
+                info=$(gh issue view "$b" --repo "$REPO" --json state,body 2>/dev/null) || continue
+                printf '%s' "$info" | jq -e '(.state // "" | ascii_downcase) == "open"' >/dev/null || continue
+                printf '%s' "$info" | jq -r '.body // ""' | grep -qF "<!-- split-parent: ${feature} -->" && continue
                 waiting="$waiting #$b"
               done
             fi
@@ -1424,7 +1429,11 @@ jobs:
               gh api "repos/$REPO/issues/$1/dependencies/blocked_by" --jq '.[] | select(.state == "open") | .number' 2>/dev/null || true
               for b in $(gh issue view "$1" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
                            | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true); do
-                gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open && echo "$b" || true
+                # The feature's own children, listed in its tracker with their own "Blocked by", are not blockers.
+                info=$(gh issue view "$b" --repo "$REPO" --json state,body 2>/dev/null) || continue
+                printf '%s' "$info" | jq -e '(.state // "" | ascii_downcase) == "open"' >/dev/null || continue
+                printf '%s' "$info" | jq -r '.body // ""' | grep -qF "<!-- split-parent: $1 -->" && continue
+                echo "$b"
               done
             } | grep -vx "$parent" | sort -u || true
           }
