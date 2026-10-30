@@ -695,7 +695,12 @@ jobs:
                             gh issue view "$feature" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
                               | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' || true
                           } | sort -u ); do
-                gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open || continue
+                # A feature's own children are not what the feature waits on. Refine's tracker lists them
+                # in the feature body as "#N ... Blocked by #M", and reading those lines as the feature's
+                # blockers held every child behind its siblings, and the first one behind itself.
+                info=$(gh issue view "$b" --repo "$REPO" --json state,body 2>/dev/null) || continue
+                printf '%s' "$info" | jq -e '(.state // "" | ascii_downcase) == "open"' >/dev/null || continue
+                printf '%s' "$info" | jq -r '.body // ""' | grep -qF "<!-- split-parent: ${feature} -->" && continue
                 waiting="$waiting #$b"
               done
             fi
@@ -752,6 +757,7 @@ jobs:
           gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label bot-working >/dev/null 2>&1 || true
           marker='<!-- stack-held -->'
           if ! gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null | grep -qF "$marker"; then
+            # shellcheck disable=SC2016
             printf '%s\nHeld until%s have landed on the default branch: this feature builds on them. It keeps `implement` and is released when they merge.\n' "$marker" "$waiting" > /tmp/held.md
             gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file /tmp/held.md >/dev/null || true
           fi
@@ -1327,6 +1333,7 @@ jobs:
                   # each cut from the same branch, and every landing left the others conflicting. The
                   # next landing releases the next child. A held child with no `Blocked by` of its
                   # own (held because a sibling was in flight) is free once it carries the hold marker.
+                  # shellcheck disable=SC2086
                   for child in $(printf '%s\n' $children | sort -n); do
                     [ "$child" = "$closed_issue" ] && continue
                     meta=$(gh issue view "$child" --repo "$REPO" --json state,labels,body 2>/dev/null || echo '{}')
@@ -1453,7 +1460,11 @@ jobs:
               gh api "repos/$REPO/issues/$1/dependencies/blocked_by" --jq '.[] | select(.state == "open") | .number' 2>/dev/null || true
               for b in $(gh issue view "$1" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
                            | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true); do
-                gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open && echo "$b" || true
+                # The feature's own children, listed in its tracker with their own "Blocked by", are not blockers.
+                info=$(gh issue view "$b" --repo "$REPO" --json state,body 2>/dev/null) || continue
+                printf '%s' "$info" | jq -e '(.state // "" | ascii_downcase) == "open"' >/dev/null || continue
+                printf '%s' "$info" | jq -r '.body // ""' | grep -qF "<!-- split-parent: $1 -->" && continue
+                echo "$b"
               done
             } | grep -vx "$parent" | sort -u || true
           }
@@ -1505,6 +1516,7 @@ jobs:
             fi
             # One child per feature, the lowest-numbered free one; each landing on the feature branch
             # releases the next (land-stack-child), so siblings never build side by side.
+            # shellcheck disable=SC2086
             for child in $(printf '%s\n' ${next_children[$feature]} | sort -n); do
               own=$(gh issue view "$child" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
                 | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)

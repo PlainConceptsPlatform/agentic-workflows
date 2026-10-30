@@ -2972,6 +2972,7 @@ fi
 ONE_AT_A_TIME_OK=1
 grep -qF 'The next landing releases the next one."' "${WORKFLOWS_DIR}/work-router.yml" ||
   { ONE_AT_A_TIME_OK=0; echo "FAIL: land-stack-child releases every free sibling at once" >&2; }
+# shellcheck disable=SC2015
 grep -qF 'echo "Released #$child of feature #$feature."' "${WORKFLOWS_DIR}/work-router.yml" &&
   grep -A1 -F 'echo "Released #$child of feature #$feature."' "${WORKFLOWS_DIR}/work-router.yml" | grep -qE '^\s+break$' ||
   { ONE_AT_A_TIME_OK=0; echo "FAIL: stack-landed releases every free child of the next feature at once" >&2; }
