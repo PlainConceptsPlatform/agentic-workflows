@@ -223,10 +223,17 @@ runs:
           // every sweep.
           const RELEASE_MARKER = '<!-- housekeeping-release -->';
           let released = 0;
-          for (const issue of issues) {
+          // One child per feature per sweep, the lowest-numbered: children of one stack build on the
+          // same branch, and releasing several at once lets them build side by side and conflict.
+          // The router holds a child while a sibling's pull request is open, and the sibling's
+          // landing releases the next one.
+          const releasedFeatures = new Set();
+          for (const issue of [...issues].sort((a, b) => a.number - b.number)) {
             if (issue.pull_request) continue;
             const labels = names(issue);
             if (!labels.includes('implement')) continue;
+            const feature = /<!-- split-parent: (\d+) -->/.exec(issue.body ?? '')?.[1];
+            if (feature && releasedFeatures.has(feature)) continue;
             if (['bot-working', 'stalled', 'review', 'pr-pending'].some((l) => labels.includes(l))) continue;
             const thread = await github.paginate(github.rest.issues.listComments, {
               ...context.repo, issue_number: issue.number, per_page: 100,
@@ -252,6 +259,7 @@ runs:
                 inputs: { operation: 'implement', 'issue-number': String(issue.number) },
               });
             });
+            if (feature) releasedFeatures.add(feature);
             released += 1;
           }
 

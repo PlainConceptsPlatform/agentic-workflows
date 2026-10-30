@@ -2936,6 +2936,20 @@ if grep -qF 'not green/mergeable yet' "${WORKFLOWS_DIR}/work-router.yml"; then
 else
   PASS=$((PASS + 1))
 fi
+# Children of one stack build one at a time: every releaser lets one child go per feature, and the
+# router holds a child while a sibling's pull request is open on the feature branch (Odyssey
+# feat/323 built three children side by side and two landed conflicting).
+ONE_AT_A_TIME_OK=1
+grep -qF 'The next landing releases the next one."' "${WORKFLOWS_DIR}/work-router.yml" ||
+  { ONE_AT_A_TIME_OK=0; echo "FAIL: land-stack-child releases every free sibling at once" >&2; }
+grep -qF 'echo "Released #$child of feature #$feature."' "${WORKFLOWS_DIR}/work-router.yml" &&
+  grep -A1 -F 'echo "Released #$child of feature #$feature."' "${WORKFLOWS_DIR}/work-router.yml" | grep -qE '^\s+break$' ||
+  { ONE_AT_A_TIME_OK=0; echo "FAIL: stack-landed releases every free child of the next feature at once" >&2; }
+grep -qF -- '--base "$STACK_BRANCH" --limit 100 --json number,body' "${WORKFLOWS_DIR}/work-router.yml" ||
+  { ONE_AT_A_TIME_OK=0; echo "FAIL: check-stack-branch dispatches a child while a sibling's pull request is open" >&2; }
+grep -qF 'releasedFeatures' "${HERE}/../housekeeping/action.yml" ||
+  { ONE_AT_A_TIME_OK=0; echo "FAIL: housekeeping releases several children of one feature in a sweep" >&2; }
+if [ "$ONE_AT_A_TIME_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # A stack child runs the feature branch's copy of the workflows, so the router brings the default
 # branch in before it dispatches one.
 if grep -qF 'bring $DEFAULT_BRANCH into $STACK_BRANCH before a child runs' "${WORKFLOWS_DIR}/work-router.yml"; then

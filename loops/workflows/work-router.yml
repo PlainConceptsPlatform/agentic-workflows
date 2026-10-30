@@ -683,6 +683,17 @@ jobs:
               done
             fi
           fi
+          # One child of a stack at a time. A sibling's pull request still open on the feature branch
+          # means this child would cut from a branch that is about to change under it, and whichever
+          # lands second conflicts (Odyssey feat/323: three children built side by side, two left
+          # DIRTY). That sibling's landing releases the next child. The child's own pull request,
+          # if it has one, is not a sibling.
+          if [ -z "$waiting" ]; then
+            for pr in $(gh pr list --repo "$REPO" --state open --base "$STACK_BRANCH" --limit 100 --json number,body \
+                          --jq ".[] | select(.body | test(\"(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?) #${ISSUE_NUMBER}([^0-9]|$)\") | not) | .number" 2>/dev/null || true); do
+              waiting="$waiting #$pr"
+            done
+          fi
           [ -n "$waiting" ] || exit 0
           echo "::notice::#$ISSUE_NUMBER is blocked by$waiting, not yet landed; holding it."
           echo "stack-blocked=true" >> "$GITHUB_OUTPUT"
@@ -1275,13 +1286,21 @@ jobs:
                   # so the landing does: re-adding `implement` with the App token is a bot label
                   # event, which the router routes straight to implement. The child that just
                   # landed counts as done even before the gate closes its issue a moment later.
-                  for child in $children; do
+                  #
+                  # One child per landing, the lowest-numbered one that is free. Releasing every free
+                  # sibling at once started three implements on Odyssey's feat/323 within a second;
+                  # each cut from the same branch, and every landing left the others conflicting. The
+                  # next landing releases the next child. A held child with no `Blocked by` of its
+                  # own (held because a sibling was in flight) is free once it carries the hold marker.
+                  for child in $(printf '%s\n' $children | sort -n); do
                     [ "$child" = "$closed_issue" ] && continue
                     meta=$(gh issue view "$child" --repo "$REPO" --json state,labels,body 2>/dev/null || echo '{}')
                     printf '%s' "$meta" | jq -e '(.state // "" | ascii_downcase) == "open"' >/dev/null || continue
-                    printf '%s' "$meta" | jq -e '[.labels[]?.name] | (index("implement") != null) and (index("bot-working") == null)' >/dev/null || continue
+                    printf '%s' "$meta" | jq -e '[.labels[]?.name] | (index("implement") != null) and (index("bot-working") == null) and (index("pr-pending") == null)' >/dev/null || continue
                     blockers=$(printf '%s' "$meta" | jq -r '.body // ""' | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
-                    [ -n "$blockers" ] || continue
+                    if [ -z "$blockers" ]; then
+                      gh api "repos/$REPO/issues/$child/comments?per_page=100" --jq '.[].body' 2>/dev/null | grep -qF '<!-- stack-held -->' || continue
+                    fi
                     waiting=""
                     for b in $blockers; do
                       [ "$b" = "$closed_issue" ] && continue
@@ -1295,7 +1314,8 @@ jobs:
                     fi
                     gh issue edit "$child" --repo "$REPO" --remove-label implement >/dev/null 2>&1 || true
                     gh issue edit "$child" --repo "$REPO" --add-label implement >/dev/null
-                    echo "Released #$child: everything it was blocked by has landed."
+                    echo "Released #$child: everything it was blocked by has landed. The next landing releases the next one."
+                    break
                   done
                   open_children=0
                   for child in $children; do
@@ -1448,7 +1468,9 @@ jobs:
               gh issue comment "$feature" --repo "$REPO" --body "Feature #$parent landed on $DEFAULT_BRANCH, but \`$DEFAULT_BRANCH\` could not be merged into \`$branch\` ($answer). The children of this feature stay held until a person resolves the branch and re-adds \`implement\` to the first one." >/dev/null || true
               continue
             fi
-            for child in ${next_children[$feature]}; do
+            # One child per feature, the lowest-numbered free one; each landing on the feature branch
+            # releases the next (land-stack-child), so siblings never build side by side.
+            for child in $(printf '%s\n' ${next_children[$feature]} | sort -n); do
               own=$(gh issue view "$child" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
                 | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
               waiting=""
@@ -1462,6 +1484,7 @@ jobs:
               gh issue edit "$child" --repo "$REPO" --remove-label implement >/dev/null 2>&1 || true
               gh issue edit "$child" --repo "$REPO" --add-label implement >/dev/null
               echo "Released #$child of feature #$feature."
+              break
             done
           done
 
