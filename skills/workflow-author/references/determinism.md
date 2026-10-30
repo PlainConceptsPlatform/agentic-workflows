@@ -93,7 +93,7 @@ statement, delete the copy or delete the test.
 The matrix should also assert the wiring, which the classifier cannot know about:
 
 ```bash
-for route in refine implement triage apply-review merge-gate audit release bot-approve \
+for route in refine implement triage apply-review merge-gate audit docs-audit release bot-approve \
              audit-close cleanup-artifacts reconcile-bot-pr-runs validate; do
   grep -q "route == '${route}'" "$ROUTER_YML" || fail "no job for route ${route}"
 done

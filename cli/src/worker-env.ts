@@ -186,14 +186,15 @@ function engineEndpoint(content: string): string | undefined {
 // group `agentic`). The route matrix asserts it, so a repo cannot drift back without a red run. Per the standing rule for this package, anything a
 // consumer really must vary belongs in `env:` at the top of the file, not in `runs-on`.
 
-// GitHub evaluates no expression in a `workflow_run.workflows:` list or in a `cron:`, so the two
+// GitHub evaluates no expression in a `workflow_run.workflows:` list or in a `cron:`, so the
 // router values that are also needed there cannot be read from `env:` at those two lines. The
 // installer copies them in instead, which is what keeps the pair in step across an update; the
 // route matrix asserts the copies still agree.
 const CI_NAME_TRIGGER = /^(\s*workflows: \[")[^"]*("\]\s*)$/m;
 const AUDIT_CRON_LINE = /^(\s*- cron: ")[^"]*(" # audit slot.*)$/m;
+const DOCS_AUDIT_CRON_LINE = /^(\s*- cron: ")[^"]*(" # docs-audit slot.*)$/m;
 
-/** Copy the router's own `env:` values into the two literal lines that cannot read them. */
+/** Copy the router's own `env:` values into the literal lines that cannot read them. */
 export function mirrorRouterLiterals(router: string): string {
   const values = new Map(parseYamlEnv(router).entries.map((entry) => [entry.key, unquote(entryValue(entry))]));
 
@@ -202,6 +203,8 @@ export function mirrorRouterLiterals(router: string): string {
   let result = router;
   if (ciName !== undefined) result = result.replace(CI_NAME_TRIGGER, `$1${ciName}$2`);
   if (auditCron !== undefined) result = result.replace(AUDIT_CRON_LINE, `$1${auditCron}$2`);
+  const docsAuditCron = values.get("DOCS_AUDIT_CRON");
+  if (docsAuditCron !== undefined) result = result.replace(DOCS_AUDIT_CRON_LINE, `$1${docsAuditCron}$2`);
   return result;
 }
 

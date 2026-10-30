@@ -50,7 +50,7 @@ describe("workflows CLI", () => {
     await expect(run(["--help"])).resolves.toBe(0);
 
     const output = log.mock.calls[0]![0] as string;
-    expect(output).toContain("refine, implement, triage, apply-review, merge-gate, audit, release");
+    expect(output).toContain("refine, implement, triage, apply-review, merge-gate, audit, docs-audit, release");
     expect(output).toContain("add [routes]");
     expect(output).toContain("--dry-run");
     log.mockRestore();
@@ -70,7 +70,7 @@ describe("workflows CLI", () => {
 
     await expect(run(["add", "frobnicate"])).resolves.toBe(1);
 
-    expect(error).toHaveBeenCalledWith("Unknown route: frobnicate. Valid routes: refine, implement, triage, apply-review, merge-gate, audit, release.");
+    expect(error).toHaveBeenCalledWith("Unknown route: frobnicate. Valid routes: refine, implement, triage, apply-review, merge-gate, audit, docs-audit, release.");
     error.mockRestore();
   });
 
@@ -101,9 +101,9 @@ describe("workflows CLI", () => {
     // None installed: all [ ]
     const installedCount = (output.match(/\[x\]/g) ?? []).length;
     expect(installedCount).toBe(0);
-    // 7 routes + 9 templates = 16 entries
+    // 8 routes + 10 templates
     const uninstalledCount = (output.match(/\[ \]/g) ?? []).length;
-    expect(uninstalledCount).toBe(17);
+    expect(uninstalledCount).toBe(18);
     log.mockRestore();
   });
 

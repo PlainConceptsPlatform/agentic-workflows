@@ -138,6 +138,18 @@ describe("stripRouteFromRouter", () => {
     expect(options(result)).toContain("audit-close");
   });
 
+  it("removes a route's cron by its slot comment, whichever slot the repository picked", () => {
+    const yaml = `on:
+  schedule:
+    - cron: "9 4 2,16 * *" # docs-audit slot, mirrored from env.DOCS_AUDIT_CRON by the installer
+    - cron: "43 3 * * *"
+`;
+    const result = stripRouteFromRouter(yaml, "docs-audit");
+
+    expect(result).not.toContain("docs-audit slot");
+    expect(result).toContain('- cron: "43 3 * * *"');
+  });
+
   it("removes the release job and dispatch option", () => {
     const result = stripRouteFromRouter(ROUTER_YAML, "release");
 

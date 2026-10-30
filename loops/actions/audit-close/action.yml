@@ -21,12 +21,19 @@ runs:
       with:
         github-token: ${{ inputs.token }}
         script: |
-          const reports = await github.paginate(github.rest.issues.listForRepo, {
-            ...context.repo,
-            state: 'open',
-            labels: 'audit',
-            per_page: 100,
-          });
+          // A documentation audit is the same chain: a report Refine splits into children. A
+          // report carrying both labels must not be processed twice.
+          const reportsById = new Map();
+          for (const labels of ['audit', 'docs-audit']) {
+            const found = await github.paginate(github.rest.issues.listForRepo, {
+              ...context.repo,
+              state: 'open',
+              labels,
+              per_page: 100,
+            });
+            for (const report of found) reportsById.set(report.number, report);
+          }
+          const reports = [...reportsById.values()];
 
           if (reports.length === 0) {
             core.info('No open audit reports.');

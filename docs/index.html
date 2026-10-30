@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Agentic Workflows diagrams</title>
-  <meta name="description" content="Reusable GitHub Actions agent loops from Plain Concepts Platform: one router, seven workers, every step drawn.">
+  <meta name="description" content="Reusable GitHub Actions agent loops from Plain Concepts Platform: one router, eight workers, every step drawn.">
   <script>
     // Same key the archify diagrams read, so the theme carries across the whole site.
     (function () {
@@ -342,7 +342,7 @@
 
     <section id="workers" aria-labelledby="workers-title">
       <div class="section-head">
-        <h2 id="workers-title">Seven workers</h2>
+        <h2 id="workers-title">Eight workers</h2>
         <p>Each worker has its own diagram. Pick one to see how its run branches; open it full screen to pan, search and trace.</p>
       </div>
       <div class="panel">
@@ -353,6 +353,7 @@
           <a href="diagrams/agent-merge-gate.html" data-worker="agent-merge-gate">Merge gate</a>
           <a href="diagrams/agent-apply-review.html" data-worker="agent-apply-review">Apply review</a>
           <a href="diagrams/agent-audit.html" data-worker="agent-audit">Audit</a>
+          <a href="diagrams/agent-docs-audit.html" data-worker="agent-docs-audit">Docs audit</a>
           <a href="diagrams/agent-release.html" data-worker="agent-release">Release</a>
         </nav>
         <div class="viewer">
@@ -509,7 +510,8 @@
         'agent-implement': ['Agent Implement', '1980 / 340', 'Writes the code and opens one pull request, then stops: the merge decision belongs to the gate.'],
         'agent-merge-gate': ['Agent Merge Gate', '1980 / 430', 'The only worker that merges. It runs one at a time for the whole repository, because every merge moves the default branch under the rest.'],
         'agent-apply-review': ['Agent Apply Review', '1410 / 500', 'Applies a reviewer’s feedback to a pull request the bot already opened, and pushes to the same branch.'],
-        'agent-audit': ['Agent Audit', '1240 / 540', 'The only worker that creates work rather than consuming it. Read-only: it files an issue and changes nothing.'],
+        'agent-audit': ['Agent Audit', '1240 / 540', 'Creates work rather than consuming it. Read-only: it files an issue and changes nothing.'],
+        'agent-docs-audit': ['Agent Docs Audit', '1250 / 500', 'Optional and read-only. Files one issue when the documentation has drifted from the code or the standard, and nothing when it has not.'],
         'agent-release': ['Agent Release', '1400 / 450', 'Manual dispatch only. The agent writes prose; deterministic jobs do everything irreversible, and nothing reaches main except through a pull request.']
       };
       var viewer = document.querySelector('.viewer iframe');

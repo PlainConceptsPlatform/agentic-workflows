@@ -108,7 +108,7 @@ runs:
             'release-tag.yml',
             'agentics-checks.yml',
             'agentics-maintenance.yml',
-            ...['refine', 'implement', 'triage', 'apply-review', 'merge-gate', 'audit', 'release']
+            ...['refine', 'implement', 'triage', 'apply-review', 'merge-gate', 'audit', 'docs-audit', 'release']
               .map((route) => `agent-${route}.lock.yml`),
           ]);
           const ownedName = (path) => (path ?? '').split('/').pop() ?? '';

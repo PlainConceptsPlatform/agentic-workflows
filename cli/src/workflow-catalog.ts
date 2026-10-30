@@ -5,6 +5,7 @@ export const routeNames = [
   "apply-review",
   "merge-gate",
   "audit",
+  "docs-audit",
   "release",
 ] as const;
 
@@ -26,8 +27,14 @@ export const workflowRoutes: readonly WorkflowRoute[] = [
   { name: "apply-review", worker: "agent-apply-review.md", description: "Applies reviewer feedback to an open pull request the bot authored, then pushes the fixes to the same branch.", defaultEnabled: true },
   { name: "merge-gate", worker: "agent-merge-gate.md", description: "Decides what happens to the pull request the merge train hands it, the bot's or a person's: repair it, merge it, or hand it to a human.", defaultEnabled: true },
   { name: "audit", worker: "agent-audit.md", description: "Read-only repository audit. Finds 5-7 problems, scores each 1-10, and files a single issue that Refine then sizes and splits.", defaultEnabled: true },
+  { name: "docs-audit", worker: "agent-docs-audit.md", description: "Read-only documentation audit, every fortnight. Checks the documentation against the code and the Platform standard, and files one issue that Refine then sizes and splits, only when something is stale.", defaultEnabled: false },
   { name: "release", worker: "agent-release.md", description: "Writes release notes from the commit log, then a deterministic job opens a version-bump pull request with auto-merge; once it merges, release-tag.yml tags the commit and publishes the GitHub Release. Manual dispatch only (operation=release).", defaultEnabled: true, companions: ["release-tag.yml"] },
 ];
+
+/** What an install with no explicit selection gets. An optional worker is added by name. */
+export const defaultRouteNames: readonly RouteName[] = workflowRoutes
+  .filter((route) => route.defaultEnabled)
+  .map((route) => route.name);
 
 // Workflow files the package used to ship and no longer does. `.github/workflows/` is not pruned
 // wholesale, because a missing worker there means a route the consumer left out, so a retired one

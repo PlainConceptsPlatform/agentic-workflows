@@ -26,7 +26,8 @@ router_env() {
   sed -n "s/^  $1: *//p" "$ROUTER_YML" | head -1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
 }
 AUDIT_CRON="$(router_env AUDIT_CRON)"
-export AUDIT_CRON
+DOCS_AUDIT_CRON="$(router_env DOCS_AUDIT_CRON)"
+export AUDIT_CRON DOCS_AUDIT_CRON
 
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../classify-route/classify-route.sh
@@ -34,7 +35,7 @@ source "${HERE}/../classify-route/classify-route.sh"
 
 # Every worker route the package knows. The ones with a worker file here are installed; the
 # others must have no job in this router. Plumbing routes are in every router.
-ALL_WORKER_ROUTES=(refine implement triage apply-review merge-gate audit release)
+ALL_WORKER_ROUTES=(refine implement triage apply-review merge-gate audit docs-audit release)
 PLUMBING_ROUTES=(bot-approve evidence audit-close cleanup-artifacts reconcile-bot-pr-runs housekeeping validate)
 
 worker_installed() {
@@ -285,6 +286,13 @@ assert "a scheduled audit reports its trigger kind" scheduled \
 assert "a dispatched audit reports its trigger kind" manual \
   "$(route_field trigger-kind EVENT=workflow_dispatch OPERATION=audit INPUT_TRIGGER_KIND=manual)"
 
+assert_route "the docs audit slot reaches its route" docs-audit \
+  EVENT=schedule "SCHEDULE=${DOCS_AUDIT_CRON:-47 2 1,15 * *}"
+assert_route "a dispatched docs audit reaches its route" docs-audit \
+  EVENT=workflow_dispatch OPERATION=docs-audit
+assert "a scheduled docs audit reports its trigger kind, or its cheap exit never fires" scheduled \
+  "$(route_field trigger-kind EVENT=schedule "SCHEDULE=${DOCS_AUDIT_CRON:-47 2 1,15 * *}")"
+
 echo "── Prompt hygiene ────────────────────────────────────────────────────────"
 
 # Everything below a worker's frontmatter is the prompt. Three things must not be in one.
@@ -366,6 +374,15 @@ if worker_installed audit; then
   elif [ "$AUDIT_CRON" != "$cron_line" ]; then
     MIRROR_OK=0
     echo "FAIL: the audit slot cron is '${cron_line}' but env.AUDIT_CRON is '${AUDIT_CRON}'" >&2
+  fi
+fi
+if worker_installed docs-audit; then
+  cron_line="$(sed -n 's/^ *- cron: "\([^"]*\)" # docs-audit slot.*/\1/p' "$ROUTER_YML" | head -1)"
+  if [ -z "$DOCS_AUDIT_CRON" ]; then
+    MIRROR_OK=0; echo "FAIL: work-router.yml defines no DOCS_AUDIT_CRON in its env: block" >&2
+  elif [ "$DOCS_AUDIT_CRON" != "$cron_line" ]; then
+    MIRROR_OK=0
+    echo "FAIL: the docs-audit slot cron is '${cron_line}' but env.DOCS_AUDIT_CRON is '${DOCS_AUDIT_CRON}'" >&2
   fi
 fi
 # And nothing may go back to naming the CI workflow directly: a second literal is a second
@@ -1317,6 +1334,19 @@ if [ -f "$AUDIT_CLOSE_YML" ] && worker_installed audit; then
     echo "FAIL: the audit backpressure query and audit-close disagree about stale-audit; abandoned reports would block every future audit" >&2
   fi
 
+  # The docs audit shares the chain, so it has the same two ways to go quiet: audit-close stops
+  # listing its reports, or its backpressure stops excluding the ones marked stale.
+  DOCS_AUDIT_WORKER_MD="${WORKFLOWS_DIR}/agent-docs-audit.md"
+  if [ -f "$DOCS_AUDIT_WORKER_MD" ]; then
+    docs_query="$(sed -n 's/^ *query: *"\(.*\)" *$/\1/p' "$DOCS_AUDIT_WORKER_MD" | head -1)"
+    if [[ "$docs_query" == *label:docs-audit*-label:stale-audit* ]] && grep -qF "'docs-audit'" "$AUDIT_CLOSE_YML"; then
+      PASS=$((PASS + 1))
+    else
+      AC_OK=0
+      echo "FAIL: audit-close and the docs-audit backpressure disagree; abandoned reports would stop every future docs audit" >&2
+    fi
+  fi
+
   if [ "$AC_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
@@ -1822,7 +1852,7 @@ LEAD_OK=1
 # A consumer has it at its root; this package keeps the template beside the workflows.
 CI_JSON="${HERE}/../../../opencode.ci.json"
 [ -f "$CI_JSON" ] || CI_JSON="${HERE}/../../templates/opencode/opencode.ci.json"
-for route in refine implement triage apply-review merge-gate audit release; do
+for route in refine implement triage apply-review merge-gate audit docs-audit release; do
   worker_md="${WORKFLOWS_DIR}/agent-${route}.md"
   [ -f "$worker_md" ] || continue
   lead=$(sed -n 's/^  AGENT_LEAD_MODEL: "\(.*\)"$/\1/p' "$worker_md")
@@ -1853,7 +1883,7 @@ PLUGINS_OK=1
 if ! grep -qF "(cd .opencode && npm install" "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   PLUGINS_OK=0; echo "FAIL: the CI setup must install .opencode's dependencies or the harness plugins never load" >&2
 fi
-for route in refine implement triage apply-review merge-gate audit release; do
+for route in refine implement triage apply-review merge-gate audit docs-audit release; do
   worker_md="${WORKFLOWS_DIR}/agent-${route}.md"
   [ -f "$worker_md" ] || continue
   tier=$(sed -n 's/^  AGENT_TIER_MODEL: "\(.*\)"$/\1/p' "$worker_md")
@@ -2281,7 +2311,7 @@ if [ -f "$ERROR_REPORT_YML" ]; then
       # The worker names are built from a route list by a template literal, so expand that list
       # the same way rather than looking for filenames the file never spells out.
       sed -n "/const OWNED = new Set(\[/,/^          \]);\$/p" "$ERROR_REPORT_YML" |
-        grep -oE "'(refine|implement|triage|apply-review|merge-gate|audit|release)'" | tr -d "'" |
+        grep -oE "'(refine|implement|triage|apply-review|merge-gate|audit|docs-audit|release)'" | tr -d "'" |
         sed 's|^|agent-|; s|$|.lock.yml|' || true
     } | sort -u )
     shipped=$( {

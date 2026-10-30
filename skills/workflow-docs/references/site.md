@@ -38,6 +38,7 @@ present, lowercased.
 | `## agent-merge-gate.md` | `agent-merge-gate` | `diagrams/agent-merge-gate.{json,html}` |
 | `## agent-apply-review.md` | `agent-apply-review` | `diagrams/agent-apply-review.{json,html}` |
 | `## agent-audit.md` | `agent-audit` | `diagrams/agent-audit.{json,html}` |
+| `## agent-docs-audit.md` | `agent-docs-audit` | `diagrams/agent-docs-audit.{json,html}` |
 | `## agent-release.md` | `agent-release` | `diagrams/agent-release.{json,html}` |
 | `## housekeeping` | `housekeeping` | `diagrams/housekeeping.{json,html}` |
 | `## agentics-app-errors` | `agentics-app-errors` | `diagrams/agentics-app-errors.{json,html}` |

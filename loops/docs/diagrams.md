@@ -48,6 +48,7 @@ flowchart TD
     work -->|apply-review| wReview
     work -->|merge-gate| wGate
     work -->|audit| wAudit
+    work -->|docs-audit| wDocs
     work -->|release| wRelease
     triageOnly("dispatch-triage<br/>re-enters as the App, so the<br/>worker sees a trusted actor") --> wTriage
     wRefine("agent-refine")
@@ -55,6 +56,7 @@ flowchart TD
     wReview("agent-apply-review")
     wGate("agent-merge-gate<br/>one lock for the whole repo")
     wAudit("agent-audit")
+    wDocs("agent-docs-audit")
     wRelease("agent-release")
     wTriage("agent-triage")
     classify -.->|"cron or dispatch"| plumbing
@@ -487,8 +489,7 @@ before anything changes. Applying them one at a time produces contradictory comm
 
 ## agent-audit.md
 
-The only worker that creates work rather than consuming it. Read-only: it files an issue and
-changes nothing.
+Creates work rather than consuming it. Read-only: it files an issue and changes nothing.
 
 ```mermaid
 flowchart TD
@@ -525,6 +526,48 @@ flowchart TD
 Memory matters here: open issues only cover what is still open, so a finding reported weeks ago and
 consciously not acted on would come back every single run. The audit records its dispositions and
 reads them next time.
+
+---
+
+## agent-docs-audit.md
+
+The audit's documentation sibling. Read-only, optional, and most of its work happens before the
+model starts: a repository with no recent commits never reaches it, and the facts a script can
+establish are on disk when it does.
+
+```mermaid
+flowchart TD
+    daStart("Work Router<br/>docs-audit route<br/>days 1 and 15, or dispatch") --> daBack
+    daBack{"Backpressure (rung 1)<br/>No open report?"}
+    daBack -.->|no| daIdle
+    daBack -->|yes| daMoved
+    daMoved{"Commits in 17 days,<br/>or a dispatch? (rung 1)"}
+    daMoved -.->|no| daIdle
+    daMoved -->|yes| daFacts
+    daFacts("Facts (rung 3)<br/>Broken links, missing paths,<br/>open issues, the standard") --> daRun
+    daRun("Compare (rung 5)<br/>Entry documents against<br/>the code and the standard") --> daDedupe
+    daDedupe{"New finding, proven<br/>on both sides?"}
+    daDedupe -.->|"none left"| daQuiet
+    daDedupe -->|"some"| daFile
+    daFile("One issue with<br/>evidence per finding") --> daReport
+    daReport(("Filed<br/>labelled docs-audit and refine,<br/>sized and split per finding"))
+    daQuiet(("Nothing to file<br/>the documentation is current"))
+    daIdle(("Idle<br/>no agent, no spend"))
+
+    classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
+    classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
+    classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
+    classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
+    classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
+    class daStart start
+    class daFacts,daRun,daFile action
+    class daBack,daMoved,daDedupe decision
+    class daIdle idle
+    class daReport,daQuiet success
+```
+
+Reports join the audit chain: `audit-close` closes one when its children are closed, and marks it
+`stale-audit` when nobody acted on it, which frees the slot.
 
 ---
 

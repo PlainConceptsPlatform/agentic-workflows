@@ -6,6 +6,7 @@ import { routeNames, workflowRoutes, type RouteName } from "./workflow-catalog.j
 
 const routeCrons: Partial<Record<RouteName, string>> = {
   audit: "17 1 * * 1",
+  "docs-audit": "47 2 1,15 * *",
 };
 
 // Deterministic router jobs that exist only to serve one worker route. They leave with it, or
@@ -25,10 +26,12 @@ const routeHelperOperations: Partial<Record<RouteName, readonly string[]>> = {
 export function stripRouteFromRouter(yaml: string, route: RouteName): string {
   let result = yaml;
 
+  // By the slot comment as well as the value: a repository picks its own slot, and the shipped
+  // line carries that comment, so matching the bare default alone left the cron behind.
   const cron = routeCrons[route];
   if (cron !== undefined) {
     result = result.replace(
-      new RegExp(`^    - cron: "${escapeRegex(cron)}"\\n`, "gm"),
+      new RegExp(`^    - cron: "(?:${escapeRegex(cron)}"|[^"]*" # ${escapeRegex(route)} slot.*)\\n`, "gm"),
       "",
     );
   }

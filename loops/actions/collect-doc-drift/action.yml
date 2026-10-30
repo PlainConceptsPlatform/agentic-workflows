@@ -1,0 +1,29 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/collect-doc-drift/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Collect documentation drift
+description: |
+  Writes the documentation facts a script can establish on its own to
+  `/tmp/gh-aw/agent/doc-drift.json`: relative Markdown links that lead nowhere, and paths the
+  entry documents cite that no longer exist. Free, deterministic, no model.
+inputs:
+  entry-docs:
+    description: Comma-separated entry documents, whose cited paths are checked.
+    required: false
+    default: README.md,ARCHITECTURE.md,AGENTS.md,CLAUDE.md,CONTRIBUTING.md,docs/README.md
+  exclude:
+    description: Comma-separated path prefixes left out of the scan, such as archives.
+    required: false
+    default: .github/workflows/,.agents/,.claude/,.opencode/,node_modules/
+  output-path:
+    description: Path to write the JSON output.
+    required: false
+    default: /tmp/gh-aw/agent/doc-drift.json
+runs:
+  using: composite
+  steps:
+    - name: Collect documentation drift
+      shell: bash
+      env:
+        ENTRY_DOCS: ${{ inputs.entry-docs }}
+        EXCLUDE: ${{ inputs.exclude }}
+        OUTPUT_PATH: ${{ inputs.output-path }}
+      run: node "${GITHUB_ACTION_PATH}/collect-doc-drift.mjs"

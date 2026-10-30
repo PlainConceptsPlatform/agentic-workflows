@@ -13,6 +13,7 @@ set -euo pipefail
 # fired on a cron this file does not know classifies to no route and dies silently, so the
 # route matrix asserts the two still agree.
 readonly AUDIT_CRON="${AUDIT_CRON:-17 1 * * 1}"
+readonly DOCS_AUDIT_CRON="${DOCS_AUDIT_CRON:-47 2 1,15 * *}"
 readonly AUDIT_CLOSE_CRON="43 3 * * *"
 readonly CLEANUP_ARTIFACTS_CRON="0 6 * * *"
 readonly RECONCILE_BOT_PR_RUNS_CRON="17 * * * *"
@@ -192,6 +193,7 @@ classify_route() {
       trigger_kind="scheduled"
       case "${SCHEDULE:-}" in
         "$AUDIT_CRON") route="audit" ;;
+        "$DOCS_AUDIT_CRON") route="docs-audit" ;;
         "$AUDIT_CLOSE_CRON") route="audit-close" ;;
         "$CLEANUP_ARTIFACTS_CRON") route="cleanup-artifacts" ;;
         "$RECONCILE_BOT_PR_RUNS_CRON") route="reconcile-bot-pr-runs" ;;
@@ -266,7 +268,7 @@ classify_route() {
             error="operation 'evidence' needs a positive pr-number, got '${INPUT_PR_NUMBER:-}'"
           fi
           ;;
-        audit)
+        audit | docs-audit)
           route="${OPERATION}"
           trigger_kind="${INPUT_TRIGGER_KIND:-manual}"
           ;;

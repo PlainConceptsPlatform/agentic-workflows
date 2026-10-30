@@ -104,6 +104,8 @@ jobs:
       # in a prompt, no Mermaid diagram, no duplicate step number, no multi-line env value.
       - name: Route matrix
         run: bash loops/actions/verify-route-matrix/verify-route-matrix.sh
+      - name: Documentation drift collector
+        run: node --test .github/tests/collect-doc-drift.test.mjs
       # Consumers actionlint the router they receive, so a job whose outputs another job reads
       # without declaring them passed every check here and went red only downstream. Reusable
       # workflow targets are the consumer's compiled locks, which this repository never holds.
