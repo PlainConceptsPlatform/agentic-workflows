@@ -46,7 +46,7 @@ workflows add refine --template agentics-checks --force  # routes + template + m
 workflows remove audit                     # uninstall the audit worker and drop it from the router
 ```
 
-Route names: refine, implement, triage, apply-review, merge-gate, audit, release. Unknown arguments produce an error.
+Route names: refine, implement, triage, apply-review, merge-gate, audit, docs-audit, release. `docs-audit` is optional: it installs only when named. Unknown arguments produce an error.
 
 ## Update
 

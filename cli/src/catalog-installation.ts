@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { parse as parseYaml } from "yaml";
 
-import { catalogTemplates, mandatoryFiles, retiredWorkflowFiles, routeNames, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
+import { catalogTemplates, defaultRouteNames, mandatoryFiles, retiredWorkflowFiles, routeNames, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
 import { processRoutes, excludedWorkerFiles } from "./route-processing.js";
 import { generateOpencodeCi, generateOpencodeConfig, generateStackDefaults, injectStackEnv, shippedVerifyDefaults } from "./stack-defaults.js";
 import { mergeRouter, mergeWorker, mirrorRouterLiterals } from "./worker-env.js";
@@ -109,7 +109,7 @@ export async function installCatalog(
 ): Promise<CatalogInstallResult> {
   const version = options.packageVersion ?? await packageVersion();
   const sourcePath = options.sourcePath ?? catalogSourcePath();
-  const selectedRoutes = options.selectedRoutes ?? routeNames;
+  const selectedRoutes = options.selectedRoutes ?? defaultRouteNames;
   const allFiles = [...await catalogFiles(sourcePath), ...mandatoryFileSpecs(sourcePath)];
   const deduplicated = allFiles.filter((file, index) =>
     allFiles.findIndex((f) => f.target === file.target) === index,

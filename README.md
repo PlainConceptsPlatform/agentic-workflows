@@ -40,6 +40,7 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | `merge-gate` | `agent-merge-gate.md` | the merge train hands it the oldest open pull request, the bot's or a writer's | one of `auto-merge`, `human-review`, `owner-review` or `blocked`, or a fix pushed to the same branch; a pull request parked for a person gets its screenshots before the decision |
 | `apply-review` | `agent-apply-review.md` | someone comments on a bot pull request or requests changes | the requested changes pushed to that pull request. An approval is not feedback: `merge-approved` merges the approved commit when the gate had parked it for a person |
 | `audit` | `agent-audit.md` | Mondays, or on demand | one issue of findings, labelled `refine` so it gets sized and split |
+| `docs-audit` | `agent-docs-audit.md` | days 1 and 15 of the month, or on demand. Optional: `workflows add docs-audit` | one issue of documentation findings, labelled `docs-audit` + `refine`, only when something is stale |
 | `release` | `agent-release.md` | on demand (`operation=release`) | a `chore(release): vX.Y.Z` pull request with auto-merge; `release-tag.yml` tags it and publishes the GitHub Release once it merges |
 
 Plus the plumbing, which has no agent in it: `work-router.yml` (the router itself),
@@ -311,7 +312,8 @@ before publishing. Setup, runbooks, and verification commands live in
 
 ## Scheduling across repositories
 
-One worker runs on a timer and it is long: `audit` takes about 45 minutes. Every repository
+Two workers run on a timer. `audit` is the long one, about 45 minutes, and `docs-audit`, if a
+repository installs it, is the same shape with less to read. Every repository
 installs the same router from this package, so unless the schedule is changed at install time,
 **every consumer fires it at the same minute**. The agent fleet is shared by every consumer and
 deliberately small, so two repositories auditing together already consume all of it while CI and
@@ -339,6 +341,21 @@ expression in a `cron:`. Change it in `env:` and run `workflows update`, or edit
 `verify-route-matrix.sh` asserts the two agree and that the cron reaches its route, because a
 cron in one place and not the other fails in the direction that hurts, with the run firing and
 then classifying to no route at all.
+
+`docs-audit` works the same way through `DOCS_AUDIT_CRON`. It runs twice a month, so a slot is a
+pair of days, and the default `47 2 1,15 * *` starts after a slot-0 audit has finished:
+
+| Slot | Repository | Docs audit |
+|---|---|---|
+| 0 | first consumer | `47 2 1,15 * *` |
+| 1 | second consumer | `47 2 2,16 * *` |
+| 2 | *free* | `47 2 3,17 * *` |
+| 3 | *free* | `47 2 4,18 * *` |
+
+A scheduled run stops before the model starts when the default branch has no commits in the last
+`DOCS_AUDIT_QUIET_DAYS` days (17, the longest gap between runs), because nothing can have drifted.
+A dispatched run always goes ahead. `docs-audit` reports count against their own backpressure, one
+at a time, and `audit-close` closes and marks them stale exactly as it does audit reports.
 
 The other value in that block is `CI_WORKFLOW_NAME`, the name of the CI workflow the merge belt
 reads its verdict from. It works the same way, mirrored into the `workflow_run` trigger, and

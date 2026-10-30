@@ -257,7 +257,7 @@
       "dot": "cyan",
       "title": "Creates work, read-only",
       "items": [
-        "The only worker that creates work rather than consuming it",
+        "Creates work rather than consuming it",
         "Files one issue, changes nothing",
         "Feeds into refine so findings get sized and split"
       ]
