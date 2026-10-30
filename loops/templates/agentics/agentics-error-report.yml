@@ -58,7 +58,8 @@ env:
 jobs:
   report:
     # Fork of a consumer: the fleet is not theirs and neither is the report.
-    if: "!github.event.repository.fork"
+    # AGENTIC_WORKFLOWS_DISABLED, a repository variable with any value, turns the automation off.
+    if: "!github.event.repository.fork && vars.AGENTIC_WORKFLOWS_DISABLED == ''"
     runs-on: agents-arc
     timeout-minutes: 20
     concurrency:

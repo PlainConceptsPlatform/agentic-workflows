@@ -2950,6 +2950,19 @@ grep -qF -- '--base "$STACK_BRANCH" --limit 100 --json number,body' "${WORKFLOWS
 grep -qF 'releasedFeatures' "${HERE}/../housekeeping/action.yml" ||
   { ONE_AT_A_TIME_OK=0; echo "FAIL: housekeeping releases several children of one feature in a sweep" >&2; }
 if [ "$ONE_AT_A_TIME_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+# A repository variable AGENTIC_WORKFLOWS_DISABLED turns everything off: the router's two root jobs
+# (every other job needs one of them) and every workflow with a trigger of its own.
+OFF_OK=1
+for job in authorize classify; do
+  sed -n "/^  ${job}:\$/,/^    runs-on:/p" "${WORKFLOWS_DIR}/work-router.yml" | grep -qF "if: vars.AGENTIC_WORKFLOWS_DISABLED == ''" ||
+    { OFF_OK=0; echo "FAIL: the router's ${job} job ignores AGENTIC_WORKFLOWS_DISABLED" >&2; }
+done
+for f in "${WORKFLOWS_DIR}/authorize-bot-work.yml" "${WORKFLOWS_DIR}/release-tag.yml"; do
+  [ -f "$f" ] || continue
+  grep -qF "vars.AGENTIC_WORKFLOWS_DISABLED == ''" "$f" ||
+    { OFF_OK=0; echo "FAIL: $(basename "$f") ignores AGENTIC_WORKFLOWS_DISABLED" >&2; }
+done
+if [ "$OFF_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # A stack child runs the feature branch's copy of the workflows, so the router brings the default
 # branch in before it dispatches one.
 if grep -qF 'bring $DEFAULT_BRANCH into $STACK_BRANCH before a child runs' "${WORKFLOWS_DIR}/work-router.yml"; then

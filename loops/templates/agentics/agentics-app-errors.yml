@@ -87,7 +87,8 @@ env:
 jobs:
   collect:
     # Fork of a consumer: not their Azure, not their issues.
-    if: "!github.event.repository.fork"
+    # AGENTIC_WORKFLOWS_DISABLED, a repository variable with any value, turns the automation off.
+    if: "!github.event.repository.fork && vars.AGENTIC_WORKFLOWS_DISABLED == ''"
     runs-on: agents-arc
     timeout-minutes: 20
     # Load bearing, not decoration. The federated credential on the deploy identity trusts the

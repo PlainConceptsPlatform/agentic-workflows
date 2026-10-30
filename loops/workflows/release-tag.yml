@@ -27,7 +27,9 @@ concurrency:
 jobs:
   tag:
     name: Tag and publish the release
+    # AGENTIC_WORKFLOWS_DISABLED, a repository variable with any value, turns the automation off.
     if: >-
+      vars.AGENTIC_WORKFLOWS_DISABLED == '' &&
       startsWith(github.event.head_commit.message, 'chore(release): v')
     runs-on: agents-arc
     timeout-minutes: 10

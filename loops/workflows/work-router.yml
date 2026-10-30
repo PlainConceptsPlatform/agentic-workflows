@@ -307,6 +307,10 @@ permissions:
 jobs:
   # Public repositories must check repository permission before an event can start a model.
   authorize:
+    # Off switch: a repository variable AGENTIC_WORKFLOWS_DISABLED, with any value, stops every
+    # route. Every other job needs this one or classify, so nothing runs. For a repository that has
+    # the workflows installed but is not ready for them.
+    if: vars.AGENTIC_WORKFLOWS_DISABLED == ''
     runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 5
     permissions:
@@ -371,6 +375,8 @@ jobs:
           esac
 
   classify:
+    # The same off switch as authorize; jobs that need only classify stop here.
+    if: vars.AGENTIC_WORKFLOWS_DISABLED == ''
     runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 5
     permissions:

@@ -418,6 +418,25 @@ The router (`work-router.yml`) is a derived file: its content is a function of w
 
 For a project-local development dependency, install `@plainconceptsplatform/workflows` and run `pnpm exec workflows` with no arguments to launch the TUI, or `pnpm exec workflows <init|add|update>` for non-interactive use.
 
+## Turning the automation off
+
+A repository variable `AGENTIC_WORKFLOWS_DISABLED`, with any value, turns every installed workflow
+off without uninstalling anything: the router's first two jobs skip, so no route runs, and
+`authorize-bot-work`, `release-tag` and the error-report templates skip too. Use it for a
+repository that has the workflows but is not ready for them, or to pause one. Labels and comments
+still land on issues; nothing acts on them until the variable is deleted.
+
+```bash
+gh variable set AGENTIC_WORKFLOWS_DISABLED --body true
+```
+
+```bash
+gh variable delete AGENTIC_WORKFLOWS_DISABLED
+```
+
+`agentics-checks` (workflow and lockfile linting on pull requests) keeps running: it checks files
+and acts on nothing.
+
 ## Updating a consumer
 
 Every installed file carries the package version in its ownership header, stamped at install

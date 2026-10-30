@@ -29,7 +29,9 @@ jobs:
     # workflow clears it below before handing the issue to the bot. The classifier's own guard
     # stays as it is: it exists to stop the *bot* re-triggering itself, and by the time
     # bot-working is added `review` is already gone.
+    # AGENTIC_WORKFLOWS_DISABLED, a repository variable with any value, turns the automation off.
     if: >
+      vars.AGENTIC_WORKFLOWS_DISABLED == '' &&
       (github.event.label.name == 'implement' ||
        github.event.label.name == 'refine') &&
       !contains(github.event.issue.labels.*.name, 'bot-working') &&
