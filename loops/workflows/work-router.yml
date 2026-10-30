@@ -1308,37 +1308,23 @@ jobs:
                   if [ "$open_children" -gt 0 ]; then
                     echo "$open_children child issue(s) still open on stack #$parent; the stack continues."
                   else
-                    # The root pull request must be green and mergeable. Green: a successful
-                    # CI run on its head SHA. Mergeable: the same on-demand computation
-                    # every gate dispatch already relies on; UNKNOWN settles in the
-                    # background, so ask until it does, like mergeable_state() does.
-                    root_state=UNKNOWN
-                    for _ in 1 2 3 4 5 6; do
-                      root_state=$(gh pr view "$root_pr" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo UNKNOWN)
-                      [ "$root_state" = "UNKNOWN" ] || break
-                      sleep 5
-                    done
-                    root_sha=$(gh api "repos/$REPO/pulls/$root_pr" --jq '.head.sha')
-                    root_ci=$(gh api "repos/$REPO/actions/runs?head_sha=$root_sha&per_page=100" \
-                      --jq '[.workflow_runs[]
-                        | select(.name == env.CI_WORKFLOW_NAME and .status == "completed"
-                                 and .conclusion == "success")]
-                      | sort_by(.created_at) | last // empty')
-                    if [ -z "$root_ci" ] || [ "$root_state" != "MERGEABLE" ]; then
-                      echo "Root PR #$root_pr is not green/mergeable yet; the human will merge when it is."
+                    # Announce as soon as the last child lands, whatever the root's CI is doing at
+                    # this instant. The landing itself pushes to the feature branch, so the root's CI
+                    # is usually still running here; waiting for green left the announcement unposted
+                    # with nothing to post it later but the six-hourly housekeeping (Odyssey #332 sat
+                    # with an auto-merge verdict, held, from 00:09 until a person announced it). The
+                    # gate still reads CI and mergeability itself before it merges the root.
+                    completion_marker='<!-- stack-complete -->'
+                    # The announcement is a pull request comment, and pull request
+                    # comments live at the issue endpoint for the pull request number,
+                    # so the marker is looked for where the comment was posted.
+                    already=$(gh api "repos/$REPO/issues/$root_pr/comments?per_page=100" \
+                      --jq "[.[] | select(.body | contains(\"$completion_marker\"))] | length" 2>/dev/null || echo 0)
+                    if [ "${already:-0}" -gt 0 ]; then
+                      echo "Stack #$parent already has a completion announcement; staying silent."
                     else
-                      completion_marker='<!-- stack-complete -->'
-                      # The announcement is a pull request comment, and pull request
-                      # comments live at the issue endpoint for the pull request number,
-                      # so the marker is looked for where the comment was posted.
-                      already=$(gh api "repos/$REPO/issues/$root_pr/comments?per_page=100" \
-                        --jq "[.[] | select(.body | contains(\"$completion_marker\"))] | length" 2>/dev/null || echo 0)
-                      if [ "${already:-0}" -gt 0 ]; then
-                        echo "Stack #$parent already has a completion announcement; staying silent."
-                      else
-                        gh pr comment "$root_pr" --repo "$REPO" --body "Stack complete: all children have merged into the feature branch and CI is green. This root pull request is ready to merge into $DEFAULT_BRANCH: the merge gate decides it next, and a person is asked only when its blast radius or a finding says so. $completion_marker"
-                        echo "Stack #$parent complete: announced root PR #$root_pr."
-                      fi
+                      gh pr comment "$root_pr" --repo "$REPO" --body "Stack complete: all children have merged into the feature branch. This root pull request is ready to merge into $DEFAULT_BRANCH once its CI is green: the merge gate decides it next, and a person is asked only when its blast radius or a finding says so. $completion_marker"
+                      echo "Stack #$parent complete: announced root PR #$root_pr."
                     fi
                   fi
                   fi

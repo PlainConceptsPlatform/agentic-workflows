@@ -2927,6 +2927,15 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: housekeeping does not announce a stack whose children all closed outside the router" >&2
 fi
+# The router announces a finished stack when the last child lands, not only when the root's CI
+# happens to be green at that instant: the landing pushes to the root, so its CI is usually still
+# running, and an unannounced root is held by the gate whatever its verdict (Odyssey #332).
+if grep -qF 'not green/mergeable yet' "${WORKFLOWS_DIR}/work-router.yml"; then
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the stack-complete announcement waits for the root's CI, and nothing re-announces it" >&2
+else
+  PASS=$((PASS + 1))
+fi
 # A stack child runs the feature branch's copy of the workflows, so the router brings the default
 # branch in before it dispatches one.
 if grep -qF 'bring $DEFAULT_BRANCH into $STACK_BRANCH before a child runs' "${WORKFLOWS_DIR}/work-router.yml"; then
