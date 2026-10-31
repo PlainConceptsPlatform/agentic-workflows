@@ -66,6 +66,14 @@ jobs:
           az webapp deploy -g agentrunner-pro-rg-01 -n agentrunner-scaler-01 \
             --src-path "${{ github.workspace }}/scaler-deploy.zip" --type zip --timeout 180
 
+      # The Bicep ships WATCH_REPOS empty so the app discovers the org's repos. A zip
+      # deploy keeps the previous app settings, so the setting is applied here; without
+      # this the deployed code keeps polling whatever list production had.
+      - name: Apply app settings
+        run: |
+          az webapp config appsettings set -g agentrunner-pro-rg-01 -n agentrunner-scaler-01 \
+            --settings WATCH_REPOS="" -o none
+
       - name: Health check
         env:
           VM_TOKEN: ${{ secrets.VM_TOKEN }}
