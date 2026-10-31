@@ -91,7 +91,7 @@ App settings:
 | `AGENT_RUNNER_LABEL` | agent base label (default `agents-aw`) |
 | `RESERVED_CI_VMS` | VMs held back for CI while CI is queued (default 0; live 2) |
 | `MAX_VMS` | hard fleet ceiling (default 6; live 10) |
-| `WATCH_REPOS` | repos polled each sweep to recover missed queued webhooks (comma-separated) |
+| `WATCH_REPOS` | Repos polled each sweep as a safety net for a missed queued webhook. Empty discovers every private repo of the org with a push in the last 14 days, newest first, cached 30 minutes; a comma-separated list overrides it. |
 | `RUNNER_GROUP_ID` | GitHub runner group for minted runners |
 
 Azure access uses the app's system-assigned managed identity (Virtual Machine
@@ -120,7 +120,7 @@ Docker daemon can never leave a VM holding a lease forever (an overnight inciden
   and a stale heartbeat, or stuck in `resetting` past its deadline, is deleted — a VM we
   no longer trust as owner we no longer trust as worker.
 - **Ledger self-healing.** Each sweep reconciles every ledger entry against GitHub (drop
-  `completed`/`gone`, fix `queued`↔`in_progress`) and polls `WATCH_REPOS` for queued jobs
+  `completed`/`gone`, fix `queued`↔`in_progress`) and polls the watched repos for queued jobs
   whose webhook was lost, so a scaler restart cannot strand a run.
 
 Deploy an update:
