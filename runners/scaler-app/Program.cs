@@ -55,9 +55,12 @@ var agentLabel    = Environment.GetEnvironmentVariable("AGENT_RUNNER_LABEL") ?? 
 var runnerGroupId = int.Parse(Environment.GetEnvironmentVariable("RUNNER_GROUP_ID") ?? "6");
 bool IsOurs(string label) => label == ciLabel || label == agentLabel;
 // Repos polled each sweep as a safety net for a queued webhook lost during a restart.
-// Comma-separated names under GH_ORG; empty disables the poll.
+// Empty discovers every private repo of the org, newest first, and caches the list.
 var watchRepos = (Environment.GetEnvironmentVariable("WATCH_REPOS") ?? "")
     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+var watchedCache = new List<string>();
+var watchedAt = DateTimeOffset.MinValue;
+var watchedLock = new object();
 
 // The one number a bug must never exceed. Post-write verification scales back down.
 // Env-driven so the ceiling can move without a code change; the default stays safe.
@@ -211,6 +214,44 @@ async Task<JsonNode?> GetJson(string url)
         return resp.IsSuccessStatusCode ? JsonNode.Parse(await resp.Content.ReadAsStringAsync()) : null;
     }
     catch (Exception e) { log.LogWarning("github get failed: {m}", e.Message); return null; }
+}
+
+// The repos to poll for a queued job the webhook missed. A configured list wins; otherwise
+// every private repo of the org that has had a push in the last two weeks, newest first, so
+// a renamed or added repo needs no configuration and a large org still bounds the polls.
+async Task<IReadOnlyList<string>> WatchedReposAsync()
+{
+    if (watchRepos.Length > 0) return watchRepos;
+
+    lock (watchedLock)
+        if (DateTimeOffset.UtcNow - watchedAt < TimeSpan.FromMinutes(30)) return watchedCache;
+
+    var discovered = new List<string>();
+    var since = DateTimeOffset.UtcNow.AddDays(-14).ToString("O");
+    for (var page = 1; page <= 5; page++)
+    {
+        var repos = await GetJson(
+            $"https://api.github.com/orgs/{ghOrg}/repos?type=private&sort=updated&per_page=100&page={page}");
+        var batch = repos as JsonArray ?? [];
+        foreach (var repo in batch)
+        {
+            if (repo?["archived"]?.GetValue<bool>() == true) continue;
+            if (repo?["has_actions"]?.GetValue<bool>() == false) continue;
+            if (repo?["pushed_at"]?.GetValue<string>() is { Length: > 0 } pushed
+                && string.CompareOrdinal(pushed, since) < 0) continue;
+            if (repo?["name"]?.GetValue<string>() is { Length: > 0 } name) discovered.Add(name);
+        }
+        if (batch.Count < 100) break;
+    }
+
+    if (discovered.Count == 0) return watchedCache;
+
+    lock (watchedLock)
+    {
+        watchedCache = discovered;
+        watchedAt = DateTimeOffset.UtcNow;
+    }
+    return discovered;
 }
 
 async Task<int> Capacity()
@@ -1040,7 +1081,7 @@ _ = Task.Run(async () =>
             // never learned and never runs (it cannot go in_progress without a runner, and a
             // runner needs the scaler to scale). Poll each watched repo's queued runs and add
             // any queued job carrying our label that the ledger is missing.
-            foreach (var repo in watchRepos)
+            foreach (var repo in await WatchedReposAsync())
             {
                 try
                 {
