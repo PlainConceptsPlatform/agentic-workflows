@@ -292,6 +292,10 @@ Tokens are split on purpose:
 - The tag and the GitHub Release use `GITHUB_TOKEN`, because a `GITHUB_TOKEN` write starts no
   workflows. A repository that deploys to production on `v*` tags therefore does not deploy
   because a release was cut, exactly as before the release became a pull request.
+- A merge into the default branch also posts a `repository_dispatch` of type
+  `agentic-post-merge`, with the merge commit in `client_payload.sha`. GitHub does not always create
+  a push run for a merge the App performs, so a consumer that deploys on push adds that event to its
+  deploy workflow's triggers.
 
 `version-bump` accepts `auto`, `patch`, `minor`, or `major`. The worker needs `OPENAI_API_KEY`,
 `BOT_APP_ID` and `BOT_PRIVATE_KEY`. Auto-merge must be allowed on the repository

@@ -13,6 +13,18 @@ set -euo pipefail
 
 out() { echo "landed=$1" >> "${GITHUB_OUTPUT:-/dev/null}"; }
 
+# GitHub does not always create a push run for a merge the App performs. A consumer that deploys on
+# push listens for this dispatch instead, so the merge still deploys.
+dispatch_post_merge() {
+  [ "$base" = "${DEFAULT_BRANCH:-}" ] || return 0
+  gh api -X POST "repos/$REPO/dispatches" \
+    -f event_type="${POST_MERGE_EVENT:-agentic-post-merge}" \
+    -f "client_payload[sha]=$HEAD_SHA" \
+    -f "client_payload[pr]=$PR" \
+    -f "client_payload[base]=$base" >/dev/null ||
+    echo "::warning::The merge landed, but the ${POST_MERGE_EVENT:-agentic-post-merge} dispatch failed; a consumer that deploys on it did not start."
+}
+
 pr_json=$(gh pr view "$PR" --repo "$REPO" --json headRefOid,baseRefName,headRefName,state)
 state=$(jq -r .state <<<"$pr_json")
 [ "$state" = OPEN ] || { echo "#$PR is $state; nothing to land."; out ""; exit 0; }
@@ -43,6 +55,7 @@ if [ -z "$queue" ]; then
   # The branch goes as well: nothing else deletes it where `delete_branch_on_merge` is off.
   gh api -X DELETE "repos/$REPO/git/refs/heads/$head_ref" >/dev/null 2>&1 || true
   echo "Merged #$PR into $base."
+  dispatch_post_merge
   out merged
   exit 0
 fi
@@ -87,6 +100,7 @@ case "$status" in
     ;;
   merged)
     echo "#$PR merged into $base."
+    dispatch_post_merge
     out merged
     ;;
   *)
