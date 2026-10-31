@@ -23,6 +23,14 @@ inputs:
     required: false
     default: Approved by the merge gate.
 
+  post-merge-event:
+    description: >-
+      repository_dispatch event type posted after a merge lands on the default branch. GitHub does
+      not always create a push run for a merge the App performs, so a consumer that deploys on push
+      opts into this event instead of relying on that run.
+    required: false
+    default: agentic-post-merge
+
 outputs:
   landed:
     description: "'merged', 'enqueued', or empty when nothing happened."
@@ -40,4 +48,6 @@ runs:
         HEAD_SHA: ${{ inputs.head-sha }}
         APPROVE: ${{ inputs.approve }}
         APPROVAL_BODY: ${{ inputs.approval-body }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        POST_MERGE_EVENT: ${{ inputs.post-merge-event }}
       run: bash "${GITHUB_ACTION_PATH}/land-pull-request.sh"
