@@ -125,8 +125,8 @@ jobs:
             -ignore 'unexpected key "queue" for "concurrency" section' \
             -ignore 'could not read reusable workflow file' \
             loops/workflows/work-router.yml
-          # The workflows the family templates install, with the shellcheck pass actionlint runs.
-          "$RUNNER_TEMP/actionlint" -config-file loops/templates/agentics/actionlint.yaml             loops/templates/ci/app-ci-dotnet-next.yml
+          # The two workflows the family templates install, with the shellcheck pass actionlint runs.
+          "$RUNNER_TEMP/actionlint" -config-file loops/templates/agentics/actionlint.yaml             loops/templates/ci/app-ci-dotnet-next.yml             loops/templates/platform-template/.github/workflows/platform-template-sync.yml
       # The quality-gates scripts ship with their node:test suites; they run here on the source.
       - name: Quality-gates script tests
         run: node --test loops/templates/quality-gates/scripts/lib/*.test.mjs
