@@ -29,8 +29,12 @@ export function isValidVersion(version: string): boolean {
   return new RegExp(`^${VERSION}$`).test(version);
 }
 
+// The header opens a line near the top of the file. A document that only quotes it is not ours:
+// matching it anywhere is how `update` deleted Guard's ADR 0010 and a Compass ADR from `docs/`.
+const HEADER_LINE = new RegExp(`^\\s*(?:#|//|<!--)?\\s*${escapeRegex(HEADER)}[@.]`);
+
 export function hasOwnershipHeader(content: string): boolean {
-  return content.includes(HEADER);
+  return content.split("\n", 5).some((line) => HEADER_LINE.test(line));
 }
 
 /** The version recorded in a file's ownership header, or undefined for an unstamped file. */
