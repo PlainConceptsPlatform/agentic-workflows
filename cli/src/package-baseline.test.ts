@@ -46,6 +46,13 @@ describe("version stamp", () => {
     expect(hasOwnershipHeader(yamlHeader)).toBe(true);
   });
 
+  it("does not take a document that quotes the header for one of ours", () => {
+    const adr = "# ADR 0010\n\n- Status: Accepted\n\nEvery file with the `Managed by @plainconceptsplatform/workflows` header\nstays.\n";
+    expect(hasOwnershipHeader(adr)).toBe(false);
+    expect(hasOwnershipHeader(`#!/usr/bin/env bash\n${yamlHeader}`)).toBe(true);
+    expect(hasOwnershipHeader("---\n# Managed by @plainconceptsplatform/workflows@1.9.2. Source: x\n---\n")).toBe(true);
+  });
+
   it("validates versions before they reach a shell", () => {
     expect(isValidVersion("0.7.0")).toBe(true);
     expect(isValidVersion("1.2.3-rc.1")).toBe(true);
