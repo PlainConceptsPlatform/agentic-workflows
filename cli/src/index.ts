@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { inspectRepository, parseVisibility, resolveVisibility } from "./repository-inspection.js";
-import { installCatalog, installedRoutes, installTemplate, isTemplateName, removeRouteFiles, type CatalogInstallResult } from "./catalog-installation.js";
+import { catalogSourcePath, installCatalog, installedRoutes, installTemplate, isTemplateName, removeRouteFiles, type CatalogInstallResult } from "./catalog-installation.js";
+import { installBundle, installedBundles, isBundleTemplate, type BundleInstallResult } from "./template-bundles.js";
 import { formatCatalog, listCatalog, searchCatalog } from "./catalog-listing.js";
 import { packageVersion } from "./package-baseline.js";
 import { routeNames, templateNames, type RouteName, type TemplateName } from "./workflow-catalog.js";
@@ -50,7 +51,9 @@ What an update does to a package-managed file:
   follows the package when its default changes. The agent runner pool and the engine gateway URL
   are kept as well. Everything else in the file is the package's.
   A file whose ownership header was removed is yours and is left alone unless --force is passed.
-  Templates are yours after installation and are replaced only with --force.
+  Single-file templates are yours after installation and are replaced only with --force.
+  Bundle templates (quality-gates, platform-template) stay package-managed like the catalog:
+  add --template installs one, and update refreshes it only where its files carry the header.
 
 Options:
   --dry-run                                   Print what add or update would change, write nothing.
@@ -127,17 +130,25 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
     const allInstalled: string[] = [];
     let catalog: CatalogInstallResult | undefined;
     const templatesPlanned: string[] = [];
+    const bundles: BundleInstallResult[] = [];
+    const sourcePath = catalogSourcePath();
 
     // The installed set is always part of the target set: adding a route never drops another,
-    // and a plain update refreshes exactly what is there.
+    // and a plain update refreshes exactly what is there, bundle templates included. A bundle
+    // nobody installed is never added by an update.
     if (routes.length > 0 || template === undefined) {
       const selectedRoutes = unionRoutes(routes, await installedRoutes(repositoryPath));
       catalog = await installCatalog(repositoryPath, { force, dryRun, selectedRoutes, inspection, baseline });
       allConflicts.push(...catalog.conflicts);
       allInstalled.push(...catalog.installed);
+      for (const name of await installedBundles(repositoryPath, sourcePath)) {
+        if (name !== template) bundles.push(await installBundle(repositoryPath, name, sourcePath, { force, dryRun }));
+      }
     }
 
-    if (template !== undefined) {
+    if (template !== undefined && isBundleTemplate(template)) {
+      bundles.push(await installBundle(repositoryPath, template, sourcePath, { force, dryRun }));
+    } else if (template !== undefined) {
       if (dryRun) {
         templatesPlanned.push(template);
       } else {
@@ -152,11 +163,13 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
       return 1;
     }
     for (const warning of catalog?.warnings ?? []) console.error(`warning: ${warning}`);
+    for (const bundle of bundles) allInstalled.push(...bundle.installed);
     console.log(JSON.stringify({
       command,
       dryRun,
       ...(catalog === undefined ? {} : summarize(catalog)),
       ...(templatesPlanned.length > 0 ? { templatesPlanned } : {}),
+      ...(bundles.length > 0 ? { templates: bundles.map(summarizeBundle) } : {}),
       installed: allInstalled.sort(),
       conflicts: allConflicts,
     }, null, 2));
@@ -193,6 +206,14 @@ function summarize(result: CatalogInstallResult) {
     changes: result.changes.filter((change) => change.status !== "unchanged"),
     unchanged: result.changes.filter((change) => change.status === "unchanged").length,
     ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
+  };
+}
+
+function summarizeBundle(result: BundleInstallResult) {
+  return {
+    template: result.template,
+    changes: result.changes.filter((change) => change.status !== "unchanged"),
+    unchanged: result.changes.filter((change) => change.status === "unchanged").length,
   };
 }
 

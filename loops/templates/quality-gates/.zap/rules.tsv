@@ -1,0 +1,26 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/templates/quality-gates/.zap/rules.tsv. Update with `workflows update --force`; consumer edits may be overwritten.
+# ZAP baseline triage for .github/workflows/security-dast.yml.
+#
+# Format, tab-separated:	<rule-id>	<WARN|IGNORE|FAIL>	<justification>
+#
+# Each entry is a reviewed decision about one rule, and the justification column is mandatory.
+# An IGNORE that a fix would remove names the issue tracking that fix. Never add an IGNORE just
+# to turn the job green: fix the finding, or record here why the rule does not apply to the app.
+# An app that needs a triage line of its own takes this file over: remove the header line above.
+#
+# Shared by the platform family. 10020, 10021, 10035, 10038, 10063, 90004 and 10015 are fixed at
+# source by the platform security headers (Api/Security/SecurityHeaders.cs), and 90003 by
+# self-hosting Geist Mono, so none of them appears here. See Foundations ai/ENGINEERING.md.
+#
+# OUTOFSCOPE lines take a URL regex as the third column instead of a justification, so the
+# justification sits in the comment above each one.
+#
+# An anonymous / answers only with a 302 to the Entra sign-in. ZAP follows it and files
+# login.microsoftonline.com's page, headers and cookies (esctx, fpc, x-ms-gateway-slice) under
+# the app's /, so the header and cookie rules fire on a page the app does not serve. The app's own
+# headers on that redirect come from the same middleware as /login, which stays in scope.
+*	OUTOFSCOPE	^https://[^/]+/$
+10049	IGNORE	Non-Storable / Storable Content: informational, describes caching semantics, not a defect. The shell and API are no-store on purpose; hashed _next/static assets are immutable on purpose.
+10109	IGNORE	Modern Web Application: informational, ZAP noting the target is a JavaScript SPA, which is why the scan uses the AJAX spider.
+10112	IGNORE	Session Management Response Identified: informational, ZAP recognising the App Service ARRAffinity cookie as a session token. Not a finding.
+10055	IGNORE	CSP analysis: style-src carries 'unsafe-inline' because Radix UI and React inline style attributes need it; script-src does not use unsafe-inline: the build emits per-script SHA-256 hashes (scripts/extract-csp-hashes.mjs). The rest of the policy is pinned by SecurityHeadersTests.

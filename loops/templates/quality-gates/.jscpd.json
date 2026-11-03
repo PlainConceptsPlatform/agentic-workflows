@@ -1,0 +1,36 @@
+{
+  "path": [
+    "apps/api/src",
+    "apps/web/src"
+  ],
+  "format": [
+    "csharp",
+    "typescript",
+    "tsx"
+  ],
+  "minLines": 10,
+  "minTokens": 70,
+  "maxLines": 100000,
+  "maxSize": "5mb",
+  "mode": "mild",
+  "reporters": [
+    "json"
+  ],
+  "output": "jscpd-report",
+  "absolute": true,
+  "gitignore": false,
+  "silent": true,
+  "noTips": true,
+  "ignore": [
+    "**/obj/**",
+    "**/bin/**",
+    "**/node_modules/**",
+    "**/*.g.cs",
+    "**/*.designer.cs",
+    "**/*.Designer.cs",
+    "**/Migrations/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/__tests__/**"
+  ]
+}

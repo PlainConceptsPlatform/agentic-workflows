@@ -83,6 +83,8 @@ export const templateNames = [
   "feature-request",
   "github-release",
   "opencode.ci.json",
+  "platform-template",
+  "quality-gates",
 ] as const;
 
 export type TemplateName = (typeof templateNames)[number];
@@ -94,6 +96,8 @@ export interface CatalogTemplate {
   readonly target?: string;
   /** Subdirectory of `templates/` holding the file. Defaults to "agentics". */
   readonly directory?: string;
+  /** Several files under `templates/<directory>/`, package-managed and refreshed by `update` where installed. */
+  readonly bundle?: boolean;
 }
 
 export const catalogTemplates: readonly CatalogTemplate[] = [
@@ -107,4 +111,11 @@ export const catalogTemplates: readonly CatalogTemplate[] = [
   { name: "feature-request", file: "feature_request.yml", description: "Feature request issue template scoped to small, well-scoped improvements (Small/Medium only; large work belongs in a planning issue).", target: ".github/ISSUE_TEMPLATE/feature_request.yml" },
   { name: "github-release", file: "github-release.yml", description: "Publishes or updates a GitHub Release with generated notes whenever a v* tag is pushed." },
   { name: "opencode.ci.json", file: "opencode.ci.json", description: "Standalone OpenCode CI config: plainconcepts provider, GLM model registration, ci-workflow-agent, and LSP defaults for consumer repositories." },
+  { name: "platform-template", file: "scripts/check-platform-conformance.mjs", directory: "platform-template", bundle: true, description: "Platform family template sync: a weekly workflow that runs copier update against the Kitchen-Sink template and opens a pull request per new tag, and a CI guard that keeps .platform/manifest paths unchanged outside a sync. Does nothing without .copier-answers.yml." },
+  { name: "quality-gates", file: "scripts/check-coverage.mjs", directory: "quality-gates", bundle: true, description: "Platform family quality gates: coverage, complexity, duplication and mutation gates, the Engineering Excellence facets, the Semgrep hygiene rules, jscpd and ZAP triage. Floors come from the app's quality.config.json; baselines stay app files." },
 ];
+
+/** Bundle templates: several package-managed files, refreshed by `update` where installed. */
+export const bundleTemplateNames: readonly TemplateName[] = catalogTemplates
+  .filter((template) => template.bundle === true)
+  .map((template) => template.name);
