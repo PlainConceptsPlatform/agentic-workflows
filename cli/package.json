@@ -27,7 +27,7 @@
   ],
   "scripts": {
     "build": "tsc --project tsconfig.build.json && node ./scripts/copy-loops.mjs",
-    "test": "vitest run",
+    "test": "vitest run --dir src",
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "release": "pnpm build && pnpm test && npm publish --access public",
     "prepack": "node ./scripts/copy-loops.mjs"

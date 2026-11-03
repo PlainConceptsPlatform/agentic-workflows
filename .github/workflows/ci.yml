@@ -125,6 +125,9 @@ jobs:
             -ignore 'unexpected key "queue" for "concurrency" section' \
             -ignore 'could not read reusable workflow file' \
             loops/workflows/work-router.yml
+      # The quality-gates scripts ship with their node:test suites; they run here on the source.
+      - name: Quality-gates script tests
+        run: node --test loops/templates/quality-gates/scripts/lib/*.test.mjs
       - name: Composite action manifests
         run: bash loops/actions/verify-composite-actions/verify-composite-actions.sh
       - name: Refine output validation
@@ -156,7 +159,7 @@ jobs:
 
           targets = sorted(root.glob("loops/actions/*/action.yml"))
           targets += sorted(root.glob("loops/workflows/*.yml"))
-          targets += sorted(root.glob("loops/templates/*/*.yml"))
+          targets += sorted(root.glob("loops/templates/**/*.yml"))
           targets += sorted(root.glob(".github/workflows/*.yml"))
           targets = [p for p in targets if not p.name.endswith(".lock.yml")]
 
@@ -206,7 +209,7 @@ jobs:
           curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz |
             tar -xJ -C "$RUNNER_TEMP"
           export PATH="$RUNNER_TEMP/shellcheck-v0.10.0:$PATH"
-          find loops/actions -name '*.sh' -print0 | xargs -0 shellcheck -x
+          find loops/actions loops/templates -name '*.sh' -print0 | xargs -0 shellcheck -x
           echo "shellcheck clean"
 
       # Every worker source must parse, and every `${{ env.NAME }}` it prints must be defined in

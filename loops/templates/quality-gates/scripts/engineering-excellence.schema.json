@@ -1,0 +1,895 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PlainConceptsPlatform/Project-Health/schema/engineering-excellence-facets.schema.json",
+  "title": "Engineering Excellence facet",
+  "description": "One artifact `engineering-excellence-<facet>` containing `<facet>.json`, uploaded by a repo's main-branch CI and read by the Project-Health collector. Rates and scores are 0..1 fractions. Atlas vendors this copy; see docs/decisions/2026-10-11-engineering-excellence-facets.md.",
+  "$ref": "#/$defs/envelope",
+  "$defs": {
+    "rate": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "envelope": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "facet",
+        "repo",
+        "ref",
+        "commitSha",
+        "runId",
+        "generatedAt",
+        "data"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "enum": [
+            1
+          ]
+        },
+        "facet": {
+          "type": "string",
+          "enum": [
+            "coverage",
+            "complexity",
+            "mutation",
+            "security",
+            "sbom",
+            "hygiene"
+          ]
+        },
+        "repo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commitSha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runId": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "runAttempt": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "generatedAt": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object"
+        }
+      }
+    },
+    "lines": {
+      "type": "object",
+      "required": [
+        "lineRate",
+        "branchRate",
+        "linesCovered",
+        "linesValid"
+      ],
+      "properties": {
+        "lineRate": {
+          "$ref": "#/$defs/rate"
+        },
+        "branchRate": {
+          "$ref": "#/$defs/rate"
+        },
+        "linesCovered": {
+          "$ref": "#/$defs/count"
+        },
+        "linesValid": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "scopes",
+        "global",
+        "passed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scopes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "lineRate",
+              "branchRate",
+              "linesCovered",
+              "linesValid",
+              "floor",
+              "modules"
+            ],
+            "properties": {
+              "lineRate": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 1
+              },
+              "branchRate": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 1
+              },
+              "linesCovered": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "linesValid": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "floor": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 1
+              },
+              "modules": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "required": [
+                    "lineRate",
+                    "branchRate",
+                    "linesCovered",
+                    "linesValid"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "global": {
+          "type": "object",
+          "required": [
+            "lineRate",
+            "linesCovered",
+            "linesValid"
+          ]
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "complexitySummary": {
+      "type": "object",
+      "required": [
+        "methods",
+        "ccP50",
+        "ccP90",
+        "ccMax",
+        "over10",
+        "crapOver30"
+      ],
+      "properties": {
+        "methods": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ccP50": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "ccP90": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "ccMax": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "over10": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "crapOver30": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "complexity": {
+      "type": "object",
+      "required": [
+        "thresholds",
+        "scopes",
+        "global",
+        "hotspots"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "thresholds": {
+          "type": "object",
+          "required": [
+            "cc",
+            "crap"
+          ]
+        },
+        "scopes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "methods",
+              "ccP50",
+              "ccP90",
+              "ccMax",
+              "over10",
+              "crapOver30",
+              "modules"
+            ]
+          }
+        },
+        "global": {
+          "type": "object",
+          "required": [
+            "methods",
+            "ccP50",
+            "ccP90",
+            "ccMax",
+            "over10",
+            "crapOver30"
+          ]
+        },
+        "hotspots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "scope",
+              "module",
+              "file",
+              "method",
+              "line",
+              "cc",
+              "coverage",
+              "crap"
+            ],
+            "properties": {
+              "scope": {
+                "type": "string"
+              },
+              "module": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "method": {
+                "type": "string"
+              },
+              "line": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "cc": {
+                "type": "number",
+                "minimum": 1
+              },
+              "coverage": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "crap": {
+                "type": "number",
+                "minimum": 1
+              }
+            }
+          }
+        },
+        "gate": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Blocking complexity gate (Atlas #1941) as evaluated on this commit: backlog size (baseline entries still violating), violations outside the baseline, and justified exemptions. Absent or null when the repo runs no gate.",
+          "required": [
+            "ccMax",
+            "crapMax",
+            "baselined",
+            "violations",
+            "justified"
+          ],
+          "properties": {
+            "ccMax": {
+              "type": "number"
+            },
+            "crapMax": {
+              "type": "number"
+            },
+            "baselined": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "violations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "justified": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "mutationScores": {
+      "type": "object",
+      "required": [
+        "coveredScore",
+        "fullScore",
+        "killed",
+        "timeout",
+        "survived",
+        "noCoverage",
+        "valid"
+      ],
+      "properties": {
+        "coveredScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "fullScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "killed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "survived": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "noCoverage": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "valid": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "mutation": {
+      "type": "object",
+      "required": [
+        "scopes",
+        "global",
+        "passed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scopes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "coveredScore",
+              "fullScore",
+              "killed",
+              "timeout",
+              "survived",
+              "noCoverage",
+              "valid",
+              "floor",
+              "passed",
+              "modules"
+            ],
+            "properties": {
+              "coveredScore": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "fullScore": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "floor": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 1
+              },
+              "passed": {
+                "type": "boolean"
+              },
+              "modules": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "required": [
+                    "coveredScore",
+                    "fullScore",
+                    "killed",
+                    "timeout",
+                    "survived",
+                    "noCoverage",
+                    "valid"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "global": {
+          "type": "object",
+          "required": [
+            "coveredScore",
+            "fullScore",
+            "killed",
+            "timeout",
+            "survived",
+            "noCoverage",
+            "valid"
+          ]
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "severities": {
+      "type": "object",
+      "required": [
+        "CRITICAL",
+        "HIGH",
+        "MEDIUM",
+        "LOW",
+        "UNKNOWN"
+      ]
+    },
+    "security": {
+      "type": "object",
+      "required": [
+        "trivy",
+        "semgrep",
+        "jobs",
+        "passed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "trivy": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "vuln",
+            "misconfig",
+            "secret",
+            "fixableVulns"
+          ],
+          "properties": {
+            "vuln": {
+              "type": "object",
+              "required": [
+                "CRITICAL",
+                "HIGH",
+                "MEDIUM",
+                "LOW",
+                "UNKNOWN"
+              ]
+            },
+            "misconfig": {
+              "type": "object",
+              "required": [
+                "CRITICAL",
+                "HIGH",
+                "MEDIUM",
+                "LOW",
+                "UNKNOWN"
+              ]
+            },
+            "secret": {
+              "type": "object",
+              "required": [
+                "CRITICAL",
+                "HIGH",
+                "MEDIUM",
+                "LOW",
+                "UNKNOWN"
+              ]
+            },
+            "fixableVulns": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "semgrep": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "ERROR",
+            "WARNING",
+            "INFO",
+            "total",
+            "scanErrors"
+          ]
+        },
+        "jobs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failure",
+              "cancelled",
+              "skipped"
+            ]
+          }
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "sbom": {
+      "type": "object",
+      "required": [
+        "format",
+        "specVersion",
+        "components",
+        "byEcosystem",
+        "licenses",
+        "unlicensed",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "type": "string"
+        },
+        "specVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "components": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "byEcosystem": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "licenses": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "unlicensed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string"
+        }
+      }
+    },
+    "hygieneSummary": {
+      "type": "object",
+      "required": [
+        "files",
+        "lines",
+        "duplicatedLines",
+        "duplicationRate",
+        "codeLines",
+        "commentLines",
+        "commentDensity",
+        "swallowedExceptions",
+        "justifiedSwallows"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "$ref": "#/$defs/count"
+        },
+        "lines": {
+          "$ref": "#/$defs/count",
+          "description": "Physical lines of the scanned files."
+        },
+        "duplicatedLines": {
+          "$ref": "#/$defs/count",
+          "description": "Lines inside at least one jscpd clone, each line counted once per file; both fragments of a clone count."
+        },
+        "duplicationRate": {
+          "$ref": "#/$defs/rate",
+          "description": "duplicatedLines / lines."
+        },
+        "codeLines": {
+          "$ref": "#/$defs/count",
+          "description": "Non-blank lines that hold code."
+        },
+        "commentLines": {
+          "$ref": "#/$defs/count",
+          "description": "Lines that hold only a comment."
+        },
+        "commentDensity": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "commentLines / codeLines. Report-only: a line-based approximation for a trend, never a gate."
+        },
+        "swallowedExceptions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Unjustified empty catch blocks (Semgrep hygiene rules). Null when no Semgrep result was available. Blocking in Atlas, so normally 0 on main."
+        },
+        "justifiedSwallows": {
+          "$ref": "#/$defs/count",
+          "description": "Empty catch blocks kept with a `nosemgrep: <hygiene rule> — <reason>` justification."
+        }
+      }
+    },
+    "hygieneScope": {
+      "type": "object",
+      "required": [
+        "files",
+        "lines",
+        "duplicatedLines",
+        "duplicationRate",
+        "codeLines",
+        "commentLines",
+        "commentDensity",
+        "swallowedExceptions",
+        "justifiedSwallows",
+        "deadCodeWarnings",
+        "modules"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "$ref": "#/$defs/count"
+        },
+        "lines": {
+          "$ref": "#/$defs/count",
+          "description": "Physical lines of the scanned files."
+        },
+        "duplicatedLines": {
+          "$ref": "#/$defs/count",
+          "description": "Lines inside at least one jscpd clone, each line counted once per file; both fragments of a clone count."
+        },
+        "duplicationRate": {
+          "$ref": "#/$defs/rate",
+          "description": "duplicatedLines / lines."
+        },
+        "codeLines": {
+          "$ref": "#/$defs/count",
+          "description": "Non-blank lines that hold code."
+        },
+        "commentLines": {
+          "$ref": "#/$defs/count",
+          "description": "Lines that hold only a comment."
+        },
+        "commentDensity": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "commentLines / codeLines. Report-only: a line-based approximation for a trend, never a gate."
+        },
+        "swallowedExceptions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Unjustified empty catch blocks (Semgrep hygiene rules). Null when no Semgrep result was available. Blocking in Atlas, so normally 0 on main."
+        },
+        "justifiedSwallows": {
+          "$ref": "#/$defs/count",
+          "description": "Empty catch blocks kept with a `nosemgrep: <hygiene rule> — <reason>` justification."
+        },
+        "deadCodeWarnings": {
+          "$ref": "#/$defs/count",
+          "description": "Dead-code diagnostics left in the scope (.NET IDE0051/IDE0052, TS noUnusedLocals/noUnusedParameters). 0 while they are build errors."
+        },
+        "modules": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/hygieneSummary"
+          }
+        }
+      }
+    },
+    "hygiene": {
+      "type": "object",
+      "description": "AI-slop proxies (Atlas #1942): duplication, swallowed exceptions, dead code and comment density, per scope (api, web) and module. Scope 'api' is apps/api/src, 'web' apps/web/src; tests, generated code and migrations are excluded.",
+      "required": [
+        "thresholds",
+        "scopes",
+        "global",
+        "deadCode",
+        "hotspots",
+        "gate"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "thresholds": {
+          "type": "object",
+          "description": "The jscpd clone minimums: a clone must reach both.",
+          "required": [
+            "minLines",
+            "minTokens"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "minLines": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minTokens": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "scopes": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/hygieneScope"
+          }
+        },
+        "global": {
+          "$ref": "#/$defs/hygieneSummary"
+        },
+        "deadCode": {
+          "type": "object",
+          "required": [
+            "gated",
+            "warnings"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "gated": {
+              "type": "boolean",
+              "description": "True when dead code fails the build, so warnings stays 0."
+            },
+            "warnings": {
+              "$ref": "#/$defs/count"
+            }
+          }
+        },
+        "hotspots": {
+          "type": "array",
+          "description": "Files with the most duplicated lines, worst first, at most 20.",
+          "items": {
+            "type": "object",
+            "required": [
+              "scope",
+              "module",
+              "file",
+              "duplicatedLines",
+              "lines",
+              "duplicationRate"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "scope": {
+                "type": "string"
+              },
+              "module": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "duplicatedLines": {
+                "$ref": "#/$defs/count"
+              },
+              "lines": {
+                "$ref": "#/$defs/count"
+              },
+              "duplicationRate": {
+                "$ref": "#/$defs/rate"
+              }
+            }
+          }
+        },
+        "gate": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Blocking duplication gate as evaluated on this commit: files in the baseline, their recorded duplicated lines, files over their baseline (or new clones), and baseline entries that improved. Null when the repo runs no gate.",
+          "required": [
+            "baselinedFiles",
+            "baselineLines",
+            "violations",
+            "fixed"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "baselinedFiles": {
+              "$ref": "#/$defs/count"
+            },
+            "baselineLines": {
+              "$ref": "#/$defs/count"
+            },
+            "violations": {
+              "$ref": "#/$defs/count"
+            },
+            "fixed": {
+              "$ref": "#/$defs/count"
+            }
+          }
+        }
+      }
+    }
+  }
+}

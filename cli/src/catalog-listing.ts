@@ -1,6 +1,8 @@
 import { access, constants } from "node:fs/promises";
 import { join } from "node:path";
 
+import { catalogSourcePath } from "./catalog-installation.js";
+import { installedBundles } from "./template-bundles.js";
 import { catalogTemplates, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
 
 export interface CatalogEntry {
@@ -26,12 +28,15 @@ export async function listCatalog(options: ListOptions = {}): Promise<readonly C
     installed: await isFileInstalled(basePath, route.worker),
   })));
 
+  // A bundle counts as installed by its ownership headers, not by its paths: a repository may keep
+  // its own headerless files at the same places.
+  const bundles = await installedBundles(basePath, catalogSourcePath());
   const templates = await Promise.all(catalogTemplates.map(async (template) => ({
     kind: "template" as const,
     name: template.name,
     description: template.description,
     file: template.file,
-    installed: await isFileInstalled(basePath, template.file, template.target),
+    installed: template.bundle === true ? bundles.includes(template.name) : await isFileInstalled(basePath, template.file, template.target),
   })));
 
   return [...routes, ...templates];

@@ -1,0 +1,88 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/templates/quality-gates/.semgrep/platform-hygiene.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+# Hygiene rules (practice 11, code hygiene) shared by the platform family, run by the blocking
+# Semgrep scan in .github/workflows/app-ci.yml via `--config .semgrep/`. Their findings also feed
+# the `engineering-excellence-hygiene` facet (swallowed-exception counts). Shape from
+# PlainConceptsPlatform/Atlas .semgrep/atlas-hygiene.yml, rule ids neutral so every app shares them.
+#
+# A `catch` with an empty body turns a failure into silence. These rules flag an
+# empty body whatever it catches: a bare `catch`, `catch (Exception)`, or a narrow
+# type. A comment inside the braces is not handling and does not exempt it.
+#
+# One shape is exempt by design: `catch (OperationCanceledException) when
+# (<token>.IsCancellationRequested) { }`, the hosted-service shutdown idiom. It
+# swallows exactly the cancellation its own caller requested, and nothing else; an
+# unfiltered cancellation catch also hides an HttpClient timeout, so it is flagged.
+#
+# Where swallowing is genuinely correct, say why where a reviewer reads it, on the
+# line the finding starts (the `try`) or the line above it:
+#
+#   // nosemgrep: platform-hygiene-csharp-empty-catch — <why swallowing is correct here>
+#
+# The facet counts these justifications, so the backlog of swallowed exceptions stays
+# visible even while the gate is green. Test code is out of scope: a test that
+# expects a throw has its own idioms.
+# See Foundations ai/ENGINEERING.md.
+rules:
+  - id: platform-hygiene-csharp-empty-catch
+    languages: [csharp]
+    severity: ERROR
+    message: >-
+      Empty catch block: the exception is swallowed without logging, rethrowing or a
+      fallback. Handle it, or justify it on the `try` line with
+      `// nosemgrep: platform-hygiene-csharp-empty-catch — <reason>`.
+    metadata:
+      category: hygiene
+    paths:
+      # Product code only: .opencode/plugins and the managed .github actions belong to the
+      # agent-harness and agentic-workflows packages.
+      include:
+        - "/apps/"
+      exclude:
+        - "**/tests/**"
+        - "**/obj/**"
+        - "**/Migrations/**"
+    pattern-either:
+      # Catch-all: never exempt, even next to a filtered cancellation catch.
+      - pattern: try { ... } catch { }
+      - pattern: try { ... } catch { } finally { ... }
+      - pattern: try { ... } catch (Exception) { }
+      - pattern: try { ... } catch (Exception $E) { }
+      - pattern: try { ... } catch (System.Exception) { }
+      - pattern: try { ... } catch (System.Exception $E) { }
+      - pattern: try { ... } catch (Exception) { } finally { ... }
+      - pattern: try { ... } catch (Exception $E) { } finally { ... }
+      - patterns:
+          - pattern-either:
+              - pattern: try { ... } catch ($T) { }
+              - pattern: try { ... } catch ($T $E) { }
+              - pattern: try { ... } catch ($T) { } finally { ... }
+              - pattern: try { ... } catch ($T $E) { } finally { ... }
+          # Semgrep's C# grammar drops the `when` filter, so the exemption is textual.
+          - pattern-not-regex: catch\s*\(\s*OperationCanceledException(\s+\w+)?\s*\)\s*when\s*\(\s*[\w.]*IsCancellationRequested\s*\)\s*\{[^}]*\}
+
+  - id: platform-hygiene-ts-empty-catch
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Empty catch block: the error is swallowed without logging, rethrowing or a
+      fallback. Handle it, or justify it on the `try` line with
+      `// nosemgrep: platform-hygiene-ts-empty-catch — <reason>`.
+    metadata:
+      category: hygiene
+    paths:
+      include:
+        - "/apps/"
+      exclude:
+        - "**/*.test.ts"
+        - "**/*.test.tsx"
+        - "**/*.test.mjs"
+        - "**/*.spec.ts"
+        - "**/__tests__/**"
+        - "**/e2e/**"
+        - "**/node_modules/**"
+        - "**/dist/**"
+    pattern-either:
+      - pattern: try { ... } catch { }
+      - pattern: try { ... } catch ($E) { }
+      - pattern: try { ... } catch { } finally { ... }
+      - pattern: try { ... } catch ($E) { } finally { ... }

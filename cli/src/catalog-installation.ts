@@ -12,6 +12,7 @@ import { generateOpencodeCi, generateOpencodeConfig, generateStackDefaults, inje
 import { mergeRouter, mergeWorker, mirrorRouterLiterals } from "./worker-env.js";
 import { fetchBaseline, hasOwnershipHeader, installedVersion, packageVersion, stampVersion, type BaselineFetcher } from "./package-baseline.js";
 import type { RepositoryInspection } from "./repository-inspection.js";
+import { installBundle, isBundleTemplate } from "./template-bundles.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -378,6 +379,10 @@ export async function installTemplate(
   options: Pick<CatalogInstallOptions, "force" | "sourcePath" | "inspection"> = {},
 ): Promise<TemplateInstallResult> {
   const sourcePath = options.sourcePath ?? catalogSourcePath();
+  if (isBundleTemplate(template)) {
+    const bundle = await installBundle(repositoryPath, template, sourcePath, { force: options.force });
+    return { installed: bundle.installed, conflicts: [] };
+  }
   const meta = catalogTemplateMeta(template);
   const source = join(sourcePath, "templates", meta.directory, meta.file);
   const target = meta.target;
