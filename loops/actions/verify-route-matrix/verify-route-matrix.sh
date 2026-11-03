@@ -2626,6 +2626,8 @@ assert "a dispatched apply-review carries its attempt count" 3 \
   "$(route_field attempts EVENT=workflow_dispatch OPERATION=apply-review INPUT_PR_NUMBER=9 INPUT_ATTEMPTS_SO_FAR=3)"
 assert "a dispatched refine still carries its mode alongside the count" rerefine \
   "$(route_field refine-mode EVENT=workflow_dispatch OPERATION=refine INPUT_ISSUE_NUMBER=42 INPUT_MODE=rerefine INPUT_ATTEMPTS_SO_FAR=3)"
+assert "the hourly sweep's assume pass reaches refine in assume mode" assume \
+  "$(route_field refine-mode EVENT=workflow_dispatch OPERATION=refine INPUT_ISSUE_NUMBER=42 INPUT_MODE=assume)"
 
 if [ "$RETRY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 

@@ -9,13 +9,17 @@ marker="$2"
 comment_prefix="$3"
 issue_number="$4"
 draft_marker="$5"
+# The sentence the prompt opens every batch of questions with, and the mark it leaves in the draft
+# wherever a question is still open.
+questions_line="${6:-I have some questions about this issue}"
+pending_mark="${7:-_pending see questions below_}"
 
 if [ ! -f "$output_file" ] || ! jq -e '.items | arrays' "$output_file" >/dev/null 2>&1; then
   echo invalid
   exit 0
 fi
 
-jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_number" --arg draft_marker "$draft_marker" '
+jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_number" --arg draft_marker "$draft_marker"   --arg questions_line "$questions_line" --arg pending_mark "$pending_mark" '
   def has_replacement_body:
     any(.items[]; .type == "update_issue" and
       (.item_number == null or (.item_number | tostring) == $issue) and
@@ -31,6 +35,18 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
       (.item_number == null or (.item_number | tostring) == $issue) and
       (.body | type == "string") and
       (.body | contains($draft_marker)));
+
+  # The batched questions, by the sentence that opens them. It decides the outcome on its own:
+  # Bots #561, #871 and Numa #821 asked, left a draft without the draft marker, were read as
+  # complete, and implement started two seconds later on a story nobody had answered.
+  def asks_questions:
+    any(.items[]; .type == "add_comment" and (.item_number | tostring) == $issue and
+      (.body | type == "string") and (.body | contains($questions_line)));
+
+  def has_pending_marks:
+    any(.items[]; .type == "update_issue" and
+      (.item_number == null or (.item_number | tostring) == $issue) and
+      (.body | type == "string") and (.body | contains($pending_mark)));
 
   # A split writes children, which are the only items allowed to target something other than
   # the source issue: they do not exist yet, so they carry no number at all.
@@ -108,7 +124,9 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
   # demanding a draft from both.
   if child_count >= 2 and has_replacement_body and has_only_split_items and root_pr_count <= 1 then "split"
   elif child_count > 0 then "invalid"
-  elif has_replacement_body and (has_draft_body | not) and has_only_source_items then "complete"
+  elif asks_questions and ((has_update | not) or has_replacement_body) and has_only_source_items
+    and (reported_incomplete | not) then "questions"
+  elif has_replacement_body and (has_draft_body | not) and (has_pending_marks | not) and has_only_source_items then "complete"
   elif has_clarification and ((has_update | not) or has_draft_body) and has_only_source_items
     and (reported_incomplete | not) then "questions"
   else "invalid"

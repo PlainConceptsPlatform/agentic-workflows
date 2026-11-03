@@ -17,6 +17,10 @@ inputs:
   issue-number:
     description: Issue number that every refinement outcome must target.
     required: true
+  questions-line:
+    description: The sentence that opens the batched questions comment. A comment carrying it makes the outcome questions.
+    required: false
+    default: I have some questions about this issue
 outputs:
   valid:
     description: Whether the output contains a usable replacement body or clarification comment.
@@ -36,10 +40,11 @@ runs:
         ISSUE_NUMBER: ${{ inputs.issue-number }}
         MARKER: ${{ inputs.marker }}
         OUTPUT_FILE: ${{ inputs.output-file }}
+        QUESTIONS_LINE: ${{ inputs.questions-line }}
       run: |
         set -euo pipefail
 
-        outcome="$(bash "${{ github.action_path }}/validate-refine-output.sh" "$OUTPUT_FILE" "$MARKER" "$COMMENT_PREFIX" "$ISSUE_NUMBER" "$DRAFT_MARKER")"
+        outcome="$(bash "${{ github.action_path }}/validate-refine-output.sh" "$OUTPUT_FILE" "$MARKER" "$COMMENT_PREFIX" "$ISSUE_NUMBER" "$DRAFT_MARKER" "$QUESTIONS_LINE")"
         echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
         echo "valid=$([ "$outcome" != 'invalid' ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
