@@ -28,13 +28,17 @@ export function linkTarget(fromFile, href) {
   if (href.startsWith("#") || EXTERNAL.test(href)) return null;
   const path = href.split(/[#?]/)[0];
   if (path === "") return null;
-  let decoded = path;
+  const decoded = decodePath(path);
+  return normalize(decoded.startsWith("/") ? decoded.slice(1) : join(dirname(fromFile), decoded));
+}
+
+function decodePath(path) {
   try {
-    decoded = decodeURIComponent(path);
+    return decodeURIComponent(path);
   } catch {
     // A literal % that is not an escape: the undecoded path is the one to check.
+    return path;
   }
-  return normalize(decoded.startsWith("/") ? decoded.slice(1) : join(dirname(fromFile), decoded));
 }
 
 // A code span in prose often is a path, but `owner/repo` and `application/json` have the same
