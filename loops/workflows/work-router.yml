@@ -194,6 +194,12 @@ env:
   # `pnpm run dev`, and a pull request with no plan costs one API call. Set it to "false" for a
   # repository whose app cannot start on a runner; operation=evidence still works by hand.
   EVIDENCE_ENABLED: "true"
+  # Working hours, Monday to Friday, that refine's questions wait for an answer. Every question
+  # carries the answer the bot would take; once this passes with no reply, or as soon as the
+  # author reacts with a thumbs-up, refine carries on with those answers and labels the issue
+  # `assumed`. A question marked as needing a decision is never assumed. "0" turns this off, and
+  # questions wait for a person however long that takes.
+  REFINE_ANSWER_TIMEOUT_HOURS: "24"
 
 on:
   issues:
@@ -267,12 +273,13 @@ on:
         required: false
         type: string
       mode:
-        description: "Refine mode: first or rerefine"
+        description: "Refine mode: first, rerefine or assume"
         required: false
         type: choice
         options:
           - first
           - rerefine
+          - assume
       ci-conclusion:
         description: "CI conclusion for merge-gate dispatch"
         required: false
@@ -1685,6 +1692,75 @@ jobs:
                   echo "Approving trusted bot run $run_id"
                   gh api "repos/$REPO/actions/runs/$run_id/approve" --method POST
                 done
+            done
+      # Refine's questions do not wait forever. Nine of the 21 batches that were really asked in
+      # Odyssey, Numa, Bots and DeliveryMetrics up to November 2026 never got a reply, and those
+      # issues stayed parked. Each question now carries the answer the bot would take, and once
+      # the working hours pass, or the author or an assignee reacts with a thumbs-up, refine runs
+      # again in assume mode and takes them. Batches written before the proposals existed, and any
+      # batch holding a question that needs a decision, still wait for a person.
+      - name: Take refine's proposed answers once nobody replied in time
+        if: env.REFINE_ANSWER_TIMEOUT_HOURS != '0'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REFINE_MARKER: "<!-- agent-refine -->"
+          QUESTIONS_LINE: "I have some questions about this issue"
+          PROPOSED_TAG: "**Proposed:**"
+          DECISION_TAG: "**Your decision needed:**"
+        run: |
+          set -euo pipefail
+          timeout_hours="${REFINE_ANSWER_TIMEOUT_HOURS:-24}"
+
+          # Hours since $1 that fall on a weekday, in UTC, counted up to the timeout and no further.
+          working_hours_since() {
+            local t now h=0
+            t=$(date -u -d "$1" +%s)
+            now=$(date -u +%s)
+            while [ "$t" -lt "$now" ] && [ "$h" -lt "$timeout_hours" ]; do
+              [ "$(date -u -d "@$t" +%u)" -le 5 ] && h=$((h + 1))
+              t=$((t + 3600))
+            done
+            echo "$h"
+          }
+
+          gh issue list --repo "$REPO" --state open --label refine --label review --limit 100 \
+            --json number,author,assignees,labels \
+            --jq '.[] | select([.labels[].name] | (index("bot-working") or index("assumed")) | not)
+                  | [.number, ([.author.login] + [.assignees[].login] | join(" "))] | @tsv' |
+            while IFS=$'\t' read -r issue people; do
+              [ -n "$issue" ] || continue
+              comments=$(gh api --paginate "repos/$REPO/issues/$issue/comments?per_page=100" | jq -s 'add // []')
+              asked=$(jq -c --arg marker "$REFINE_MARKER" --arg line "$QUESTIONS_LINE" '
+                [.[] | select(.user.type == "Bot" and (.body | contains($marker)) and (.body | contains($line)))]
+                | last // empty | {id, created_at, body}' <<<"$comments")
+              [ -n "$asked" ] || continue
+              asked_at=$(jq -r '.created_at' <<<"$asked")
+              body=$(jq -r '.body' <<<"$asked")
+
+              # A person spoke after the questions: that reply is refine's to read, not a silence.
+              replied=$(jq --arg at "$asked_at" '[.[] | select(.user.type != "Bot" and .created_at > $at)] | length' <<<"$comments")
+              [ "$replied" -eq 0 ] || continue
+              case "$body" in *"$DECISION_TAG"*) echo "#$issue waits for a decision; not assuming."; continue ;; esac
+              case "$body" in *"$PROPOSED_TAG"*) ;; *) continue ;; esac
+
+              accepted=false
+              thumbs=$(gh api "repos/$REPO/issues/comments/$(jq -r '.id' <<<"$asked")/reactions" \
+                --jq '[.[] | select(.content == "+1") | .user.login] | join(" ")' 2>/dev/null || true)
+              for login in $thumbs; do
+                case " $people " in *" $login "*) accepted=true ;; esac
+              done
+              hours=$(working_hours_since "$asked_at")
+              if [ "$accepted" = true ]; then
+                echo "#$issue: the proposed answers were accepted with a thumbs-up; refining with them."
+              elif [ "$hours" -ge "$timeout_hours" ]; then
+                echo "#$issue: no reply in ${timeout_hours} working hours; refining with the proposed answers."
+              else
+                continue
+              fi
+              gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
+                -f ref="$(gh api "repos/$REPO" --jq .default_branch)" \
+                -f "inputs[operation]=refine" -f "inputs[issue-number]=$issue" -f "inputs[mode]=assume"
             done
 
   audit-close:

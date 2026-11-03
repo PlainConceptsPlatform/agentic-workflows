@@ -58,6 +58,17 @@ env:
   DRAFT_MARKER: "<!-- agent-refine-draft -->"
   INITIAL_MODE: first
   RESPONSE_MODE: rerefine
+  # The pass the router starts when nobody answered the questions in time, or the author accepted
+  # them with a thumbs-up: every proposed answer is taken as given. See REFINE_ANSWER_TIMEOUT_HOURS
+  # in work-router.yml.
+  ASSUME_MODE: assume
+  ASSUMED_LABEL: assumed
+  # The sentence that opens the batched questions, and the two ways a question ends. The validator
+  # reads the first to decide the outcome; the router reads the other two to know whether the
+  # questions can be taken as answered.
+  QUESTIONS_LINE: "I have some questions about this issue"
+  PROPOSED_TAG: "**Proposed:**"
+  DECISION_TAG: "**Your decision needed:**"
   MAX_SELF_QUESTIONS: "5"
   TRIVIAL_MARKER: "<!-- complexity: trivial -->"
   ESTIMATE_MARKER_PREFIX: "<!-- estimate: "
@@ -76,8 +87,9 @@ env:
   GIT_COMMITTER_NAME: "github-actions[bot]"
   GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
 description: |
-  Refines an issue into a user story, on a first pass or after the author has answered the
-  bot's questions. Replaces .loops/recipes/refine-loop.yaml.
+  Refines an issue into a user story, on a first pass, after the author has answered the
+  bot's questions, or once the bot's proposed answers stand because nobody answered in time.
+  Replaces .loops/recipes/refine-loop.yaml.
 
   The refined story is wrapped in the repository's own issue template when one matches.
   When questions remain, the worker leaves that template-wrapped temporal draft on the
@@ -92,7 +104,7 @@ description: |
   still parks an issue for a person.
 
   Router-only worker: triggered exclusively via workflow_call from work-router.yml.
-  Contract inputs: issue-number, mode(first|rerefine).
+  Contract inputs: issue-number, mode(first|rerefine|assume).
 
 name: "Agent: Refine Issue"
 
@@ -114,7 +126,7 @@ on:
         required: true
         type: string
       mode:
-        description: Refinement pass mode (first or rerefine).
+        description: Refinement pass mode (first, rerefine or assume).
         required: false
         type: string
         default: first
@@ -177,9 +189,10 @@ jobs:
           labels=$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels \
             --jq '[.labels[].name]')
           if jq -e 'index("review")' >/dev/null <<<"$labels"; then
-            if [ "$MODE" = "rerefine" ]; then
+            if [ "$MODE" = "rerefine" ] || [ "$MODE" = "assume" ]; then
               # A rerefine is triggered by a human comment on an issue the bot parked for
-              # review. The comment is the review: clear the label and proceed.
+              # review. The comment is the review: clear the label and proceed. An assume pass
+              # is the router's answer to the same park once the deadline passed.
               gh issue edit "$ISSUE_NUMBER" --remove-label "review" 2>/dev/null ||
                 echo "::notice::review label already gone on #$ISSUE_NUMBER"
               echo "eligible=true" >> "$GITHUB_OUTPUT"
@@ -323,6 +336,8 @@ jobs:
           token: ${{ github.token }}
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
+      # `assumed` says the router already spent its assume pass on this issue. A refinement from
+      # scratch earns a new one.
       - name: Clear the human-needed flag
         uses: ./.github/actions/remove-issue-labels
         with:
@@ -331,6 +346,7 @@ jobs:
           labels: |-
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
+            ${{ inputs.mode == env.INITIAL_MODE && env.ASSUMED_LABEL || '' }}
   validate_output:
     needs: [activation, agent, safe_outputs]
     if: >
@@ -362,6 +378,7 @@ jobs:
           draft-marker: ${{ env.DRAFT_MARKER }}
           comment-prefix: ${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}
           issue-number: ${{ inputs.issue-number }}
+          questions-line: ${{ env.QUESTIONS_LINE }}
   conclude:
     needs: [activation, agent, safe_outputs, validate_output]
     # `always()` is load-bearing: without it GitHub prepends `success()`, which returns false
@@ -418,6 +435,7 @@ jobs:
           labels: |-
             ${{ env.REFINED_LABEL }}
             ${{ env.IMPLEMENT_LABEL }}
+            ${{ inputs.mode == env.ASSUME_MODE && env.ASSUMED_LABEL || '' }}
       - name: Clear complete refinement labels
         if: needs.validate_output.outputs.outcome == 'complete'
         uses: ./.github/actions/remove-issue-labels
@@ -645,13 +663,18 @@ jobs:
             gh issue edit "$child" --repo "$REPO" --add-label "$IMPLEMENT_LABEL" >/dev/null
             echo "#$child handed to implement"
           done
+      # An assume pass that still asks leaves `assumed` beside `review`, which the router reads as
+      # "already assumed once": the questions then wait for a person instead of being assumed
+      # again every working day.
       - name: Flag questions for review
         if: needs.validate_output.outputs.outcome == 'questions'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
-          labels: ${{ env.REVIEW_LABEL }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+            ${{ inputs.mode == env.ASSUME_MODE && env.ASSUMED_LABEL || '' }}
       - name: Release questions for the author
         if: needs.validate_output.outputs.outcome == 'questions'
         uses: ./.github/actions/remove-issue-labels
@@ -903,7 +926,15 @@ timeout-minutes: 90
    - On a `${{ env.RESPONSE_MODE }}` pass, incorporate only the supplied answers from the issue author or an
      assignee. Do not use answers from other commenters. The body may already hold the
      temporal draft from the earlier pass: reuse what still holds, and resolve its pending
-     marks with the author's answers.
+     marks with the author's answers. A question the author left unanswered keeps the answer
+     you proposed for it. A reply that accepts your proposals as a whole ("ok", "yes", "go
+     ahead", in any language) answers every question with its proposal.
+   - On a `${{ env.ASSUME_MODE }}` pass, nobody answered your last batch of questions in time, or the
+     author accepted it with a thumbs-up. Take each question's `${{ env.PROPOSED_TAG }}` answer as
+     given, except where the author or an assignee did answer in a comment: their answer wins.
+     Do not ask again: write the finished story. Add a section titled `Assumed without a reply`
+     at the end of the body, before any related links, listing each question in a short line
+     with the answer you took, so whoever reviews the pull request sees what nobody confirmed.
 
 3. **Explore and write the story.** Split the issue into work units first. If the issue body is
    a bullet list of distinct tasks, treat each bullet as its own work unit. Otherwise treat the
@@ -914,6 +945,14 @@ timeout-minutes: 90
    findings held as internal working. Never write a self-asked question or its answer to the
    issue. At most ${{ env.MAX_SELF_QUESTIONS }} self-asked questions per work unit, and stop
    sooner once more exploring stops changing your understanding.
+
+   Answer your own questions from the codebase and the docs. Set one aside for the author when
+   it is a business or product decision the code cannot settle: which of two reasonable
+   behaviours the users want, who sees or may do something, a threshold or a limit, which figure
+   a calculation uses, what a message says to a customer. Choosing one of those yourself because
+   the code would allow either is not answering it; it is the question. A wrong guess costs a
+   pull request, a question costs a reply, and the author can accept every proposal with a
+   thumbs-up.
 
    Then classify the change complexity. A change is **trivial** only if every one of these
    holds: ${{ env.TRIVIAL_CRITERIA }}
@@ -1044,14 +1083,23 @@ timeout-minutes: 90
     The comment carries:
    1. `${{ env.REFINE_MARKER }}`
    2. `${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}`
-   3. `I have some questions about this issue. Please reply in one comment and I'll process your answers.`
-   4. Every set-aside question, gathered from all work units, immediately below it, each answerable in a sentence.
+   3. `${{ env.QUESTIONS_LINE }}. Each one carries the answer I would take. Reply in one comment to change any of them, or react with 👍 to accept them all.`
+   4. Every set-aside question, gathered from all work units, as a numbered list, each answerable in a sentence.
+   5. A last line saying that if nobody replies the proposed answers stand and refinement carries on, except for any question that needs a decision.
+
+   Every question ends in one of two ways, on its own line under the question:
+
+   - `${{ env.PROPOSED_TAG }} <the answer you would take> -- <why, in one short clause: the convention, the existing behaviour or the issue text it follows>`. This is the usual case: you can name a sensible answer, and getting it wrong costs a change, not a loss.
+   - `${{ env.DECISION_TAG }} <why no answer can be assumed>`. Only for a question where a wrong assumption is hard to undo: data deleted or rewritten, money or prices, permissions or security, personal data, or a contract another team or system consumes. These are never assumed; refinement waits for a person.
 
    Write the questions in **plain business language, not technical jargon**. The person reading
    them is a domain expert, not an engineer.
 
     **The story is complete.** You answered every exploration question yourself and none remain
-    for the author. Call `update_issue` first, with the wrapped replacement body, and wait
+    for the author. A complete story has no open question anywhere in it: if the issue form has an
+    `Open questions` field, it says `None`, and a question you settled goes into the acceptance
+    criteria as the behaviour you chose. A question still open in the body is a question for the
+    author, so that is the outcome above, not this one. Call `update_issue` first, with the wrapped replacement body, and wait
     for it to come back. Send the whole body in that one call: it is the only thing this
     step has to get right.
 
@@ -1062,6 +1110,8 @@ timeout-minutes: 90
 
     - If the array includes the exact label `future`: `Refinement complete. The implement label has been added. Implementation is paused until the future label is removed.`
     - Otherwise: `Refinement complete. The implement label has been added and the implement workflow will start shortly.`
+
+    On a `${{ env.ASSUME_MODE }}` pass, add one sentence after that message: `The proposed answers were taken because nobody replied in time, and they are listed under "Assumed without a reply". If one is wrong, say so on the pull request.`
 
     If `update_issue` did not succeed, do not post either message: an issue that reads as
     refined with its body untouched is worse than one that says the run failed. Call

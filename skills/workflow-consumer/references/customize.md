@@ -97,6 +97,7 @@ of `work-router.yml`, which `update` keeps the same way it keeps a worker's.
 | Value | What it is | Getting it wrong |
 |---|---|---|
 | `CI_WORKFLOW_NAME` | The CI workflow the merge belt reads its verdict from. Must equal that workflow's `name:` exactly | No gate at all. The belt logs no completed CI run and the pull request waits, with no red run anywhere |
+| `REFINE_ANSWER_TIMEOUT_HOURS` | Working hours (Monday to Friday) refine's questions wait before the proposed answers are taken and the issue is labelled `assumed`. A thumbs-up from the author takes them at once; a question marked as needing a decision always waits. `"0"` turns it off | Too short and people never get to answer; `"0"` and an unanswered issue stays parked for good, which is where nine of the first twenty-one batches of questions ended |
 | `AUDIT_CRON` | This repository's audit slot. See "Scheduling across repositories" in the package README | The audit fires and classifies to no route, so nothing happens and nothing complains |
 
 Both are also needed where GitHub evaluates no expression, in the `workflow_run.workflows:` list
