@@ -49,6 +49,9 @@ outputs:
   run-id:
     description: CI run ID when fetched.
     value: ${{ steps.identify.outputs.run-id }}
+  human-author:
+    description: Whether a person with write access opened the pull request, rather than a trusted bot.
+    value: ${{ steps.identify.outputs.human-author }}
 runs:
   using: composite
   steps:
@@ -194,6 +197,7 @@ runs:
           if [ -n "$issue" ]; then echo "closes=closes issue #$issue"; else echo "closes=closes no issue"; fi
           echo "conclusion=$ci_conclusion"
           echo "run-id=$ci_run_id"
+          if [ "$bot" = true ]; then echo "human-author=false"; else echo "human-author=true"; fi
         } >> "$GITHUB_OUTPUT"
 
         echo "PR #$PR_NUMBER by $author closes #${issue:-nothing}; CI concluded $ci_conclusion"

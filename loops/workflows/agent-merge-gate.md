@@ -25,7 +25,9 @@ env:
   RISK_INDICATORS: "Any diff touching authentication, authorization or session handling. Any change to a calculation or pricing engine, or to code handling money. Any database migration, or a change to an entity or schema. Any change to an audit or event log, or anything that could break its continuity. Any change to a public API contract or a shared library other repositories consume."
   # Paths a bot may change but never merge on its own: an extended regular expression matched
   # against every changed path in the pull request. A match holds the merge for a human; it does
-  # not stop the agent repairing failed CI on the same files.
+  # not stop the agent repairing failed CI on the same files. A pull request a person with write
+  # access opened is not held for them: that person could push the same change to the branch, and
+  # GitHub does not let them approve their own pull request, so the hold only stranded it.
   #
   # Only the automation itself. This list used to hold every dependency manifest, lockfile and
   # dotted directory as well, and with a size threshold and an owner list as wide it parked most
@@ -188,6 +190,7 @@ jobs:
       closes: ${{ steps.subject.outputs.closes }}
       conclusion: ${{ steps.subject.outputs.conclusion }}
       run-id: ${{ steps.subject.outputs.run-id }}
+      human_author: ${{ steps.subject.outputs.human-author }}
       review_blocked: ${{ steps.review.outputs.review_blocked }}
       pr_base: ${{ steps.stack.outputs.pr_base }}
       stack_root: ${{ steps.stack.outputs.stack_root }}
@@ -311,7 +314,7 @@ jobs:
         with:
           token: ${{ github.token }}
           pr-number: ${{ needs.subject.outputs.pr }}
-          protected-paths: ${{ env.PROTECTED_PATHS }}
+          protected-paths: ${{ needs.subject.outputs.human_author != 'true' && env.PROTECTED_PATHS || '' }}
           owner-paths: ${{ env.OWNER_PATHS }}
           sensitive-paths: ${{ env.SENSITIVE_PATHS }}
           high-files: ${{ env.BLAST_HIGH_FILES }}
@@ -426,13 +429,13 @@ jobs:
           body: |
             ${{ env.GATE_MARKER }}
             PR #${{ needs.subject.outputs.pr }} changes protected files and cannot be auto-merged.
-            The `review` and `owner-review` labels are set: the person who owns these files
-            decides, and merges.
+            The `review` and `owner-review` labels are set. Anyone with write access can review it:
+            approving the pull request merges it.
 
             Protected files:
             ${{ needs.protected_changes.outputs.files }}
 
-            Required owners: `${{ needs.protected_changes.outputs.required_owners || 'none configured' }}`
+            Asked to review: `${{ needs.protected_changes.outputs.required_owners || 'nobody named in CODEOWNERS' }}`
 
             **Verdict:** owner-review
       - name: Replay the verification plan for the owner
@@ -613,7 +616,7 @@ jobs:
               && format('| Accepted unattended | {0} |', needs.validate_output.outputs.flags)
               || '' }}
             ${{ needs.validate_output.outputs.outcome == 'owner-review'
-              && format('| Required owners | `{0}` |', needs.protected_changes.outputs.required_owners != '' && needs.protected_changes.outputs.required_owners || 'none configured, see the matched paths above')
+              && format('| Asked to review | `{0}` |', needs.protected_changes.outputs.required_owners != '' && needs.protected_changes.outputs.required_owners || 'nobody named in CODEOWNERS, see the matched paths above')
               || '' }}
 
             Why this blast radius:
@@ -622,7 +625,8 @@ jobs:
             ```
 
             ${{ needs.subject.outputs.issue != '' && format('Findings and verification on the linked issue: #{0}.', needs.subject.outputs.issue) || 'Findings and verification are in the review comment above.' }} [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            ${{ env.EVIDENCE_BEFORE_REVIEW == 'true' && contains(fromJson('["human-review","owner-review"]'), needs.validate_output.outputs.outcome) && 'Screenshots of this head follow in their own comment if it carries a verification plan. Approving the pull request merges it.' || '' }}
+            ${{ env.EVIDENCE_BEFORE_REVIEW == 'true' && contains(fromJson('["human-review","owner-review"]'), needs.validate_output.outputs.outcome) && 'Screenshots of this head follow in their own comment if it carries a verification plan.' || '' }}
+            ${{ contains(fromJson('["human-review","owner-review"]'), needs.validate_output.outputs.outcome) && 'Anyone with write access can review it: approving the pull request merges it.' || '' }}
       - name: Read the head to land
         id: landing_head
         if: needs.validate_output.outputs.outcome == 'auto-merge' && (needs.subject.outputs.stack_root != 'true' || needs.subject.outputs.root_complete == 'true')
