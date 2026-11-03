@@ -13,6 +13,10 @@ installed as a mandatory file during catalog install; it is not optional.
 | `feature-request` | Repository needs a feature request issue template scoped to small improvements |
 | `github-release` | Pushing a `v*` tag should publish a GitHub Release with generated notes |
 | `opencode.ci.json` | Always installed as mandatory during catalog install. Advanced: use `--template opencode.ci.json` to install in isolation |
+| `quality-gates` | A platform family app (Kitchen-Sink, Numa, Odyssey, Hermes) wants the shared gate scripts and rules; floors live in its `quality.config.json` |
+| `platform-template` | A platform family app adopted the Kitchen-Sink Copier template (`.copier-answers.yml` exists) |
+
+`quality-gates` and `platform-template` are bundles: package-managed after installation and refreshed by `update` where installed. See `docs/family-templates.md` in the package repository.
 
 ## Install one
 
@@ -55,9 +59,10 @@ A full CI pipeline for a .NET + Next.js application. Includes:
 
 - SQL Server service container with Docker
 - `dotnet restore`, `dotnet build -c Release`, per-project `dotnet test`
-- Coverage gate
-- `pnpm install` and `next build` for the frontend
+- The engineering gates and facets, which run the `quality-gates` scripts and read `quality.config.json`
+- `pnpm install`, lint, typecheck, vitest and `next build` for the frontend, optional Playwright E2E
 - TruffleHog, Trivy, Semgrep, SBOM security scans
+- The platform conformance guard, and the `dispatch-merge-gate` handoff to the merge train
 
 Read the template's `env:` block and job commands before enabling it. Tailor package names, paths,
 versions, artifacts, and scanners to the repository.

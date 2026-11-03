@@ -199,7 +199,7 @@ ruled on. A `blocked` verdict, or a merge that did not happen, expires when the 
 up to `MERGE_TRAIN_MAX_RETRIES` times: the failure may have been the base's.
 
 A consumer CI hands its verdict to the train from its last job (`dispatch-merge-train` in
-`templates/ci`), because GitHub sends no `workflow_run` event for CI a bot started. A CI that still
+`app-ci-node-monorepo`, `dispatch-merge-gate` in `app-ci-dotnet-next`), because GitHub sends no `workflow_run` event for CI a bot started. A CI that still
 dispatches `operation=merge-gate` is treated as the same handover until it is updated.
 
 Three labels are the controls a person has: `review` parks anything for a human, `future`
@@ -418,6 +418,8 @@ npx @plainconceptsplatform/workflows@latest add --template app-ci-dotnet-next
 npx @plainconceptsplatform/workflows@latest add --template app-ci-node-monorepo
 npx @plainconceptsplatform/workflows@latest add --template bug-report
 npx @plainconceptsplatform/workflows@latest add --template feature-request
+npx @plainconceptsplatform/workflows@latest add --template quality-gates
+npx @plainconceptsplatform/workflows@latest add --template platform-template
 npx @plainconceptsplatform/workflows@latest remove triage
 npx @plainconceptsplatform/workflows@latest update --dry-run
 npx @plainconceptsplatform/workflows@latest update
@@ -532,7 +534,7 @@ npx @plainconceptsplatform/workflows@latest add audit
 - `bug-report` installs a bug report issue template to `.github/ISSUE_TEMPLATE/bug_report.yml`. Bugs can be any size.
 - `feature-request` installs a feature request issue template to `.github/ISSUE_TEMPLATE/feature_request.yml`. Scoped to small, well-scoped improvements a Small/Medium dropdown gate steers large work to a planning issue.
 
-Templates are standalone copies placed in `.github/workflows/`. `app-ci-dotnet-next` provides .NET, SQL Server integration testing, Next.js, and security checks. `app-ci-node-monorepo` provides Node monorepo, web, Electron, Capacitor, E2E, and security checks. `github-release` publishes generated GitHub release notes when a `v*` tag is pushed. `bug-report` and `feature-request` install to `.github/ISSUE_TEMPLATE/` instead of `.github/workflows/`. `opencode.ci.json` is always installed as a mandatory file during catalog install; the `--template opencode.ci.json` command is an advanced option for installing it in isolation. Edit their top-level `env:` defaults or JSON properties after copying.
+Templates are standalone copies placed in `.github/workflows/`. `app-ci-dotnet-next` provides .NET, SQL Server integration testing, Next.js, and security checks. `app-ci-node-monorepo` provides Node monorepo, web, Electron, Capacitor, E2E, and security checks. `github-release` publishes generated GitHub release notes when a `v*` tag is pushed. `bug-report` and `feature-request` install to `.github/ISSUE_TEMPLATE/` instead of `.github/workflows/`. `opencode.ci.json` is always installed as a mandatory file during catalog install; the `--template opencode.ci.json` command is an advanced option for installing it in isolation. Edit their top-level `env:` defaults or JSON properties after copying. `quality-gates` and `platform-template` are bundles for the platform family (Kitchen-Sink, Numa, Odyssey, Hermes): the gate scripts and rules, and the Copier template sync with its conformance guard. They stay package-managed, and `update` refreshes them only where they are installed. See [docs/family-templates.md](docs/family-templates.md), which also documents `quality.config.json` and the Dependabot settings family apps need.
 
 ### What the error report files, and what it only counts
 

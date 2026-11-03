@@ -143,7 +143,9 @@ in `loops/templates/`.
 selection). The `--template opencode.ci.json` command is an advanced option for installing it in
 isolation without the rest of the catalog.
 
-Template copies are consumer-owned after installation and must not be silently updated as managed
+Bundle templates (`bundle: true` in `catalogTemplates`: `quality-gates`, `platform-template`) are the exception. `cli/src/template-bundles.ts` installs every file under `loops/templates/<directory>/` at the same path in the repository, stamps the version like the catalog, and skips a file whose header was removed unless `--force`. A JSON file's header lives in a companion `<file>.md`; the JSON is the consumer's when that note is missing or headerless. `installedBundles()` counts a bundle as installed only when one of its files carries our header, and `add`/`update` refresh exactly those, so a repository with its own headerless copies of the same paths never receives a bundle. `list` uses the same detection.
+
+Single-file template copies are consumer-owned after installation and must not be silently updated as managed
 loops. A second `add --template <name>` on an existing template reports a conflict unless `--force`
 is passed. Workflow templates (`.yml`) install to `.github/workflows/<name>.yml`; the issue templates
 install to `.github/ISSUE_TEMPLATE/`; `opencode.ci.json` installs to the repository root.
