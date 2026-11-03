@@ -2414,6 +2414,21 @@ if [ -f "$ERROR_REPORT_YML" ]; then
       ok(p.isQuiet(null, now, 30) === false, "no closing date is not quiet");
       ok(p.parseVersion("# Managed by @plainconceptsplatform/workflows@1.2.3. Source: x") === "1.2.3", "the version has no trailing full stop");
       ok(p.parseVersion("nothing here") === "unknown", "no version reads as unknown");
+      // The layer that still got through: a secret the consumer never set, an agent failure the
+      // worker had already retried, a lint check failing on a pull request, an outdated install.
+      ok(p.severityOf("missing-secret") === "consumer", "a missing secret belongs to the consumer");
+      ok(p.causeFromStep("Validate CODEX_API_KEY or OPENAI_API_KEY secret") === "missing-secret", "the secret check is read from its step name");
+      ok(p.causeFromStep("Execute OpenCode CLI") === null, "any other step is left to the catalogue");
+      const held = p.select([f("s", 39, "consumer"), f("u", 2, "unknown"), f("k", 2, "package-bug")], { minOccurrences: 2, minUnknown: 3, maxFindings: 5 });
+      ok(held.file.map((x) => x.patternId).join() === "k", "a consumer cause and an undiagnosed pair are held, a diagnosed pair is filed");
+      const retry = (conclusion) => [{ steps: [{ name: "Execute OpenCode CLI", conclusion: "failure" }] }, { steps: [{ name: "Send the work back through the router", conclusion }] }];
+      ok(p.wasRetried(retry("success")) === true, "a run whose retry was sent is answered");
+      ok(p.wasRetried(retry("skipped")) === false, "a run that parked is not");
+      ok(p.isReviewCheck({ workflow: "agentics-checks.yml", event: "pull_request" }) === true, "a check failing on a pull request did its job");
+      ok(p.isReviewCheck({ workflow: "agentics-checks.yml", event: "push" }) === false, "a check failing on the default branch is read");
+      ok(p.isOutdated("1.6.41", "v1.10.0") === true && p.isOutdated("1.10.0", "v1.10.1") === false, "only a minor or more behind is outdated");
+      ok(p.isOutdated("unknown", "v1.10.0") === false && p.isOutdated("1.9.0", "") === false, "an unknown version files as before");
+      ok(p.latestVersion(["v1.9.4", "v1.10.0", "v0.28.11-alpha.1", "v1.8.3"]) === "v1.10.0", "the newest tag is read numerically, prereleases left out");
       if (bad.length) { console.error(bad.join("\n")); process.exit(1); }
     '
     if node -e "$policy_js" "$POLICY_CJS" 2>/tmp/policy-err; then
@@ -2432,6 +2447,9 @@ if [ -f "$ERROR_REPORT_YML" ]; then
   er "patternId === 'log-unavailable'\) \{ quiet\.unreadable \+= 1; continue; \}" 'files jobs whose log could not be read'
   er 'policy\.isQuiet\(' 'does not keep a recently closed signature quiet'
   er 'listAnnotations' 'does not read the job annotations, where the runner shutdown is written'
+  er 'if \(policy\.wasRetried\(jobs\)\) \{ quiet\.retried \+= 1; continue; \}' 'files agent failures the worker already retried'
+  er 'if \(policy\.isReviewCheck\(.*\{ quiet\.reviewChecks \+= 1; continue; \}' 'files lint checks that failed on a pull request'
+  er 'if \(!existing && policy\.isOutdated\(' 'opens issues from installs a minor or more behind'
 
   # 4. No model. A model asked to summarise a failure paraphrases whatever the log held, which
   # is the one thing that must not cross the boundary. This job stays deterministic.

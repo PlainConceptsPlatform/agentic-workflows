@@ -29,6 +29,12 @@ inputs:
       occurrence is a blip; an issue that is already open is always appended to.
     required: false
     default: '2'
+  min-occurrences-unknown:
+    description: >-
+      The same, for a failure the catalogue could not classify. With no diagnosis behind it, a
+      cause has to repeat more before it is worth a person's time.
+    required: false
+    default: '3'
   max-findings:
     description: The most issues one run opens, the most frequent first. The rest stay in the job summary.
     required: false
@@ -58,6 +64,7 @@ runs:
         UPSTREAM_REPO: ${{ inputs.upstream-repo }}
         LOOKBACK_HOURS: ${{ inputs.lookback-hours }}
         MIN_OCCURRENCES: ${{ inputs.min-occurrences }}
+        MIN_UNKNOWN: ${{ inputs.min-occurrences-unknown }}
         MAX_FINDINGS: ${{ inputs.max-findings }}
         QUIET_DAYS: ${{ inputs.quiet-days }}
         POLICY_PATH: ${{ github.action_path }}/report-policy.cjs
@@ -118,7 +125,7 @@ runs:
           // line carries repository paths, branch names and issue titles.
           const CATALOGUE = [
             { id: 'runner-never-assigned', test: /waiting for a runner|no runner matching|requested labels/i, note: 'A job waited for a self-hosted runner that never arrived.' },
-            { id: 'runner-lost-mid-job', test: /lost communication with the server|runner has received a shutdown signal|The self-hosted runner:.*lost/i, note: 'The runner disappeared while a job was running.' },
+            { id: 'runner-lost-mid-job', test: /lost communication with the server|runner has received a shutdown signal|The self-hosted runner:.*lost|exit code 143/i, note: 'The runner disappeared while a job was running.' },
             { id: 'job-cancelled-by-timeout', test: /The job running on runner .* has exceeded the maximum execution time|timeout-minutes/i, note: 'A job hit its timeout instead of finishing.' },
             { id: 'out-of-disk', test: /no space left on device|You are running out of disk space/i, note: 'The runner ran out of disk.' },
             { id: 'out-of-memory', test: /JavaScript heap out of memory|Killed\s+process|OOMKilled/i, note: 'A step was killed for memory.' },
@@ -187,7 +194,7 @@ runs:
           // Things that happened and are worth a number in the job summary, but that nobody can
           // fix by editing a workflow, so they never open an issue: a cancelled job with no step
           // that failed, a log that could not be read, and the fleet's own transient causes.
-          const quiet = { cancelledNoStep: 0, unreadable: 0, infra: new Map() };
+          const quiet = { cancelledNoStep: 0, unreadable: 0, retried: 0, reviewChecks: 0, infra: new Map() };
           let queueWaitTotal = 0;
           let queueWaitCount = 0;
           let queueWaitWorst = 0;
@@ -213,12 +220,19 @@ runs:
             if (!['failure', 'cancelled', 'timed_out', 'startup_failure'].includes(run.conclusion)) continue;
             ownedFailures += 1;
 
+            // A lint check failing on a pull request has done its job on somebody's change.
+            if (policy.isReviewCheck({ workflow: file, event: run.event })) { quiet.reviewChecks += 1; continue; }
+
             let jobs = [];
             try {
               jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
                 ...context.repo, run_id: run.id, attempt_number: run.run_attempt ?? 1, per_page: 100,
               });
             } catch { continue; }
+
+            // The worker already caught this one and sent the work back through the router; the
+            // attempt that parks does not retry, so a failure no retry got past is still read.
+            if (policy.wasRetried(jobs)) { quiet.retried += 1; continue; }
 
             for (const job of jobs) {
               if (job.started_at && job.created_at) {
@@ -251,20 +265,24 @@ runs:
                 annotationText = notes.map((note) => note.message ?? '').join('\n');
               } catch { /* annotations are an extra; the log can still classify */ }
 
-              let patternId = 'unrecognised';
+              // A step whose name already says what failed is not read further: a missing secret
+              // is the repository's to set, whatever the log says around it.
+              let patternId = policy.causeFromStep(step?.name) ?? 'unrecognised';
               let logRead = true;
-              try {
-                const { data: log } = await github.rest.actions.downloadJobLogsForWorkflowRun({
-                  ...context.repo, job_id: job.id,
-                });
-                const text = typeof log === 'string' ? log : Buffer.from(log).toString('utf8');
-                // The tail is where the failure is, and reading less of the log is less to get
-                // wrong. Only the matched entry's id crosses into the report.
-                const tail = `${annotationText}\n${text.slice(-20000)}`;
-                patternId = CATALOGUE.find((entry) => entry.test.test(tail))?.id ?? 'unrecognised';
-              } catch {
-                logRead = false;
-                patternId = CATALOGUE.find((entry) => entry.test.test(annotationText))?.id ?? 'log-unavailable';
+              if (patternId === 'unrecognised') {
+                try {
+                  const { data: log } = await github.rest.actions.downloadJobLogsForWorkflowRun({
+                    ...context.repo, job_id: job.id,
+                  });
+                  const text = typeof log === 'string' ? log : Buffer.from(log).toString('utf8');
+                  // The tail is where the failure is, and reading less of the log is less to get
+                  // wrong. Only the matched entry's id crosses into the report.
+                  const tail = `${annotationText}\n${text.slice(-20000)}`;
+                  patternId = CATALOGUE.find((entry) => entry.test.test(tail))?.id ?? 'unrecognised';
+                } catch {
+                  logRead = false;
+                  patternId = CATALOGUE.find((entry) => entry.test.test(annotationText))?.id ?? 'log-unavailable';
+                }
               }
 
               // A log nobody could read says nothing, so it is counted and not filed.
@@ -303,7 +321,8 @@ runs:
           }
 
           const catalogueNote = (id) => CATALOGUE.find((entry) => entry.id === id)?.note
-            ?? (id === 'log-unavailable' ? 'The job log could not be read, so the failure could not be classified.'
+            ?? (id === 'missing-secret' ? 'A workflow stopped at a check for a secret this repository has not set.'
+              : id === 'log-unavailable' ? 'The job log could not be read, so the failure could not be classified.'
               : 'The log matched no known failure shape. Worth adding one to the catalogue.');
 
           const ranked = [...findings.values()].sort((a, b) => b.count - a.count);
@@ -313,6 +332,7 @@ runs:
           // person's time, and a bad night opens a handful of issues rather than forty.
           const selection = policy.select(ranked, {
             minOccurrences: Number(process.env.MIN_OCCURRENCES),
+            minUnknown: Number(process.env.MIN_UNKNOWN),
             maxFindings: Number(process.env.MAX_FINDINGS),
           });
 
@@ -385,6 +405,8 @@ runs:
               `Distinct failure signatures: ${ranked.length}`,
               `Filed or appended: ${selection.file.length}; held back: ${selection.held.length}`,
               `Cancelled jobs with no failing step, not reported: ${quiet.cancelledNoStep}`,
+              `Runs whose failure the worker retried through the router, not reported: ${quiet.retried}`,
+              `Checks that failed on a pull request, not reported: ${quiet.reviewChecks}`,
               `Jobs whose log could not be read, not reported: ${quiet.unreadable}`,
               `Infrastructure causes, counted and not reported: ${[...quiet.infra].map(([id, n]) => `${id} ${n}`).join(', ') || 'none'}`,
               queueWaitCount > 0
@@ -396,6 +418,12 @@ runs:
               ...summaryRows,
             ])
             .write();
+
+          // The repository's own configuration is said here, to the people who can change it, and
+          // nowhere else. The step name is the package's (or gh-aw's) own words.
+          for (const { finding } of selection.held.filter(({ finding }) => finding.severity === 'consumer')) {
+            core.warning(`${finding.count} job(s) of ${finding.workflow} stopped at "${finding.step}": set the secret it checks for, or the work it guards never runs.`);
+          }
 
           if (ranked.length === 0) {
             core.info('No failures in the window for any workflow this package ships.');
@@ -427,6 +455,18 @@ runs:
           const upstream = getOctokit(upstreamToken);
           const filed = [];
 
+          // The latest release, to tell a failure a release may already have fixed from one that
+          // is still live. Best effort: a token that cannot read tags files as before.
+          let latestRelease = '';
+          try {
+            const { data: tags } = await upstream.rest.repos.listTags({
+              owner: upstreamOwner, repo: upstreamName, per_page: 100,
+            });
+            latestRelease = policy.latestVersion(tags.map((tag) => tag.name));
+          } catch (error) {
+            core.info(`could not read the upstream tags: HTTP ${error.status ?? '?'}`);
+          }
+
           for (const { finding, title, body } of reports) {
             const marker = body.split('\n')[0];
             // One issue per signature, updated rather than repeated. Searching by the marker
@@ -448,6 +488,13 @@ runs:
               }
             } catch (error) {
               core.warning(`could not search upstream for an existing report: HTTP ${error.status ?? '?'}`);
+            }
+
+            // An install a minor or more behind does not open a new issue: update it first. It
+            // still appends to one that is open, because then the bug is live on newer versions too.
+            if (!existing && policy.isOutdated(packageVersion, latestRelease)) {
+              core.info(`left alone, ${packageVersion} is behind ${latestRelease}; update first: ${title}`);
+              continue;
             }
 
             if (dryRun) {
