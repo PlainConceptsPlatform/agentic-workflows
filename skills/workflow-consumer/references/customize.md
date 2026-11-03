@@ -74,7 +74,7 @@ three path lists and four thresholds, and the difference between them is the dif
 
 | Value | What it is | Getting it wrong |
 |---|---|---|
-| `PROTECTED_PATHS` | Extended regex. A match may never be auto-merged, and sets blast radius high on its own | The default names this stack's manifests and every dotted directory. An unmatched list protects nothing and reports nothing |
+| `PROTECTED_PATHS` | Extended regex. A match in a bot's pull request may never be auto-merged, and sets blast radius high on its own. A person with write access is not held by it | The default names this stack's manifests and every dotted directory. An unmatched list protects nothing and reports nothing |
 | `OWNER_PATHS` | Extended regex. A match requires the owner of that area and sets blast radius high | Too broad and every pull request waits on one person; too narrow and an auth change merges itself |
 | `SENSITIVE_PATHS` | Extended regex. A match raises the floor to medium, which still auto-merges when the change is recoverable | Purely advisory. Putting an area here that genuinely needs a person is the mistake, and `OWNER_PATHS` is where it belongs |
 | `BLAST_HIGH_FILES` / `BLAST_HIGH_LINES` | Diff shape at or above which the radius is high | Set too high and a sprawling change merges itself. This is what catches a change that touches no named path |
@@ -84,7 +84,10 @@ three path lists and four thresholds, and the difference between them is the dif
 | `RISK_INDICATORS` | Areas the review pass should look at first | Advisory since the dispositions landed. It used to decide the outcome by category, which is why the gate parked nearly everything |
 
 `CODEOWNERS` refines who is asked when a repository has one. It is never required: `OWNER_PATHS`
-fires with or without it, and the gate names the matched paths when no owner is configured.
+fires with or without it, and the gate names the matched paths when no owner is configured. It
+never limits who decides either: anyone with write access who approves a parked pull request
+merges it. Keep it to the paths the gate parks for (`.github/` and secrets); a `*` line asks the
+same people to review every pull request in the repository.
 
 ## What the router owns
 
