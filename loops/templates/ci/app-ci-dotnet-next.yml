@@ -1,9 +1,26 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/templates/ci/app-ci-dotnet-next.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+# Build, test and security-scan a platform family app (.NET API + Next.js web). One workflow so a
+# change is validated once, by one run, instead of two that fire on almost the same paths.
+#
+# Also the engineering gates from Foundations' ai/ENGINEERING.md, run by the quality-gates template
+# (`workflows add --template quality-gates`): Reqnroll acceptance tests, merged .NET + web coverage
+# floors from quality.config.json, the blocking complexity and duplication gates, the Semgrep
+# empty-catch rules, dead private members as build errors, and the
+# engineering-excellence-{coverage,complexity,security,sbom,hygiene} facets Project-Health
+# collects. The facets upload from main only, which this workflow reaches through `App: Deploy` on
+# every push and through its own weekly schedule. The platform-conformance job runs the
+# platform-template guard where the app has adopted the template.
+#
+# Everything that differs between apps is a top-level `env:` value below or a floor in
+# quality.config.json. Job names are required status checks on main: do not rename them.
 name: "App: CI"
 
+# Every pull request runs, so the required security checks always report. The app jobs skip
+# themselves (a skipped job satisfies a required check) when the change touches none of the app
+# paths; see the `scope` job.
 on:
   pull_request:
-  # GitHub's merge queue builds the base plus the pull requests ahead; the full CI runs there.
+  # GitHub's merge queue: the full CI runs on the merge group, built on main plus what is ahead.
   merge_group:
   schedule:
     - cron: "0 6 * * 1"
@@ -13,46 +30,6 @@ on:
       NPM_REGISTRY_TOKEN:
         required: false
 
-env:
-  DOTNET_VERSION: "10.0.x"
-  NODE_VERSION: "22"
-  PNPM_VERSION: "10"
-  API_WORKING_DIRECTORY: apps/api
-  DOTNET_SOLUTION: App.slnx
-  UNIT_TEST_PROJECT: tests/App.UnitTests/App.UnitTests.csproj
-  PARITY_TEST_PROJECT: tests/App.ParityTests/App.ParityTests.csproj
-  INTEGRATION_TEST_PROJECT: tests/App.IntegrationTests/App.IntegrationTests.csproj
-  # Per-PR mutation gate. Stryker mutates only files changed since the PR base (--since),
-  # so a green unit suite that never actually pins behaviour fails here instead of shipping.
-  # dotnet-stryker is pinned in the api tools manifest (.config/dotnet-tools.json / dotnet-tools.json).
-  MUTATION_TARGET_PROJECT: src/App.Domain/App.Domain.csproj
-  MUTATION_TEST_PROJECT: tests/App.UnitTests/App.UnitTests.csproj
-  MUTATION_THRESHOLD: "60"
-  COVERAGE_SETTINGS: coverage.runsettings
-  COVERAGE_CHECK_COMMAND: node ../../scripts/check-coverage.mjs TestResults/merged/Cobertura.xml
-  MIGRATION_PROJECT: src/App.Infrastructure/App.Infrastructure.csproj
-  MIGRATION_STARTUP_PROJECT: src/App.Api/App.Api.csproj
-  SEED_PROJECT: src/App.Seed
-  PRIMARY_DATABASE: app
-  DATA_LAYER_DATABASE: numa_dl
-  # Derived per run rather than written down. The container is ephemeral, bound to a random
-  # host port and reachable only from this job, so the value protects nothing, but a literal
-  # password in a config file is a policy finding wherever it sits, and this file is public.
-  # It has to be a workflow-level expression: service containers receive their environment
-  # before any step runs, so a value generated in a step would arrive too late.
-  #
-  # The same expression is repeated inside the service's `options` above rather than read
-  # from here, because the `env` context is not available in `jobs.<id>.services` only
-  # inside that service's own `env:`. Written as ${{ env.SQL_SA_PASSWORD }} there, the health
-  # check probes with an empty password and the service never reports healthy.
-  SQL_SA_PASSWORD: "Aa1!${{ github.run_id }}"
-  WEB_PACKAGE: "@app/web"
-  NPM_REGISTRY_URL: "//npm.pkg.github.com/"
-  TRUFFLEHOG_IMAGE: "trufflesecurity/trufflehog:latest"
-  SEMGREP_IMAGE: "semgrep/semgrep:1.168.0"
-  SBOM_ARTIFACT_NAME: app-sbom.cyclonedx.json
-  MIGRATION_CONTEXT: AppDbContext
-
 permissions:
   contents: read
 
@@ -60,72 +37,253 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  DOTNET_VERSION: "10.0.x"
+  NODE_VERSION: "22"
+  API_WORKING_DIRECTORY: apps/api
+  DOTNET_SOLUTION: App.slnx
+  # EnforceCodeStyleInBuild runs the IDE rules on build; Directory.Build.props makes IDE0051 and
+  # IDE0052 (dead private members, practice 11) errors, so dead private code fails the build.
+  DOTNET_BUILD_ARGS: "-p:EnforceCodeStyleInBuild=true"
+  # Test projects, relative to API_WORKING_DIRECTORY. An empty value skips that suite.
+  UNIT_TEST_PROJECT: tests/App.UnitTests/App.UnitTests.csproj
+  PARITY_TEST_PROJECT: tests/App.ParityTests/App.ParityTests.csproj
+  ARCHITECTURE_TEST_PROJECT: ""
+  ACCEPTANCE_TEST_PROJECT: tests/App.AcceptanceTests/App.AcceptanceTests.csproj
+  INTEGRATION_TEST_PROJECT: tests/App.IntegrationTests/App.IntegrationTests.csproj
+  COVERAGE_SETTINGS: coverage.runsettings
+  MIGRATION_PROJECT: src/App.Infrastructure/App.Infrastructure.csproj
+  MIGRATION_STARTUP_PROJECT: src/App.Api/App.Api.csproj
+  MIGRATION_CONTEXT: AppDbContext
+  SEED_PROJECT: src/App.Seed
+  # The API the E2E job serves the built SPA from.
+  API_PROJECT: src/App.Api
+  # The SQL Server database the API job migrates, seeds and tests against. Migrations, the seed and
+  # the E2E API read its connection string from DATABASE_CONNECTION_ENV; the integration suite from
+  # INTEGRATION_CONNECTION_ENV, which may be a test-only name so an ambient ConnectionStrings__*
+  # cannot outrank what the fixture sets.
+  PRIMARY_DATABASE: app
+  DATABASE_CONNECTION_ENV: ConnectionStrings__App
+  INTEGRATION_CONNECTION_ENV: ConnectionStrings__App
+  # Space-separated NAME=database pairs: each database is created too, and NAME carries its
+  # connection string into the integration suite (for example DataLayer__ConnectionString=app_dl).
+  EXTRA_DATABASES: ""
+  # Space-separated NAME=value pairs the seed also needs (for example ConnectionStrings__blobs=UseDevelopmentStorage=true).
+  SEED_EXTRA_ENV: ""
+  WEB_PACKAGE: "@app/web"
+  # Extra commands the web job runs after the build, such as a second package's checks.
+  WEB_EXTRA_COMMANDS: ""
+  # The root package.json name, so a job can install only the root tools (jscpd, markdownlint).
+  ROOT_PACKAGE: app
+  MARKDOWN_LINT_COMMAND: "pnpm lint:md"
+  # Repository-specific checks for the `Repository checks` job; empty skips its steps.
+  REPO_CHECK_COMMANDS: ""
+  # Playwright against the SPA served by the API. Empty skips the E2E job.
+  E2E_COMMAND: ""
+  # Node test files the engineering-excellence job runs beside the gates' own.
+  EXTRA_NODE_TESTS: ""
+  NPM_REGISTRY_URL: "//npm.pkg.github.com/"
+  # Pulled from GHCR rather than Docker Hub, whose anonymous pull limit failed this step elsewhere.
+  TRUFFLEHOG_IMAGE: "ghcr.io/trufflesecurity/trufflehog:latest"
+  SEMGREP_IMAGE: "semgrep/semgrep:1.168.0"
+  # Package-managed paths, rewritten on every update, so a local fix cannot hold: findings go upstream.
+  SEMGREP_EXCLUDES: ".opencode/plugins .github/actions/capture-evidence"
+  SBOM_ARTIFACT_NAME: app-sbom.cyclonedx.json
+  # Derived per run rather than written down. The container is ephemeral, bound to a random host
+  # port and reachable only from its job, but a literal password is a policy finding wherever it
+  # sits. The services repeat the expression: their `options` cannot read the env context.
+  SQL_SA_PASSWORD: "Aa1!${{ github.run_id }}"
+
 jobs:
+  # Tiered CI (repository variable CI_DEPTH_TIERED): a bot's push runs the light checks only, and
+  # the merge train asks for the full run once the pull request is next in line, by labelling it
+  # ci-full and re-running this run. The label is read here at run time because a re-run keeps the
+  # event payload of the first attempt. People's pull requests, main, tags and schedules run in full.
+  depth:
+    name: CI depth
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    timeout-minutes: 5
+    outputs:
+      full: ${{ steps.depth.outputs.full }}
+    steps:
+      - id: depth
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TIERED: ${{ vars.CI_DEPTH_TIERED }}
+          MERGE_QUEUE: ${{ vars.MERGE_QUEUE }}
+          EVENT: ${{ github.event_name }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          full=true
+          if [ "$MERGE_QUEUE" = true ] && [ "$EVENT" = pull_request ]; then
+            # The merge queue runs the full CI on the merge group, so every pull request runs light.
+            full=false
+          elif [ "$TIERED" = true ] && [ "$EVENT" = pull_request ] && [ "$AUTHOR_TYPE" = Bot ]; then
+            # Unreadable labels run in full: a light run must never stand in for the tests.
+            labels=$(gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name') || labels=ci-full
+            grep -qx ci-full <<<"$labels" || full=false
+          fi
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "CI depth: $([ "$full" = true ] && echo full || echo 'light (the merge train asks for the full run)')"
+
+  scope:
+    name: Detect app changes
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    timeout-minutes: 5
+    outputs:
+      app: ${{ steps.scope.outputs.app }}
+      e2e: ${{ steps.scope.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # Anything that is not a pull request (push via App: Deploy, dispatch) always runs the app jobs.
+      - name: Did this change touch the app?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          echo "e2e=$([ -n "$E2E_COMMAND" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "app=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch origin "$BASE_REF" --depth=1
+          if git diff --name-only "origin/$BASE_REF" HEAD \
+              | grep -qE '^(apps/|scripts/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|quality\.config\.json$|\.github/workflows/app-ci\.yml$)'; then
+            echo "app=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "app=false" >> "$GITHUB_OUTPUT"
+            echo "No app, script or manifest changes; the API and web jobs skip."
+          fi
+
+  # Runs on the weekly schedule as well: App: CI has no push trigger (main reaches it through
+  # App: Deploy), so the scheduled run on main is the one where this workflow itself runs the
+  # Gherkin suite and the facets, independent of whether a deploy is green.
   api:
-    name: API (.NET)
-    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || vars.MERGE_QUEUE != 'true')
-    runs-on: agents-arc
-    timeout-minutes: 30
+    name: API (.NET 10)
+    needs: [depth, scope]
+    if: ${{ (needs.scope.outputs.app == 'true') && needs.depth.outputs.full == 'true' }}
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    timeout-minutes: 45
     services:
       sqlserver:
         image: mcr.microsoft.com/mssql/server:2022-latest
         env:
           ACCEPT_EULA: "Y"
-          MSSQL_SA_PASSWORD: ${{ env.SQL_SA_PASSWORD }}
+          MSSQL_SA_PASSWORD: "Aa1!${{ github.run_id }}"
         ports:
-        # Ephemeral host port. Four runners share this machine, so a fixed 1433 means the
-        # second concurrent job fails at Initialize containers with "Docker start fail with
-        # exit code 1". Steps read the assigned port from the job.services context.
+          # Ephemeral host port. Self-hosted runners can share a machine, so a fixed 1433 makes the
+          # second concurrent job fail at Initialize containers with "Docker start fail with
+          # exit code 1". Steps read the assigned port from the job.services context.
           - 1433
         options: >-
           --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Aa1!${{ github.run_id }}' -Q 'SELECT 1' -C || exit 1"
-          --health-interval 10s --health-timeout 5s --health-retries 12 --health-start-period 30s
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 30s
     defaults:
       run:
         working-directory: ${{ env.API_WORKING_DIRECTORY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Without DOTNET_INSTALL_DIR setup-dotnet installs into /usr/share/dotnet, which the runner
+      # user does not own, and the job dies with "Permission denied" before any step runs.
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-      - name: Restore tools, solution, and build
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
+      - name: Restore .NET tools
+        run: dotnet tool restore
+      - name: Restore solution
+        run: dotnet restore "$DOTNET_SOLUTION"
+      - name: Build (Release)
         run: |
-          dotnet tool restore
-          dotnet restore "$DOTNET_SOLUTION"
-          dotnet build "$DOTNET_SOLUTION" --no-restore -c Release
-      - name: Unit tests with coverage
-        run: dotnet test "$UNIT_TEST_PROJECT" --no-build -c Release --collect:"XPlat Code Coverage" --settings "$COVERAGE_SETTINGS" --results-directory TestResults
+          # shellcheck disable=SC2086 # DOTNET_BUILD_ARGS is a list of arguments.
+          dotnet build "$DOTNET_SOLUTION" --no-restore -c Release $DOTNET_BUILD_ARGS
+      - name: Unit tests + coverage
+        if: env.UNIT_TEST_PROJECT != ''
+        run: dotnet test "$UNIT_TEST_PROJECT" --no-build -c Release
+          --collect:"XPlat Code Coverage" --settings "$COVERAGE_SETTINGS" --results-directory TestResults
       - name: Parity tests
+        if: env.PARITY_TEST_PROJECT != ''
         run: dotnet test "$PARITY_TEST_PROJECT" --no-build -c Release
+      - name: Architecture tests
+        if: env.ARCHITECTURE_TEST_PROJECT != ''
+        run: dotnet test "$ARCHITECTURE_TEST_PROJECT" --no-build -c Release
+      # Executable OpenSpec scenarios (Reqnroll). Each scenario is bound to a spec scenario by tag
+      # and fails if that scenario disappears from openspec/.
+      - name: Acceptance tests (Reqnroll) + coverage
+        if: env.ACCEPTANCE_TEST_PROJECT != ''
+        run: dotnet test "$ACCEPTANCE_TEST_PROJECT" --no-build -c Release
+          --collect:"XPlat Code Coverage" --settings "$COVERAGE_SETTINGS" --results-directory TestResults
+      # APP_SQL_SERVER is the connection string without a database; each later step names its own.
       - name: Create test databases
+        env:
+          SQL_CONTAINER: ${{ job.services.sqlserver.id }}
+          SQL_PORT: ${{ job.services.sqlserver.ports['1433'] }}
         run: |
-          for database in "$PRIMARY_DATABASE" "$DATA_LAYER_DATABASE"; do
-            docker exec ${{ job.services.sqlserver.id }} /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$SQL_SA_PASSWORD" -C -Q "IF DB_ID('$database') IS NULL CREATE DATABASE [$database];"
+          set -euo pipefail
+          databases="$PRIMARY_DATABASE"
+          for pair in $EXTRA_DATABASES; do databases="$databases ${pair#*=}"; done
+          for database in $databases; do
+            docker exec "$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$SQL_SA_PASSWORD" -C \
+              -Q "IF DB_ID('$database') IS NULL CREATE DATABASE [$database];"
           done
-      - name: Apply migrations and seed test data
-        env:
-          ConnectionStrings__App: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.PRIMARY_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
-          DataLayer__ConnectionString: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.DATA_LAYER_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
-          DATALAYER_SEED: "true"
+          echo "APP_SQL_SERVER=Server=localhost,$SQL_PORT;User Id=sa;Password=$SQL_SA_PASSWORD;TrustServerCertificate=true" >> "$GITHUB_ENV"
+      - name: Apply EF Core migrations
         run: |
+          set -euo pipefail
+          export "$DATABASE_CONNECTION_ENV=$APP_SQL_SERVER;Database=$PRIMARY_DATABASE"
           dotnet ef database update -p "$MIGRATION_PROJECT" -s "$MIGRATION_STARTUP_PROJECT" --context "$MIGRATION_CONTEXT"
-          dotnet run --project "$SEED_PROJECT" --no-build -c Release
-      - name: Integration tests with coverage
-        env:
-          ConnectionStrings__App: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.PRIMARY_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
-          DataLayer__ConnectionString: Server=localhost,${{ job.services.sqlserver.ports['1433'] }};Database=${{ env.DATA_LAYER_DATABASE }};User Id=sa;Password=${{ env.SQL_SA_PASSWORD }};TrustServerCertificate=true
-        run: dotnet test "$INTEGRATION_TEST_PROJECT" --no-build -c Release --collect:"XPlat Code Coverage" --settings "$COVERAGE_SETTINGS" --results-directory TestResults
-      - name: Enforce merged coverage floor
+      - name: Seed minimum dataset for tests
         run: |
-          dotnet tool install --global dotnet-reportgenerator-globaltool
+          set -euo pipefail
+          export "$DATABASE_CONNECTION_ENV=$APP_SQL_SERVER;Database=$PRIMARY_DATABASE"
+          for pair in $SEED_EXTRA_ENV; do export "${pair?}"; done
+          dotnet run --project "$SEED_PROJECT" --no-build -c Release
+      - name: Integration tests + coverage
+        if: env.INTEGRATION_TEST_PROJECT != ''
+        run: |
+          set -euo pipefail
+          export "$INTEGRATION_CONNECTION_ENV=$APP_SQL_SERVER;Database=$PRIMARY_DATABASE"
+          for pair in $EXTRA_DATABASES; do export "${pair%%=*}=$APP_SQL_SERVER;Database=${pair#*=}"; done
+          dotnet test "$INTEGRATION_TEST_PROJECT" --no-build -c Release \
+            --collect:"XPlat Code Coverage" --settings "$COVERAGE_SETTINGS" --results-directory TestResults
+      # The coverage step runs a small node script; fresh runner VMs ship no node.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # pipefail: without it the step reports tee's status and passes however low coverage is.
+      - name: Coverage floor (merged)
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-reportgenerator-globaltool >/dev/null
           export PATH="$PATH:$HOME/.dotnet/tools"   # ephemeral ARC runners do not have dotnet tools on PATH
           reportgenerator -reports:"TestResults/**/coverage.cobertura.xml" -targetdir:TestResults/merged -reporttypes:Cobertura
-          bash -c "$COVERAGE_CHECK_COMMAND"
+          node "$GITHUB_WORKSPACE/scripts/check-coverage.mjs" TestResults/merged/Cobertura.xml | tee -a "$GITHUB_STEP_SUMMARY"
+      # Feeds the engineering-excellence job. Uploaded even when the floor fails, so a drop is
+      # recorded rather than lost. Seven days so the complexity baseline can be re-seeded from it.
+      - name: Upload merged coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: api-coverage-merged
+          path: ${{ env.API_WORKING_DIRECTORY }}/TestResults/merged/Cobertura.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   mutation-api:
     name: Mutation (.NET, diff)
-    if: github.event_name == 'pull_request'
-    runs-on: agents-arc
+    if: ${{ (github.event_name == 'pull_request') && needs.depth.outputs.full == 'true' }}
+    needs: [depth]
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
     timeout-minutes: 25
     defaults:
       run:
@@ -138,6 +296,8 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
       - name: Detect backend changes
         id: scope
         working-directory: ${{ github.workspace }}
@@ -154,30 +314,136 @@ jobs:
         run: |
           dotnet tool restore
           dotnet build "$DOTNET_SOLUTION" -c Release
+      # The project, test projects and thresholds come from the app's stryker-config.json.
       - name: Stryker.NET (changed files only)
         if: steps.scope.outputs.run == 'true'
         run: |
-          export PATH="$PATH:$HOME/.dotnet/tools"   # ephemeral ARC runners do not have dotnet tools on PATH
+          export PATH="$PATH:$HOME/.dotnet/tools"
           dotnet stryker \
-            --project "$MUTATION_TARGET_PROJECT" \
-            --test-projects "$MUTATION_TEST_PROJECT" \
             --since:"origin/$GITHUB_BASE_REF" \
             --concurrency 2 \
-            --threshold-high "$MUTATION_THRESHOLD" \
-            --threshold-low "$MUTATION_THRESHOLD" \
-            --break-at "$MUTATION_THRESHOLD" \
             --reporter progress --reporter json
 
   web:
-    name: Web (Next.js)
-    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || vars.MERGE_QUEUE != 'true')
-    runs-on: agents-arc
+    name: Web (Next.js static export)
+    needs: [depth, scope]
+    if: ${{ (needs.scope.outputs.app == 'true') && needs.depth.outputs.full == 'true' }}
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Detect apps/web
+        id: detect
+        run: |
+          if [ -f apps/web/package.json ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "apps/web not present yet, skipping web checks"
+          fi
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        if: steps.detect.outputs.exists == 'true'
+        with:
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.detect.outputs.exists == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Configure optional private registry authentication
+        if: steps.detect.outputs.exists == 'true'
+        env:
+          NPM_REGISTRY_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN }}
+        run: |
+          if [ -n "$NPM_REGISTRY_TOKEN" ]; then
+            echo "${NPM_REGISTRY_URL}:_authToken=$NPM_REGISTRY_TOKEN" >> .npmrc
+          fi
+      - name: Install (pnpm)
+        if: steps.detect.outputs.exists == 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        if: steps.detect.outputs.exists == 'true'
+        run: pnpm --filter "$WEB_PACKAGE" run lint
+      - name: Typecheck
+        # `next build` transpiles per-file with SWC and never type-checks the project, so a
+        # type error outside the build graph, test files especially, ships silently.
+        if: steps.detect.outputs.exists == 'true'
+        run: pnpm --filter "$WEB_PACKAGE" run typecheck
+      - name: Test (vitest + coverage)
+        if: steps.detect.outputs.exists == 'true'
+        run: pnpm --filter "$WEB_PACKAGE" run test --coverage
+      - name: Coverage floor (web)
+        if: steps.detect.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          node scripts/check-coverage.mjs --web apps/web/coverage/cobertura-coverage.xml | tee -a "$GITHUB_STEP_SUMMARY"
+      # Cyclomatic complexity per function, for the complexity gate below. ESLint runs with the
+      # `complexity` rule only (apps/web/eslint.complexity.config.mjs); Biome stays the linter.
+      - name: Complexity report (ESLint)
+        if: ${{ !cancelled() && steps.detect.outputs.exists == 'true' }}
+        run: pnpm --filter "$WEB_PACKAGE" run complexity
+      - name: Upload web coverage
+        if: ${{ !cancelled() && steps.detect.outputs.exists == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-coverage
+          path: |
+            apps/web/coverage/cobertura-coverage.xml
+            apps/web/coverage/coverage-final.json
+            apps/web/eslint-complexity.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: FSD boundary check (Steiger)
+        if: steps.detect.outputs.exists == 'true'
+        run: pnpm --filter "$WEB_PACKAGE" run lint:fsd
+      # Key parity between locales and no user-facing string literals in JSX (zero magic strings).
+      - name: i18n check
+        if: steps.detect.outputs.exists == 'true'
+        run: pnpm --filter "$WEB_PACKAGE" run --if-present lint:i18n
+      - name: Build (Next.js static export)
+        if: steps.detect.outputs.exists == 'true'
+        run: pnpm --filter "$WEB_PACKAGE" run build
+      - name: App-specific web checks
+        if: steps.detect.outputs.exists == 'true' && env.WEB_EXTRA_COMMANDS != ''
+        run: bash -euo pipefail -c "$WEB_EXTRA_COMMANDS"
+
+  # The SPA built as production builds it, served by the API from wwwroot (same origin), with mock
+  # sign-in and a real SQL Server. Development environment so the API migrates and seeds on start.
+  e2e:
+    name: E2E (Playwright)
+    needs: [depth, scope]
+    if: ${{ (needs.scope.outputs.app == 'true') && needs.scope.outputs.e2e == 'true' && needs.depth.outputs.full == 'true' }}
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    timeout-minutes: 30
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "Aa1!${{ github.run_id }}"
+        ports:
+          - 1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Aa1!${{ github.run_id }}' -Q 'SELECT 1' -C || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 30s
+    env:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://localhost:5089
+      Auth__Provider: mock
+      E2E_BASE_URL: http://localhost:5089
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: ${{ env.PNPM_VERSION }}
           run_install: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -191,32 +457,139 @@ jobs:
           if [ -n "$NPM_REGISTRY_TOKEN" ]; then
             echo "${NPM_REGISTRY_URL}:_authToken=$NPM_REGISTRY_TOKEN" >> .npmrc
           fi
-      - run: pnpm install --frozen-lockfile
-      - name: Lint, test, verify boundaries, and build
+      - name: Install (pnpm)
+        run: pnpm install --frozen-lockfile
+      - name: Build the SPA into the API's wwwroot
         run: |
-          pnpm --filter "$WEB_PACKAGE" run lint
-          pnpm --filter "$WEB_PACKAGE" run test
-          pnpm --filter "$WEB_PACKAGE" run lint:fsd
-          pnpm --filter "$WEB_PACKAGE" run build
+          set -euo pipefail
+          api="$API_WORKING_DIRECTORY/$API_PROJECT"
+          NEXT_PUBLIC_API_BASE_URL=/api/v1 pnpm --filter "$WEB_PACKAGE" run build
+          rm -rf "$api/wwwroot"
+          cp -r apps/web/out "$api/wwwroot"
+      - name: Start the API
+        env:
+          SQL_PORT: ${{ job.services.sqlserver.ports['1433'] }}
+        run: |
+          set -euo pipefail
+          api="$API_WORKING_DIRECTORY/$API_PROJECT"
+          export "$DATABASE_CONNECTION_ENV=Server=localhost,$SQL_PORT;Database=$PRIMARY_DATABASE;User Id=sa;Password=$SQL_SA_PASSWORD;TrustServerCertificate=true"
+          dotnet build "$api" -c Release
+          nohup dotnet run --project "$api" -c Release --no-build > api.log 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:5089/api/v1/health >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          cat api.log
+          exit 1
+      - name: Install Playwright browsers
+        run: |
+          set -euo pipefail
+          # --with-deps runs apt-get, which needs passwordless sudo. The self-hosted fleet already has
+          # the system libraries and does not grant sudo, so ask for them only where sudo works.
+          if sudo -n true 2>/dev/null; then
+            pnpm --filter "$WEB_PACKAGE" exec playwright install --with-deps chromium
+          else
+            pnpm --filter "$WEB_PACKAGE" exec playwright install chromium
+          fi
+      - name: Playwright
+        run: bash -euo pipefail -c "$E2E_COMMAND"
+      - name: Upload Playwright report and API log
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-report
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+            api.log
+          if-no-files-found: ignore
+          retention-days: 7
 
-  mutation-web:
-    name: Mutation (web, diff)
-    if: github.event_name == 'pull_request'
-    runs-on: agents-arc
-    timeout-minutes: 25
+  # Foundations' one Markdown rule: a paragraph is one physical line (no-hard-wrapped-prose).
+  markdown:
+    name: Markdown
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
+        if: env.MARKDOWN_LINT_COMMAND != ''
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        if: env.MARKDOWN_LINT_COMMAND != ''
         with:
-          version: ${{ env.PNPM_VERSION }}
           run_install: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: env.MARKDOWN_LINT_COMMAND != ''
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      - name: Install root tools only
+        if: env.MARKDOWN_LINT_COMMAND != ''
+        run: pnpm install --frozen-lockfile --filter "$ROOT_PACKAGE" --ignore-scripts
+      - name: Lint Markdown
+        if: env.MARKDOWN_LINT_COMMAND != ''
+        run: bash -euo pipefail -c "$MARKDOWN_LINT_COMMAND"
+
+  # Checks only this repository has, from REPO_CHECK_COMMANDS. Node is set up; nothing is installed.
+  repo-checks:
+    name: Repository checks
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.REPO_CHECK_COMMANDS != ''
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: env.REPO_CHECK_COMMANDS != ''
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Repository checks
+        if: env.REPO_CHECK_COMMANDS != ''
+        run: bash -euo pipefail -c "$REPO_CHECK_COMMANDS"
+
+  # Platform files (.platform/manifest) change only through a template sync. The guard comes with the
+  # platform-template template; a repository without .copier-answers.yml has not adopted it and passes.
+  platform-conformance:
+    name: Platform conformance
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Platform files change only through a template sync
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ ! -f .copier-answers.yml ]; then
+            echo "No .copier-answers.yml: this repository has not adopted the platform template."
+            exit 0
+          fi
+          if [ ! -f scripts/check-platform-conformance.mjs ]; then
+            echo "::error::.copier-answers.yml is here but scripts/check-platform-conformance.mjs is not. Install it with: npx @plainconceptsplatform/workflows add --template platform-template"
+            exit 1
+          fi
+          if [ "$EVENT" = pull_request ]; then
+            git fetch origin "$BASE_REF"
+            node scripts/check-platform-conformance.mjs --base "origin/$BASE_REF" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            node scripts/check-platform-conformance.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  mutation-web:
+    name: Mutation (web, diff)
+    if: ${{ (github.event_name == 'pull_request') && needs.depth.outputs.full == 'true' }}
+    needs: [depth]
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Detect web changes
         id: scope
         run: |
@@ -227,6 +600,16 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "No apps/web changes in this PR; skipping web mutation."
           fi
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        if: steps.scope.outputs.run == 'true'
+        with:
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.scope.outputs.run == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - name: Configure optional private registry authentication
         if: steps.scope.outputs.run == 'true'
         env:
@@ -239,21 +622,45 @@ jobs:
         if: steps.scope.outputs.run == 'true'
         run: |
           pnpm install --frozen-lockfile
-          pnpm --filter "$WEB_PACKAGE" exec stryker run --since="origin/$GITHUB_BASE_REF"
+          # StrykerJS v9 removed --since. Compute changed TS/TSX files and pass them to --mutate.
+          # The config already excludes test files; we only need to scope to changed source files.
+          changed_files=$(git diff --name-only "origin/$GITHUB_BASE_REF" HEAD -- 'apps/web/src/**/*.ts' 'apps/web/src/**/*.tsx' \
+            | sed 's|^apps/web/||' \
+            | grep -v '\.test\.' \
+            | grep -v '\.spec\.' \
+            | grep -v '/__mocks__/' \
+            | paste -sd, -)
+          if [ -z "$changed_files" ]; then
+            echo "No changed web source files to mutate; skipping."
+            exit 0
+          fi
+          echo "Mutating: $changed_files"
+          # StrykerJS v9 child worker cannot auto-discover @stryker-mutator/vitest-runner
+          # under pnpm hoisting. --appendPlugins forces the plugin import from the workspace.
+          cd apps/web && pnpm exec stryker run --mutate "$changed_files" --appendPlugins "@stryker-mutator/vitest-runner"
 
   secret-scan:
-    name: Secret scan (TruffleHog)
-    runs-on: agents-arc
+    name: Secret scan (TruffleHog, verified only)
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker run --rm -v "${{ github.workspace }}:/repo" "$TRUFFLEHOG_IMAGE" filesystem /repo --only-verified --fail --no-update
+      - name: TruffleHog filesystem scan
+        env:
+          WORKSPACE: ${{ github.workspace }}
+        run: |
+          docker run --rm -v "$WORKSPACE:/repo" "$TRUFFLEHOG_IMAGE" \
+            filesystem /repo --only-verified --fail --no-update
 
+  # vuln: pnpm-lock.yaml and the .NET package props. misconfig: infra and the Dockerfile. secret:
+  # the whole tree. CRITICAL/HIGH only, unfixed advisories ignored so an unpatched upstream CVE
+  # cannot block every PR.
   deps-and-iac-scan:
-    name: Dependencies and IaC (Trivy)
-    runs-on: agents-arc
+    name: Dependencies & IaC (Trivy, blocking)
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scanners: vuln,misconfig,secret
@@ -262,19 +669,67 @@ jobs:
           exit-code: "1"
           format: table
 
-  sast-scan:
-    name: SAST (Semgrep)
-    runs-on: agents-arc
+  # Machine-readable Trivy result for the security facet: every severity, unfixed included, never
+  # failing. A job of its own so nothing in this report-only run can leak into the gate above.
+  deps-and-iac-report:
+    name: Dependencies & IaC report (Trivy JSON, report-only)
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker run --rm -v "${{ github.workspace }}:/src" -w /src "$SEMGREP_IMAGE" semgrep scan --error --metrics=off --oss-only --disable-version-check --config p/default --config p/security-audit --config p/secrets --config p/csharp --config p/typescript --config p/react --exclude-rule yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+      - name: Trivy filesystem scan (JSON)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln,misconfig,secret
+          severity: CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN
+          exit-code: "0"
+          format: json
+          output: trivy.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-json
+          path: trivy.json
+          if-no-files-found: error
+          retention-days: 1
+
+  sast-scan:
+    name: SAST (Semgrep OSS, blocking)
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # --json-output writes the same findings as the blocking text output, for the security facet.
+      # `--config .semgrep/` adds the hygiene rules (empty catch blocks, practice 11) from the
+      # quality-gates template; their findings also feed the hygiene facet.
+      - name: Semgrep scan (blocking)
+        env:
+          WORKSPACE: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          excludes=()
+          for path in $SEMGREP_EXCLUDES; do excludes+=(--exclude "$path"); done
+          docker run --rm -v "$WORKSPACE:/src" -w /src "$SEMGREP_IMAGE" \
+            semgrep scan --error --metrics=off --oss-only --disable-version-check \
+              --config p/default --config p/security-audit --config p/secrets \
+              --config p/csharp --config p/typescript --config p/react --config .semgrep/ \
+              --exclude-rule yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag \
+              "${excludes[@]}" \
+              --json-output=semgrep.json
+      # Uploaded when the scan fails too: a failing run is exactly the one worth recording.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() }}
+        with:
+          name: semgrep-json
+          path: semgrep.json
+          if-no-files-found: ignore
+          retention-days: 1
 
   sbom:
-    name: SBOM (CycloneDX)
-    runs-on: agents-arc
+    name: SBOM (Syft, CycloneDX)
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+      - name: Generate SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           format: cyclonedx-json
           artifact-name: ${{ env.SBOM_ARTIFACT_NAME }}
@@ -282,13 +737,208 @@ jobs:
           # needs contents: write this workflow does not have, and fails the run that gates deploy.
           upload-release-assets: false
 
-  # The merge queue requires this check. On a pull request with MERGE_QUEUE on, the heavy jobs are
-  # skipped and the full CI runs on the merge group instead; skipped counts as passed.
+  # Builds the coverage, complexity and hygiene facets (uploaded from main only) and runs the
+  # blocking complexity and duplication gates. The coverage floors stay with the api and web jobs.
+  # Skips with them on a pull request that touches no app path. `sast-scan` is a need only for its
+  # Semgrep JSON (the hygiene facet's swallowed-exception counts); it finishes long before api.
+  # When api or web died before uploading what this job reads, the steps that read it skip (see the
+  # `inputs` step) rather than failing a second time with "Artifact not found" or ENOENT and burying
+  # the real failure. A missed coverage floor still uploads, so the facets are recorded then.
+  engineering-excellence:
+    name: Engineering Excellence (coverage, complexity)
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    timeout-minutes: 15
+    needs: [depth, api, web, sast-scan]
+    if: ${{ (!cancelled() && needs.api.result != 'skipped' && needs.web.result != 'skipped') && needs.depth.outputs.full == 'true' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with: { name: api-coverage-merged, path: ee/api }
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with: { name: web-coverage, path: ee/web }
+      # upload-artifact keeps paths relative to the common ancestor of its inputs: find, don't assume.
+      - name: Check the coverage and complexity inputs
+        id: inputs
+        run: |
+          set -euo pipefail
+          find_one() { find "$1" -name "$2" 2>/dev/null | head -n 1 || true; }
+          API=ee/api/Cobertura.xml
+          WEB_COBERTURA=$(find_one ee/web cobertura-coverage.xml)
+          WEB_FINAL=$(find_one ee/web coverage-final.json)
+          ESLINT=$(find_one ee/web eslint-complexity.json)
+          missing=""
+          [ -f "$API" ] || missing="$missing Cobertura.xml (artifact api-coverage-merged, from the api job);"
+          [ -n "$WEB_COBERTURA" ] || missing="$missing cobertura-coverage.xml (artifact web-coverage, from the web job);"
+          [ -n "$WEB_FINAL" ] || missing="$missing coverage-final.json (artifact web-coverage, from the web job);"
+          [ -n "$ESLINT" ] || missing="$missing eslint-complexity.json (artifact web-coverage, from the web job);"
+          if [ -n "$missing" ]; then
+            msg="Coverage and complexity facets and the complexity gate skipped. Missing:$missing the upstream job that should have produced it is the failure to fix."
+            echo "::notice::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "ready=true"
+            echo "api=$API"
+            echo "web_cobertura=$WEB_COBERTURA"
+            echo "web_final=$WEB_FINAL"
+            echo "eslint=$ESLINT"
+          } >> "$GITHUB_OUTPUT"
+      # A pattern download matches nothing (and does not fail) when the scan left no JSON.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with: { pattern: semgrep-json, path: ee/semgrep }
+      - name: Unit tests (facet builder, complexity and duplication gates, quality config)
+        run: |
+          # shellcheck disable=SC2086 # EXTRA_NODE_TESTS is a list of files.
+          node --test scripts/lib/*.test.mjs $EXTRA_NODE_TESTS
+      # Root devDependencies only (jscpd, pinned in package.json and the lockfile), not the web
+      # workspace: a few seconds.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+      - name: Install jscpd
+        run: pnpm install --frozen-lockfile --filter "$ROOT_PACKAGE" --ignore-scripts
+      - name: Duplication report (jscpd)
+        run: pnpm exec jscpd -c .jscpd.json
+      - name: Build coverage and complexity facets
+        if: steps.inputs.outputs.ready == 'true'
+        env:
+          API: ${{ steps.inputs.outputs.api }}
+          WEB_COBERTURA: ${{ steps.inputs.outputs.web_cobertura }}
+          WEB_FINAL: ${{ steps.inputs.outputs.web_final }}
+          ESLINT: ${{ steps.inputs.outputs.eslint }}
+        run: |
+          set -euo pipefail
+          node scripts/engineering-excellence.mjs coverage --out ee/coverage.json \
+            --api "$API" --web "$WEB_COBERTURA" | tee -a "$GITHUB_STEP_SUMMARY"
+          node scripts/engineering-excellence.mjs complexity --out ee/complexity.json \
+            --api "$API" --web-final "$WEB_FINAL" --eslint "$ESLINT" \
+            --baseline scripts/complexity-baseline.json | tee -a "$GITHUB_STEP_SUMMARY"
+      # Reads only this job's jscpd report and the optional Semgrep JSON, not the api/web artifacts.
+      - name: Build hygiene facet
+        run: |
+          set -euo pipefail
+          SEMGREP=$(find ee/semgrep -name semgrep.json 2>/dev/null | head -n 1 || true)
+          node scripts/engineering-excellence.mjs hygiene --out ee/hygiene.json \
+            --jscpd jscpd-report/jscpd-report.json --semgrep "${SEMGREP:-ee/semgrep/missing.json}" \
+            --baseline scripts/duplication-baseline.json | tee -a "$GITHUB_STEP_SUMMARY"
+      # BLOCKING: every method must satisfy CC <= 15 and CRAP <= 30 unless it is recorded backlog in
+      # scripts/complexity-baseline.json, which may not get worse. Runs after the facets are built so
+      # a red gate still records them.
+      - name: Complexity gate (CC ≤ 15, CRAP ≤ 30)
+        if: ${{ !cancelled() && steps.inputs.outputs.ready == 'true' }}
+        env:
+          API: ${{ steps.inputs.outputs.api }}
+          WEB_FINAL: ${{ steps.inputs.outputs.web_final }}
+          ESLINT: ${{ steps.inputs.outputs.eslint }}
+        run: |
+          set -euo pipefail
+          node scripts/check-complexity.mjs --api "$API" \
+            --web-final "$WEB_FINAL" --eslint "$ESLINT" | tee -a "$GITHUB_STEP_SUMMARY"
+      # BLOCKING (practice 11): no file may hold more duplicated lines (jscpd clones of >= 10 lines
+      # and 70 tokens) than scripts/duplication-baseline.json records, so a copy-pasted block fails.
+      # Runs even when the complexity gate failed, so one red build reports both.
+      - name: Duplication gate (no new clones)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          node scripts/check-duplication.mjs --report jscpd-report/jscpd-report.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage facet
+        if: ${{ !cancelled() && steps.inputs.outputs.ready == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: engineering-excellence-coverage
+          path: ee/coverage.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Upload complexity facet
+        if: ${{ !cancelled() && steps.inputs.outputs.ready == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: engineering-excellence-complexity
+          path: ee/complexity.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Upload hygiene facet
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: engineering-excellence-hygiene
+          path: ee/hygiene.json
+          if-no-files-found: error
+          retention-days: 90
+
+  # Summarises the scanners above into the `engineering-excellence-security` and `-sbom` facets.
+  # The verdicts stay with the blocking jobs; this records what they saw, pass or fail.
+  engineering-excellence-security:
+    name: Engineering Excellence (security, SBOM)
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    timeout-minutes: 10
+    needs: [secret-scan, deps-and-iac-scan, deps-and-iac-report, sast-scan, sbom]
+    if: ${{ !cancelled() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # pattern: matches nothing without failing, so a scanner that died before writing its report
+      # leaves its block null instead of breaking the facet.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with: { pattern: trivy-json, path: ee/trivy }
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with: { pattern: semgrep-json, path: ee/semgrep }
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with: { pattern: "${{ env.SBOM_ARTIFACT_NAME }}", path: ee/sbom }
+      - name: Build facets
+        env:
+          SECRET_SCAN: ${{ needs.secret-scan.result }}
+          DEPS_AND_IAC: ${{ needs.deps-and-iac-scan.result }}
+          SAST: ${{ needs.sast-scan.result }}
+          SBOM: ${{ needs.sbom.result }}
+        run: |
+          set -euo pipefail
+          # A pattern download nests each artifact under its name; find, don't assume.
+          TRIVY=$(find ee/trivy -name trivy.json 2>/dev/null | head -n 1 || true)
+          SEMGREP=$(find ee/semgrep -name semgrep.json 2>/dev/null | head -n 1 || true)
+          node scripts/engineering-excellence.mjs security --out ee/security.json \
+            --trivy "${TRIVY:-ee/trivy/missing.json}" --semgrep "${SEMGREP:-ee/semgrep/missing.json}" \
+            --job "secretScan=$SECRET_SCAN" --job "depsAndIac=$DEPS_AND_IAC" --job "sast=$SAST" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          BOM=$(find ee/sbom -type f -name '*.json' 2>/dev/null | head -n 1 || true)
+          if [ -n "$BOM" ]; then
+            node scripts/engineering-excellence.mjs sbom --out ee/sbom.json --cyclonedx "$BOM" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::no SBOM artifact (sbom job: $SBOM) — sbom facet not built"
+          fi
+      - name: Upload security facet
+        if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: engineering-excellence-security
+          path: ee/security.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Upload SBOM facet
+        if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: engineering-excellence-sbom
+          path: ee/sbom.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  # The merge train reads this job by its name to tell a full run from a light one: do not rename it.
   full-ci:
     name: Full CI
-    needs: [api, web]
-    if: always()
-    runs-on: agents-arc
+    needs: [depth, api, web, e2e, mutation-api, mutation-web, engineering-excellence]
+    if: ${{ always() && needs.depth.outputs.full == 'true' }}
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
     timeout-minutes: 5
     steps:
       - name: Every heavy job passed
@@ -296,43 +946,52 @@ jobs:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
           for result in $RESULTS; do
-            case "$result" in failure | cancelled | timed_out) echo "A heavy job ended $result."; exit 1 ;; esac
+            case "$result" in
+              failure | cancelled | timed_out) echo "A heavy job ended $result."; exit 1 ;;
+            esac
           done
+          echo "Full CI passed."
 
-  # Hands this run's verdict to the router's merge train, which decides whether this pull request
-  # is the one in front and what it needs. A pull request opened or updated with a bot token gets
-  # no workflow_run event for its CI (the run's actor is the bot), and the train brings people's
-  # pull requests up to date with one too, so every pull request on this repository hands over
-  # from here. workflow_dispatch is one of the two events GITHUB_TOKEN may raise, so no App token
-  # is needed, and the router treats a dispatch as trusted. The hourly schedule is the fallback.
+  # Hands this run's verdict to the router's merge train. A pull request opened or updated with a
+  # bot token gets no workflow_run event for its CI (the run's actor is the bot), so a bot's pull
+  # request hands over from here; people's pull requests reach the train through workflow_run.
+  # GITHUB_TOKEN on purpose: workflow_dispatch is one of the two events it may raise, so no App
+  # token is needed, and this workflow is also a workflow_call target that declares no App secrets.
   #
   # If a deploy pipeline calls this workflow with `uses:`, that caller must also grant
   # `actions: write`. A called workflow may not request a scope its caller withheld, and the
   # whole run fails to start with zero jobs and no annotation when it does.
-  dispatch-merge-train:
-    name: Dispatch merge train
-    needs: [api, mutation-api, web, mutation-web]
+  dispatch-merge-gate:
+    name: Dispatch merge gate
+    needs: [api, mutation-api, web, mutation-web, secret-scan, deps-and-iac-scan, sast-scan, sbom, engineering-excellence, platform-conformance, full-ci]
     if: >
       always() &&
+      vars.AGENTIC_WORKFLOWS_DISABLED == '' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.draft == false
-    runs-on: agents-arc
+      github.event.pull_request.draft == false &&
+      (github.event.pull_request.user.login == 'app/github-actions' || endsWith(github.event.pull_request.user.login, '[bot]'))
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
     timeout-minutes: 5
     permissions:
       contents: read
       actions: write
     steps:
-      - name: Hand this run's verdict to the merge train
+      - name: Hand this run's verdict to the merge train after CI settles
         env:
           GH_TOKEN: ${{ github.token }}
+          # The jobs the apps judged before this template; the mutation runs are only waited for.
+          RESULTS: >-
+            ${{ needs.api.result }} ${{ needs.web.result }} ${{ needs.secret-scan.result }}
+            ${{ needs.deps-and-iac-scan.result }} ${{ needs.sast-scan.result }} ${{ needs.sbom.result }}
+            ${{ needs.engineering-excellence.result }} ${{ needs.platform-conformance.result }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           REF: ${{ github.event.repository.default_branch }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           RUN_ID: ${{ github.run_id }}
-          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
           set -euo pipefail
+          sleep 60
           conclusion=success
           for result in $RESULTS; do
             case "$result" in
