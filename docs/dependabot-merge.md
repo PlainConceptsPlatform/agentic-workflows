@@ -6,8 +6,12 @@ Dependabot opens the pull requests and CI judges them. Nobody should have to pre
 
 | Repository | How | Token |
 |---|---|---|
-| Runs the work router | A step of the router's `housekeeping` job, the `Agentics: Maintenance - 6h` run (`23 */6 * * *`). No cron or route of its own. It runs after the sweep, even when the sweep failed. | The Platform App token |
-| No router (the pillar repositories) | The `dependabot-merge` bundle template: `.github/workflows/dependabot-merge.yml`, every six hours at minute 41 and on `workflow_dispatch`, calling the same action, which the template installs as `.github/actions/merge-dependabot/`. | The App token when `BOT_APP_ID` and `BOT_PRIVATE_KEY` exist, `GITHUB_TOKEN` otherwise |
+| Runs the work router | A step of the router's `housekeeping` job, the `Agentics: Maintenance - 6h` run (`23 */6 * * *`). No cron or route of its own. It runs after the sweep, even when the sweep failed. | The Platform App token writes; `GITHUB_TOKEN` reads |
+| No router (the pillar repositories) | The `dependabot-merge` bundle template: `.github/workflows/dependabot-merge.yml`, every six hours at minute 41 and on `workflow_dispatch`, calling the same action, which the template installs as `.github/actions/merge-dependabot/`. | The App token writes when `BOT_APP_ID` and `BOT_PRIVATE_KEY` exist, `GITHUB_TOKEN` otherwise; `GITHUB_TOKEN` reads |
+
+Two tokens, split by what they do. The writes (approve, merge, the rebase comment, the branch delete) use the `token` input, the App token where there is one, so the merge starts the push workflows. The reads (pull requests, commits, comments, check runs, commit statuses) use `read-token`, which defaults to `GITHUB_TOKEN`: the job grants it `checks: read` and `statuses: read`, which the App installation may not hold. Where the App installation grants no Checks permission, as in Project-Health-Platform, 1.13.0 read with the App token and every run failed with `403 Resource not accessible by integration`.
+
+If a read is still refused, that pull request is skipped with a warning naming the missing permission, for example `cannot read checks: grant Checks: read to the App or the workflow token`, the same line heads the job summary, and the run goes on to the next pull request.
 
 Install the template with:
 
@@ -66,11 +70,11 @@ gh variable set DEPENDABOT_MERGE --body off
 
 - It never checks out, builds or runs the pull request's code. The template's checkout is the default branch, sparse, for the action alone. Everything else is REST and GraphQL calls.
 - It merges only what Dependabot alone wrote, by the three checks above, and only on green checks.
-- `verify-route-matrix.sh` asserts the router step uses the App token and reads both values from the `env:` block, that the action has no checkout and starts no process, that every commit must be verified, and that it squash-merges the head it judged.
+- `verify-route-matrix.sh` asserts the router step writes with the App token, reads with `GITHUB_TOKEN` granted `checks: read`, and reads both values from the `env:` block, that the action has no checkout and starts no process, that every commit must be verified, and that it squash-merges the head it judged.
 
 ## GITHUB_TOKEN
 
-Without the App secrets the template runs on `GITHUB_TOKEN`, with `contents`, `pull-requests` and `issues` write. Three limits come with it:
+Without the App secrets the template runs on `GITHUB_TOKEN` alone, with `contents`, `pull-requests` and `issues` write and `checks` and `statuses` read. Three limits come with it:
 
 - GitHub starts no workflow from a merge made with `GITHUB_TOKEN`: the default branch's push workflows (a deploy, a release) do not run for that merge, only for the next commit that is not one.
 - It cannot merge a pull request that changes `.github/workflows/`, so Dependabot's GitHub Actions updates are reported as refused.
