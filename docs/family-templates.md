@@ -6,7 +6,7 @@ Numa, Odyssey, Hermes and Kitchen-Sink are one family: they share their platform
 |---|---|---|
 | `quality-gates` | The gate scripts, the Engineering Excellence facets and the gate rules (Semgrep, jscpd, ZAP) | `workflows update`, where installed |
 | `app-ci-dotnet-next` | The gates CI, `.github/workflows/app-ci.yml` | The app; replaced only with `--force` |
-| `platform-template` | The weekly template sync and the platform conformance guard | `workflows update`, where installed |
+| `platform-template` | The weekly template sync and the conformance guard, driven by the [platform contract](platform-contracts.md) | `workflows update`, where installed |
 
 None of them is part of the default catalog. A repository gets one only by asking for it:
 
@@ -91,52 +91,17 @@ A rate is a number from 0 to 1. Any other key, a percentage written as 94, or a 
 | `MARKDOWN_LINT_COMMAND`, `REPO_CHECK_COMMANDS` | The Markdown job and the app's own checks (Kitchen-Sink's `node scripts/check-demo-manifest.mjs`); empty skips the steps |
 | `SBOM_ARTIFACT_NAME`, `SEMGREP_EXCLUDES`, images and versions | Scanner settings |
 
-The job names are the ones the apps' required checks and the merge train read (`Full CI`), and the last job, `dispatch-merge-gate`, hands a bot pull request's verdict to the router's merge train exactly as the apps' CI does. A deploy pipeline that calls the workflow with `uses:` must grant `actions: write`. The `Platform conformance` job runs the guard below where the app has adopted the template and passes everywhere else.
+The job names are the ones the apps' required checks and the merge train read (`Full CI`), and the last job, `dispatch-merge-gate`, hands a bot pull request's verdict to the router's merge train exactly as the apps' CI does. A deploy pipeline that calls the workflow with `uses:` must grant `actions: write`. The `Platform conformance` job runs the guard from [platform-contracts.md](platform-contracts.md) where the app declares a platform contract and passes everywhere else.
 
 It stays a single-file template: once installed it is the app's, and `--force` replaces it with the package's, `env:` included.
 
 ## platform-template
 
-Kitchen-Sink is the Copier template of the family. An app adopts it with `copier copy`, which writes `.copier-answers.yml`; that file is the opt-in marker, and without it both pieces of this template do nothing.
-
-### Template sync
-
-`.github/workflows/platform-template-sync.yml` runs every Monday and on demand. It is plain YAML, no model:
-
-1. It stops unless `.copier-answers.yml` exists.
-2. It mints the Platform App token from `BOT_APP_ID` / `BOT_PRIVATE_KEY`, which reads the private Kitchen-Sink repository named in `_src_path`.
-3. It runs copier 9.19.1 through `uvx`, `pipx` or a virtual environment from the runner's Python (3.10 or newer), as `copier update --trust --defaults --conflict inline`.
-4. No change means the app is on the newest template tag, and the run ends.
-5. Otherwise it commits to `platform/sync-<tag>` and opens a pull request titled with the tag, listing the changed files, the files with conflicts, and a link to the Kitchen-Sink release.
-
-A platform file the app had edited comes back with inline `<<<<<<< before updating` markers. The conformance guard fails CI on them, so the merge gate repairs the pull request (`remediated`) like any red one.
-
-The App must be installed on Kitchen-Sink with contents read, and on the app with contents and pull requests write. A push made with `GITHUB_TOKEN` starts no workflow, so the App token pushes the branch.
-
-### Conformance guard
-
-`scripts/check-platform-conformance.mjs` runs offline in the `Platform conformance` job:
-
-- No `.copier-answers.yml`: it exits 0 without a word.
-- A pull request that changes a path matching `.platform/manifest` fails, unless it also moves `_commit` in `.copier-answers.yml` (a sync, or the adoption itself) or an unexpired `.platform/exceptions.yml` entry covers the path.
-- A manifest file holding conflict markers fails.
-- An expired exception fails, whether or not the pull request uses it.
-
-`.platform/manifest` holds one gitwildmatch glob per line, relative to the repository root, with `#` comments and `!` negation; the last matching line decides. `.platform/exceptions.yml` is the app's:
-
-```yaml
-exceptions:
-  - path: "apps/api/src/Platform/Audit/**"
-    reason: Numa keeps its own audit hashing until the chain lands upstream
-    issue: https://github.com/PlainConceptsPlatform/Numa/issues/123
-    expires: 2026-12-31
-```
-
-Every entry needs all four keys, `expires` is a `YYYY-MM-DD` date and stays valid through that day.
+The family's apps carry a [platform contract](platform-contracts.md) that Kitchen-Sink delivers: `source.url` is Kitchen-Sink, `owned` its platform paths, and `sync` the Copier answers file and `copier update`. Apps adopted before the contract existed have `.copier-answers.yml` and `.platform/manifest`, which are read as the same contract. The template sync, the conformance guard and the exceptions file are described in [platform-contracts.md](platform-contracts.md).
 
 ## Dependabot
 
-The template bumps what it owns: the pnpm `platform` catalog in `pnpm-workspace.yaml` and the packages in `apps/api/Directory.Packages.Platform.props`. A Dependabot pull request for one of them edits a manifest path outside a sync, so the conformance guard fails it, and the next sync would overwrite it anyway. Family apps ignore them, one entry per package in the catalog and the props file:
+The template bumps what it owns: the pnpm `platform` catalog in `pnpm-workspace.yaml` and the packages in `apps/api/Directory.Packages.Platform.props`. A Dependabot pull request for one of them edits an owned path outside a sync, so the conformance guard fails it, and the next sync would overwrite it anyway. Family apps ignore them, one entry per package in the catalog and the props file:
 
 ```yaml
 version: 2

@@ -14,9 +14,9 @@ installed as a mandatory file during catalog install; it is not optional.
 | `github-release` | Pushing a `v*` tag should publish a GitHub Release with generated notes |
 | `opencode.ci.json` | Always installed as mandatory during catalog install. Advanced: use `--template opencode.ci.json` to install in isolation |
 | `quality-gates` | A platform family app (Kitchen-Sink, Numa, Odyssey, Hermes) wants the shared gate scripts and rules; floors live in its `quality.config.json` |
-| `platform-template` | A platform family app adopted the Kitchen-Sink Copier template (`.copier-answers.yml` exists) |
+| `platform-template` | The repository receives shared code from an upstream template and declares it in `.platform/contract.yml` (or the legacy `.copier-answers.yml` with `.platform/manifest`) |
 
-`quality-gates` and `platform-template` are bundles: package-managed after installation and refreshed by `update` where installed. See `docs/family-templates.md` in the package repository.
+`quality-gates` and `platform-template` are bundles: package-managed after installation and refreshed by `update` where installed. See `docs/platform-contracts.md` and `docs/family-templates.md` in the package repository.
 
 ## Install one
 
