@@ -117,7 +117,7 @@ const action = parse(readFileSync(join(loops, "actions/file-audit-issues/action.
 const script: string = action.runs.steps[0].with.script;
 const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor;
 
-async function fileAudit(repo: ReturnType<typeof fakeRepository>, items: Array<{ title: string; body: string }>) {
+async function fileAudit(repo: ReturnType<typeof fakeRepository>, items: Array<{ title: string; body: string }>, overrides: Record<string, string> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "audit-issues-"));
   const outputFile = join(dir, "agent_output.json");
   writeFileSync(outputFile, JSON.stringify({ items: items.map((item) => ({ type: "create_issue", ...item })) }));
@@ -132,6 +132,8 @@ async function fileAudit(repo: ReturnType<typeof fakeRepository>, items: Array<{
     MAX_WORK_UNITS: String(AUDIT.maxWorkUnits),
     MAX_STORIES: "3",
     RUN_URL: "https://github.com/acme/app/actions/runs/1",
+    REPORT_TITLE: "",
+    ...overrides,
   };
   const saved = { ...process.env };
   Object.assign(process.env, env);
@@ -302,5 +304,75 @@ describe("audit worker wiring", () => {
   it("measures in refine's guard with the same helper", () => {
     const steps = refineWorker.jobs.size_guard.steps.map((step: { uses?: string }) => step.uses);
     expect(steps).toContain("./.github/actions/measure-issue-size");
+  });
+});
+
+// The docs audit filed one report labelled refine, the shape the audit lost in 1.12.1, and grew
+// past refine's gate the same way once a repository's documentation drifted far enough.
+const docsFinding = (n: number): string => `### ${n}. README lists module ${n}, which was removed
+**Document:** \`README.md:${10 + n}\`, "${"Module ".repeat(30)}${n} handles quotes."
+**Evidence:** \`apps/api/src/\` has no Module${n} directory; ${"it was folded into Quotes. ".repeat(20)}
+**Fix:** ${"Describe the Quotes module instead and drop the stale section. ".repeat(10)}
+`;
+const docsStory = (n: number): string => `**As a new developer**, I want the README to describe module ${n} as it is, so I do not look for code that is gone.
+
+**Document:** \`README.md:${10 + n}\`
+**Evidence:** \`apps/api/src/Quotes/\`
+
+${"- The README section names the module that exists\n".repeat(4)}`;
+
+describe("docs audit", () => {
+  const docsEnv = { REPORT_LABELS: "docs-audit", STORY_LABELS: "documentation\nrefine", REPORT_TITLE: "^docs audit:" };
+
+  it("finds the report by its own title even when the agent filed a story first", () => {
+    const plan = audit.planAuditIssues(
+      [{ title: "Fix the module 1 section", body: docsStory(1) }, { title: "Docs audit: 2026-11-04", body: docsFinding(1) }],
+      { limits: AUDIT, reportPattern: /^docs audit:/i },
+    );
+    expect(plan.report.title).toBe("Docs audit: 2026-11-04");
+    expect(plan.stories.map((s: { title: string }) => s.title)).toEqual(["Fix the module 1 section"]);
+  });
+
+  it("files a report without refine and stories labelled for refine, every one under the gate", async () => {
+    const report = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(docsFinding).join("\n");
+    expect(passes("Docs audit: 2026-11-04", report)).toBe(false);
+    const repo = fakeRepository();
+
+    const { outputs, failures } = await fileAudit(repo, [
+      { title: "Docs audit: 2026-11-04", body: report },
+      ...[1, 2, 3, 4].map((n) => ({ title: `Describe module ${n} as it is`, body: docsStory(n) })),
+    ], docsEnv);
+
+    expect(failures).toEqual([]);
+    const filed = repo.issues.get(Number(outputs["report-number"]))!;
+    expect(filed.title).toBe("Docs audit: 2026-11-04");
+    expect(filed.labels).toEqual(["docs-audit"]);
+    const stories = outputs["story-numbers"]!.split(" ").map((n) => repo.issues.get(Number(n))!);
+    expect(stories).toHaveLength(3);
+    for (const s of stories) {
+      expect(s.labels).toEqual(["documentation", "refine"]);
+      expect(filed.body).toContain(`- [ ] #${s.number} ${s.title}`);
+    }
+    for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) expect(filed.body).toContain(`### ${n}. README lists module ${n}`);
+    for (const issue of repo.issues.values()) expect(passes(issue.title, issue.body, AUDIT), `#${issue.number}`).toBe(true);
+  });
+
+  it("is wired like the audit: staged, under refine's limits, refine only on the stories", () => {
+    const front = (file: string) => parse(readFileSync(join(loops, "workflows", file), "utf8").replace(/\r\n/g, "\n").split("---\n")[1]!);
+    const docs = front("agent-docs-audit.md");
+    const refineWorker = front("agent-refine.md");
+    const fileStep = docs.jobs.conclude.steps.find((step: { uses?: string }) => step.uses === "./.github/actions/file-audit-issues");
+    const lines = (value: string): string[] => value.split("\n").map((line) => line.trim()).filter(Boolean);
+
+    expect(lines(fileStep.with["report-labels"])).toEqual(["docs-audit"]);
+    expect(lines(fileStep.with["story-labels"])).toContain("refine");
+    // `docs-audit` on a story would fill the one-report backpressure by itself.
+    expect(lines(fileStep.with["story-labels"])).not.toContain("docs-audit");
+    expect(new RegExp(fileStep.with["report-title"], "i").test("Docs audit: 2026-11-04")).toBe(true);
+    expect(Number(docs.env.DOCS_AUDIT_MAX_BODY_CHARS)).toBeLessThan(Number(refineWorker.env.REFINE_MAX_BODY_CHARS));
+    expect(Number(docs.env.DOCS_AUDIT_MAX_WORK_UNITS)).toBeLessThan(Number(refineWorker.env.REFINE_MAX_WORK_UNITS));
+    expect(docs["safe-outputs"].staged).toBe(true);
+    expect(docs["safe-outputs"]["create-issue"].max).toBe(Number(docs.env.DOCS_AUDIT_MAX_STORIES) + 1);
+    expect(docs.jobs.conclude.steps.some((step: { uses?: string }) => step.uses === "./.github/actions/add-issue-labels")).toBe(false);
   });
 });

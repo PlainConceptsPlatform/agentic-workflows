@@ -523,7 +523,7 @@
         'agent-merge-gate': ['Agent Merge Gate', '1980 / 430', 'The only worker that merges. It runs one at a time for the whole repository, because every merge moves the default branch under the rest.'],
         'agent-apply-review': ['Agent Apply Review', '1410 / 500', 'Applies a reviewer’s feedback to a pull request the bot already opened, and pushes to the same branch.'],
         'agent-audit': ['Agent Audit', '1240 / 540', 'Creates work rather than consuming it. Read-only: it files an issue and changes nothing.'],
-        'agent-docs-audit': ['Agent Docs Audit', '1250 / 500', 'Optional and read-only. Files one issue when the documentation has drifted from the code or the standard, and nothing when it has not.'],
+        'agent-docs-audit': ['Agent Docs Audit', '1250 / 500', 'Optional and read-only. Files a tracking report and one story per top finding when the documentation has drifted from the code or the standard, and nothing when it has not.'],
         'agent-release': ['Agent Release', '1400 / 450', 'Manual dispatch only. The agent writes prose; deterministic jobs do everything irreversible, and nothing reaches main except through a pull request.']
       };
       var viewer = document.querySelector('.viewer iframe');

@@ -37,6 +37,10 @@ inputs:
     description: This run, cited in a body that had to be trimmed.
     required: false
     default: ''
+  report-title:
+    description: Pattern, case-insensitive, of the report's title. Every other issue the agent filed is a story.
+    required: false
+    default: '^audit\b'
 outputs:
   report-number:
     description: The report's issue number, or empty when the agent filed nothing.
@@ -61,6 +65,7 @@ runs:
         MAX_WORK_UNITS: ${{ inputs.max-work-units }}
         MAX_STORIES: ${{ inputs.max-stories }}
         RUN_URL: ${{ inputs.run-url }}
+        REPORT_TITLE: ${{ inputs.report-title }}
       with:
         github-token: ${{ inputs.token }}
         script: |
@@ -81,6 +86,7 @@ runs:
             limits,
             maxStories: Number(process.env.MAX_STORIES) || 3,
             runUrl: process.env.RUN_URL,
+            reportPattern: new RegExp(process.env.REPORT_TITLE || '^audit\\b', 'i'),
           });
           if (!plan) {
             core.info('The agent filed no issue.');
