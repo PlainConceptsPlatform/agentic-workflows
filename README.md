@@ -40,7 +40,7 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | `merge-gate` | `agent-merge-gate.md` | the merge train hands it the oldest open pull request, the bot's or a writer's | one of `auto-merge`, `human-review`, `owner-review` or `blocked`, or a fix pushed to the same branch; a pull request parked for a person gets its screenshots before the decision |
 | `apply-review` | `agent-apply-review.md` | someone comments on a bot pull request or requests changes | the requested changes pushed to that pull request. An approval is not feedback: `merge-approved` merges the approved commit when the gate had parked it for a person |
 | `audit` | `agent-audit.md` | Mondays, or on demand | a tracking report of every finding, labelled `audit`, and one story issue per top finding, labelled `refine` and linked under the report; every body is sized under refine's limit before it is filed |
-| `docs-audit` | `agent-docs-audit.md` | days 1 and 15 of the month, or on demand. Optional: `workflows add docs-audit` | one issue of documentation findings, labelled `docs-audit` + `refine`, only when something is stale |
+| `docs-audit` | `agent-docs-audit.md` | days 1 and 15 of the month, or on demand. Optional: `workflows add docs-audit` | only when something is stale: a tracking report of every finding, labelled `docs-audit`, and one story issue per top finding, labelled `documentation` + `refine` and linked under the report; every body is sized under refine's limit before it is filed |
 | `release` | `agent-release.md` | on demand (`operation=release`) | a `chore(release): vX.Y.Z` pull request with auto-merge; `release-tag.yml` tags it and publishes the GitHub Release once it merges |
 
 Plus the plumbing, which has no agent in it: `work-router.yml` (the router itself),
@@ -80,7 +80,7 @@ bot: autonomy between 6% and 50%. The rest stopped somewhere and told nobody.
 
 | Job | Runs | Does |
 |---|---|---|
-| `housekeeping` | `23 */6 * * *` | retries work that **stalled** (a crash, a timeout, an empty output) after 6h, up to 3 times; drops `pr-pending` from issues no open pull request closes; closes a split parent once every child is closed; **stacks**: closes feature and child issues whose pull requests landed but whose close was lost, and reports held, orphaned and unfinished stacks in the digest; deletes branches whose pull requests are all finished and bot-authored; rewrites one issue, **Needs a human**, listing what genuinely needs a person |
+| `housekeeping` | `23 */6 * * *` | retries work that **stalled** (a crash, a timeout, an empty output) after 6h, up to 3 times; drops `pr-pending` from issues no open pull request closes; closes a split parent once every child is closed; **stacks**: closes feature and child issues whose pull requests landed but whose close was lost, and reports held, orphaned and unfinished stacks in the digest; deletes branches whose pull requests are all finished and bot-authored; rewrites one issue, **Needs a human**, listing what genuinely needs a person; squash-merges the Dependabot pull requests whose checks are all green ([Dependabot auto-merge](docs/dependabot-merge.md)) |
 | `audit-close` | `43 3 * * *` | closes an audit report once every issue it references is closed, and labels a report nobody actioned `stale-audit` after 14 days so it stops blocking the next audit |
 
 The rule that shapes the janitor: **retry a failure, report a decision.** `stalled` marks a park
@@ -99,6 +99,8 @@ It runs on the App token, because GitHub starts no workflow run from an event ra
 through one wrapper, which is the only place `dry-run` is read, so `operation=housekeeping` with
 `dry-run` on prints exactly what it would change and writes nothing. `verify-route-matrix.sh`
 asserts all of that, including that it closes only two kinds of issue.
+
+The same run merges Dependabot's updates, so nobody has to: a pull request Dependabot opened, with every commit verified and Dependabot's, targeting the default branch and carrying no hold label, is squash-merged once every check is green. A stale one gets one `@dependabot rebase`, a failing one is listed in the job summary, and nothing of the pull request is checked out or run. `DEPENDABOT_MERGE` (`all`, `minor`, `patch` or `off`) and `DEPENDABOT_MERGE_WITHOUT_CHECKS` in the `env:` block set the scope; a repository variable `DEPENDABOT_MERGE` overrides it. A repository without the router gets the same from the `dependabot-merge` template. See [docs/dependabot-merge.md](docs/dependabot-merge.md) for the rules, the security model and how to turn it off.
 
 ### How the routes chain
 
@@ -379,6 +381,8 @@ repository's to change:
 | `HOUSEKEEPING_MAX_RETRIES` | `3` | retries before the issue is left to a person |
 | `HOUSEKEEPING_STALE_PR_DAYS` | `3` | a bot pull request older than this with no gate verdict is reported, never closed |
 | `HOUSEKEEPING_DIGEST_TITLE` | `Needs a human` | the one issue listing what needs a person; empty turns the digest off |
+| `DEPENDABOT_MERGE` | `all` | which Dependabot updates the maintenance run merges once green: `all`, `minor`, `patch` or `off`; a repository variable of the same name overrides it |
+| `DEPENDABOT_MERGE_WITHOUT_CHECKS` | `true` | merge a Dependabot update in a repository with no checks at all, once its head is an hour old |
 | `AUDIT_STALE_AFTER_DAYS` | `14` | when an unactioned audit report stops blocking the next audit |
 | `MAX_GATE_ATTEMPTS` | `6` | failed merge-gate attempts one pull request head may consume before the train passes it by |
 | `MERGE_TRAIN_HOLD_LABEL` | `hold` | a pull request with this label stays off the merge train |
@@ -420,6 +424,7 @@ npx @plainconceptsplatform/workflows@latest add --template bug-report
 npx @plainconceptsplatform/workflows@latest add --template feature-request
 npx @plainconceptsplatform/workflows@latest add --template quality-gates
 npx @plainconceptsplatform/workflows@latest add --template platform-template
+npx @plainconceptsplatform/workflows@latest add --template dependabot-merge
 npx @plainconceptsplatform/workflows@latest remove triage
 npx @plainconceptsplatform/workflows@latest update --dry-run
 npx @plainconceptsplatform/workflows@latest update
@@ -534,7 +539,7 @@ npx @plainconceptsplatform/workflows@latest add audit
 - `bug-report` installs a bug report issue template to `.github/ISSUE_TEMPLATE/bug_report.yml`. Bugs can be any size.
 - `feature-request` installs a feature request issue template to `.github/ISSUE_TEMPLATE/feature_request.yml`. Scoped to small, well-scoped improvements a Small/Medium dropdown gate steers large work to a planning issue.
 
-Templates are standalone copies placed in `.github/workflows/`. `app-ci-dotnet-next` provides .NET, SQL Server integration testing, Next.js, and security checks. `app-ci-node-monorepo` provides Node monorepo, web, Electron, Capacitor, E2E, and security checks. `github-release` publishes generated GitHub release notes when a `v*` tag is pushed. `bug-report` and `feature-request` install to `.github/ISSUE_TEMPLATE/` instead of `.github/workflows/`. `opencode.ci.json` is always installed as a mandatory file during catalog install; the `--template opencode.ci.json` command is an advanced option for installing it in isolation. Edit their top-level `env:` defaults or JSON properties after copying. `quality-gates` and `platform-template` are bundles: the platform family's gate scripts and rules, and a template sync with its conformance guard for any repository that declares a platform contract (`.platform/contract.yml`). They stay package-managed, and `update` refreshes them only where they are installed. See [docs/platform-contracts.md](docs/platform-contracts.md) for the contract, and [docs/family-templates.md](docs/family-templates.md) for the quality gates, `quality.config.json` and the Dependabot settings family apps need.
+Templates are standalone copies placed in `.github/workflows/`. `app-ci-dotnet-next` provides .NET, SQL Server integration testing, Next.js, and security checks. `app-ci-node-monorepo` provides Node monorepo, web, Electron, Capacitor, E2E, and security checks. `github-release` publishes generated GitHub release notes when a `v*` tag is pushed. `bug-report` and `feature-request` install to `.github/ISSUE_TEMPLATE/` instead of `.github/workflows/`. `opencode.ci.json` is always installed as a mandatory file during catalog install; the `--template opencode.ci.json` command is an advanced option for installing it in isolation. Edit their top-level `env:` defaults or JSON properties after copying. `quality-gates` and `platform-template` are bundles: the platform family's gate scripts and rules, and a template sync with its conformance guard for any repository that declares a platform contract (`.platform/contract.yml`). `dependabot-merge` is a bundle too: a six-hourly workflow and the `merge-dependabot` action, for a repository without the router, that squash-merges green Dependabot pull requests with the App token or `GITHUB_TOKEN` ([docs/dependabot-merge.md](docs/dependabot-merge.md)). They stay package-managed, and `update` refreshes them only where they are installed; in a repository holding only bundles, `update` installs no router. See [docs/platform-contracts.md](docs/platform-contracts.md) for the contract, and [docs/family-templates.md](docs/family-templates.md) for the quality gates, `quality.config.json` and the Dependabot settings family apps need.
 
 ### What the error report files, and what it only counts
 

@@ -550,8 +550,9 @@ flowchart TD
     daDedupe{"New finding, proven<br/>on both sides?"}
     daDedupe -.->|"none left"| daQuiet
     daDedupe -->|"some"| daFile
-    daFile("One issue with<br/>evidence per finding") --> daReport
-    daReport(("Filed<br/>labelled docs-audit and refine,<br/>sized and split per finding"))
+    daFile("Report of every finding,<br/>plus one story per top 3") --> daMeasure
+    daMeasure("conclude (rung 6)<br/>each body measured with<br/>refine's rule, trimmed to fit") --> daReport
+    daReport(("Filed<br/>report: docs-audit, not refine<br/>stories: refine, sub-issues"))
     daQuiet(("Nothing to file<br/>the documentation is current"))
     daIdle(("Idle<br/>no agent, no spend"))
 
@@ -561,7 +562,7 @@ flowchart TD
     classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class daStart start
-    class daFacts,daRun,daFile action
+    class daFacts,daRun,daFile,daMeasure action
     class daBack,daMoved,daDedupe decision
     class daIdle idle
     class daReport,daQuiet success
@@ -569,6 +570,8 @@ flowchart TD
 
 Reports join the audit chain: `audit-close` closes one when its children are closed, and marks it
 `stale-audit` when nobody acted on it, which frees the slot.
+
+It files the way the audit does, through the same `file-audit-issues` step: the report never goes to refine, which refused a single report of every finding once it grew past its size gate. Each top story is filed on its own, labelled `refine`, linked under the report and listed in it.
 
 ---
 
@@ -653,7 +656,8 @@ flowchart TB
     hkBranch -->|yes| hkDelete("Delete the branch")
     hkBranch -.->|"open PR, human PR,<br/>or the default branch"| hkDigest
     hkDelete --> hkDigest
-    hkDigest("Rewrite one issue:<br/>Needs a human") --> hkEnd
+    hkDigest("Rewrite one issue:<br/>Needs a human") --> hkDependabot
+    hkDependabot("Squash-merge Dependabot PRs<br/>whose checks are all green") --> hkEnd
     hkEnd(("One place to look<br/>instead of four repos"))
 
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
@@ -661,7 +665,7 @@ flowchart TB
     classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class hkCron start
-    class hkScan,hkRetry,hkStrand,hkParent,hkDelete,hkDigest,hkStackClose action
+    class hkScan,hkRetry,hkStrand,hkParent,hkDelete,hkDigest,hkStackClose,hkDependabot action
     class hkPark,hkWhy,hkBudget,hkBranch,hkStack,hkStackWait decision
     class hkEnd success
 ```
@@ -681,6 +685,8 @@ mid-stack is the normal state and stays silent; a root that finished but was nev
 held for days after its announcement, a root closed by accident with children open, and a missing
 root pull request each get one line in the digest. No labels move, so nothing the router listens
 for is raised by the sweep itself.
+
+The last step merges Dependabot's updates through the `merge-dependabot` action: only pull requests Dependabot opened with every commit verified and its own, squash-merged once every check is green, a stale one asked once to rebase, a failing one listed in the job summary. It reads nothing of the pull request but the API, and `DEPENDABOT_MERGE` sets its scope. See `docs/dependabot-merge.md` in the package.
 
 ---
 
