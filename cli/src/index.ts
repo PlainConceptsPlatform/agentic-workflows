@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
 import { inspectRepository, parseVisibility, resolveVisibility } from "./repository-inspection.js";
-import { catalogSourcePath, installCatalog, installedRoutes, installTemplate, isTemplateName, removeRouteFiles, type CatalogInstallResult } from "./catalog-installation.js";
+import { catalogSourcePath, exists, installCatalog, installedRoutes, installTemplate, isTemplateName, removeRouteFiles, type CatalogInstallResult } from "./catalog-installation.js";
 import { installBundle, installedBundles, isBundleTemplate, type BundleInstallResult } from "./template-bundles.js";
 import { formatCatalog, listCatalog, searchCatalog } from "./catalog-listing.js";
 import { packageVersion } from "./package-baseline.js";
 import { routeNames, templateNames, type RouteName, type TemplateName } from "./workflow-catalog.js";
 import { runInteractive } from "./tui.js";
 import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HELP_TEXT = `Workflows CLI install and update Plain Concepts Platform agentic workflows.
@@ -135,9 +135,18 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
 
     // The installed set is always part of the target set: adding a route never drops another,
     // and a plain update refreshes exactly what is there, bundle templates included. A bundle
-    // nobody installed is never added by an update.
-    if (routes.length > 0 || template === undefined) {
-      const selectedRoutes = unionRoutes(routes, await installedRoutes(repositoryPath));
+    // nobody installed is never added by an update, and a repository holding only bundles gets
+    // no router from one.
+    const installedRouteSet = await installedRoutes(repositoryPath);
+    const routerInstalled = await exists(join(repositoryPath, ".github", "workflows", "work-router.yml"));
+    const bundlesOnly = command === "update" && routes.length === 0 && template === undefined &&
+      installedRouteSet.length === 0 && !routerInstalled && (await installedBundles(repositoryPath, sourcePath)).length > 0;
+    if (bundlesOnly) {
+      for (const name of await installedBundles(repositoryPath, sourcePath)) {
+        bundles.push(await installBundle(repositoryPath, name, sourcePath, { force, dryRun }));
+      }
+    } else if (routes.length > 0 || template === undefined) {
+      const selectedRoutes = unionRoutes(routes, installedRouteSet);
       catalog = await installCatalog(repositoryPath, { force, dryRun, selectedRoutes, inspection, baseline });
       allConflicts.push(...catalog.conflicts);
       allInstalled.push(...catalog.installed);
@@ -147,6 +156,9 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
     }
 
     if (template !== undefined && isBundleTemplate(template)) {
+      if (template === "dependabot-merge" && routerInstalled) {
+        console.error("warning: the work router already merges Dependabot pull requests in its maintenance run; this workflow does the same work twice.");
+      }
       bundles.push(await installBundle(repositoryPath, template, sourcePath, { force, dryRun }));
     } else if (template !== undefined) {
       if (dryRun) {

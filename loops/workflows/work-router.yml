@@ -151,6 +151,14 @@ env:
   # The single issue that lists what genuinely needs a person. Set it empty to turn the digest
   # off and keep the rest of the janitor.
   HOUSEKEEPING_DIGEST_TITLE: "Needs a human"
+  # Which Dependabot pull requests the six-hourly maintenance squash-merges once every check is
+  # green: "all", "minor" (minor and patch), "patch", or "off". CI is the gate; only pull requests
+  # Dependabot opened, with every commit Dependabot's, are touched. A repository variable of the
+  # same name overrides this without a commit.
+  DEPENDABOT_MERGE: "all"
+  # "true" also merges a Dependabot pull request in a repository with no checks at all, once its
+  # head is an hour old. "false" leaves those for a person.
+  DEPENDABOT_MERGE_WITHOUT_CHECKS: "true"
   # How long an audit report may sit open before it is labelled `stale-audit`. The audit's own
   # backpressure ignores a stale report, so three abandoned reports can no longer disable the
   # weekly audit for good; the digest lists them instead. Two missed weekly cycles.
@@ -1851,6 +1859,17 @@ jobs:
           max-retries: ${{ env.HOUSEKEEPING_MAX_RETRIES }}
           stale-pr-days: ${{ env.HOUSEKEEPING_STALE_PR_DAYS }}
           digest-title: ${{ env.HOUSEKEEPING_DIGEST_TITLE }}
+          dry-run: ${{ github.event.inputs.dry-run || 'false' }}
+      # Dependabot updates merge here rather than on a cron of their own. API calls only: no pull
+      # request code is checked out. It runs even when the sweep above failed.
+      - name: Merge Dependabot pull requests
+        if: ${{ !cancelled() && steps.app-token.outcome == 'success' }}
+        uses: ./.github/actions/merge-dependabot
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          scope: ${{ vars.DEPENDABOT_MERGE || env.DEPENDABOT_MERGE }}
+          merge-without-checks: ${{ env.DEPENDABOT_MERGE_WITHOUT_CHECKS }}
+          skip-labels: do-not-merge blocked human-review ${{ env.MERGE_TRAIN_HOLD_LABEL }}
           dry-run: ${{ github.event.inputs.dry-run || 'false' }}
 
   validate:

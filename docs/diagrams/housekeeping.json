@@ -170,6 +170,20 @@
         140,
         52
       ]
+    },
+    {
+      "id": "dependabot",
+      "type": "backend",
+      "label": "Merge Dependabot",
+      "sublabel": "green checks, squash",
+      "pos": [
+        1580,
+        220
+      ],
+      "size": [
+        140,
+        52
+      ]
     }
   ],
   "connections": [
@@ -258,8 +272,13 @@
       "variant": "dashed"
     },
     {
-      "id": "digest-end",
+      "id": "digest-dependabot",
       "from": "digest",
+      "to": "dependabot"
+    },
+    {
+      "id": "dependabot-end",
+      "from": "dependabot",
       "to": "end",
       "variant": "emphasis"
     }
@@ -271,6 +290,14 @@
       "items": [
         "A crash, timeout or empty output is a machine failure (stalled) - retry",
         "A triage needs-maintainer, refine questions, or merge-gate review is a verdict - retrying reproduces it"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Dependabot, without a person",
+      "items": [
+        "Only pull requests Dependabot opened, every commit verified and its own",
+        "Green checks squash-merge; a stale one gets one rebase request; a failing one is reported"
       ]
     }
   ]

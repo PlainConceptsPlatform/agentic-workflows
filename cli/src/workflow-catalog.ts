@@ -80,6 +80,7 @@ export const templateNames = [
   "app-ci-dotnet-next",
   "app-ci-node-monorepo",
   "bug-report",
+  "dependabot-merge",
   "feature-request",
   "github-release",
   "opencode.ci.json",
@@ -98,6 +99,8 @@ export interface CatalogTemplate {
   readonly directory?: string;
   /** Several files under `templates/<directory>/`, package-managed and refreshed by `update` where installed. */
   readonly bundle?: boolean;
+  /** Actions from `actions/` a bundle installs under `.github/actions/`, for a repository without the router. */
+  readonly actions?: readonly string[];
 }
 
 export const catalogTemplates: readonly CatalogTemplate[] = [
@@ -108,6 +111,7 @@ export const catalogTemplates: readonly CatalogTemplate[] = [
   { name: "app-ci-dotnet-next", file: "app-ci-dotnet-next.yml", description: "App CI pipeline for a .NET + Next.js monorepo: build, test, and lint on PRs and schedule." },
   { name: "app-ci-node-monorepo", file: "app-ci-node-monorepo.yml", description: "App CI pipeline for a Node monorepo: build, test, and lint on PRs and schedule." },
   { name: "bug-report", file: "bug_report.yml", description: "Bug report issue template: what happened, repro steps, expected behavior, acceptance criteria, environment, logs.", target: ".github/ISSUE_TEMPLATE/bug_report.yml" },
+  { name: "dependabot-merge", file: ".github/workflows/dependabot-merge.yml", directory: "dependabot-merge", bundle: true, actions: ["merge-dependabot"], description: "Dependabot auto-merge for a repository without the work router: every six hours, squash-merges the Dependabot pull requests whose checks are all green and asks Dependabot to rebase the stale ones. Deterministic, no model, never runs pull request code. Works with GITHUB_TOKEN; the Platform App token is used when its secrets exist. The router does the same in its maintenance run." },
   { name: "feature-request", file: "feature_request.yml", description: "Feature request issue template scoped to small, well-scoped improvements (Small/Medium only; large work belongs in a planning issue).", target: ".github/ISSUE_TEMPLATE/feature_request.yml" },
   { name: "github-release", file: "github-release.yml", description: "Publishes or updates a GitHub Release with generated notes whenever a v* tag is pushed." },
   { name: "opencode.ci.json", file: "opencode.ci.json", description: "Standalone OpenCode CI config: plainconcepts provider, GLM model registration, ci-workflow-agent, and LSP defaults for consumer repositories." },

@@ -1293,6 +1293,45 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
   if [ "$HK_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+# Dependabot merges ride the maintenance run. They merge code nobody on the team wrote, so the
+# guarantees are asserted: the App token (a GITHUB_TOKEN merge starts no push workflow), the knobs
+# in the env: block, no checkout or process of the pull request's code, and only verified commits.
+DEPENDABOT_DIR="${HERE}/../merge-dependabot"
+if [ -f "${DEPENDABOT_DIR}/action.yml" ] && grep -q '^  housekeeping:$' "$ROUTER_YML"; then
+  DB_OK=1
+  hk_job=$(sed -n '/^  housekeeping:$/,/^  [a-z0-9_-]*:$/p' "$ROUTER_YML")
+  db_step=$(printf '%s\n' "$hk_job" | sed -n '/uses: \.\/\.github\/actions\/merge-dependabot/,/^      - /p')
+  printf '%s' "$db_step" | grep -q 'token: ${{ steps.app-token.outputs.token }}' ||
+    { DB_OK=0; echo "FAIL: the maintenance run does not merge Dependabot pull requests with the App token" >&2; }
+  for knob in DEPENDABOT_MERGE DEPENDABOT_MERGE_WITHOUT_CHECKS; do
+    if [ -z "$(router_env "$knob")" ] || ! printf '%s' "$db_step" | grep -q "env.${knob}"; then
+      DB_OK=0
+      echo "FAIL: ${knob} is not both declared in the router env: block and read by the Dependabot merge step" >&2
+    fi
+  done
+  if grep -q 'actions/checkout' "${DEPENDABOT_DIR}/action.yml" ||
+    grep -qE 'node:child_process|execFile|spawn\(' "${DEPENDABOT_DIR}/merge-dependabot.mjs"; then
+    DB_OK=0
+    echo "FAIL: merge-dependabot checks out or runs something; it must work through the API alone" >&2
+  fi
+  grep -qF 'verification?.verified !== true' "${DEPENDABOT_DIR}/merge-dependabot.mjs" ||
+    { DB_OK=0; echo "FAIL: merge-dependabot no longer requires every commit to be verified" >&2; }
+  grep -qF 'merge_method: "squash", sha: pr.head.sha' "${DEPENDABOT_DIR}/merge-dependabot.mjs" ||
+    { DB_OK=0; echo "FAIL: merge-dependabot must squash-merge the head it judged" >&2; }
+  if [ "$DB_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+# Dependabot's runs get a read-only token, so a CI template's merge-train dispatch fails its pull
+# request and holds the update forever.
+for template in "${HERE}/../../templates/ci/"*.yml; do
+  [ -f "$template" ] || continue
+  if ! grep -q 'operation=merge-train' "$template" || grep -q "pull_request.user.login != 'dependabot\[bot\]'" "$template"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: $(basename "$template") dispatches the merge train from Dependabot's read-only runs" >&2
+  fi
+done
+
 # The audit chain closes its own reports, and every way it can be wrong is silent: a report
 # closed as completed with nothing implemented, or a report pinned open forever so the next
 # audit never runs. Both happened. Assert the three conditions that decide it.
