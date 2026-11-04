@@ -47,7 +47,8 @@ env:
   # one, Pliny-Bot #305 (13,398 chars, 92 work units), burned a full agent -- 17 minutes,
   # 2.4M tokens -- and died at the provider's 32K output cap with zero outcome, twice.
   # Both numbers are measured before the agent starts, so refusal is deterministic and
-  # costs ten seconds instead of half an hour.
+  # costs ten seconds instead of half an hour. The audit files under its own AUDIT_MAX_*,
+  # which must stay below these or refine refuses what it files.
   REFINE_MAX_BODY_CHARS: "8000"
   REFINE_MAX_WORK_UNITS: "24"
   REFUSE_MARKER: "<!-- agent-refine-refused -->"
@@ -207,9 +208,8 @@ jobs:
   # The size gate, rung 4. Measures the issue before any model starts, because an oversized
   # body does not fail fast on its own: it produces an agent that explores for seventeen
   # minutes and then dies mid-generation at the provider's response cap having written
-  # nothing, which reads as a green run with no outcome (Pliny-Bot #305, twice). Pure
-  # shell, no network beyond one issue read; over either limit it is a refusal, not a
-  # smaller attempt.
+  # nothing, which reads as a green run with no outcome (Pliny-Bot #305, twice). No
+  # model, one issue read; over either limit it is a refusal, not a smaller attempt.
   size_guard:
     needs: [still_open, eligibility]
     if: needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true'
@@ -219,36 +219,23 @@ jobs:
       contents: read
       issues: read
     outputs:
-      too_big: ${{ steps.measure.outputs.too_big }}
+      too_big: ${{ steps.measure.outputs.too-big }}
       reason: ${{ steps.measure.outputs.reason }}
     steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The rule lives in issue-size.cjs, which the audit also runs before it files, so the two
+      # cannot drift: every audit report from 2026-09-21 on was refused here for want of it.
       - name: Measure the issue against the size limits
         id: measure
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ inputs.issue-number }}
-          MAX_BODY_CHARS: ${{ env.REFINE_MAX_BODY_CHARS }}
-          MAX_WORK_UNITS: ${{ env.REFINE_MAX_WORK_UNITS }}
-        run: |
-          set -euo pipefail
-          body=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json title,body --jq '.title + "\n\n" + (.body // "")')
-          chars=$(printf '%s' "$body" | wc -c)
-          # One work unit per markdown bullet, the same split the prompt's step 3 makes.
-          units=$(printf '%s' "$body" | grep -cE '^[[:space:]]*[-*] ' || true)
-          reason=""
-          too_big=false
-          if [ "$chars" -gt "$MAX_BODY_CHARS" ]; then
-            too_big=true
-            reason="body ${chars} chars > ${MAX_BODY_CHARS}"
-          fi
-          if [ "$units" -gt "$MAX_WORK_UNITS" ]; then
-            too_big=true
-            reason="${reason:+$reason; }work units ${units} > ${MAX_WORK_UNITS}"
-          fi
-          echo "too_big=$too_big" >> "$GITHUB_OUTPUT"
-          echo "reason=$reason" >> "$GITHUB_OUTPUT"
-          echo "::notice::measured $chars chars, $units work units (limits: ${MAX_BODY_CHARS} chars, ${MAX_WORK_UNITS} units) -> $too_big"
+        uses: ./.github/actions/measure-issue-size
+        with:
+          token: ${{ github.token }}
+          issue-number: ${{ inputs.issue-number }}
+          max-body-chars: ${{ env.REFINE_MAX_BODY_CHARS }}
+          max-work-units: ${{ env.REFINE_MAX_WORK_UNITS }}
   # The deterministic refusal. Runs only when the size gate tripped, so it costs one
   # comment and no model. The refine label stays: a human who shrinks the body and
   # replies re-enters rerefine through the comment route, and the classifier ignores
