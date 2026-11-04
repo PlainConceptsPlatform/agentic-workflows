@@ -19,15 +19,23 @@ env:
   # One line: gh-aw joins a multi-line env value onto a single line when it compiles the lock.
   AUDIT_FOCUS: "Architectural layer violations and dependencies pointing the wrong way. Missing or misleading tests around behaviour that already shipped. Security gaps: unvalidated input, missing authorization, secrets in code. Performance anti-patterns, N+1 queries in particular. Documentation that no longer matches the code it describes."
   AUDIT_MARKER: "<!-- agent-audit -->"
+  # The largest issue the audit files, measured with refine's own rule (issue-size.cjs). Three
+  # quarters of agent-refine.md's REFINE_MAX_BODY_CHARS and REFINE_MAX_WORK_UNITS, so a story a
+  # person edits a little still refines. A body over these is trimmed before it is filed.
+  AUDIT_MAX_BODY_CHARS: "6000"
+  AUDIT_MAX_WORK_UNITS: "18"
+  AUDIT_MAX_STORIES: "3"
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
   GIT_COMMITTER_NAME: "github-actions[bot]"
   GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
 description: |
-  Read-only repository audit. Finds 5-7 problems, scores each 1-10, files a single issue
-  with all findings listed and the top 3 refined as actionable user stories. The issue is
-  labelled `audit` + `bug` + `refine`, so Refine sizes it and splits a multi-defect report
-  into one estimated issue per finding rather than one pull request that has to fix them all. Replaces .loops/recipes/guardrails-audit-loop.yaml.
+  Read-only repository audit. Finds 5-7 problems, scores each 1-10, and files a compact
+  tracking report of every finding, labelled `audit` + `bug`, plus one story issue for each of
+  the top 3, labelled `bug` + `refine` and linked to the report as sub-issues. Refine refines
+  each story on its own; the report never goes to Refine. Every body is measured with refine's
+  size rule before it is filed and trimmed to fit, because one issue holding every finding and
+  three stories was over refine's limit every time and was refused. Replaces .loops/recipes/guardrails-audit-loop.yaml.
 
   Router-only worker: triggered exclusively via workflow_call from work-router.yml.
   Contract input: trigger-kind(scheduled|manual).
@@ -54,7 +62,8 @@ on:
         type: string
         default: manual
 
-  # Rung 1. Do not pile reports on top of unactioned reports.
+  # Rung 1. Do not pile reports on top of unactioned reports. Only the report carries `audit`;
+  # its stories do not, or one audit would fill the three slots by itself.
   #
   # `-label:stale-audit` is what keeps this backpressure from becoming a stop. Three reports
   # nobody ever actioned used to disable the weekly audit for good: the query counted them
@@ -115,18 +124,26 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      # No apply-agent-output here. The safe_outputs job already created the issue and
-      # exposes its number; calling the action with create-issues would file a second copy
-      # of the same report. It was only needed while staged: true suppressed the native
-      # write, and staged is gone.
-      - name: Apply audit labels to created issues
-        if: needs.safe_outputs.outputs.created_issue_number != ''
-        uses: ./.github/actions/add-issue-labels
+      # Staged, so this is the only write: the report, then each story with its labels and a
+      # link back, then the report's list of stories. Each body passes refine's size rule first.
+      - name: Download agent output
+        id: output
+        uses: ./.github/actions/download-agent-output
         with:
+          artifact-name: ${{ needs.activation.outputs.artifact_prefix }}agent
+      - name: File the report and its stories
+        uses: ./.github/actions/file-audit-issues
+        with:
+          output-file: ${{ steps.output.outputs.output-file }}
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.safe_outputs.outputs.created_issue_number }}
-          labels: |
+          max-body-chars: ${{ env.AUDIT_MAX_BODY_CHARS }}
+          max-work-units: ${{ env.AUDIT_MAX_WORK_UNITS }}
+          max-stories: ${{ env.AUDIT_MAX_STORIES }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          report-labels: |-
             audit
+            bug
+          story-labels: |-
             bug
             refine
 
@@ -138,7 +155,7 @@ jobs:
   #
   # This fires when the agent succeeded and the safe-outputs handler processed nothing at all.
   #
-  # Step 6 of the prompt gives a clean codebase its own outcome -- call `noop` and stop -- and
+  # Step 7 of the prompt gives a clean codebase its own outcome -- call `noop` and stop -- and
   # that outcome must not be reported as a failure. `noop` is a registered safe output here
   # (`noop: max 1`), so the handler receives it as a message and the processed count is not zero,
   # which keeps a deliberately empty audit out of this branch. That is read from the handler
@@ -171,8 +188,11 @@ safe-outputs:
   # under noise nobody closes.
   report-failure-as-issue: false
   threat-detection: false
+  # The report and the stories are filed by `conclude`, after they are measured.
+  staged: true
+  # The report and up to three stories.
   create-issue:
-    max: 1
+    max: 4
 
 # The fleet is two machines, so this clock is also how long a stuck run can hold half of it.
 # 240 went on to every worker at once when the provider was slow, which fixed the deaths and
@@ -227,21 +247,18 @@ timeout-minutes: 90
    again. What this prevents is re-filing something the team looked at and chose to live
    with, which is the noise that makes an audit backlog get ignored.
 
-5. Call `create_issue` **once** with title "Audit: <date>". Do NOT specify labels , the
-   conclude job will apply them. The body MUST have two sections:
+5. File the report: call `create_issue` with title "Audit: <YYYY-MM-DD>" and nothing else in the title. Do NOT specify labels; the conclude job applies them. The report is a compact tracking list, not a story: Refine never reads it. One entry per finding, highest score first, each exactly this shape and no longer than about 600 characters:
 
-   **Section 1 , All findings:** A numbered list of every finding (5-7) with its score,
-   file path, and a one-line description. Order by score descending.
+   ```
+   ### <n>. <one-line problem> (score <s>)
+   **Where:** `path/to/file.ext:line`, `other/file.ext:line`
+   **Problem:** One or two sentences: what happens and its impact.
+   **Fix:** One or two sentences: the change that resolves it.
+   ```
 
-   **Section 2 , Top 3 to implement:** Call skill("pc-plan-story") and refine the top 3
-   findings by score into user stories; that skill owns their shape. Name the likely files to
-   change. Mark this section clearly with a heading like `## Top 3 , To Implement`.
+   No bullet lists, no Gherkin, no user stories, no reproduction walkthroughs. Do not write any issue number (`#123`) in the report: the workflow adds the links to the stories, and every number in it is read as work the report waits on.
 
-   The issue you file goes to Refine, not straight to implementation. Refine sizes it and,
-   because a report of several unrelated defects across different files is exactly the shape
-   that does not land as one pull request, splits it into one properly estimated issue per
-   finding. Write each finding so it survives that split: self-contained, naming its own
-   files and its own acceptance criteria, never "as above" or "same as finding 2".
+6. File the stories: call skill("pc-plan-story") and write the top ${{ env.AUDIT_MAX_STORIES }} findings by score as user stories; that skill owns their shape. Call `create_issue` once per story, after the report, titled with the story's own title (never "Audit: ..."), no labels. Refine refines each story on its own, so each must stand alone: it names its own files and its own acceptance criteria, never "as above" or "see finding 2", and never mentions the other stories or the report. Keep each story well under ${{ env.AUDIT_MAX_BODY_CHARS }} characters and ${{ env.AUDIT_MAX_WORK_UNITS }} bullet lines: the workflow measures every issue against that limit before filing and cuts anything over it from the end.
 
-6. If nothing met the bar, call `noop` and stop. Filing nothing is the right outcome when
+7. If nothing met the bar, call `noop` and stop. Filing nothing is the right outcome when
    the codebase is clean.

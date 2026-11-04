@@ -1,0 +1,47 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/measure-issue-size/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Measure issue size
+description: >-
+  Measure an issue against refine's size limits with the rule in issue-size.cjs, the same rule the
+  audit applies before it files anything.
+inputs:
+  token:
+    description: GitHub token with issues:read.
+    required: true
+  issue-number:
+    description: The issue to measure.
+    required: true
+  max-body-chars:
+    description: Largest title-plus-body size, in UTF-8 bytes, that is not too big.
+    required: true
+  max-work-units:
+    description: Most bullet lines that are not too big.
+    required: true
+outputs:
+  too-big:
+    description: true when either limit is exceeded.
+    value: ${{ steps.measure.outputs.too-big }}
+  reason:
+    description: Which limits were exceeded, empty when none.
+    value: ${{ steps.measure.outputs.reason }}
+runs:
+  using: composite
+  steps:
+    - name: Measure the issue
+      id: measure
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        ISSUE_SIZE_LIB: ${{ github.action_path }}/../issue-size.cjs
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        MAX_BODY_CHARS: ${{ inputs.max-body-chars }}
+        MAX_WORK_UNITS: ${{ inputs.max-work-units }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          const { measureIssue, sizeVerdict } = require(process.env.ISSUE_SIZE_LIB);
+          const { data: issue } = await github.rest.issues.get({ ...context.repo, issue_number: Number(process.env.ISSUE_NUMBER) });
+          const limits = { maxBodyChars: Number(process.env.MAX_BODY_CHARS), maxWorkUnits: Number(process.env.MAX_WORK_UNITS) };
+          const size = measureIssue(issue.title, issue.body);
+          const verdict = sizeVerdict(size, limits);
+          core.setOutput('too-big', String(verdict.tooBig));
+          core.setOutput('reason', verdict.reason);
+          core.notice(`measured ${size.chars} chars, ${size.units} work units (limits: ${limits.maxBodyChars} chars, ${limits.maxWorkUnits} units) -> ${verdict.tooBig}`);

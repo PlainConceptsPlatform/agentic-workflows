@@ -2623,6 +2623,37 @@ if worker_installed audit; then
   if [ "$AUDIT_EMPTY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+# Every audit from 2026-09-21 until 1.12.1 filed one issue over refine's size gate, labelled `refine`,
+# and was refused. The audit now files a report refine never sees and stories under the gate.
+if worker_installed audit; then
+  AUDIT_FILE_OK=1
+  AUDIT_WORKER_MD="${WORKFLOWS_DIR}/agent-audit.md"
+  REFINE_WORKER_MD="${WORKFLOWS_DIR}/agent-refine.md"
+  af() { AUDIT_FILE_OK=0; echo "FAIL: the audit $1" >&2; }
+  file_block=$(awk '/uses: \.\/\.github\/actions\/file-audit-issues/{found=1} found{print} found && /^  [a-z_]+:$/{exit}' "$AUDIT_WORKER_MD")
+  [ -n "$file_block" ] || af "does not file through file-audit-issues, so nothing measures what it files"
+  labels_of() { printf '%s\n' "$file_block" | awk -v key="$1:" '$1 == key {f=1; next} /^ *$|^ *#|^ *[a-z_-]+:/{f=0} f' | tr -d ' '; }
+  report_labels=$(labels_of report-labels)
+  story_labels=$(labels_of story-labels)
+  printf '%s\n' "$report_labels" | grep -qx audit || af "report is not labelled audit, so backpressure and audit-close cannot see it"
+  printf '%s\n' "$report_labels" | grep -qx refine && af "report is labelled refine; refine refuses a report of every finding"
+  printf '%s\n' "$story_labels" | grep -qx refine || af "stories are not labelled refine, so nothing refines them"
+  printf '%s\n' "$story_labels" | grep -qx audit && af "stories are labelled audit; three of them fill the backpressure and audit-close treats each as a report"
+  grep -qE '^  staged: true' "$AUDIT_WORKER_MD" || af "is not staged, so gh-aw files the issues before they are measured"
+  audit_env() { sed -n "s/^  $1: \"\([0-9]*\)\"$/\1/p" "$AUDIT_WORKER_MD" | head -1; }
+  if [ -f "$REFINE_WORKER_MD" ]; then
+    refine_chars=$(sed -n 's/^  REFINE_MAX_BODY_CHARS: "\([0-9]*\)"$/\1/p' "$REFINE_WORKER_MD" | head -1)
+    refine_units=$(sed -n 's/^  REFINE_MAX_WORK_UNITS: "\([0-9]*\)"$/\1/p' "$REFINE_WORKER_MD" | head -1)
+    [ "$(audit_env AUDIT_MAX_BODY_CHARS)" -lt "${refine_chars:-0}" ] 2>/dev/null ||
+      af "AUDIT_MAX_BODY_CHARS is not below refine's REFINE_MAX_BODY_CHARS (${refine_chars:-unset})"
+    [ "$(audit_env AUDIT_MAX_WORK_UNITS)" -lt "${refine_units:-0}" ] 2>/dev/null ||
+      af "AUDIT_MAX_WORK_UNITS is not below refine's REFINE_MAX_WORK_UNITS (${refine_units:-unset})"
+    grep -qF 'uses: ./.github/actions/measure-issue-size' "$REFINE_WORKER_MD" ||
+      af "and refine measure with different rules; refine's size_guard must use measure-issue-size"
+  fi
+  if [ "$AUDIT_FILE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 echo "── Retrying a run that died early ────────────────────────────────────────"
 
 # A run that died before producing anything is worth repeating; one that worked and then failed
