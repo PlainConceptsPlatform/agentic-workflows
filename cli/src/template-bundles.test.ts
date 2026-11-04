@@ -48,6 +48,12 @@ const PLATFORM_TEMPLATE = [
   "scripts/check-platform-conformance.mjs",
 ];
 
+const DEPENDABOT_MERGE = [
+  ".github/actions/merge-dependabot/action.yml",
+  ".github/actions/merge-dependabot/merge-dependabot.mjs",
+  ".github/workflows/dependabot-merge.yml",
+];
+
 const HEADERLESS_COVERAGE = "// Atlas's own floors, no ownership header.\nexport const FLOORS = { 'Atlas.Domain': 0.9 };\n";
 const OWN_JSCPD = "{ \"path\": [\"src\"], \"minLines\": 5 }\n";
 
@@ -144,6 +150,65 @@ describe("bundle templates", () => {
     expect(await installedBundles(atlas, sourcePath)).toEqual([]);
     expect(await installedBundles(family, sourcePath)).toEqual(["platform-template"]);
     expect(await filesIn(family)).toEqual(PLATFORM_TEMPLATE);
+  });
+});
+
+describe("dependabot-merge", () => {
+  it("installs its workflow and the action it calls, stamped, into a repository without the router", async () => {
+    const repositoryPath = await createDirectory({});
+    const catalog = mockCatalog();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await expect(run(["add", "--template", "dependabot-merge"], repositoryPath)).resolves.toBe(0);
+
+    expect(catalog).not.toHaveBeenCalled();
+    expect(await filesIn(repositoryPath)).toEqual(DEPENDABOT_MERGE);
+    const version = await packageVersion();
+    for (const target of DEPENDABOT_MERGE) {
+      expect(await read(repositoryPath, target), target).toContain(`Managed by @plainconceptsplatform/workflows@${version}.`);
+    }
+    const workflow = await read(repositoryPath, ".github/workflows/dependabot-merge.yml");
+    expect(workflow).toContain("uses: ./.github/actions/merge-dependabot");
+    expect(workflow).toContain("github.token");
+  });
+
+  it("refreshes on update without installing the router where only bundles are installed", async () => {
+    const repositoryPath = await createDirectory({ "README.md": "# Pillar\n" });
+    await installBundle(repositoryPath, "dependabot-merge", sourcePath, { packageVersion: "1.0.0" });
+    const stale = ".github/actions/merge-dependabot/merge-dependabot.mjs";
+    await writeFile(join(repositoryPath, stale), `${await read(repositoryPath, stale)}// edited\n`, "utf8");
+    const catalog = mockCatalog();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await expect(run(["update"], repositoryPath)).resolves.toBe(0);
+
+    expect(catalog).not.toHaveBeenCalled();
+    expect(await filesIn(repositoryPath)).toEqual([...DEPENDABOT_MERGE, "README.md"].sort());
+    const version = await packageVersion();
+    expect(await read(repositoryPath, stale)).toContain(`Managed by @plainconceptsplatform/workflows@${version}.`);
+    expect(await read(repositoryPath, stale)).not.toContain("// edited");
+    const output = JSON.parse(String(log.mock.calls.at(-1)?.[0])) as { templates: { template: string; changes: { target: string; status: string }[] }[] };
+    expect(output.templates.map((entry) => entry.template)).toEqual(["dependabot-merge"]);
+    expect(output.templates[0]!.changes.map((change) => change.status)).toEqual(["updated", "updated", "updated"]);
+  });
+
+  it("is not installed in a router consumer merely because the catalog put its action there", async () => {
+    const router = await createDirectory({});
+    const action = await readFile(join(sourcePath, "actions/merge-dependabot/action.yml"), "utf8");
+    await mkdir(join(router, ".github/actions/merge-dependabot"), { recursive: true });
+    await writeFile(join(router, ".github/actions/merge-dependabot/action.yml"), action, "utf8");
+
+    expect(await installedBundles(router, sourcePath)).toEqual([]);
+  });
+
+  it("warns that the router already does the same work", async () => {
+    const repositoryPath = await createDirectory({ ".github/workflows/work-router.yml": "name: router\n" });
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await expect(run(["add", "--template", "dependabot-merge"], repositoryPath)).resolves.toBe(0);
+
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("already merges Dependabot pull requests"));
   });
 });
 

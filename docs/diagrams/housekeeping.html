@@ -5173,7 +5173,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <path data-edge-from="branch" data-edge-to="delete" data-edge-label="yes" data-edge-key="11" data-edge-id="branch-delete" data-composition-points="1280,253;1360,253" d="M 1280 253 L 1360 253" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="branch" data-edge-to="digest" data-edge-label="no" data-edge-key="12" data-edge-id="branch-digest" data-composition-points="1280,239;1320,239;1320,76;1360,76" d="M 1280 239 L 1312 239 Q 1320 239 1320 231 L 1320 84 Q 1320 76 1328 76 L 1360 76" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="delete" data-edge-to="digest" data-edge-key="13" data-edge-id="delete-digest" data-composition-points="1430,220;1430,92" d="M 1430 220 L 1430 92" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="digest" data-edge-to="end" data-edge-key="14" data-edge-id="digest-end" data-composition-points="1500,66;1580,66" d="M 1500 66 L 1580 66" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="digest" data-edge-to="dependabot" data-edge-key="14" data-edge-id="digest-dependabot" data-composition-points="1500,66;1540,66;1540,246;1580,246" d="M 1500 66 L 1532 66 Q 1540 66 1540 74 L 1540 238 Q 1540 246 1548 246 L 1580 246" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="dependabot" data-edge-to="end" data-edge-key="15" data-edge-id="dependabot-end" data-composition-points="1650,220;1650,92" d="M 1650 220 L 1650 92" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
 
         <!-- Components -->
         <g id="node-cron" data-node-id="cron" data-node-label="cron 23 */6 * * *" tabindex="0" role="button" aria-label="Focus cron 23 */6 * * *, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
@@ -5309,6 +5310,17 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="1650" y="80" class="t-muted" font-size="9" text-anchor="middle">instead of four repos</text>
         </g>
 
+        <g id="node-dependabot" data-node-id="dependabot" data-node-label="Merge Dependabot" tabindex="0" role="button" aria-label="Focus Merge Dependabot, green checks, squash, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="green checks, squash" data-node-context="Architecture component">
+          <title>Merge Dependabot · green checks, squash · Architecture component</title>
+          <rect x="1580" y="220" width="140" height="52" rx="6" class="c-mask"/>
+          <rect x="1580" y="220" width="140" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1586 226) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1650" y="244" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Merge Dependabot</text>
+        <text data-detail="context" x="1650" y="260" class="t-muted" font-size="9" text-anchor="middle">green checks, squash</text>
+        </g>
+
         <!-- Connection labels -->
 
 
@@ -5347,6 +5359,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <rect x="1305" y="137.5" width="30" height="14" rx="3" class="c-mask"/>
           <text x="1320" y="147.5" class="t-messagebus" font-size="8" text-anchor="middle">no</text>
         </g>
+
 
 
 
@@ -5563,6 +5576,17 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <ul>
           <li>&bull; A crash, timeout or empty output is a machine failure (stalled) - retry</li>
           <li>&bull; A triage needs-maintainer, refine questions, or merge-gate review is a verdict - retrying reproduces it</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot emerald"></div>
+          <h3>Dependabot, without a person</h3>
+        </div>
+        <ul>
+          <li>&bull; Only pull requests Dependabot opened, every commit verified and its own</li>
+          <li>&bull; Green checks squash-merge; a stale one gets one rebase request; a failing one is reported</li>
         </ul>
       </div>
     </div>

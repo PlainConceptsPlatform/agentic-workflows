@@ -57,14 +57,14 @@ export async function installBundle(
   options: BundleInstallOptions = {},
 ): Promise<BundleInstallResult> {
   const version = options.packageVersion ?? await packageVersion();
-  const root = bundleRoot(sourcePath, template);
-  const targets = await bundleTargets(sourcePath, template);
+  const files = await bundleFiles(sourcePath, template);
+  const targets = files.map((file) => file.target);
   const changes: FileChange[] = [];
   const writes: { target: string; content: string }[] = [];
 
-  for (const target of targets) {
+  for (const { source, target } of files) {
     const current = await readOptional(join(repositoryPath, target));
-    const text = stampVersion(normalizeEol(await readFile(join(root, target), "utf8")), version);
+    const text = stampVersion(normalizeEol(await readFile(source, "utf8")), version);
     const recorded = current === undefined ? undefined : installedVersion(current);
     const base = recorded === undefined ? { target } : { target, installedVersion: recorded };
 
@@ -114,6 +114,21 @@ function bundleRoot(sourcePath: string, template: TemplateName): string {
   const entry = catalogTemplates.find((item) => item.name === template);
   if (entry?.bundle !== true || entry.directory === undefined) throw new Error(`${template} is not a bundle template`);
   return join(sourcePath, "templates", entry.directory);
+}
+
+// The bundle's own files, then the actions it borrows from the catalog. Only the former decide whether
+// it is installed: a router consumer carries the same actions without having asked for the bundle.
+async function bundleFiles(sourcePath: string, template: TemplateName): Promise<{ source: string; target: string }[]> {
+  const root = bundleRoot(sourcePath, template);
+  const own = (await bundleTargets(sourcePath, template)).map((target) => ({ source: join(root, target), target }));
+  const borrowed: { source: string; target: string }[] = [];
+  for (const action of catalogTemplates.find((item) => item.name === template)?.actions ?? []) {
+    const directory = join(sourcePath, "actions", action);
+    for (const file of (await readdir(directory)).sort()) {
+      borrowed.push({ source: join(directory, file), target: `.github/actions/${action}/${file}` });
+    }
+  }
+  return [...own, ...borrowed].sort((left, right) => (left.target < right.target ? -1 : left.target > right.target ? 1 : 0));
 }
 
 async function bundleTargets(sourcePath: string, template: TemplateName): Promise<string[]> {

@@ -19,15 +19,23 @@ env:
   # No commit in this many days means nothing can have drifted since the last run, so a scheduled
   # run stops before the model starts. 17 is the longest gap between runs on days 1 and 15.
   DOCS_AUDIT_QUIET_DAYS: "17"
+  # The largest issue the docs audit files, measured with refine's own rule (issue-size.cjs), as
+  # agent-audit.md does: three quarters of refine's limits. A body over these is trimmed first.
+  DOCS_AUDIT_MAX_BODY_CHARS: "6000"
+  DOCS_AUDIT_MAX_WORK_UNITS: "18"
+  DOCS_AUDIT_MAX_STORIES: "3"
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
   GIT_COMMITTER_NAME: "github-actions[bot]"
   GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
 description: |
   Read-only documentation audit. Checks that the repository's documentation still matches its
-  code and the Platform documentation standard. When it does not, files a single issue of
-  findings with evidence from both sides, labelled `docs-audit` + `refine`, so Refine sizes it
-  and splits it into one issue per finding. When the documentation is current, files nothing.
+  code and the Platform documentation standard. When it does not, files a compact tracking report
+  of every finding, labelled `docs-audit` and never `refine`, plus one story issue for each of the
+  top 3 findings, labelled `documentation` + `refine` and linked to the report as sub-issues.
+  Every body is measured with refine's size rule before it is filed and trimmed to fit, because a
+  single report of every finding grows past refine's limit and is refused. When the documentation
+  is current, files nothing.
 
   Router-only worker: triggered exclusively via workflow_call from work-router.yml.
   Contract input: trigger-kind(scheduled|manual).
@@ -173,16 +181,27 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      # The safe_outputs job already created the issue. Only the labels are left, and they are
-      # applied with the App token so that `refine` reaches the router as a trusted event.
-      - name: Apply labels to the report
-        if: needs.safe_outputs.outputs.created_issue_number != ''
-        uses: ./.github/actions/add-issue-labels
+      # Staged, so this is the only write, as in agent-audit.md: the report, each story with its
+      # labels and a link back, then the report's list. The App token lets `refine` reach the router.
+      - name: Download agent output
+        id: output
+        uses: ./.github/actions/download-agent-output
         with:
+          artifact-name: ${{ needs.activation.outputs.artifact_prefix }}agent
+      - name: File the report and its stories
+        uses: ./.github/actions/file-audit-issues
+        with:
+          output-file: ${{ steps.output.outputs.output-file }}
           token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ needs.safe_outputs.outputs.created_issue_number }}
-          labels: |
+          max-body-chars: ${{ env.DOCS_AUDIT_MAX_BODY_CHARS }}
+          max-work-units: ${{ env.DOCS_AUDIT_MAX_WORK_UNITS }}
+          max-stories: ${{ env.DOCS_AUDIT_MAX_STORIES }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          report-title: '^docs audit:'
+          report-labels: |-
             docs-audit
+          story-labels: |-
+            documentation
             refine
 
   # An agent that ended without a report or a noop would otherwise be a green run that audited
@@ -208,8 +227,11 @@ safe-outputs:
   # A failed run is already a red run. An issue per failure buries the real backlog.
   report-failure-as-issue: false
   threat-detection: false
+  # The report and the stories are filed by `conclude`, after they are measured.
+  staged: true
+  # The report and up to three stories.
   create-issue:
-    max: 1
+    max: 4
 
 # Reads documents and the code they describe, and writes one issue. Unobserved so far: audit, the
 # nearest worker, takes about 45 minutes over a whole repository, and this one reads less.
@@ -253,14 +275,18 @@ timeout-minutes: 60
 7. If no finding is left, call `noop` and stop. Filing nothing is the right outcome when the
    documentation is current.
 
-8. Call `create_issue` **once** with title "Docs audit: <date>". Do NOT specify labels, the
-   conclude job applies them. List every finding, the most misleading first, each with:
-   - the document's `file:line` and the stale statement;
-   - the evidence from the code, with its `file:line` or path;
-   - what the document should say, or the section that has to be added.
+8. File the report: call `create_issue` with title "Docs audit: <YYYY-MM-DD>" and nothing else in the title. Do NOT specify labels; the conclude job applies them. The report is a compact tracking list, not a story: Refine never reads it. One entry per finding, the most misleading first, each exactly this shape and no longer than about 600 characters:
 
-   The issue goes to Refine, which sizes it and splits it into one issue per finding, so write
-   each finding to survive that: self-contained, naming its own files, never "as above".
+   ```
+   ### <n>. <one-line stale statement>
+   **Document:** `path/to/doc.md:line`, what it says
+   **Evidence:** `path/to/code.ext:line` or the path that shows otherwise
+   **Fix:** What the document should say, or the section that has to be added.
+   ```
+
+   No bullet lists and no user stories. Do not write any issue number (`#123`) in the report: the workflow adds the links to the stories, and every number in it is read as work the report waits on.
+
+9. File the stories: write the top ${{ env.DOCS_AUDIT_MAX_STORIES }} findings as short stories. Call `create_issue` once per story, after the report, titled with what the story fixes (never "Docs audit: ..."), no labels. Refine refines each story on its own, so each must stand alone: it names its document and the code that contradicts it, says what the document should say, and never says "as above" or mentions the other stories or the report. Keep each story well under ${{ env.DOCS_AUDIT_MAX_BODY_CHARS }} characters and ${{ env.DOCS_AUDIT_MAX_WORK_UNITS }} bullet lines: the workflow measures every issue against that limit before filing and cuts anything over it from the end.
 
    Refer to people by role, never by name, and include no personal contact details, even when
    a document you are quoting contains them.

@@ -94,8 +94,8 @@
     {
       "id": "file",
       "type": "backend",
-      "label": "File one issue",
-      "sublabel": "evidence per finding",
+      "label": "Report + stories",
+      "sublabel": "measured, trimmed to fit",
       "pos": [
         870,
         380
@@ -109,7 +109,7 @@
       "id": "report",
       "type": "backend",
       "label": "Filed",
-      "sublabel": "docs-audit + refine",
+      "sublabel": "stories to refine",
       "pos": [
         670,
         380

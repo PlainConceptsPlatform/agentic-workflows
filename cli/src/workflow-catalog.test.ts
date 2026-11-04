@@ -43,7 +43,7 @@ describe("workflow catalog", () => {
   });
 
   it("lists supported optional templates", () => {
-    expect(templateNames).toEqual(["agentics-app-errors", "agentics-checks", "agentics-error-report", "agentics-maintenance", "app-ci-dotnet-next", "app-ci-node-monorepo", "bug-report", "feature-request", "github-release", "opencode.ci.json", "platform-template", "quality-gates"]);
+    expect(templateNames).toEqual(["agentics-app-errors", "agentics-checks", "agentics-error-report", "agentics-maintenance", "app-ci-dotnet-next", "app-ci-node-monorepo", "bug-report", "dependabot-merge", "feature-request", "github-release", "opencode.ci.json", "platform-template", "quality-gates"]);
   });
 
   it("gives every catalog template a non-empty description and file", () => {

@@ -963,6 +963,9 @@ jobs:
   # If a deploy pipeline calls this workflow with `uses:`, that caller must also grant
   # `actions: write`. A called workflow may not request a scope its caller withheld, and the
   # whole run fails to start with zero jobs and no annotation when it does.
+  #
+  # Not for Dependabot: its runs get a read-only token, so the dispatch would fail its pull request,
+  # and the router's maintenance run merges Dependabot updates instead of the train.
   dispatch-merge-gate:
     name: Dispatch merge gate
     needs: [api, mutation-api, web, mutation-web, secret-scan, deps-and-iac-scan, sast-scan, sbom, engineering-excellence, platform-conformance, full-ci]
@@ -972,6 +975,7 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.draft == false &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
       (github.event.pull_request.user.login == 'app/github-actions' || endsWith(github.event.pull_request.user.login, '[bot]'))
     runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
     timeout-minutes: 5

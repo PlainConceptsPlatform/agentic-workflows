@@ -2,6 +2,26 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.13.0
+
+Includes 1.12.1 (the audit's report and stories under refine's size gate), so publishing 1.13.0 ships both.
+
+### Added
+
+- Dependabot auto-merge. The new `merge-dependabot` action squash-merges the open Dependabot pull requests whose checks are all green, at the head commit it judged, and deletes their branches. Only a pull request Dependabot opened, on a `dependabot/` branch of this repository, targeting the default branch, not a draft, without `do-not-merge`, `blocked`, `human-review` or the hold label, and with every commit authored by Dependabot, committed by GitHub and signature-verified, is touched. A failing check leaves it open and listed in the job summary; a pending one waits for the next run; one behind or conflicting gets a single `@dependabot rebase` per head commit; one with no checks at all is merged once its head is an hour old. API calls only: nothing of the pull request is checked out or run, and no model decides. At most 5 merges a run; every run writes a table of what it merged, skipped and why.
+- The router's six-hourly maintenance run (`housekeeping`, `23 */6 * * *`) runs it as its last step with the App token, so a merge starts the default branch's push workflows. No new cron or route. `DEPENDABOT_MERGE` (`all`, `minor`, `patch` or `off`, default `all`: CI is the gate) and `DEPENDABOT_MERGE_WITHOUT_CHECKS` (default `true`) are new values in the router's `env:` block; a repository variable `DEPENDABOT_MERGE` overrides the file. A grouped update counts as its highest bump.
+- `dependabot-merge` template, opt-in with `workflows add --template dependabot-merge`, for a repository without the router: `.github/workflows/dependabot-merge.yml`, every six hours and on dispatch, plus the action it calls. It uses the Platform App token when `BOT_APP_ID` and `BOT_PRIVATE_KEY` exist and `GITHUB_TOKEN` otherwise; a `GITHUB_TOKEN` merge starts no other workflow and cannot merge a change to `.github/workflows/`. A bundle can now carry actions from the catalog, which do not count towards whether the bundle is installed.
+- `docs/dependabot-merge.md`: where it runs, what it merges, the configuration, the security model and how to turn it off.
+
+### Fixed
+
+- The docs audit's issues reach refine. It filed one report of every finding labelled `refine`, the shape the audit dropped in 1.12.1, and refine refused it once it grew past the size gate. It now files like the audit, through the same `file-audit-issues` step: a compact tracking report labelled `docs-audit` and never `refine`, and one story per top-3 finding labelled `documentation` + `refine`, linked under the report. Every body is measured with `issue-size.cjs` against `DOCS_AUDIT_MAX_BODY_CHARS` (6000) and `DOCS_AUDIT_MAX_WORK_UNITS` (18) and trimmed to fit before anything is filed. `file-audit-issues` takes a `report-title` pattern for this.
+- The `app-ci-dotnet-next` and `app-ci-node-monorepo` merge-train dispatch skips Dependabot's pull requests. Dependabot's runs get a read-only token, so the dispatch failed and held every Dependabot pull request red. Existing copies of those templates keep the old condition until they are reinstalled.
+
+### Changed
+
+- `workflows update` in a repository that holds only bundle templates, with no router and no worker, refreshes those bundles and installs nothing else. It used to install the whole catalog, router included.
+
 ## 1.12.1
 
 ### Fixed

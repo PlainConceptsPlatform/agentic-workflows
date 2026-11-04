@@ -1293,6 +1293,45 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
   if [ "$HK_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+# Dependabot merges ride the maintenance run. They merge code nobody on the team wrote, so the
+# guarantees are asserted: the App token (a GITHUB_TOKEN merge starts no push workflow), the knobs
+# in the env: block, no checkout or process of the pull request's code, and only verified commits.
+DEPENDABOT_DIR="${HERE}/../merge-dependabot"
+if [ -f "${DEPENDABOT_DIR}/action.yml" ] && grep -q '^  housekeeping:$' "$ROUTER_YML"; then
+  DB_OK=1
+  hk_job=$(sed -n '/^  housekeeping:$/,/^  [a-z0-9_-]*:$/p' "$ROUTER_YML")
+  db_step=$(printf '%s\n' "$hk_job" | sed -n '/uses: \.\/\.github\/actions\/merge-dependabot/,/^      - /p')
+  printf '%s' "$db_step" | grep -q 'token: ${{ steps.app-token.outputs.token }}' ||
+    { DB_OK=0; echo "FAIL: the maintenance run does not merge Dependabot pull requests with the App token" >&2; }
+  for knob in DEPENDABOT_MERGE DEPENDABOT_MERGE_WITHOUT_CHECKS; do
+    if [ -z "$(router_env "$knob")" ] || ! printf '%s' "$db_step" | grep -q "env.${knob}"; then
+      DB_OK=0
+      echo "FAIL: ${knob} is not both declared in the router env: block and read by the Dependabot merge step" >&2
+    fi
+  done
+  if grep -q 'actions/checkout' "${DEPENDABOT_DIR}/action.yml" ||
+    grep -qE 'node:child_process|execFile|spawn\(' "${DEPENDABOT_DIR}/merge-dependabot.mjs"; then
+    DB_OK=0
+    echo "FAIL: merge-dependabot checks out or runs something; it must work through the API alone" >&2
+  fi
+  grep -qF 'verification?.verified !== true' "${DEPENDABOT_DIR}/merge-dependabot.mjs" ||
+    { DB_OK=0; echo "FAIL: merge-dependabot no longer requires every commit to be verified" >&2; }
+  grep -qF 'merge_method: "squash", sha: pr.head.sha' "${DEPENDABOT_DIR}/merge-dependabot.mjs" ||
+    { DB_OK=0; echo "FAIL: merge-dependabot must squash-merge the head it judged" >&2; }
+  if [ "$DB_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+# Dependabot's runs get a read-only token, so a CI template's merge-train dispatch fails its pull
+# request and holds the update forever.
+for template in "${HERE}/../../templates/ci/"*.yml; do
+  [ -f "$template" ] || continue
+  if ! grep -q 'operation=merge-train' "$template" || grep -q "pull_request.user.login != 'dependabot\[bot\]'" "$template"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: $(basename "$template") dispatches the merge train from Dependabot's read-only runs" >&2
+  fi
+done
+
 # The audit chain closes its own reports, and every way it can be wrong is silent: a report
 # closed as completed with nothing implemented, or a report pinned open forever so the next
 # audit never runs. Both happened. Assert the three conditions that decide it.
@@ -2613,6 +2652,32 @@ if worker_installed audit; then
       af "and refine measure with different rules; refine's size_guard must use measure-issue-size"
   fi
   if [ "$AUDIT_FILE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
+# The docs audit filed the same single refine-labelled report and hit the same gate; it now files
+# like the audit: a report refine never sees and stories under the gate, measured before filing.
+if worker_installed docs-audit; then
+  DOCS_FILE_OK=1
+  DOCS_WORKER_MD="${WORKFLOWS_DIR}/agent-docs-audit.md"
+  dfa() { DOCS_FILE_OK=0; echo "FAIL: the docs audit $1" >&2; }
+  docs_block=$(awk '/uses: \.\/\.github\/actions\/file-audit-issues/{found=1} found{print} found && /^  [a-z_]+:$/{exit}' "$DOCS_WORKER_MD")
+  [ -n "$docs_block" ] || dfa "does not file through file-audit-issues, so nothing measures what it files"
+  docs_labels_of() { printf '%s\n' "$docs_block" | awk -v key="$1:" '$1 == key {f=1; next} /^ *$|^ *#|^ *[a-z_-]+:/{f=0} f' | tr -d ' '; }
+  docs_report_labels=$(docs_labels_of report-labels)
+  docs_story_labels=$(docs_labels_of story-labels)
+  printf '%s\n' "$docs_report_labels" | grep -qx docs-audit || dfa "report is not labelled docs-audit, so backpressure and audit-close cannot see it"
+  printf '%s\n' "$docs_report_labels" | grep -qx refine && dfa "report is labelled refine; refine refuses a report of every finding"
+  printf '%s\n' "$docs_story_labels" | grep -qx refine || dfa "stories are not labelled refine, so nothing refines them"
+  printf '%s\n' "$docs_story_labels" | grep -qx docs-audit && dfa "stories are labelled docs-audit; one of them fills the backpressure"
+  grep -qE '^  staged: true' "$DOCS_WORKER_MD" || dfa "is not staged, so gh-aw files the issues before they are measured"
+  grep -q 'add-issue-labels' "$DOCS_WORKER_MD" && dfa "still labels a report gh-aw filed itself"
+  if [ -f "${WORKFLOWS_DIR}/agent-refine.md" ]; then
+    docs_chars=$(sed -n 's/^  DOCS_AUDIT_MAX_BODY_CHARS: "\([0-9]*\)"$/\1/p' "$DOCS_WORKER_MD" | head -1)
+    refine_chars=$(sed -n 's/^  REFINE_MAX_BODY_CHARS: "\([0-9]*\)"$/\1/p' "${WORKFLOWS_DIR}/agent-refine.md" | head -1)
+    [ "${docs_chars:-99999999}" -lt "${refine_chars:-0}" ] 2>/dev/null ||
+      dfa "DOCS_AUDIT_MAX_BODY_CHARS is not below refine's REFINE_MAX_BODY_CHARS (${refine_chars:-unset})"
+  fi
+  if [ "$DOCS_FILE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
 echo "── Retrying a run that died early ────────────────────────────────────────"

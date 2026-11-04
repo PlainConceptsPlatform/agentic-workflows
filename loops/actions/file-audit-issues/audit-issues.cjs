@@ -187,15 +187,16 @@ function fitReport(title, body, suffix, limits, runUrl) {
   return fitBody(title, compact, suffix, limits, runUrl);
 }
 
-// `items` are the agent's create_issue items. The report is the one titled "Audit: ...", or the
-// first; the others are stories. Returns bodies that pass `limits` once rendered with any issue
+// `items` are the agent's create_issue items. The report is the one whose title matches
+// `reportPattern` ("Audit: ..." by default, "Docs audit: ..." for docs-audit), or the first; the
+// others are stories. Returns bodies that pass `limits` once rendered with any issue
 // number, which is the refine guard's check run before filing instead of after.
 function planAuditIssues(items, options) {
-  const { limits, maxStories = 3, runUrl = '' } = options;
+  const { limits, maxStories = 3, runUrl = '', reportPattern = /^audit\b/i } = options;
   const usable = items.filter((item) => item && String(item.title ?? '').trim());
   if (usable.length === 0) return null;
 
-  const reportIndex = Math.max(0, usable.findIndex((item) => /^audit\b/i.test(String(item.title).trim())));
+  const reportIndex = Math.max(0, usable.findIndex((item) => reportPattern.test(String(item.title).trim())));
   const reportItem = usable[reportIndex];
   const lifted = extractStorySection(String(reportItem.body ?? ''));
   const separate = usable.filter((_, index) => index !== reportIndex)
