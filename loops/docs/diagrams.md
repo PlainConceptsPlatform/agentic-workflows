@@ -100,7 +100,7 @@ flowchart LR
     gate -.->|"CI failed or conflict"| fix("Fix, push, CI again") --> ci
     gate -.->|".github, secrets<br/>or 10000+ lines"| human(("Human review"))
     review("Someone reviews the PR") --> applyReview("apply-review") --> ci
-    audit("audit, weekly") -->|"files one issue"| refine
+    audit("audit, weekly") -->|"files stories"| refine
 
     classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
     classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
@@ -114,9 +114,7 @@ flowchart LR
     class merged success
 ```
 
-Audit creates work rather than consuming it, and files into `refine` rather than straight to
-`implement`, so a report of several unrelated findings becomes one properly sized issue per finding
-instead of one pull request that has to fix them all.
+Audit creates work rather than consuming it, and files into `refine` rather than straight to `implement`: one story issue per top finding, each under refine's size limit, plus a tracking report refine never sees, instead of one pull request that has to fix them all.
 
 ### The merge train
 
@@ -489,7 +487,7 @@ before anything changes. Applying them one at a time produces contradictory comm
 
 ## agent-audit.md
 
-Creates work rather than consuming it. Read-only: it files an issue and changes nothing.
+Creates work rather than consuming it. Read-only: it files a tracking report and one story issue per top finding, and changes nothing else.
 
 ```mermaid
 flowchart TD
@@ -506,8 +504,9 @@ flowchart TD
     auDedupe{"Already tracked, or<br/>previously rejected?"}
     auDedupe -.->|"all of them"| auQuiet
     auDedupe -->|"some are new"| auFile
-    auFile("One issue: every finding,<br/>top 3 refined into stories") --> auReport
-    auReport(("Filed<br/>labelled refine, so it gets<br/>sized and split per finding"))
+    auFile("Report of every finding,<br/>plus one story per top 3") --> auMeasure
+    auMeasure("conclude (rung 6)<br/>each body measured with<br/>refine's rule, trimmed to fit") --> auReport
+    auReport(("Filed<br/>report: audit, not refine<br/>stories: refine, sub-issues"))
     auQuiet(("Nothing to file<br/>the right outcome on a<br/>clean codebase"))
     auIdle(("Idle<br/>backlog already full"))
 
@@ -517,11 +516,13 @@ flowchart TD
     classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class auStart start
-    class auFacts,auRun,auScore,auFile action
+    class auFacts,auRun,auScore,auFile,auMeasure action
     class auBack,auFilter,auDedupe decision
     class auIdle idle
     class auReport,auQuiet success
 ```
+
+The report never goes to refine: refine's size gate refused every audit filed as one issue of every finding and three stories, from 2026-09-21 until 1.12.1. Each story is filed on its own, labelled `refine`, linked under the report and listed in it, so `audit-close` closes the report once its stories are closed. A story already tracked by an open issue is listed against that issue instead of filed again.
 
 Memory matters here: open issues only cover what is still open, so a finding reported weeks ago and
 consciously not acted on would come back every single run. The audit records its dispositions and

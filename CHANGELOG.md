@@ -2,6 +2,17 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.12.1
+
+### Fixed
+
+- The audit's issues reach refine again. Since refine's size gate arrived (0.28.0), every audit filed one issue holding every finding and three stories with Gherkin, labelled `refine`, and every one was over the gate: refine refused all of them from 2026-09-21 on (Lyceum #36 the first, Numa #826 at 22,034 chars and 35 work units the latest), so no audit was refined or implemented in any repository. The audit now files a compact tracking report, labelled `audit` + `bug` and never `refine`, with one entry per finding (`file:line`, problem, fix), and one issue per top-3 story, labelled `bug` + `refine`, linked under the report as a sub-issue, listed in it as a task, and pointing back to it. A story already tracked by an open issue with the same title is listed against that issue instead of filed again, and running the step again reuses what it filed without restarting refine.
+- Every audit issue is measured before it is filed, with the rule refine's guard applies, and has to fit `AUDIT_MAX_BODY_CHARS` (6000) and `AUDIT_MAX_WORK_UNITS` (18), three quarters of refine's limits. A body over them is trimmed: a story from the end with its open code fence closed, the report by cutting every finding to a share of the budget so all of them stay listed. A report written the old way is split, its "To implement" section becoming the stories. The audit is staged (`create-issue: max: 4`) and the new `file-audit-issues` action does the filing.
+
+### Changed
+
+- Refine's size guard measures with the new `measure-issue-size` action, which reads `issue-size.cjs`, the rule the audit also uses, instead of its own shell. The counts are the same: UTF-8 bytes of the title, a blank line and the body, and one work unit per `-` or `*` bullet line.
+
 ## 1.12.0
 
 ### Added

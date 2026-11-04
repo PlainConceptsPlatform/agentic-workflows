@@ -1,0 +1,187 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/file-audit-issues/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: File audit issues
+description: >-
+  File an audit as a tracking report plus one issue per story. Every body is measured with refine's
+  size rule first and trimmed to fit, the stories get the work labels and link back to the report,
+  and the report lists them. Re-running it reuses what an earlier attempt already filed.
+inputs:
+  output-file:
+    description: Path to agent_output.json.
+    required: true
+  token:
+    description: GitHub token with issues:write. An App token, so the story labels reach the router.
+    required: true
+  report-labels:
+    description: Labels for the report, one per line. Never a work label.
+    required: false
+    default: |-
+      audit
+      bug
+  story-labels:
+    description: Labels for each story, one per line. The work label goes last.
+    required: false
+    default: |-
+      bug
+      refine
+  max-body-chars:
+    description: Largest body any filed issue may have, measured as refine measures it.
+    required: true
+  max-work-units:
+    description: Most bullet lines any filed issue may have, measured as refine measures it.
+    required: true
+  max-stories:
+    description: Most stories filed from one audit.
+    required: false
+    default: '3'
+  run-url:
+    description: This run, cited in a body that had to be trimmed.
+    required: false
+    default: ''
+outputs:
+  report-number:
+    description: The report's issue number, or empty when the agent filed nothing.
+    value: ${{ steps.file.outputs.report-number }}
+  story-numbers:
+    description: Space-separated numbers of the stories filed or reused.
+    value: ${{ steps.file.outputs.story-numbers }}
+runs:
+  using: composite
+  steps:
+    - name: File the report and its stories
+      id: file
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        AGENT_OUTPUT_LIB: ${{ github.action_path }}/../agent-output.cjs
+        ISSUE_SIZE_LIB: ${{ github.action_path }}/../issue-size.cjs
+        AUDIT_ISSUES_LIB: ${{ github.action_path }}/audit-issues.cjs
+        OUTPUT_FILE: ${{ inputs.output-file }}
+        REPORT_LABELS: ${{ inputs.report-labels }}
+        STORY_LABELS: ${{ inputs.story-labels }}
+        MAX_BODY_CHARS: ${{ inputs.max-body-chars }}
+        MAX_WORK_UNITS: ${{ inputs.max-work-units }}
+        MAX_STORIES: ${{ inputs.max-stories }}
+        RUN_URL: ${{ inputs.run-url }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          const { readAgentItems } = require(process.env.AGENT_OUTPUT_LIB);
+          const { measureIssue, sizeVerdict } = require(process.env.ISSUE_SIZE_LIB);
+          const audit = require(process.env.AUDIT_ISSUES_LIB);
+
+          const list = (value) => String(value ?? '').split(/\r?\n|,/).map((label) => label.trim()).filter(Boolean);
+          const reportLabels = list(process.env.REPORT_LABELS);
+          const storyLabels = list(process.env.STORY_LABELS);
+          const limits = { maxBodyChars: Number(process.env.MAX_BODY_CHARS), maxWorkUnits: Number(process.env.MAX_WORK_UNITS) };
+          if (!(limits.maxBodyChars > 0 && limits.maxWorkUnits > 0)) {
+            core.setFailed(`Invalid size limits: ${JSON.stringify(limits)}`);
+            return;
+          }
+
+          const plan = audit.planAuditIssues(readAgentItems(process.env.OUTPUT_FILE, 'create_issue'), {
+            limits,
+            maxStories: Number(process.env.MAX_STORIES) || 3,
+            runUrl: process.env.RUN_URL,
+          });
+          if (!plan) {
+            core.info('The agent filed no issue.');
+            core.setOutput('report-number', '');
+            core.setOutput('story-numbers', '');
+            return;
+          }
+
+          // The pre-flight: nothing is filed unless every body, rendered with the widest issue
+          // number, passes the same rule the refine guard applies.
+          const widest = audit.PLACEHOLDER_NUMBER;
+          const checks = [
+            { title: plan.report.title, body: audit.renderReport(plan.report.body, plan.stories.map((s) => ({ number: widest, title: s.title, tracked: true }))) },
+            ...plan.stories.map((s) => ({ title: s.title, body: audit.renderStory(s.body, widest) })),
+          ];
+          for (const check of checks) {
+            const verdict = sizeVerdict(measureIssue(check.title, check.body), limits);
+            if (verdict.tooBig) {
+              core.setFailed(`"${check.title}" would be refused by refine (${verdict.reason}); nothing was filed.`);
+              return;
+            }
+          }
+
+          const open = (await github.paginate(github.rest.issues.listForRepo, { ...context.repo, state: 'open', per_page: 100 }))
+            .filter((issue) => !issue.pull_request);
+          const byTitle = new Map(open.map((issue) => [audit.titleKey(issue.title), issue]));
+          const labelNames = (issue) => issue.labels.map((label) => (typeof label === 'string' ? label : label.name));
+
+          for (const name of new Set([...reportLabels, ...storyLabels])) {
+            await github.rest.issues.createLabel({ ...context.repo, name, color: 'ededed' })
+              .catch((error) => { if (error.status !== 422) throw error; });
+          }
+
+          // A re-run finds the report it filed before: same title, carrying the report labels.
+          let report = byTitle.get(audit.titleKey(plan.report.title));
+          if (report && reportLabels.every((label) => labelNames(report).includes(label))) {
+            core.info(`Reusing the report #${report.number}.`);
+          } else {
+            ({ data: report } = await github.rest.issues.create({
+              ...context.repo,
+              title: plan.report.title,
+              body: audit.renderReport(plan.report.body, []),
+            }));
+            core.info(`Filed the report #${report.number}.`);
+          }
+          const missing = reportLabels.filter((label) => !labelNames(report).includes(label));
+          if (missing.length > 0) {
+            await github.rest.issues.addLabels({ ...context.repo, issue_number: report.number, labels: missing });
+          }
+
+          const links = [];
+          const marker = audit.reportMarker(report.number);
+          for (const story of plan.stories) {
+            const existing = byTitle.get(audit.titleKey(story.title));
+            if (existing && !(existing.body ?? '').includes(marker)) {
+              // Already tracked by an issue this audit did not file: point at it, file nothing.
+              core.info(`"${story.title}" is already tracked by #${existing.number}.`);
+              links.push({ number: existing.number, title: story.title, tracked: true });
+              continue;
+            }
+            let issue = existing;
+            if (!issue) {
+              ({ data: issue } = await github.rest.issues.create({
+                ...context.repo,
+                title: story.title,
+                body: audit.renderStory(story.body, report.number),
+              }));
+              core.info(`Filed #${issue.number}: ${story.title}${story.trimmed ? ' (trimmed)' : ''}`);
+            }
+            try {
+              await github.request('POST /repos/{owner}/{repo}/issues/{issue_number}/sub_issues', {
+                ...context.repo,
+                issue_number: report.number,
+                sub_issue_id: issue.id,
+              });
+            } catch (error) {
+              // The report's checklist below links it either way; 422 is "already a sub-issue".
+              if (error.status !== 422) core.warning(`Could not link #${issue.number} under #${report.number}: ${error.message}`);
+            }
+            // Last, so refine starts on a story whose body and link are already in place. A story an
+            // earlier attempt labelled is left alone: adding `refine` again would start refine again.
+            if (storyLabels.length > 0 && labelNames(issue).length === 0) {
+              await github.rest.issues.addLabels({ ...context.repo, issue_number: issue.number, labels: storyLabels });
+            }
+            links.push({ number: issue.number, title: story.title, tracked: false });
+          }
+
+          await github.rest.issues.update({
+            ...context.repo,
+            issue_number: report.number,
+            body: audit.renderReport(plan.report.body, links),
+          });
+
+          for (const title of plan.dropped) core.warning(`Not filed, over the ${process.env.MAX_STORIES} story limit: ${title}`);
+          core.setOutput('report-number', String(report.number));
+          core.setOutput('story-numbers', links.filter((link) => !link.tracked).map((link) => link.number).join(' '));
+          await core.summary
+            .addHeading('Audit filed', 2)
+            .addList([
+              `Report #${report.number}${plan.report.trimmed ? ' (trimmed to fit)' : ''}`,
+              ...links.map((link) => `#${link.number} ${link.title}${link.tracked ? ' (already tracked)' : ''}`),
+              ...plan.dropped.map((title) => `Not filed: ${title}`),
+            ])
+            .write();

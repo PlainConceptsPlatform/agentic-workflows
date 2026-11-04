@@ -333,10 +333,7 @@ Labels on created issues are applied by the `conclude` job, not by the agent's `
 The agent creates the issue without labels; `apply-agent-output` exposes `first-issue-number` and the
 worker labels it deterministically.
 
-The audit workflow uses score-then-select in a single issue: find 5 to 7 problems, score each 1 to 10
-on severity times likelihood times blast radius, then emit one `create_issue` containing every finding
-ranked, with the top 3 refined into user stories in the body. One issue, `max: 1`, and the ranking is
-visible to a human.
+The audit workflow uses score-then-select: find 5 to 7 problems, score each 1 to 10 on severity times likelihood times blast radius, then emit one `create_issue` for a compact report of every finding ranked, and one per top-3 story. It is staged, `max: 4`: `conclude` measures every body with `issue-size.cjs`, the rule refine's size guard runs, trims anything over the audit's limits, files the report with `audit` and the stories with `refine`, and links them. An audit filed as one issue of every finding plus three stories was over refine's limit every time and was refused, which is why a worker that files into another worker measures with that worker's rule before it files.
 
 ### `create-pull-request`
 

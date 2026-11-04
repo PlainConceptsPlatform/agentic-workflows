@@ -39,7 +39,7 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | `implement` | `agent-implement.md` | the `implement` label is added | one branch, one pull request, one issue closed |
 | `merge-gate` | `agent-merge-gate.md` | the merge train hands it the oldest open pull request, the bot's or a writer's | one of `auto-merge`, `human-review`, `owner-review` or `blocked`, or a fix pushed to the same branch; a pull request parked for a person gets its screenshots before the decision |
 | `apply-review` | `agent-apply-review.md` | someone comments on a bot pull request or requests changes | the requested changes pushed to that pull request. An approval is not feedback: `merge-approved` merges the approved commit when the gate had parked it for a person |
-| `audit` | `agent-audit.md` | Mondays, or on demand | one issue of findings, labelled `refine` so it gets sized and split |
+| `audit` | `agent-audit.md` | Mondays, or on demand | a tracking report of every finding, labelled `audit`, and one story issue per top finding, labelled `refine` and linked under the report; every body is sized under refine's limit before it is filed |
 | `docs-audit` | `agent-docs-audit.md` | days 1 and 15 of the month, or on demand. Optional: `workflows add docs-audit` | one issue of documentation findings, labelled `docs-audit` + `refine`, only when something is stale |
 | `release` | `agent-release.md` | on demand (`operation=release`) | a `chore(release): vX.Y.Z` pull request with auto-merge; `release-tag.yml` tags it and publishes the GitHub Release once it merges |
 
@@ -227,7 +227,7 @@ number you did not write, that is what it is.
 | `agent-merge-gate.md` | 120 | Reviews the diff for defects, and may fix failed CI and re-push. |
 | `agent-refine.md` | 60 | Reads the repository to ground a story, then rewrites one issue body. |
 | `agent-apply-review.md` | 45 | Applies review comments to an existing branch. |
-| `agent-audit.md` | 45 | Sweeps the repository and writes one findings issue. |
+| `agent-audit.md` | 45 | Sweeps the repository and writes a findings report plus up to three stories. |
 | `agent-release.md` | 30 | Reads the commit log and writes release notes. |
 | `agent-triage.md` | 30 | Judges one issue and comments. |
 
