@@ -1,19 +1,15 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/templates/platform-template/.github/workflows/platform-template-sync.yml. Update with `workflows update --force`; consumer edits may be overwritten.
 name: "Platform: Template sync"
 
-# Brings the platform code of a family app up to the newest Kitchen-Sink template tag. Plain YAML,
-# no model: copier does the merge, and a person or the merge gate takes it from the pull request.
+# Pulls the newest version of the upstream template named in .platform/contract.yml (see
+# docs/platform-contracts.md in agentic-workflows). Plain YAML, no model. Without a contract it does
+# nothing. With one it runs `sync.update` and opens or updates one pull request from
+# `platform/template-sync`. copier is installed when the command starts with `copier`; any other
+# command is the repository's to provide. Conflict markers left in an owned file fail the
+# conformance guard, so the merge gate repairs the pull request like any red one.
 #
-# Does nothing without .copier-answers.yml, the marker a repository gets when it adopts the
-# template. With it, `copier update` runs against the newest `v*` tag of the template named in
-# `_src_path`. No change means the app is current and the run ends there. Otherwise the result is
-# committed to `platform/sync-<tag>` and opened as a pull request titled with the tag. A file the
-# app had edited gets copier's inline conflict markers; scripts/check-platform-conformance.mjs
-# fails CI on them, so the merge gate repairs the pull request (`remediated`) like any red one.
-#
-# Kitchen-Sink is private, so the Platform App token (BOT_APP_ID / BOT_PRIVATE_KEY) reads it. The
-# same token pushes the branch and opens the pull request, because a push made with GITHUB_TOKEN
-# starts no workflow and CI would never run on the sync.
+# The Platform App token (BOT_APP_ID / BOT_PRIVATE_KEY) reads a private template and pushes, because
+# a push made with GITHUB_TOKEN starts no workflow and CI would never run on the sync.
 on:
   schedule:
     - cron: "17 5 * * 1"
@@ -29,6 +25,8 @@ concurrency:
 env:
   # copier 9.19.1 needs Python 3.10 or newer on the runner.
   COPIER_VERSION: "9.19.1"
+  NODE_VERSION: "22"
+  SYNC_BRANCH: platform/template-sync
 
 jobs:
   sync:
@@ -41,19 +39,40 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Has this repository adopted the template?
-        id: marker
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # An invalid contract fails here, with the file and the field in the error.
+      - name: Read the platform contract
+        id: contract
         run: |
-          if [ -f .copier-answers.yml ]; then
-            echo "adopted=true" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          node scripts/check-platform-conformance.mjs --contract | tee -a "$GITHUB_OUTPUT"
+
+      - name: Decide whether to sync
+        id: decide
+        env:
+          CONTRACT: ${{ steps.contract.outputs.contract }}
+          SELF: ${{ steps.contract.outputs.self }}
+          UPDATE: ${{ steps.contract.outputs.update }}
+        run: |
+          set -euo pipefail
+          run=false
+          if [ "$CONTRACT" != present ]; then
+            echo "No .platform/contract.yml (nor .copier-answers.yml with .platform/manifest): nothing to sync."
+          elif [ "$SELF" = true ]; then
+            echo "This repository is the template source.url names: nothing to sync."
+          elif [ -z "$UPDATE" ]; then
+            echo "The platform contract declares no sync.update: nothing to sync."
           else
-            echo "adopted=false" >> "$GITHUB_OUTPUT"
-            echo "No .copier-answers.yml: this repository has not adopted the platform template. Nothing to do."
+            run=true
           fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
 
       - name: Generate App token
         id: app-token
-        if: steps.marker.outputs.adopted == 'true'
+        if: steps.decide.outputs.run == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
@@ -62,7 +81,7 @@ jobs:
 
       # uvx where uv is installed, then pipx, then a virtual environment from the runner's Python.
       - name: Install copier
-        if: steps.marker.outputs.adopted == 'true'
+        if: steps.decide.outputs.run == 'true' && startsWith(steps.contract.outputs.update, 'copier ')
         run: |
           set -euo pipefail
           bin="$RUNNER_TEMP/copier-bin"
@@ -87,8 +106,10 @@ jobs:
       # The token reaches git through process-scoped config only, never a file on the runner.
       - name: Update from the template
         id: update
-        if: steps.marker.outputs.adopted == 'true'
+        if: steps.decide.outputs.run == 'true'
         env:
+          UPDATE: ${{ steps.contract.outputs.update }}
+          BEFORE: ${{ steps.contract.outputs.version }}
           GIT_CONFIG_COUNT: "1"
           GIT_CONFIG_KEY_0: url.https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/.insteadOf
           GIT_CONFIG_VALUE_0: https://github.com/
@@ -98,21 +119,19 @@ jobs:
           GIT_COMMITTER_EMAIL: ${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com
         run: |
           set -euo pipefail
-          commit_of() { sed -n 's/^_commit:[[:space:]]*//p' .copier-answers.yml | tr -d "\"'" | head -n 1; }
-          before=$(commit_of)
-          copier update --trust --defaults --conflict inline
-          after=$(commit_of)
+          echo "sync.update: $UPDATE"
+          bash -euo pipefail -c "$UPDATE"
           if [ -z "$(git status --porcelain)" ]; then
-            echo "Already on the newest template ($before). Nothing to do."
+            echo "Already on the newest template (${BEFORE:-no version recorded}). Nothing to do."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          after=$(node scripts/check-platform-conformance.mjs --contract | sed -n 's/^version=//p')
           git add --all
           conflicts=$(git grep --cached -l -E '^(<<<<<<<|>>>>>>>)( |$)' -- . || true)
           {
             echo "changed=true"
-            echo "before=$before"
-            echo "tag=$after"
+            echo "tag=${after:-$(git rev-parse --short HEAD)}"
             echo "files<<EOF"
             git diff --cached --name-status
             echo "EOF"
@@ -121,14 +140,19 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Open the sync pull request
+      # One sync pull request at a time. An open one for the same version is left alone, so the
+      # conflict resolutions pushed to it survive; a newer version replaces its branch and its text.
+      - name: Open or update the sync pull request
         if: steps.update.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           BASE: ${{ github.event.repository.default_branch }}
-          BEFORE: ${{ steps.update.outputs.before }}
+          SOURCE_NAME: ${{ steps.contract.outputs.source_name }}
+          SOURCE_WEB: ${{ steps.contract.outputs.source_web }}
+          BEFORE: ${{ steps.contract.outputs.version }}
           TAG: ${{ steps.update.outputs.tag }}
+          UPDATE: ${{ steps.contract.outputs.update }}
           FILES: ${{ steps.update.outputs.files }}
           CONFLICTS: ${{ steps.update.outputs.conflicts }}
           GIT_CONFIG_COUNT: "1"
@@ -140,25 +164,29 @@ jobs:
           GIT_COMMITTER_EMAIL: ${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com
         run: |
           set -euo pipefail
-          branch="platform/sync-$TAG"
-          if [ -n "$(gh pr list --repo "$REPO" --head "$branch" --state open --json number --jq '.[].number')" ]; then
-            echo "A pull request for $TAG is already open on $branch. Nothing to do."
+          marker="<!-- platform-template-sync: $TAG -->"
+          open=$(gh pr list --repo "$REPO" --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$open" ] && gh pr view "$open" --repo "$REPO" --json body --jq .body | grep -qF -- "$marker"; then
+            echo "Pull request #$open already syncs $TAG. Nothing to do."
             exit 0
           fi
-          src=$(sed -n 's/^_src_path:[[:space:]]*//p' .copier-answers.yml | tr -d "\"'" | head -n 1)
-          web="${src#git+}"
-          web="${web%.git}"
-          git switch --create "$branch"
-          git commit --quiet --message "chore(platform): sync the platform template to $TAG"
-          git push --force "https://github.com/$REPO.git" "HEAD:refs/heads/$branch"
+          title="chore(platform): sync $SOURCE_NAME to $TAG"
+          git switch --create "$SYNC_BRANCH"
+          git commit --quiet --message "$title"
+          git push --force "https://github.com/$REPO.git" "HEAD:refs/heads/$SYNC_BRANCH"
+          case "$SOURCE_WEB" in
+            https://github.com/*) target="[\`$TAG\`]($SOURCE_WEB/releases/tag/$TAG)" ;;
+            *) target="\`$TAG\`" ;;
+          esac
           body="$RUNNER_TEMP/sync-body.md"
           {
-            echo "Platform template sync from \`$BEFORE\` to [\`$TAG\`]($web/releases/tag/$TAG), made by \`copier update\`."
+            echo "$marker"
+            echo "Sync of the code owned by $SOURCE_NAME from \`${BEFORE:-no recorded version}\` to $target, made by \`$UPDATE\`."
             echo
             if [ -n "$CONFLICTS" ]; then
               echo "### Conflicts"
               echo
-              echo "These files carry inline conflict markers where the app had edited platform code. CI fails on them until they are resolved."
+              echo "These files carry inline conflict markers where this repository had edited owned code. CI fails on them until they are resolved."
               echo
               printf '%s\n' "$CONFLICTS" | awk '{ printf "- `%s`\n", $0 }'
               echo
@@ -167,5 +195,8 @@ jobs:
             echo
             printf '%s\n' "$FILES" | awk -F '\t' '{ printf "- `%s` %s\n", $NF, $1 }'
           } > "$body"
-          gh pr create --repo "$REPO" --base "$BASE" --head "$branch" \
-            --title "chore(platform): sync the platform template to $TAG" --body-file "$body"
+          if [ -n "$open" ]; then
+            gh pr edit "$open" --repo "$REPO" --title "$title" --body-file "$body"
+          else
+            gh pr create --repo "$REPO" --base "$BASE" --head "$SYNC_BRANCH" --title "$title" --body-file "$body"
+          fi

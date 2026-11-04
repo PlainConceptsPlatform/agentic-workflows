@@ -2,6 +2,21 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.12.0
+
+### Added
+
+- The platform contract, `.platform/contract.yml`: an open file in which a repository names the template it receives shared code from (`source`), the paths that template owns (`owned`), its exceptions file and how it syncs (`sync.marker`, `sync.version`, `sync.update`). `docs/platform-contracts.md` documents the format with a neutral example, what this package does with each field, and that other tools may read the same file while none is required.
+- `check-platform-conformance.mjs --compare`: fetches `source.url` at the version `sync.version` records and fails an owned file that differs or is missing, unless an unexpired exception covers it. When git cannot read the template, it says so and runs the other checks. `--contract` prints the resolved contract for a workflow.
+
+### Changed
+
+- `platform-template` is template-agnostic. The conformance script reads the contract with its own small parser, and an invalid one fails with one error naming the file and the field. A template sync is a pull request that changes `sync.marker` or moves `sync.version`, and messages name `source.name` and `source.changes` instead of Kitchen-Sink. The repository whose `origin` is `source.url` is the template itself and passes.
+- `platform-template-sync.yml` runs `sync.update` and opens or updates one pull request from `platform/template-sync`, titled with the new version. It installs copier only when the command starts with `copier`; any other command is the repository's to provide. Without a contract, in the template itself or without `sync.update` it does nothing.
+- `app-ci-dotnet-next`'s `Platform conformance` job runs where a contract exists, or the legacy `.copier-answers.yml` with `.platform/manifest`, and compares the owned files with the template.
+- `.copier-answers.yml` with `.platform/manifest` and no `contract.yml` is read as the contract it implies, so 1.11.0 installs keep working. `.copier-answers.yml` alone is no longer a contract: the guard passes such a repository instead of failing it for a missing manifest.
+- `docs/family-templates.md` keeps the quality gates, the gates CI and the Dependabot settings, and points at `docs/platform-contracts.md` for the template sync and the guard.
+
 ## 1.11.0
 
 ### Added

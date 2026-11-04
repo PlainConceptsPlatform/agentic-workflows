@@ -9,7 +9,7 @@
 # engineering-excellence-{coverage,complexity,security,sbom,hygiene} facets Project-Health
 # collects. The facets upload from main only, which this workflow reaches through `App: Deploy` on
 # every push and through its own weekly schedule. The platform-conformance job runs the
-# platform-template guard where the app has adopted the template.
+# platform-template guard where the app declares a platform contract.
 #
 # Everything that differs between apps is a top-level `env:` value below or a floor in
 # quality.config.json. Job names are required status checks on main: do not rename them.
@@ -546,8 +546,10 @@ jobs:
         if: env.REPO_CHECK_COMMANDS != ''
         run: bash -euo pipefail -c "$REPO_CHECK_COMMANDS"
 
-  # Platform files (.platform/manifest) change only through a template sync. The guard comes with the
-  # platform-template template; a repository without .copier-answers.yml has not adopted it and passes.
+  # Paths a platform contract (.platform/contract.yml) marks as owned change only through a template
+  # sync. The guard comes with the platform-template template; a repository with no contract (nor
+  # .copier-answers.yml with .platform/manifest, read as one) has not adopted it and passes. The
+  # owned files are also compared with the template at the recorded version wherever git can read it.
   platform-conformance:
     name: Platform conformance
     runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
@@ -559,25 +561,25 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Platform files change only through a template sync
+      - name: Owned files change only through a template sync
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          if [ ! -f .copier-answers.yml ]; then
-            echo "No .copier-answers.yml: this repository has not adopted the platform template."
+          if [ ! -f .platform/contract.yml ] && { [ ! -f .copier-answers.yml ] || [ ! -f .platform/manifest ]; }; then
+            echo "No .platform/contract.yml: this repository declares no platform contract."
             exit 0
           fi
           if [ ! -f scripts/check-platform-conformance.mjs ]; then
-            echo "::error::.copier-answers.yml is here but scripts/check-platform-conformance.mjs is not. Install it with: npx @plainconceptsplatform/workflows add --template platform-template"
+            echo "::error::This repository has a platform contract but no scripts/check-platform-conformance.mjs. Install it with: npx @plainconceptsplatform/workflows add --template platform-template"
             exit 1
           fi
           if [ "$EVENT" = pull_request ]; then
             git fetch origin "$BASE_REF"
-            node scripts/check-platform-conformance.mjs --base "origin/$BASE_REF" | tee -a "$GITHUB_STEP_SUMMARY"
+            node scripts/check-platform-conformance.mjs --compare --base "origin/$BASE_REF" | tee -a "$GITHUB_STEP_SUMMARY"
           else
-            node scripts/check-platform-conformance.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+            node scripts/check-platform-conformance.mjs --compare | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
   mutation-web:
