@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   authorshipProblem, bumpLevel, createClient, decide, highestBump, NO_CHECKS_GRACE_MINUTES, parseUpdates,
-  readConfig, rebaseAlreadyRequested, renderSummary, run, scopeAllows, summarizeChecks,
+  readConfig, ReadDenied, rebaseAlreadyRequested, renderSummary, run, scopeAllows, summarizeChecks,
 } from "../../loops/actions/merge-dependabot/merge-dependabot.mjs";
 
 const REPO = "acme/app";
@@ -149,8 +149,9 @@ test("readConfig validates the scope and reads the switches", () => {
 });
 
 // A fake GitHub: answers by method and path, records every write.
-function fakeGitHub({ pulls, commits = {}, comments = {}, checkRuns = {}, mergeStatus = 200 }) {
+function fakeGitHub({ pulls, commits = {}, comments = {}, checkRuns = {}, mergeStatus = 200, token = "t", forbid = null }) {
   const writes = [];
+  const reads = [];
   const routes = [
     [/^GET \/repos\/acme\/app$/, () => ({ default_branch: "main" })],
     [/^GET \/repos\/acme\/app\/pulls\?/, () => pulls],
@@ -168,16 +169,18 @@ function fakeGitHub({ pulls, commits = {}, comments = {}, checkRuns = {}, mergeS
     let status = 200;
     let data = null;
     if (init.method === "GET") {
+      reads.push(key);
       const route = routes.find(([pattern]) => pattern.test(key));
       if (!route) throw new Error(`unexpected ${key}`);
-      data = route[1](...key.match(route[0]).slice(1));
+      if (forbid?.test(key)) { status = 403; data = { message: "Resource not accessible by integration" }; }
+      else data = route[1](...key.match(route[0]).slice(1));
     } else {
       writes.push({ key, body: JSON.parse(init.body ?? "null") });
       if (/\/merge$/.test(path)) { status = mergeStatus; data = status === 200 ? { sha: "c".repeat(40) } : { message: "Pull Request is not mergeable" }; }
     }
     return { status, headers: new Map([["x-ratelimit-remaining", "4000"]]), text: async () => JSON.stringify(data) };
   };
-  return { client: createClient({ token: "t", fetchImpl }), writes };
+  return { client: createClient({ token, fetchImpl }), writes, reads };
 }
 
 const config = (overrides = {}) => ({ ...readConfig({ SKIP_LABELS: "do-not-merge blocked human-review hold", POST_MERGE_EVENT: "agentic-post-merge" }), ...overrides });
@@ -231,4 +234,46 @@ test("run comments the rebase command once, honours dry-run, the merge limit and
   const off = await run({ client: dry.client, repository: REPO, config: config({ scope: "off" }), now: NOW, log: silent });
   assert.deepEqual(off, { rows: [], off: true });
   assert.match(renderSummary(off, config({ scope: "off" })), /DEPENDABOT_MERGE is off/);
+});
+
+test("run reads with the read token and writes with the App token", async () => {
+  const pr = pullRequest({ mergeable_state: "blocked" });
+  const app = fakeGitHub({ pulls: [pr], token: "app", forbid: /./ });
+  const workflow = fakeGitHub({ pulls: [pr], token: "workflow", checkRuns: greenRun(pr.head.sha) });
+  const result = await run({ client: app.client, reader: workflow.client, repository: REPO, config: config(), now: NOW, log: silent });
+  assert.equal(result.rows[0].action, "merged");
+  assert.deepEqual(app.reads, []);
+  assert.deepEqual(workflow.writes, []);
+  assert.ok(workflow.reads.some((key) => /\/check-runs/.test(key)));
+  assert.deepEqual(app.writes.map((write) => write.key.split(" ")[0]), ["POST", "PUT", "DELETE", "POST"]);
+});
+
+test("a refused read skips that pull request with a warning and the run goes on", async () => {
+  const first = pullRequest({ number: 1 });
+  const second = pullRequest({ number: 2, head: { ...pullRequest().head, sha: "d".repeat(40) } });
+  const { client, writes } = fakeGitHub({ pulls: [first, second], checkRuns: greenRun(second.head.sha), forbid: /\/commits\/b+\/check-runs/ });
+  const logged = [];
+  const result = await run({ client, repository: REPO, config: config(), now: NOW, log: (line) => logged.push(line) });
+  const denied = "cannot read checks: grant Checks: read to the App or the workflow token";
+  assert.deepEqual(result.rows.map((row) => [row.number, row.action]), [[1, "skip"], [2, "merged"]]);
+  assert.equal(result.rows[0].reason, denied);
+  assert.deepEqual(result.denied, [denied]);
+  assert.ok(logged.includes(`::warning::#1 skipped: ${denied}`));
+  assert.equal(writes[0].key, "PUT /repos/acme/app/pulls/2/merge");
+  assert.ok(renderSummary(result, config()).includes(`> ${denied}.`));
+
+  const statuses = fakeGitHub({ pulls: [first], checkRuns: greenRun(first.head.sha), forbid: /\/status\?/ });
+  const statusResult = await run({ client: statuses.client, repository: REPO, config: config(), now: NOW, log: silent });
+  assert.match(statusResult.rows[0].reason, /grant Commit statuses: read/);
+  assert.ok(new ReadDenied("checks", "Checks") instanceof Error);
+});
+
+test("a read failing for any reason but a 403 still fails the run", async () => {
+  const pr = pullRequest();
+  const { client } = fakeGitHub({ pulls: [pr] });
+  const broken = { ...client, paginate: async (path) => {
+    if (/check-runs/.test(path)) throw Object.assign(new Error("GET check-runs answered 502"), { status: 502 });
+    return client.paginate(path);
+  } };
+  await assert.rejects(run({ client: broken, repository: REPO, config: config(), now: NOW, log: silent }), /answered 502/);
 });

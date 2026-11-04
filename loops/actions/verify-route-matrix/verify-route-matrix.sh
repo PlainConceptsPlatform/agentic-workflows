@@ -1303,6 +1303,11 @@ if [ -f "${DEPENDABOT_DIR}/action.yml" ] && grep -q '^  housekeeping:$' "$ROUTER
   db_step=$(printf '%s\n' "$hk_job" | sed -n '/uses: \.\/\.github\/actions\/merge-dependabot/,/^      - /p')
   printf '%s' "$db_step" | grep -q 'token: ${{ steps.app-token.outputs.token }}' ||
     { DB_OK=0; echo "FAIL: the maintenance run does not merge Dependabot pull requests with the App token" >&2; }
+  # The App installation may hold no Checks permission: the reads run on the job token.
+  if ! printf '%s' "$db_step" | grep -q 'read-token: ${{ github.token }}' ||
+    ! printf '%s\n' "$hk_job" | grep -q '^      checks: read$'; then
+    DB_OK=0; echo "FAIL: the Dependabot merge must read checks with GITHUB_TOKEN granted checks: read" >&2
+  fi
   for knob in DEPENDABOT_MERGE DEPENDABOT_MERGE_WITHOUT_CHECKS; do
     if [ -z "$(router_env "$knob")" ] || ! printf '%s' "$db_step" | grep -q "env.${knob}"; then
       DB_OK=0

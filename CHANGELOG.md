@@ -2,6 +2,16 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.13.1
+
+### Fixed
+
+- `merge-dependabot` reads with the workflow token and writes with the App token. 1.13.0 did everything with the App token, and where the App installation holds no Checks permission (Project-Health-Platform) every run failed on the first check-runs read with `403 Resource not accessible by integration`. The action takes a new `read-token` input, default `GITHUB_TOKEN`, for the pull requests, commits, comments, check runs and commit statuses; approve, merge, the rebase comment, the branch delete and the post-merge dispatch stay on `token`, so a merge still starts the push workflows. The `dependabot-merge` template passes `read-token: ${{ github.token }}` with `checks: read` and `statuses: read`, and the router's `housekeeping` job now grants `checks: read` and `statuses: read` and passes the same.
+- A read that is still refused no longer fails the run. That pull request is skipped with a `::warning::` naming the missing permission, for example `cannot read checks: grant Checks: read to the App or the workflow token`, the same line heads the job summary, and the next pull request is judged. Any other API failure still turns the run red.
+- `verify-route-matrix.sh` asserts the router's Dependabot merge reads with `GITHUB_TOKEN` and that the `housekeeping` job grants `checks: read`.
+
+Existing installs keep reading with the App token until `workflows update` refreshes them.
+
 ## 1.13.0
 
 Includes 1.12.1 (the audit's report and stories under refine's size gate), so publishing 1.13.0 ships both.
