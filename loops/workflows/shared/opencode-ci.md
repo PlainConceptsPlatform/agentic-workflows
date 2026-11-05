@@ -208,11 +208,10 @@ pre-agent-steps:
     # Two of the three run here. pc-system-reminders gates shell and edits on skills a CI
     # worker's prompt does not load, and has never run in CI; it stays off until it does.
     #
-    # The tier models come from AGENT_TIER_MODEL when a worker sets it. The AWF proxy refuses
-    # a model it has no AI credits price for; harness.json names carina-60b and quasar-438b,
-    # which had none until the `models.providers` prices at the top of this file (Atlas #2016).
-    # CI still pins every tier to one model, through the gitignored per-user override the
-    # plugin reads first, until a run on the newly priced models has passed.
+    # The tier models come from AGENT_TIER_MODEL when a worker sets it. The implement worker
+    # leaves it empty so harness.json drives: plan=glm-5-3, build/fast=glm-5-2. A repository
+    # whose CI account is not granted a tier model can still pin every tier to one model
+    # through the gitignored per-user override the plugin reads first.
     run: |
       set -euo pipefail
       if [ ! -f .opencode/package.json ]; then
@@ -245,6 +244,19 @@ pre-agent-steps:
       fi
       echo "Harness plugins: $(ls .opencode/plugins | tr '\n' ' ')"
       echo "Tier models: $(jq -c '.models' .opencode/harness.user.json 2>/dev/null || jq -c '.models' .opencode/harness.json)"
+
+  - name: Sync harness agents and print model routing
+    # The plugin writes these at startup, but OpenCode builds the task enum from what
+    # exists when it starts. Generating them here makes planner-sub and the tier
+    # variants visible from the first turn; the doctor is the audit line.
+    run: |
+      set -euo pipefail
+      if [ -f .opencode/scripts/sync-agents.mjs ] && [ -f .opencode/plugins/pc-subagent-tiers-core.js ]; then
+        node .opencode/scripts/sync-agents.mjs --strict
+      fi
+      if [ -f .opencode/scripts/harness-doctor.mjs ]; then
+        node .opencode/scripts/harness-doctor.mjs --strict
+      fi
 
   - name: Merge the CI-only OpenCode provider into opencode.jsonc
     env:

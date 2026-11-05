@@ -6,12 +6,12 @@ env:
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
   AGENT_LEAD_MODEL: "forge/glm-5-2"
-  # Every harness tier (plan, build, fast) on one model the CI's Forge account is granted.
-  # harness.json names quasar-438b and carina-60b, which that account is not granted: Pliny-Bot
-  # #823's build tasks failed on quasar. Empty runs the tiers harness.json names.
-  AGENT_TIER_MODEL: "plainconcepts/glm-5-2"
-  # The fast tier alone, while the CI's Forge account is not granted carina-60b.
-  AGENT_FAST_MODEL: "plainconcepts/glm-5-2"
+  # Let harness.json drive the tiers: plan=glm-5-3, build/fast=glm-5-2. A repository
+  # whose CI account is not granted a tier model can still pin every tier to one
+  # model by setting AGENT_TIER_MODEL.
+  AGENT_TIER_MODEL: ""
+  # Empty: harness.json already names glm-5-2 for fast.
+  AGENT_FAST_MODEL: ""
   VERIFY_COMMANDS: ""
   REPO_RULES: "Implement only the selected issue. Follow repository documentation and existing conventions. Do not weaken tests, lower coverage thresholds, or bypass checks."
   # Split out of REPO_RULES because one field asked to carry architecture, testing, coverage and
@@ -770,13 +770,14 @@ timeout-minutes: 180
 
    1. `pc-plan-goal`, then Phase 0 as it describes.
 
-   **Propose and archive run in the `planner` agent, not in this session.** Spawn it with the
-   task tool (`subagent_type: planner`) and a prompt that names the skill to load
+   **Propose and archive run in the `planner-sub` agent, not in this session.** Spawn it with the
+   task tool (`subagent_type: planner-sub`) and a prompt that names the skill to load
    (`pc-plan-propose` or `pc-plan-archive`), the issue context path above, the branch, and that it
-   runs in autonomous mode with no one to ask. `planner` runs on the repository's plan model, which
-   is stronger than this session's, and these two steps decide the whole change. Wait for it in the
-   same turn, then continue with the next phase yourself. Only when no `planner` agent exists
-   (agent-harness older than 3.4.0) load the skill here instead.
+   runs in autonomous mode with no one to ask. `planner-sub` runs on the repository's plan model,
+   which these two steps decide the whole change on. Wait for it in the same turn, then continue
+   with the next phase yourself. If `planner-sub` is not in the task tool's enum, call
+   `report_incomplete` naming it; do not load `pc-plan-propose` here. Only when the harness is
+   older than 3.4.0 and has neither `planner` nor `planner-sub` may you load the skill here.
 
    2. `pc-plan-propose`, even when the issue is refined. It is what turns the issue into
       `openspec/changes/<id>/tasks.md` with every task annotated

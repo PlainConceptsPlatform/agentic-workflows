@@ -1916,8 +1916,8 @@ fi
 if ! grep -qF 'contents/${FRAGMENT}?ref=${DEFAULT_BRANCH}' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   LEAD_OK=0; echo "FAIL: the CI config merge must read opencode.ci.json from the default branch" >&2
 fi
-if worker_installed implement && ! grep -qF 'subagent_type: planner' "$IMPLEMENT_WORKER_MD"; then
-  LEAD_OK=0; echo "FAIL: the implement prompt must run propose and archive in the planner agent" >&2
+if worker_installed implement && ! grep -qF 'subagent_type: planner-sub' "$IMPLEMENT_WORKER_MD"; then
+  LEAD_OK=0; echo "FAIL: the implement prompt must run propose and archive in the planner-sub agent" >&2
 fi
 if [ "$LEAD_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # The harness plugins only load with .opencode/node_modules installed; without it every CI run
