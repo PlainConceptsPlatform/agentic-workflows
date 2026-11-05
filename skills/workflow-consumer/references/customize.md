@@ -42,7 +42,7 @@ repository differs from the defaults:
 | Turn budgets | `max-turns`, `max-turn-cache-misses`, `max-ai-credits` | `300`, `3000`, `5000` |
 | Verification commands | `env:` block | Stack-aware from CLI |
 | Permissions | `permissions:` | `read-all` |
-| Runner | `runs-on`, `runs-on-slim` | The package's agent pool; `ubuntu-latest` for framework jobs |
+| Runner | `runs-on`, `runs-on-slim` | `agents-arc` for the agent job and the framework jobs |
 | Safe Outputs policy | `safe-outputs:` | Worker-specific |
 | Timeout | `timeout-minutes` | Worker-specific |
 

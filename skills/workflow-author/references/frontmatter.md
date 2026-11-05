@@ -266,8 +266,8 @@ name the trigger but never the route the classifier picks. Allowed contexts are 
 
 | Field | Notes |
 |---|---|
-| `runs-on:` | Platform: `ubuntu-latest`. The agent job |
-| `runs-on-slim:` | Platform: `ubuntu-latest`. The framework jobs. Defaults to `ubuntu-slim` if omitted |
+| `runs-on:` | Platform: `agents-arc`. The agent job |
+| `runs-on-slim:` | Platform: `agents-arc`. The framework jobs. Defaults to a GitHub-hosted `ubuntu-slim` if omitted |
 | `timeout-minutes:` | Platform: always set. Default 20, which is too short. Compiles to the `Execute OpenCode CLI` step, not the job. See Timeouts below |
 | `env:` | Top-level pairs available to agent `steps:` and interpolated into the prompt. Use for labels, markers, paths, comment templates |
 | `concurrency:` | Platform: never on a worker. The router owns it |
