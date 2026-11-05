@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.14.0
+
+### Changed
+
+- The implement worker lets `harness.json` drive the tiers (`plan=glm-5-3`, `build/fast=glm-5-2`) instead of pinning every tier to one model. It spawns `planner-sub` for propose and archive, and the pre-agent setup runs `sync-agents` and `harness-doctor` so the task enum includes the generated agents. `verify-route-matrix.sh` asserts `subagent_type: planner-sub`.
+
 ## 1.13.1
 
 ### Fixed
