@@ -383,9 +383,13 @@ log at `sandbox/firewall/logs/api-proxy-logs/token-usage.jsonl` may be absent en
 ## Self-hosted runners
 
 The agent workers target `agents-arc`, an ephemeral VM Scale Set hard-capped at two VMs
-(`runners/README.md`). Because that cap is a budget rather than a queue to grow into, nothing that
-does not invoke the model belongs there: CI, infra and release work go to `RunnerLandingZone`,
-which autoscales, and anything that only sleeps or calls an API goes to `ubuntu-latest`. The label
+(`runners/README.md`). Every job in a private or internal platform repository runs there, CI,
+deploy and release included; GitHub-hosted runners (`ubuntu-latest`) are for the public
+repositories only. Capacity is the cost of that: if queue time climbs, grow the fleet, do not move
+jobs back to hosted runners. The exceptions are jobs that must reach a private endpoint (the PRO
+deploy and the in-network `smoke-final` check run on a private-network runner), that build for
+Windows or macOS, or that need `sudo` (`playwright install --with-deps` has none: run Playwright
+in the official `mcr.microsoft.com/playwright` image instead). The label
 `[self-hosted, linux, agents]` is dead it was retired in `0fc7b08` and now matches no runner, so
 a job still carrying it waits forever.
 

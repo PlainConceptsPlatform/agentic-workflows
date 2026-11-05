@@ -408,8 +408,8 @@ on:
         required: true
         type: string
 
-runs-on: ubuntu-latest       # Both keys, always. Omitting runs-on-slim silently
-runs-on-slim: ubuntu-latest  # sends framework jobs to a GitHub-hosted ubuntu-slim.
+runs-on: agents-arc          # Both keys, always. Omitting runs-on-slim silently
+runs-on-slim: agents-arc     # sends framework jobs to a GitHub-hosted ubuntu-slim.
 
 secrets:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
