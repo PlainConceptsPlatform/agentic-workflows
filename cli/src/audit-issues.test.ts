@@ -155,6 +155,10 @@ async function fileAudit(repo: ReturnType<typeof fakeRepository>, items: Array<{
 
 describe("issue-size", () => {
   it("counts what refine's shell guard counted: wc -c bytes and bullet lines", () => {
+    // This test spawns bash to compare the JS counts against the shell guard (wc -c, grep).
+    // Spawning bash is slow on Windows (first spawn of Git Bash can take 3-5s); the timeout
+    // below (15s) leaves headroom. The bash compare is best-effort: if it throws, the JS
+    // assertion above still holds.
     const title = "Audit: 2026-11-04";
     const body = "Intro — with a dash\n\n- one\n  * two\n-not a bullet\n\t- three\n```\n- four, in a fence, still counted\n```\n\n";
     const measured = size.measureIssue(title, body);
@@ -171,7 +175,7 @@ describe("issue-size", () => {
     }
     expect(measured).toEqual({ chars: Buffer.byteLength(`${title}\n\n${body}`.replace(/\n+$/, "")), units: 4 });
     if (shell) expect(measured).toEqual(shell);
-  });
+  }, 15000);
 });
 
 describe("planAuditIssues", () => {
