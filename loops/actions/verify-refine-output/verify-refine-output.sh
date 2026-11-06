@@ -75,6 +75,16 @@ assert_output 'complete output cannot update another issue' invalid \
   '{"items":[{"type":"update_issue","item_number":42,"body":"# User story"},{"type":"update_issue","item_number":7,"body":"# Other story"}]}'
 assert_output 'draft update with questions comment is questions' questions \
   '{"items":[{"type":"update_issue","item_number":42,"body":"<!-- agent-refine-draft -->\n### Proposal\n_pending see questions below_"},{"type":"add_comment","item_number":42,"body":"<!-- agent-refine -->\nRefinement update\nI have some questions about this issue. Please reply in one comment and I''ll process your answers.\nWhich area owns this behavior?"}]}'
+
+# From Bots #1336, run 42214146974. gh-aw process_safe_outputs strips HTML comments
+# from the body, so the draft marker (<!-- agent-refine-draft -->) is gone. The
+# model also paraphrased the questions line as "I have some questions that the code
+# cannot settle on its own" instead of the exact sentence. The pending mark
+# (_pending see questions below_) survives in the body and the comment is still on
+# the source issue, so the outcome is questions, not invalid.
+assert_output 'stripped draft marker with paraphrased questions is questions' questions \
+  '{"items":[{"type":"update_issue","item_number":42,"body":"**Complexity:** standard path\n\n> Refinement draft. Three open questions are in a separate comment. The parts they leave open are marked `_pending see questions below_`."},{"type":"add_comment","item_number":42,"body":"## Refinement update\n\nI have some questions that the code cannot settle on its own. Reply in one comment to change any of them.\n1. Does the conductor bot stay local only too?"}]}'
+
 assert_output 'draft update alone is invalid' invalid \
   '{"items":[{"type":"update_issue","item_number":42,"body":"<!-- agent-refine-draft -->\n### Proposal\n_pending see questions below_"}]}'
 

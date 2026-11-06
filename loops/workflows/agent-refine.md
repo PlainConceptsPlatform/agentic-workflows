@@ -738,7 +738,20 @@ jobs:
             output_tokens=$(jq -r '.output_tokens // empty' usage-read/agent_usage.json 2>/dev/null || echo "")
           fi
           if [ -n "$output_tokens" ] && [ "$output_tokens" -gt 20000 ]; then
-            echo "truncated=This attempt consumed ${output_tokens} output tokens and still produced no outcome. That is what provider output truncation looks like, not an outage: the model hit the single-response cap mid-generation and every call it was writing was lost. If this repeats, split the issue or tighten its body." >> "$GITHUB_OUTPUT"
+            # A run that burned tokens and produced items the validator refused is not
+            # truncation: the agent finished, and the validator did not recognise the
+            # outcome shape (Bots #1336, run 42214146974: 50926 output tokens, 2 items,
+            # draft marker stripped by process_safe_outputs, questions line paraphrased).
+            # Only call it truncation when the agent spent tokens and produced nothing.
+            item_count=0
+            if [ -f usage-read/agent_output.json ]; then
+              item_count=$(jq '.items | length' usage-read/agent_output.json 2>/dev/null || echo 0)
+            fi
+            if [ "$item_count" -gt 0 ]; then
+              echo "truncated=This attempt consumed ${output_tokens} output tokens and produced ${item_count} item(s), but the validator could not recognise the outcome. The agent finished its work: check the run artifacts (agent_output.json, safeoutputs.jsonl) against the validator's expected shape before retrying." >> "$GITHUB_OUTPUT"
+            else
+              echo "truncated=This attempt consumed ${output_tokens} output tokens and still produced no outcome. That is what provider output truncation looks like, not an outage: the model hit the single-response cap mid-generation and every call it was writing was lost. If this repeats, split the issue or tighten its body." >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "truncated=" >> "$GITHUB_OUTPUT"
           fi

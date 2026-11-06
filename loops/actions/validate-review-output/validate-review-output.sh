@@ -24,7 +24,10 @@ jq -r --arg pr "$pr_number" --slurpfile threads "$threads_file" '
   .items as $items
   | ($threads[0] | map(select(.isResolved == false and .isOutdated == false) | .id) | sort) as $expected
   | ($items | [.[] | select(.type == "add_comment" and (.item_number | tostring) == $pr and (.body | type == "string"))]) as $comments
-  | ($comments | map(.body | if test("\\*\\*Review outcome:\\*\\*\\s*(implemented|already-satisfied|needs-human)"; "i") then capture("\\*\\*Review outcome:\\*\\*\\s*(?<v>implemented|already-satisfied|needs-human)"; "i").v | ascii_downcase else empty end) | .[0] // "invalid") as $outcome
+  # The line is matched by shape, not exact markdown: a model that writes
+  # **Review outcome** : implemented or **Review outcome - implemented still means
+  # the same. See the triage validator for the same pattern.
+  | ($comments | map(.body | if test("Review outcome[^\\w\\n]{0,6}(?<v>implemented|already-satisfied|needs-human)\\b"; "i") then capture("Review outcome[^\\w\\n]{0,6}(?<v>implemented|already-satisfied|needs-human)\\b"; "i").v | ascii_downcase else empty end) | .[0] // "invalid") as $outcome
   # `add` on an empty array is null, not [], and `unique` then dies with "Cannot iterate over
   # null". That is not an edge case: it is every pull-request-level review. Requesting changes
   # from the Files tab, or a plain review body with no inline comment, creates a review and no

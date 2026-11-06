@@ -29,19 +29,31 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
     any(.items[]; .type == "update_issue");
 
   # A temporal draft is a replacement body the worker still expects to grow: the draft
-  # marker distinguishes it from a finished body.
+  # marker distinguishes it from a finished body. The gh-aw process_safe_outputs strips
+  # HTML comments from the body, so the draft marker (<!-- agent-refine-draft -->) can
+  # be gone by the time the validator reads it (Bots #1336, run 42214146974). When the
+  # draft marker is absent but the pending mark (_pending see questions below_) is
+  # present, the body is still a draft: the pending mark only appears in drafts, and a
+  # finished body has none.
   def has_draft_body:
     any(.items[]; .type == "update_issue" and
       (.item_number == null or (.item_number | tostring) == $issue) and
       (.body | type == "string") and
-      (.body | contains($draft_marker)));
+      ((.body | contains($draft_marker)) or (.body | contains($pending_mark))));
 
   # The batched questions, by the sentence that opens them. It decides the outcome on its own:
   # Bots #561, #871 and Numa #821 asked, left a draft without the draft marker, were read as
   # complete, and implement started two seconds later on a story nobody had answered.
+  # The prompt asks the model to open with the exact questions_line, but models paraphrase
+  # it: GLM-5-2 wrote "I have some questions that the code cannot settle on its own" and the
+  # exact-line match failed, dropping a valid questions outcome (Bots #1336). Match the exact
+  # line, or its opening "I have some questions" prefix, which is specific enough in a refine
+  # comment to never match the complete or split messages.
   def asks_questions:
     any(.items[]; .type == "add_comment" and (.item_number | tostring) == $issue and
-      (.body | type == "string") and (.body | contains($questions_line)));
+      (.body | type == "string") and
+      ((.body | contains($questions_line)) or
+       (.body | test("I have some questions"; "i"))));
 
   def has_pending_marks:
     any(.items[]; .type == "update_issue" and

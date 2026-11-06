@@ -20,12 +20,15 @@ fi
 # must contain a verdict line matching **Verdict:** pass|needs-info|needs-maintainer|block.
 # capture() returns an object use a named group (?<v>...) to extract the value.
 # test() before capture() avoids jq errors on non-matching bodies.
+# The line is matched by shape, not exact markdown: a model that writes
+# **Verdict** : pass or **Verdict - pass still means the same (Bots #1336 showed
+# GLM-5-2 paraphrasing the expected sentence; the same happens with verdict lines).
 jq -r --arg issue "$issue_number" '
   def extract_verdict:
     [.items[] | select(.type == "add_comment" and (.item_number | tostring) == $issue and (.body | type == "string"))]
     | map(.body |
-      if test("\\*\\*Verdict:\\*\\*\\s*(pass|needs-info|needs-maintainer|block)"; "i") then
-        capture("\\*\\*Verdict:\\*\\*\\s*(?<v>pass|needs-info|needs-maintainer|block)"; "i").v | ascii_downcase
+      if test("Verdict[^\\w\\n]{0,6}(?<v>pass|needs-info|needs-maintainer|block)\\b"; "i") then
+        capture("Verdict[^\\w\\n]{0,6}(?<v>pass|needs-info|needs-maintainer|block)\\b"; "i").v | ascii_downcase
       else empty end
     )
     | .[0] // "none";
