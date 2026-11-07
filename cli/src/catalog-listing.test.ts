@@ -27,7 +27,7 @@ describe("catalog listing", () => {
     expect(defaultRouteNames).not.toContain("docs-audit");
     expect(defaultRouteNames).toContain("audit");
     expect(routeNames).toEqual(["refine", "implement", "triage", "apply-review", "merge-gate", "audit", "docs-audit", "release"]);
-    expect(templateNames).toEqual(["agentics-app-errors", "agentics-checks", "agentics-error-report", "agentics-maintenance", "app-ci-dotnet-next", "app-ci-node-monorepo", "bug-report", "dependabot-merge", "feature-request", "github-release", "opencode.ci.json", "platform-template", "quality-gates"]);
+    expect(templateNames).toEqual(["agentics-app-errors", "agentics-checks", "agentics-maintenance", "app-ci-dotnet-next", "app-ci-node-monorepo", "bug-report", "dependabot-merge", "feature-request", "github-release", "opencode.ci.json", "platform-template", "quality-gates"]);
   });
 
   it("reports all entries as not installed in an empty repository", async () => {
