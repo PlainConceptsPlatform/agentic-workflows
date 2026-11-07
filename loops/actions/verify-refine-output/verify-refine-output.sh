@@ -82,6 +82,10 @@ assert_output 'draft update with questions comment is questions' questions \
 # cannot settle on its own" instead of the exact sentence. The pending mark
 # (_pending see questions below_) survives in the body and the comment is still on
 # the source issue, so the outcome is questions, not invalid.
+# The JSON fixture below carries literal markdown backticks from the real Bots #1336 output.
+# The checker reads them as command substitution inside single quotes (SC2016), a false
+# positive because the whole argument is data, not shell.
+# shellcheck disable=SC2016
 assert_output 'stripped draft marker with paraphrased questions is questions' questions \
   '{"items":[{"type":"update_issue","item_number":42,"body":"**Complexity:** standard path\n\n> Refinement draft. Three open questions are in a separate comment. The parts they leave open are marked `_pending see questions below_`."},{"type":"add_comment","item_number":42,"body":"## Refinement update\n\nI have some questions that the code cannot settle on its own. Reply in one comment to change any of them.\n1. Does the conductor bot stay local only too?"}]}'
 

@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.15.0
+
+### Changed
+
+- The refine worker accepts large issues. `REFINE_MAX_BODY_CHARS` rises from `8000` to `100000` and `REFINE_MAX_WORK_UNITS` from `24` to `150`, so a real, richly-specified issue (a UX contract, a multi-part design brief) is refined and split into implementable children rather than refused before any model runs. The limit stays as a fast-fail safety net for pathological inputs (binary pastes, log dumps, base64 blobs); the output side is bounded by the split mechanism (estimate `>= 8` writes `<= MAX_SPLIT_CHILDREN` small bodies, one per turn) plus `max-turns` and `max-ai-credits`. The original `8000`/`24` gate existed to stop the model writing one giant refined body and dying at the provider's single-response output cap (Pliny-Bot #305), but it also blocked legitimate large specs that the implement worker accepted unchanged — Bots #1357 (a 23,388-char UX specification) was refused by refine and mis-routed to implement, which read it as nothing-to-do. Audit limits stay well below refine (`AUDIT_MAX_BODY_CHARS: 6000`, `DOCS_AUDIT_MAX_BODY_CHARS: 6000`), so `verify-route-matrix.sh` still passes.
+
 ## 1.14.0
 
 ### Changed

@@ -43,14 +43,22 @@ env:
   REFINE_ATTEMPT_MARKER: "<!-- agent-refine-attempt -->"
   MAX_ATTEMPTS: "5"
   PARK_AT_ATTEMPT: "4"
-  # The size gate. An issue over either limit is refused before any model runs: a real
-  # one, Pliny-Bot #305 (13,398 chars, 92 work units), burned a full agent -- 17 minutes,
-  # 2.4M tokens -- and died at the provider's 32K output cap with zero outcome, twice.
-  # Both numbers are measured before the agent starts, so refusal is deterministic and
-  # costs ten seconds instead of half an hour. The audit files under its own AUDIT_MAX_*,
+  # The size gate is a fast-fail safety net for pathological inputs -- a binary paste, a
+  # log dump, a base64 blob -- not a blocker for legitimate large specs. It used to gate at
+  # 8000 chars / 24 units after Pliny-Bot #305 (13,398 chars, 92 work units) burned 17
+  # minutes and 2.4M tokens dying at the provider's 32K output cap with zero outcome. That
+  # cap was on the model's single response while it wrote one giant refined body; the split
+  # mechanism (estimate >= 8 -> write <= MAX_SPLIT_CHILDREN small bodies, one per turn) and
+  # the prompt's "tighten the body" rule now bound the written output instead, and max-turns
+  # + max-ai-credits bound the run. The old limit refused real specs the implement worker
+  # accepted: Bots #1357 (23,388 chars, 108 work units), a UX contract that should have been
+  # split into implementable children, was refused here and mis-routed to implement, which
+  # read it as nothing-to-do. Raise the gate so a real issue always passes; only a non-issue
+  # does. Both numbers are still measured before the agent starts, so refusal is deterministic
+  # and costs ten seconds instead of half an hour. The audit files under its own AUDIT_MAX_*,
   # which must stay below these or refine refuses what it files.
-  REFINE_MAX_BODY_CHARS: "8000"
-  REFINE_MAX_WORK_UNITS: "24"
+  REFINE_MAX_BODY_CHARS: "100000"
+  REFINE_MAX_WORK_UNITS: "150"
   REFUSE_MARKER: "<!-- agent-refine-refused -->"
   # Ten rather than six: the failure that prompted this took three minutes, and a slower one on a
   # worse day would fall outside a six-minute window and park for a fault that clears by itself.
