@@ -1,19 +1,27 @@
 name: Npm Publish
 
-# Publishing rides on GitHub Releases, like GitHub's own starter workflow. A stable release
-# (vX.Y.Z on main) publishes with the `latest` dist-tag; a prerelease (vX.Y.Z-alpha.N, created
-# on the alpha branch) publishes with the `alpha` dist-tag. There is also a manual path:
-# "Run workflow" publishes an alpha of any branch, picking the next unused alpha number itself.
-# Pull requests cannot trigger either path.
+# Publishes @plainconceptsplatform/workflows to npm automatically when a version bump is merged
+# to main. Authentication uses npm Trusted Publishing (GitHub OIDC): no shared tokens, no OTP, no
+# secrets in the repo. The Trusted Publisher on npmjs.com must match this workflow's filename
+# (npm-publish.yml) and the npm-publish environment exactly.
 #
-# Authentication uses npm Trusted Publishing (GitHub OIDC). Trusted Publishing requires Node
-# >= 22.14.0 and npm >= 11.5.1. Node 24 is used because it satisfies those requirements.
-# The Trusted Publisher on npmjs.com must match this workflow's filename and the npm-publish
-# environment exactly.
+# Triggers:
+#   - push to main that touches cli/package.json (where @plainconceptsplatform/workflows's version
+#     lives): publishes with the `latest` dist-tag. Rerun-safe: if the version is already on npm
+#     (dependency bump that did not change the version, or a workflow rerun), the publish is
+#     skipped. This replaces the earlier release-based trigger, which depended on a
+#     `chore(release): vX.Y.Z` commit (PR #506's pattern) and on release-tag.yml being installed
+#     in this repo (it isn't); that path silently never fired.
+#   - workflow_dispatch: manual. Publishes an alpha (auto-numbered) from any branch, to validate
+#     OIDC end-to-end or to ship a prerelease. Alphas are tagged `alpha`, never `latest`.
+#
+# Requires Node >= 22.14.0 and npm >= 11.5.1 for Trusted Publishing. Node 24 satisfies both.
 
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
+    paths:
+      - 'cli/package.json'
   workflow_dispatch:
     inputs:
       branch:
@@ -31,14 +39,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: npm-publish
-    env:
-      TAG_NAME: ${{ github.event.release.tag_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.release.tag_name }}
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.ref }}
+      - uses: pnpm/action-setup@ea17c68df8912ef54335278610c181273ba90b1 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -46,37 +52,32 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
 
-      # The alpha version is the release tag. Stamp it into the CLI manifest before the gate so
-      # the packed and published artifact carries it; nothing is committed back to the branch.
-      - name: Prepare alpha version
-        if: ${{ github.event.release.prerelease }}
-        env:
-          TARGET_BRANCH: ${{ github.event.release.target_commitish }}
-        run: |
-          set -euo pipefail
-          if [ "$TARGET_BRANCH" != "alpha" ]; then
-            echo "::error::Prereleases must be published from the alpha branch, not '$TARGET_BRANCH'."
-            exit 1
-          fi
-          version="${TAG_NAME#v}"
-          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
-            echo "::error::Prerelease tag must look like vX.Y.Z-alpha.N, got '$TAG_NAME'."
-            exit 1
-          fi
-          if npm view "@plainconceptsplatform/workflows@$version" version >/dev/null 2>&1; then
-            echo "::error::$version is already on npm; alpha versions are never reused."
-            exit 1
-          fi
-          node -e "const fs = require('node:fs'); const file = 'cli/package.json'; const pkg = JSON.parse(fs.readFileSync(file, 'utf8')); pkg.version = process.argv[1]; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');" "$version"
-          echo "cli/package.json staged at $version for this run (not committed)."
+      - name: Read version
+        id: ver
+        run: echo "version=$(node -p "require('./cli/package.json').version")" >> "$GITHUB_OUTPUT"
 
-      # Manual path: no release exists, so derive the next unused alpha number from npm and
-      # stamp it the same way. The branch's own manifest version is the base.
-      - name: Prepare alpha version (manual)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      # Rerun-safe: if this version is already on npm, nothing to do. Handles dependency bumps
+      # that touched cli/package.json without changing the version, and workflow reruns.
+      - name: Skip if already published
+        id: skip
         run: |
           set -euo pipefail
-          base=$(node -p "require('./cli/package.json').version")
+          if npm view "@plainconceptsplatform/workflows@${{ steps.ver.outputs.version }}" version >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "${{ steps.ver.outputs.version }} is already on npm; nothing to publish."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "${{ steps.ver.outputs.version }} is not on npm yet; will publish."
+          fi
+
+      # Manual path: derive the next unused alpha number from npm and stamp it the same way.
+      # The branch's own manifest version is the base. cli/package.json is stamped for this run
+      # only, not committed.
+      - name: Prepare alpha version
+        if: ${{ github.event_name == 'workflow_dispatch' && steps.skip.outputs.skip == 'true' }}
+        run: |
+          set -euo pipefail
+          base="${{ steps.ver.outputs.version }}"
           base="${base%%-*}"
           next=1
           for published in $(npm view "@plainconceptsplatform/workflows" versions --json | tr -d ' ",[]' | grep -E "^${base}-alpha\.[0-9]+$" || true); do
@@ -91,28 +92,18 @@ jobs:
             exit 1
           fi
           node -e "const fs = require('node:fs'); const file = 'cli/package.json'; const pkg = JSON.parse(fs.readFileSync(file, 'utf8')); pkg.version = process.argv[1]; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');" "$version"
+          echo "alpha_version=$version" >> "$GITHUB_ENV"
           echo "Publishing $version (alpha #$next, auto-numbered). cli/package.json is stamped for this run only, not committed."
 
       # The same gate CI runs: typecheck, build, test, then package (see pack in package.json).
       - run: pnpm run pack
 
-      # Rerun-safe: a version already on npm means this release was published before, so skip.
       - name: Publish stable
-        if: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
-        env:
-          TARGET_BRANCH: ${{ github.event.release.target_commitish }}
+        if: ${{ github.event_name == 'push' && steps.skip.outputs.skip != 'true' }}
         working-directory: cli
         run: |
           set -euo pipefail
-          if [ "$TARGET_BRANCH" != "main" ]; then
-            echo "::error::Stable releases must target the main branch, not '$TARGET_BRANCH'."
-            exit 1
-          fi
           version=$(node -p "require('./package.json').version")
-          if [ "$version" != "${TAG_NAME#v}" ]; then
-            echo "::error::Release is $TAG_NAME but cli/package.json says $version. Bump both manifests to the release version."
-            exit 1
-          fi
           if npm view "@plainconceptsplatform/workflows@$version" version >/dev/null 2>&1; then
             echo "$version is already on npm; nothing to publish."
             exit 0
@@ -121,7 +112,7 @@ jobs:
           echo "Published @plainconceptsplatform/workflows@$version with dist-tag latest."
 
       - name: Publish alpha
-        if: ${{ github.event_name == 'workflow_dispatch' || github.event.release.prerelease }}
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         working-directory: cli
         run: |
           set -euo pipefail
