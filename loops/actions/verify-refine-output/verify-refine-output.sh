@@ -82,8 +82,8 @@ assert_output 'draft update with questions comment is questions' questions \
 # cannot settle on its own" instead of the exact sentence. The pending mark
 # (_pending see questions below_) survives in the body and the comment is still on
 # the source issue, so the outcome is questions, not invalid.
-# The JSON fixture below carries literal markdown backticks from the real Bots #1336 output;
-# shellcheck sees them as command substitution inside single quotes (SC2016), which is a false
+# The JSON fixture below carries literal markdown backticks from the real Bots #1336 output.
+# The checker reads them as command substitution inside single quotes (SC2016), a false
 # positive because the whole argument is data, not shell.
 # shellcheck disable=SC2016
 assert_output 'stripped draft marker with paraphrased questions is questions' questions \
