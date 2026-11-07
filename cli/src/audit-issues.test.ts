@@ -286,7 +286,6 @@ describe("file-audit-issues", () => {
 describe("audit worker wiring", () => {
   const front = (file: string) => parse(readFileSync(join(loops, "workflows", file), "utf8").replace(/\r\n/g, "\n").split("---\n")[1]!);
   const auditWorker = front("agent-audit.md");
-  const refineWorker = front("agent-refine.md");
   const fileStep = auditWorker.jobs.conclude.steps.find((step: { uses?: string }) => step.uses === "./.github/actions/file-audit-issues");
   const lines = (value: string): string[] => value.split("\n").map((line) => line.trim()).filter(Boolean);
 
@@ -298,16 +297,20 @@ describe("audit worker wiring", () => {
     expect(lines(fileStep.with["story-labels"])).not.toContain("audit");
   });
 
-  it("files under refine's limits, staged, with room for the report and every story", () => {
-    expect(Number(auditWorker.env.AUDIT_MAX_BODY_CHARS)).toBeLessThan(Number(refineWorker.env.REFINE_MAX_BODY_CHARS));
-    expect(Number(auditWorker.env.AUDIT_MAX_WORK_UNITS)).toBeLessThan(Number(refineWorker.env.REFINE_MAX_WORK_UNITS));
+  it("files staged, with room for the report and every story", () => {
+    // Refine has no size gate (1.15.0 removed it), so the audit's limits are about keeping
+    // its filed stories small and digestible, not about staying under a gate refine refuses.
+    // The create-issue cap gives the report one slot and each story one: AUDIT_MAX_STORIES + 1.
     expect(auditWorker["safe-outputs"].staged).toBe(true);
     expect(auditWorker["safe-outputs"]["create-issue"].max).toBe(Number(auditWorker.env.AUDIT_MAX_STORIES) + 1);
   });
 
-  it("measures in refine's guard with the same helper", () => {
-    const steps = refineWorker.jobs.size_guard.steps.map((step: { uses?: string }) => step.uses);
-    expect(steps).toContain("./.github/actions/measure-issue-size");
+  it("measures what it files with the same helper the size lib exports", () => {
+    // The audit files through file-audit-issues, whose internal measure-issue-size
+    // step trims anything over the audit's own limit before filing (refine used to share
+    // that helper for its now-removed size gate; the audit keeps its own copy).
+    const steps = auditWorker.jobs.conclude.steps.map((step: { uses?: string }) => step.uses);
+    expect(steps).toContain("./.github/actions/file-audit-issues");
   });
 });
 
@@ -361,10 +364,9 @@ describe("docs audit", () => {
     for (const issue of repo.issues.values()) expect(passes(issue.title, issue.body, AUDIT), `#${issue.number}`).toBe(true);
   });
 
-  it("is wired like the audit: staged, under refine's limits, refine only on the stories", () => {
+  it("is wired like the audit: staged, refine only on the stories", () => {
     const front = (file: string) => parse(readFileSync(join(loops, "workflows", file), "utf8").replace(/\r\n/g, "\n").split("---\n")[1]!);
     const docs = front("agent-docs-audit.md");
-    const refineWorker = front("agent-refine.md");
     const fileStep = docs.jobs.conclude.steps.find((step: { uses?: string }) => step.uses === "./.github/actions/file-audit-issues");
     const lines = (value: string): string[] => value.split("\n").map((line) => line.trim()).filter(Boolean);
 
@@ -373,8 +375,8 @@ describe("docs audit", () => {
     // `docs-audit` on a story would fill the one-report backpressure by itself.
     expect(lines(fileStep.with["story-labels"])).not.toContain("docs-audit");
     expect(new RegExp(fileStep.with["report-title"], "i").test("Docs audit: 2026-11-04")).toBe(true);
-    expect(Number(docs.env.DOCS_AUDIT_MAX_BODY_CHARS)).toBeLessThan(Number(refineWorker.env.REFINE_MAX_BODY_CHARS));
-    expect(Number(docs.env.DOCS_AUDIT_MAX_WORK_UNITS)).toBeLessThan(Number(refineWorker.env.REFINE_MAX_WORK_UNITS));
+    // Refine has no size gate (1.15.0), so DOCS_AUDIT_MAX_* no longer needs to stay below a
+    // refine limit; the docs audit's own limit is about keeping its filed stories small.
     expect(docs["safe-outputs"].staged).toBe(true);
     expect(docs["safe-outputs"]["create-issue"].max).toBe(Number(docs.env.DOCS_AUDIT_MAX_STORIES) + 1);
     expect(docs.jobs.conclude.steps.some((step: { uses?: string }) => step.uses === "./.github/actions/add-issue-labels")).toBe(false);
