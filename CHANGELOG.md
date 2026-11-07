@@ -6,7 +6,13 @@ Releases of `@plainconceptsplatform/workflows`. Earlier versions are described i
 
 ### Changed
 
-- The refine worker accepts large issues. `REFINE_MAX_BODY_CHARS` rises from `8000` to `100000` and `REFINE_MAX_WORK_UNITS` from `24` to `150`, so a real, richly-specified issue (a UX contract, a multi-part design brief) is refined and split into implementable children rather than refused before any model runs. The limit stays as a fast-fail safety net for pathological inputs (binary pastes, log dumps, base64 blobs); the output side is bounded by the split mechanism (estimate `>= 8` writes `<= MAX_SPLIT_CHILDREN` small bodies, one per turn) plus `max-turns` and `max-ai-credits`. The original `8000`/`24` gate existed to stop the model writing one giant refined body and dying at the provider's single-response output cap (Pliny-Bot #305), but it also blocked legitimate large specs that the implement worker accepted unchanged — Bots #1357 (a 23,388-char UX specification) was refused by refine and mis-routed to implement, which read it as nothing-to-do. Audit limits stay well below refine (`AUDIT_MAX_BODY_CHARS: 6000`, `DOCS_AUDIT_MAX_BODY_CHARS: 6000`), so `verify-route-matrix.sh` still passes.
+- **Refine no longer refuses large issues.** The `size_guard` job, the `refuse_big_issue` job, the `REFINE_MAX_BODY_CHARS`, `REFINE_MAX_WORK_UNITS`, and `REFUSE_MARKER` env vars, and the `measure-issue-size` step in the refine worker are all removed. Refine now accepts any issue implement accepts — they consume the issue identically (`load-issue-context` → `ISSUE_CONTEXT_PATH` JSON), and there was never a reason to gate one on the input size and not the other. The failure the gate existed for (Pliny-Bot #305: the model writing one giant refined body and dying at the provider's 32K single-response output cap) is bounded on the OUTPUT side by the split mechanism (estimate `>= 8` writes `<= MAX_SPLIT_CHILDREN` small child bodies, one per turn), the prompt's "tighten the body" rule, plus `max-turns` and `max-ai-credits` — none of which depends on the input size. The old `8000`/`24` limit (and a `100000`/`150` step considered on the way) just re-created the asymmetry that mis-routed Bots #1357 (a 23,388-char UX contract) to implement, which read it as nothing-to-do and emitted `noop`. `verify-route-matrix.sh` drops the assertions that required refine to carry a gate; the `measure-issue-size` action stays for the audit workers, whose own `AUDIT_MAX_*` limits are about how they file, not about what refine reads.
+
+### Fixed
+
+- Refine validator: a draft body paired with a 'Refinement complete' comment is `invalid` (a self-contradiction), not `questions`. Regression from the 1.14.1 `has_draft_body` fallback.
+- Silenced SC2016 shellcheck false positive on a JSON test fixture carrying literal markdown backticks.
+- Removed the stale `agentics-error-report` template entry left by #503 (fleet error reporting removal).
 
 ## 1.14.0
 

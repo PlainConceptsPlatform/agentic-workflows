@@ -43,23 +43,18 @@ env:
   REFINE_ATTEMPT_MARKER: "<!-- agent-refine-attempt -->"
   MAX_ATTEMPTS: "5"
   PARK_AT_ATTEMPT: "4"
-  # The size gate is a fast-fail safety net for pathological inputs -- a binary paste, a
-  # log dump, a base64 blob -- not a blocker for legitimate large specs. It used to gate at
-  # 8000 chars / 24 units after Pliny-Bot #305 (13,398 chars, 92 work units) burned 17
-  # minutes and 2.4M tokens dying at the provider's 32K output cap with zero outcome. That
-  # cap was on the model's single response while it wrote one giant refined body; the split
-  # mechanism (estimate >= 8 -> write <= MAX_SPLIT_CHILDREN small bodies, one per turn) and
-  # the prompt's "tighten the body" rule now bound the written output instead, and max-turns
-  # + max-ai-credits bound the run. The old limit refused real specs the implement worker
-  # accepted: Bots #1357 (23,388 chars, 108 work units), a UX contract that should have been
-  # split into implementable children, was refused here and mis-routed to implement, which
-  # read it as nothing-to-do. Raise the gate so a real issue always passes; only a non-issue
-  # does. Both numbers are still measured before the agent starts, so refusal is deterministic
-  # and costs ten seconds instead of half an hour. The audit files under its own AUDIT_MAX_*,
-  # which must stay below these or refine refuses what it files.
-  REFINE_MAX_BODY_CHARS: "100000"
-  REFINE_MAX_WORK_UNITS: "150"
-  REFUSE_MARKER: "<!-- agent-refine-refused -->"
+  # No size gate. Refine and implement consume the issue identically (load-issue-context ->
+  # ISSUE_CONTEXT_PATH JSON, read in the prompt), so there is no reason to gate one on the
+  # issue's size and not the other. The failure the gate once existed for -- Pliny-Bot #305,
+  # 13,398 chars, the model writing one giant refined body and dying at the provider's 32K
+  # single-response cap -- is bounded on the OUTPUT side by the split mechanism
+  # (estimate >= 8 -> write <= MAX_SPLIT_CHILDREN small child bodies, one per turn), the
+  # prompt's "tighten the body" rule, and max-turns + max-ai-credits. None of that depends
+  # on the INPUT size. Keeping a finite limit just re-created the asymmetry that mis-routed
+  # Bots #1357 (a 23,388-char UX contract) to implement, which read it as nothing-to-do:
+  # refine refused it, so the router sent it where large issues were accepted. Removed
+  # entirely at 1.15.0; the measure-issue-size action stays for the audit workers, whose
+  # own AUDIT_MAX_* limits are about how they file, not about how refine reads.
   # Ten rather than six: the failure that prompted this took three minutes, and a slower one on a
   # worse day would fall outside a six-minute window and park for a fault that clears by itself.
   RETRY_UNDER_MINUTES: "10"
@@ -139,7 +134,7 @@ on:
         required: false
         type: string
         default: first
-  needs: [still_open, size_guard, eligibility]
+  needs: [still_open, eligibility]
 
 jobs:
   # A route dispatched while the issue was open must not execute after it has been closed. The
@@ -213,97 +208,9 @@ jobs:
             exit 0
           fi
           echo "eligible=true" >> "$GITHUB_OUTPUT"
-  # The size gate, rung 4. Measures the issue before any model starts, because an oversized
-  # body does not fail fast on its own: it produces an agent that explores for seventeen
-  # minutes and then dies mid-generation at the provider's response cap having written
-  # nothing, which reads as a green run with no outcome (Pliny-Bot #305, twice). No
-  # model, one issue read; over either limit it is a refusal, not a smaller attempt.
-  size_guard:
+  reserve:
     needs: [still_open, eligibility]
     if: needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true'
-    runs-on: agents-arc
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      issues: read
-    outputs:
-      too_big: ${{ steps.measure.outputs.too-big }}
-      reason: ${{ steps.measure.outputs.reason }}
-    steps:
-      - name: Checkout workflow actions
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # The rule lives in issue-size.cjs, which the audit also runs before it files, so the two
-      # cannot drift: every audit report from 2026-09-21 on was refused here for want of it.
-      - name: Measure the issue against the size limits
-        id: measure
-        uses: ./.github/actions/measure-issue-size
-        with:
-          token: ${{ github.token }}
-          issue-number: ${{ inputs.issue-number }}
-          max-body-chars: ${{ env.REFINE_MAX_BODY_CHARS }}
-          max-work-units: ${{ env.REFINE_MAX_WORK_UNITS }}
-  # The deterministic refusal. Runs only when the size gate tripped, so it costs one
-  # comment and no model. The refine label stays: a human who shrinks the body and
-  # replies re-enters rerefine through the comment route, and the classifier ignores
-  # bot comments, so this comment cannot re-trigger the worker.
-  refuse_big_issue:
-    needs: [still_open, size_guard, eligibility]
-    if: needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true' && needs.size_guard.outputs.too_big == 'true'
-    runs-on: agents-arc
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      issues: write
-    steps:
-      - name: Checkout workflow actions
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Create bot token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - name: Refuse the oversized issue
-        uses: ./.github/actions/create-issue-comment
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ inputs.issue-number }}
-          body: |
-            ${{ env.REFUSE_MARKER }}
-            This issue is too large to refine automatically: ${{ needs.size_guard.outputs.reason }}.
-            A story this size does not fail fast; it burns a full agent run and dies mid-generation at the provider's response cap, producing nothing.
-
-            Split it into smaller issues, each describing one story, or edit this body down under the limits (at most ${{ env.REFINE_MAX_BODY_CHARS }} characters and ${{ env.REFINE_MAX_WORK_UNITS }} work-unit bullets), then reply here and refinement will run again.
-      - name: Flag the issue for a person
-        uses: ./.github/actions/add-issue-labels
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ inputs.issue-number }}
-          labels: review
-      - name: Clear a stale stalled flag
-        uses: ./.github/actions/remove-issue-labels
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ inputs.issue-number }}
-          labels: stalled
-      # A refusal must also release the reservation. authorize-bot-work adds bot-working
-      # before the router dispatches, and this job is the refused run's only terminal path:
-      # incomplete is gated off it (see there), so without this removal a refused issue
-      # stays reserved with no run behind it -- parked, invisible, not re-triggerable until
-      # the hourly reconcile sweep clears it hours later.
-      - name: Release the reservation
-        uses: ./.github/actions/remove-issue-labels
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ inputs.issue-number }}
-          labels: ${{ env.WORKING_LABEL }}
-  reserve:
-    needs: [still_open, size_guard, eligibility]
-    if: needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true' && needs.size_guard.outputs.too_big != 'true'
     runs-on: agents-arc
     timeout-minutes: 5
     permissions:
@@ -377,9 +284,10 @@ jobs:
   conclude:
     needs: [activation, agent, safe_outputs, validate_output]
     # `always()` is load-bearing: without it GitHub prepends `success()`, which returns false
-    # if any needed job was skipped. If activation was skipped (Pliny-Bot #321: refuse_big_issue
-    # skip-poisoned activation in v0.28.0), both conclude AND incomplete skipped and the refine
-    # label never transitioned. The explicit conditions below are still the guard; `always()`
+    # if any needed job was skipped. The historical trigger was the size gate's refuse_big_issue
+    # skip-poisoning activation (Pliny-Bot #321) -- that gate is gone at 1.15.0, but a skip in
+    # any need still short-circuits, so `always()` plus the explicit conditions below remain
+    # the guard. The explicit conditions below are still the guard; `always()`
     # just prevents a skipped need from short-circuiting the whole expression.
     if: >
       always() &&
@@ -680,16 +588,10 @@ jobs:
   incomplete:
     # activation for the artifact prefix the usage read needs; validate_output for its
     # valid output, which decides whether the usage read should look for truncation at all.
-    # size_guard because a refusal is terminal: when too_big is true, refuse_big_issue has
-    # already spoken on the issue and no attempt, retry or park may follow. Without this
-    # clause every refused issue also looped here -- one human-label visit produced eight
-    # refusal comments and eight "Attempt N of 5" comments, none of which could succeed
-    # (Pliny-Bot #322).
-    needs: [activation, agent, safe_outputs, validate_output, size_guard, eligibility]
+    needs: [activation, agent, safe_outputs, validate_output, eligibility]
     if: >
       always() &&
       needs.eligibility.outputs.eligible == 'true' &&
-      needs.size_guard.outputs.too_big != 'true' &&
       (
         needs.agent.result != 'success' ||
         needs.safe_outputs.result != 'success' ||
@@ -827,15 +729,16 @@ jobs:
             ${{ steps.usage.outputs.truncated }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-# `!failure()` is load-bearing, not decoration. gh-aw adds every custom job to the agent's
-# `needs`, including refuse_big_issue -- a job that skips precisely when refinement should
-# run. Without a status function in this `if:` GitHub prepends an implicit `success()`,
-# and a skipped need fails it, so every under-limit issue skipped the agent in 0s and the
-# incomplete loop parked the issue (Pliny-Bot #320-322, 16 runs). `!failure()` suppresses
-# the implicit success(): a refused skip no longer poisons the agent, while any real
-# failure -- size_guard erroring, the refusal job erroring mid-refuse, reserve failing --
-# still blocks it and lands in incomplete.
-if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true' && needs.size_guard.outputs.too_big != 'true' && !failure()
+# `!failure()` is load-bearing, not decoration. `still_open` and `eligibility` skip
+# precisely when refinement should not run (issue closed, parked for review). Without a
+# status function in this `if:` GitHub prepends an implicit `success()`, and a skipped
+# need fails it, so every closed-or-reviewed issue skipped the agent in 0s and the
+# incomplete loop parked it. `!failure()` suppresses the implicit success(): a
+# skipped gate no longer poisons the agent, while any real failure -- eligibility
+# erroring, reserve failing -- still blocks it and lands in incomplete. (The original
+# motivation was the size gate's refuse_big_issue skip; that gate is gone at 1.15.0,
+# but the same skip shape applies to still_open and eligibility, so the guard stays.)
+if: inputs.issue-number != '' && needs.still_open.outputs.open == 'true' && needs.eligibility.outputs.eligible == 'true' && !failure()
 
 runs-on: agents-arc
 runs-on-slim: agents-arc

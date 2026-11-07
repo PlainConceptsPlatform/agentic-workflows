@@ -2645,17 +2645,11 @@ if worker_installed audit; then
   printf '%s\n' "$story_labels" | grep -qx refine || af "stories are not labelled refine, so nothing refines them"
   printf '%s\n' "$story_labels" | grep -qx audit && af "stories are labelled audit; three of them fill the backpressure and audit-close treats each as a report"
   grep -qE '^  staged: true' "$AUDIT_WORKER_MD" || af "is not staged, so gh-aw files the issues before they are measured"
-  audit_env() { sed -n "s/^  $1: \"\([0-9]*\)\"$/\1/p" "$AUDIT_WORKER_MD" | head -1; }
-  if [ -f "$REFINE_WORKER_MD" ]; then
-    refine_chars=$(sed -n 's/^  REFINE_MAX_BODY_CHARS: "\([0-9]*\)"$/\1/p' "$REFINE_WORKER_MD" | head -1)
-    refine_units=$(sed -n 's/^  REFINE_MAX_WORK_UNITS: "\([0-9]*\)"$/\1/p' "$REFINE_WORKER_MD" | head -1)
-    [ "$(audit_env AUDIT_MAX_BODY_CHARS)" -lt "${refine_chars:-0}" ] 2>/dev/null ||
-      af "AUDIT_MAX_BODY_CHARS is not below refine's REFINE_MAX_BODY_CHARS (${refine_chars:-unset})"
-    [ "$(audit_env AUDIT_MAX_WORK_UNITS)" -lt "${refine_units:-0}" ] 2>/dev/null ||
-      af "AUDIT_MAX_WORK_UNITS is not below refine's REFINE_MAX_WORK_UNITS (${refine_units:-unset})"
-    grep -qF 'uses: ./.github/actions/measure-issue-size' "$REFINE_WORKER_MD" ||
-      af "and refine measure with different rules; refine's size_guard must use measure-issue-size"
-  fi
+  # Refine no longer carries a size gate (1.15.0 removed it -- the split mechanism bounds
+  # the output, and gating refine on input size while implement accepts any size just
+  # mis-routed real specs). So there is no REFINE_MAX_* to keep AUDIT_MAX_* below: the
+  # audit's own limits are about keeping its filed stories small and digestible, not about
+  # staying under a gate refine will refuse.
   if [ "$AUDIT_FILE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
@@ -2676,12 +2670,9 @@ if worker_installed docs-audit; then
   printf '%s\n' "$docs_story_labels" | grep -qx docs-audit && dfa "stories are labelled docs-audit; one of them fills the backpressure"
   grep -qE '^  staged: true' "$DOCS_WORKER_MD" || dfa "is not staged, so gh-aw files the issues before they are measured"
   grep -q 'add-issue-labels' "$DOCS_WORKER_MD" && dfa "still labels a report gh-aw filed itself"
-  if [ -f "${WORKFLOWS_DIR}/agent-refine.md" ]; then
-    docs_chars=$(sed -n 's/^  DOCS_AUDIT_MAX_BODY_CHARS: "\([0-9]*\)"$/\1/p' "$DOCS_WORKER_MD" | head -1)
-    refine_chars=$(sed -n 's/^  REFINE_MAX_BODY_CHARS: "\([0-9]*\)"$/\1/p' "${WORKFLOWS_DIR}/agent-refine.md" | head -1)
-    [ "${docs_chars:-99999999}" -lt "${refine_chars:-0}" ] 2>/dev/null ||
-      dfa "DOCS_AUDIT_MAX_BODY_CHARS is not below refine's REFINE_MAX_BODY_CHARS (${refine_chars:-unset})"
-  fi
+  # Refine has no size gate (1.15.0), so there is no REFINE_MAX_BODY_CHARS to keep
+  # DOCS_AUDIT_MAX_BODY_CHARS below. The docs audit's own limit is about keeping its
+  # filed stories small, measured before filing; it does not depend on refine.
   if [ "$DOCS_FILE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
@@ -2817,42 +2808,37 @@ fi
 
 echo "── Refine size gate ──────────────────────────────────────────────────────"
 
-# The size gate added a job that skips in the happy path, and gh-aw adds every custom job to
-# the agent's needs. Three claims about that shape are asserted, because each one broke in
-# production in the same week (Pliny-Bot #320-322: sixteen runs, three parked issues, a
-# refusal loop on an issue the author was shrinking live):
+# Refine had a size-gate + refusal job that skipped in the happy path, and gh-aw adds every
+# custom job to the agent's needs, so a skip-poisoned implicit success() killed the agent
+# in 0s (Pliny-Bot #320-322). The size gate was removed at 1.15.0 (the split mechanism
+# bounds the output, and gating refine on input size while implement accepts any size
+# mis-routed real specs like Bots #1357). Two claims from that era still hold and are
+# asserted below:
 #
-#   1. the agent's gate carries !failure(), so a skipped refusal no longer poisons the
-#      implicit success() and kills the agent in 0s
-#   2. the incomplete job excludes the refusal, so a refused issue is terminal: no attempt
-#      counter, no x/5, no re-dispatch, no stalled
-#   3. the refusal itself releases bot-working, so a refused issue is not left reserved
+#   1. the agent's top-level gate still carries !failure(): still_open and eligibility skip
+#      when refinement should not run (issue closed, parked for review), and without
+#      !failure() a skipped need would poison the implicit success() and skip the agent
+#   2. the split floor: a split child carries a whole stack's machinery, so a 1- or 2-point
+#      slice is a fragment and must be folded into a sibling
 if worker_installed refine; then
-  SIZE_GATE_OK=1
+  REFINE_OK=1
   REFINE_WORKER_MD="${WORKFLOWS_DIR}/agent-refine.md"
 
   # The top-level if: starts at column 0 -- job-level ifs: are indented -- so anchor on that,
-  # not on the prose comment above it. It must end with !failure().
+  # not on the prose comment above it. It must end with !failure(): still_open and eligibility
+  # skip in the not-eligible case, and an implicit success() would short-circuit the agent.
   top_level_if="$(sed -n 's/^if: //p' "$REFINE_WORKER_MD" | head -1)"
   if [[ "$top_level_if" != *'!failure()' ]]; then
-    SIZE_GATE_OK=0
-    echo "FAIL: refine gates the agent without !failure(); a skipped refuse_big_issue poisons the implicit success() and skips the agent on every under-limit issue" >&2
+    REFINE_OK=0
+    echo "FAIL: refine gates the agent without !failure(); a skipped still_open/eligibility poisons the implicit success() and skips the agent on every closed-or-reviewed issue" >&2
   fi
 
-  # Extract the incomplete job's own block. A whole-file grep cannot make this claim: reserve,
-  # refuse_big_issue and the agent gate all read size_guard, so the exclusion clause could be
-  # deleted from incomplete while every grep still passes.
-  incomplete_block="$(awk '/^  incomplete:/{found=1; next} found && /^  [a-z_]+:/{exit} found{print}' "$REFINE_WORKER_MD")"
-  if ! printf '%s' "$incomplete_block" | grep -qE '^    needs: \[.*size_guard' \
-    || ! printf '%s' "$incomplete_block" | grep -qF "needs.size_guard.outputs.too_big != 'true'"; then
-    SIZE_GATE_OK=0
-    echo "FAIL: refine's incomplete does not exclude the refusal path; every refused issue also loops attempts" >&2
-  fi
-
-  refuse_block="$(awk '/^  refuse_big_issue:/{found=1; next} found && /^  [a-z_]+:/{exit} found{print}' "$REFINE_WORKER_MD")"
-  if ! printf '%s' "$refuse_block" | grep -qF 'WORKING_LABEL'; then
-    SIZE_GATE_OK=0
-    echo "FAIL: the refine refusal never releases bot-working; a refused issue stays reserved with no run behind it" >&2
+  # The size gate is gone, so there must be no size_guard job and no refuse_big_issue job
+  # left behind (a leftover job compiles into the agent's needs and re-introduces the
+  # skip-poison the removal was meant to end).
+  if grep -qE '^  (size_guard|refuse_big_issue):' "$REFINE_WORKER_MD"; then
+    REFINE_OK=0
+    echo "FAIL: refine still carries a size_guard or refuse_big_issue job; the size gate was removed at 1.15.0" >&2
   fi
 
   # The split floor: a split child carries a whole stack's machinery (issue, feature branch,
@@ -2861,11 +2847,11 @@ if worker_installed refine; then
   # so a consumer cannot lower it below 3 without editing the worker.
   if ! grep -qF 'MIN_CHILD_POINTS: "3"' "$REFINE_WORKER_MD" \
     || ! grep -qF 'child estimated below ${{ env.MIN_CHILD_POINTS }}' "$REFINE_WORKER_MD"; then
-    SIZE_GATE_OK=0
+    REFINE_OK=0
     echo "FAIL: refine allows split children below 3 points; the floor must stay interpolated from MIN_CHILD_POINTS" >&2
   fi
 
-  if [ "$SIZE_GATE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+  if [ "$REFINE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
 # The safeoutputs bridge reads its JSON from stdin only for `tool .`. Any --flag on the line makes
