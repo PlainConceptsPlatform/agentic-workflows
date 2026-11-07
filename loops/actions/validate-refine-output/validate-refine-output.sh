@@ -121,6 +121,18 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
       (.body | split($marker) | join("") | split($prefix) | join("") |
         gsub("<[^>]*>"; "") | test("[[:alnum:]]")));
 
+  # A completion announcement. Branch 5 (has_clarification -> questions) treats any comment
+  # with content as a question the agent asked, but a "Refinement complete" comment is not a
+  # question: paired with a draft body (which is how branch 5 is reached, via has_draft_body)
+  # it is a self-contradiction -- the agent said complete over a body still pending -- and the
+  # right outcome is invalid, not questions. Seen as a regression after has_draft_body started
+  # matching the pending mark when the HTML draft marker was stripped (1.15.0): the test "a body
+  # still pending with no questions asked is not complete" flipped from invalid to questions.
+  def has_completion_comment:
+    any(.items[]; .type == "add_comment" and (.item_number | tostring) == $issue and
+      (.body | type == "string") and
+      (.body | test("Refinement complete"; "i")));
+
   # Order matters: a run that wrote children is a split even though it also replaced the
   # parent body, and a lone child with no parent update is an incomplete split, not a
   # complete refinement. A body carrying the draft marker is a temporal draft, not a
@@ -140,7 +152,7 @@ jq -r --arg marker "$marker" --arg prefix "$comment_prefix" --arg issue "$issue_
     and (reported_incomplete | not) then "questions"
   elif has_replacement_body and (has_draft_body | not) and (has_pending_marks | not) and has_only_source_items then "complete"
   elif has_clarification and ((has_update | not) or has_draft_body) and has_only_source_items
-    and (reported_incomplete | not) then "questions"
+    and (reported_incomplete | not) and (has_completion_comment | not) then "questions"
   else "invalid"
   end
 ' "$output_file"
