@@ -204,12 +204,31 @@ jobs:
     runs-on: agents-arc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+      - name: Generate SBOM
+        id: sbom
+        uses: anchore/sbom-action@fffec3d851af758d56fee099cf3fbf8aa8779843 # v0.24.3
+        continue-on-error: true
         with:
           format: cyclonedx-json
           artifact-name: ${{ env.SBOM_ARTIFACT_NAME }}
+          syft-version: v1.57.0
           # On a tag that already has a GitHub Release the action attaches the SBOM to it, which
           # needs contents: write this workflow does not have, and fails the run that gates deploy.
+          upload-release-assets: false
+      # The action downloads the syft binary with a single non-retried GET. A transient GitHub
+      # release-CDN 504 (log: "received HTTP status=504 ... _checksums.txt") flips this step to
+      # failure and, because SBOM gates deploy, blocks PROD for no code reason. The first attempt is
+      # continue-on-error so the job stays live; this retry runs only when it actually failed. If
+      # BOTH attempts fail (a real syft/SBOM error, not a flaky download), the job still fails and
+      # SBOM stays a gate.
+      - name: Retry SBOM on transient asset 504
+        if: ${{ steps.sbom.outcome == 'failure' }}
+        uses: anchore/sbom-action@fffec3d851af758d56fee099cf3fbf8aa8779843 # v0.24.3
+        with:
+          format: cyclonedx-json
+          artifact-name: ${{ env.SBOM_ARTIFACT_NAME }}
+          syft-version: v1.57.0
+          # Same guard as above: a tag release needs contents: write, which this job lacks.
           upload-release-assets: false
 
   # The merge queue requires this check. On a pull request with MERGE_QUEUE on, the heavy jobs are
