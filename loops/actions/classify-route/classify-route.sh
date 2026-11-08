@@ -14,10 +14,12 @@ set -euo pipefail
 # route matrix asserts the two still agree.
 readonly AUDIT_CRON="${AUDIT_CRON:-17 1 * * 1}"
 readonly DOCS_AUDIT_CRON="${DOCS_AUDIT_CRON:-47 2 1,15 * *}"
+# The hourly reconcile cron belongs to agentics-merge-belt.yml, which classifies its events with
+# this same file: CI completions, merges and approvals as well as this cron.
 readonly RECONCILE_BOT_PR_RUNS_CRON="17 * * * *"
 # The housekeeping, audit-close and cleanup-artifacts crons belong to agentics-housekeeping.yml,
 # which never calls this classifier. Their operations still route here, and the router forwards
-# them.
+# them, as it forwards merge-gate, merge-train and reconcile-bot-pr-runs to the merge belt.
 
 has_label() {
   jq -e --arg name "$1" 'index($name)' >/dev/null 2>&1 <<<"${ISSUE_LABELS:-[]}"

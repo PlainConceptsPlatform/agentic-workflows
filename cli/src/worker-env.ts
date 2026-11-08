@@ -259,15 +259,18 @@ export function mergePlumbing(
     ? { content: packageContent, report: { keptEnv: [], updatedDefaults: [], consumerOnlyEnv: [], droppedEnv: [] } }
     : mergeWorkerEnv(packageContent, source, baselineContent, parseYamlEnv);
 
-  if (finalRouter === undefined) return merged;
+  // A plumbing file with a workflow_run trigger (agentics-merge-belt.yml) needs CI_WORKFLOW_NAME
+  // in that literal line too, exactly as the router did when it owned the trigger.
+  const mirrored = (content: string) => ({ content: mirrorRouterLiterals(content), report: merged.report });
+  if (finalRouter === undefined) return mirrored(merged.content);
   const routerByKey = new Map(parseYamlEnv(finalRouter).entries.map((entry) => [entry.key, entry]));
   const env = parseYamlEnv(merged.content);
-  if (!env.present) return merged;
+  if (!env.present) return mirrored(merged.content);
   const synced = env.entries.map((entry) => {
     const fromRouter = routerByKey.get(entry.key);
     return fromRouter === undefined ? entry : { key: entry.key, leading: entry.leading, lines: fromRouter.lines };
   });
-  return { content: serializeWorkerEnv({ ...env, entries: synced }), report: merged.report };
+  return mirrored(serializeWorkerEnv({ ...env, entries: synced }));
 }
 
 /**

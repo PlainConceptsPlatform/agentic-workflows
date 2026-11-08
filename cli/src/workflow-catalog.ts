@@ -51,6 +51,7 @@ export const retiredWorkflowFiles = [
 // declares is copied from the router, which stays the one place to change it.
 export const plumbingWorkflowFiles = [
   "agentics-housekeeping.yml",
+  "agentics-merge-belt.yml",
 ] as const;
 
 export const packageOwnedTargets = [

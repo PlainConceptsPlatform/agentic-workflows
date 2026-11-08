@@ -414,6 +414,57 @@ describe("catalog installation", () => {
     });
   });
 
+  // The second split-out file. It owns the workflow_run trigger now, so the CI workflow name the
+  // consumer set in its router has to reach that literal line too.
+  describe("split-out merge belt workflow", () => {
+    const routerWith = (env: string, version?: string) =>
+      `${header("loops/workflows/work-router.yml", version)}name: "# Main Work Router"\n\nenv:\n${env}\non:\n  workflow_dispatch:\n\njobs:\n  classify:\n    runs-on: x\n`;
+    const beltWith = (env: string, ci = "App: CI", version?: string) =>
+      `${header("loops/workflows/agentics-merge-belt.yml", version)}name: "Agentics: Merge Belt"\n\nenv:\n${env}\non:\n  workflow_run:\n    workflows: ["${ci}"]\n    types: [completed]\n\njobs:\n  merge-train:\n    runs-on: x\n`;
+    const packageSource = () => createDirectory({
+      "workflows/work-router.yml": routerWith('  CI_WORKFLOW_NAME: "App: CI"\n  TRUSTED_BOTS: "bot"\n'),
+      "workflows/agentics-merge-belt.yml": beltWith('  CI_WORKFLOW_NAME: "App: CI"\n  TRUSTED_BOTS: "bot"\n  MERGE_TRAIN_REPAIRS: "1"\n'),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+
+    it("takes the train's settings from the router, drops them there, and mirrors the CI name into its trigger", async () => {
+      const sourcePath = await packageSource();
+      const repositoryPath = await createDirectory({
+        ".github/workflows/work-router.yml": routerWith(
+          '  CI_WORKFLOW_NAME: "Build"\n  TRUSTED_BOTS: "bot"\n  MERGE_TRAIN_REPAIRS: "3"\n', "0.6.0"),
+      });
+
+      const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", baseline: offline });
+
+      expect(result.changes.find((change) => change.target === ".github/workflows/agentics-merge-belt.yml"))
+        .toMatchObject({ status: "added" });
+      const belt = await readFile(join(repositoryPath, ".github/workflows/agentics-merge-belt.yml"), "utf8");
+      expect(belt).toContain('  MERGE_TRAIN_REPAIRS: "3"\n');
+      expect(belt).toContain('  CI_WORKFLOW_NAME: "Build"\n');
+      expect(belt).toContain('    workflows: ["Build"]\n');
+      const router = await readFile(join(repositoryPath, ".github/workflows/work-router.yml"), "utf8");
+      expect(router).not.toContain("MERGE_TRAIN_REPAIRS");
+      expect(router).toContain('  CI_WORKFLOW_NAME: "Build"\n');
+    });
+
+    it("follows a CI name changed in the router on a later update", async () => {
+      const sourcePath = await packageSource();
+      const repositoryPath = await createDirectory({
+        ".github/workflows/work-router.yml": routerWith('  CI_WORKFLOW_NAME: "Pipeline"\n  TRUSTED_BOTS: "bot"\n', "0.7.0"),
+        ".github/workflows/agentics-merge-belt.yml": beltWith(
+          '  CI_WORKFLOW_NAME: "Build"\n  TRUSTED_BOTS: "bot"\n  MERGE_TRAIN_REPAIRS: "2"\n', "Build", "0.7.0"),
+      });
+
+      await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.8.0", baseline: offline });
+
+      const belt = await readFile(join(repositoryPath, ".github/workflows/agentics-merge-belt.yml"), "utf8");
+      expect(belt).toContain('  CI_WORKFLOW_NAME: "Pipeline"\n');
+      expect(belt).toContain('    workflows: ["Pipeline"]\n');
+      expect(belt).toContain('  MERGE_TRAIN_REPAIRS: "2"\n');
+    });
+  });
+
   it("dry-run computes the plan and writes nothing", async () => {
     const sourcePath = await createDirectory({
       "actions/check/action.yml": header("loops/actions/check/action.yml") + "name: Check\n",

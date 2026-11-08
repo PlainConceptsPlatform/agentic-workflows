@@ -85,18 +85,22 @@ The router (`work-router.yml`) is merged the same way, through `mergeRouter`, be
 `env:` block carries the two values a repository must set: `CI_WORKFLOW_NAME` and `AUDIT_CRON`.
 Both are also needed where GitHub evaluates no expression (a `workflow_run.workflows:` list and a
 `cron:`), so `mirrorRouterLiterals` copies them from `env:` into those two literal lines after the
-merge. The audit cron line is found by its `# audit slot` marker comment. Everything inside a job
+merge. The `workflow_run` list is in `agentics-merge-belt.yml` now, so for the router only the cron
+lines match, and the same function fills the belt's list after `mergePlumbing`. The audit cron line
+is found by its `# audit slot` marker comment. Everything inside a job
 reads the values from `env:`, including `classify-route.sh`, whose `AUDIT_CRON` is
 `"${AUDIT_CRON:-<package default>}"`. `verify-route-matrix.sh` asserts the copies still agree and
 that no third literal appears.
 
 A workflow split out of the router (`plumbingWorkflowFiles` in `workflow-catalog.ts`, today
-`agentics-housekeeping.yml`) is merged by `mergePlumbing`, after the router. Its `env:` is kept like
+`agentics-housekeeping.yml` and `agentics-merge-belt.yml`) is merged by `mergePlumbing`, after the
+router. Its `env:` is kept like
 the router's, with two more rules. On its first install the consumer has no copy, so its values are
 taken from the consumer's router, with that router's release as the baseline: a setting that moved
 out of the router keeps the consumer's value, and an untouched old default follows the package. A
-key the router also declares (`MERGE_TRAIN_HOLD_LABEL`) is copied from the merged router, so the
-router stays the one place to change it. `dropMovedRouterEnv` then removes the moved keys from the
+key the router also declares (`CI_WORKFLOW_NAME`, `TRUSTED_BOTS`, `MERGE_TRAIN_HOLD_LABEL`) is
+copied from the merged router, so the router stays the one place to change it, and
+`mirrorRouterLiterals` then writes `CI_WORKFLOW_NAME` into the belt's `workflow_run` trigger. `dropMovedRouterEnv` then removes the moved keys from the
 router, or a consumer who had changed one would keep a dead copy there.
 
 A worker (`agent-*.md`) is merged by `worker-env.ts`: the package file with the consumer's `env:`
@@ -169,9 +173,11 @@ install to `.github/ISSUE_TEMPLATE/`; `opencode.ci.json` installs to the reposit
 | `loops/templates/opencode/opencode.ci.json` | `opencode.ci.json` | Yes (mandatory) |
 | `loops/scripts/compile-agent-workflows.mjs` | `scripts/compile-agent-workflows.mjs` | Yes (mandatory) |
 
-Workers not in the selected route set are left out of the file set, and the router is regenerated
-for that set by `route-processing.ts`: the excluded route's `call-<route>` job, the helper jobs that
-serve only it (`check-implement-pr`, `dispatch-triage`), its cron and its dispatch option go. The
+Workers not in the selected route set are left out of the file set, and the router and
+`agentics-merge-belt.yml` are regenerated for that set by `route-processing.ts`: the excluded
+route's `call-<route>` job, the helper jobs that serve only it (`check-implement-pr`,
+`dispatch-triage`; for the gate `merge-train`, `merge-approved` and the router's
+`forward-merge-train`), its cron and its dispatch option go. The
 classifier and the route matrix are copied as they are; the matrix reads the installed workers.
 
 The source path is resolved relative to the installed package's `loops/` directory. In development,

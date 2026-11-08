@@ -50,10 +50,11 @@ context, give it a bounded task, and require one complete final Safe Outputs pay
 
 - `loops/workflows/work-router.yml` owns the public triggers that can start an agent, route
   selection, concurrency, and calls to workers. It is plain YAML, not a gh-aw markdown workflow.
-- `loops/workflows/agentics-*.yml` are plain YAML workflows split out of the router for deterministic
-  work that never starts an agent (`agentics-housekeeping.yml`: housekeeping, audit-close,
-  cleanup-artifacts). Each owns its own triggers, an `env:` block the installer keeps, and the
-  `AGENTIC_WORKFLOWS_DISABLED` check on every job. When an operation moves to one, the router keeps
+- `loops/workflows/agentics-*.yml` are plain YAML workflows split out of the router
+  (`agentics-housekeeping.yml`: housekeeping, audit-close, cleanup-artifacts;
+  `agentics-merge-belt.yml`: the merge train, merge-approved, the hourly reconcile, and the merge
+  gate it calls, the one worker that does not start from the router). Each owns its own triggers,
+  an `env:` block the installer keeps, and the `AGENTIC_WORKFLOWS_DISABLED` check on every job. When an operation moves to one, the router keeps
   the operation and forwards it, because other code and people still dispatch it there.
 - `loops/workflows/agent-*.md` are `workflow_call` workers only. They have no public trigger and
   declare no concurrency.
@@ -82,20 +83,23 @@ workers that have no public trigger at all.
 
 ```
 loops/workflows/
-  work-router.yml              conventional YAML. Every on: the repository has.
+  work-router.yml              conventional YAML. Every on: that can start an agent but the gate.
     classify                   one event in, exactly one route out
       call-refine              agent-refine.md              workflow_call only
       call-implement           agent-implement.md           workflow_call only
       call-triage              agent-triage.md              workflow_call only
       call-apply-review        agent-apply-review.md        workflow_call only
-      call-merge-gate          agent-merge-gate.md          workflow_call only
       call-audit               agent-audit.md               workflow_call only
       call-release             agent-release.md             workflow_call only
       call-evidence            evidence.yml                 plain YAML, no model
       deterministic jobs       check-implement-pr, dispatch-triage, bot-approve,
-                              merge-train, land-stack-child, reconcile-bot-pr-runs,
-                              forward-housekeeping, validate
+                              land-stack-child, stack-landed, forward-merge-train,
+                              forward-reconcile, forward-housekeeping, validate
   agentics-housekeeping.yml    its own crons: housekeeping, audit-close, cleanup-artifacts
+  agentics-merge-belt.yml      CI completions, merges, approvals, the hourly cron
+    classify                   the same classifier as the router
+      call-merge-gate          agent-merge-gate.md          workflow_call only
+      merge-train, merge-approved, reconcile-bot-pr-runs
   authorize-bot-work.yml       human adds implement/refine → bot adds bot-working
 ```
 

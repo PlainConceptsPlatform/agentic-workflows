@@ -226,6 +226,44 @@ describe("processRoutes", () => {
     expect(options(router)).toEqual(["refine", "implement", "audit-close", "cleanup-artifacts", "reconcile-bot-pr-runs", "validate", "release"]);
   });
 
+  // The merge gate's helpers live in agentics-merge-belt.yml and leave it with the gate; the router
+  // loses the forwarder that would hand the belt an operation it no longer offers.
+  it("strips the merge gate from the merge belt and its forwarder from the router", () => {
+    const belt = [
+      "on:",
+      "  workflow_dispatch:",
+      "    inputs:",
+      "      operation:",
+      "        options:",
+      "          - merge-gate",
+      "          - merge-train",
+      "          - reconcile-bot-pr-runs",
+      "jobs:",
+      "  classify:",
+      "    runs-on: x",
+      "  # The gate.",
+      "  call-merge-gate:",
+      "    uses: ./.github/workflows/agent-merge-gate.lock.yml",
+      "  merge-train:",
+      "    runs-on: x",
+      "  merge-approved:",
+      "    runs-on: x",
+      "  reconcile-bot-pr-runs:",
+      "    runs-on: x",
+      "",
+    ].join("\n");
+    const router = ROUTER_YAML.replace("  validate:", "  forward-merge-train:\n    runs-on: x\n  validate:");
+    const input = new Map([...files(), [".github/workflows/work-router.yml", router], [".github/workflows/agentics-merge-belt.yml", belt]]);
+
+    const result = processRoutes(input, routeNames.filter((route) => route !== "merge-gate"));
+
+    expect(jobs(result.get(".github/workflows/agentics-merge-belt.yml")!)).toEqual(["classify", "reconcile-bot-pr-runs"]);
+    expect(options(result.get(".github/workflows/agentics-merge-belt.yml")!)).toEqual(["reconcile-bot-pr-runs"]);
+    expect(result.get(".github/workflows/agentics-merge-belt.yml")).not.toContain("# The gate.");
+    expect(jobs(result.get(".github/workflows/work-router.yml")!)).not.toContain("forward-merge-train");
+    expect(processRoutes(input, [...routeNames]).get(".github/workflows/agentics-merge-belt.yml")).toBe(belt);
+  });
+
   it("never rewrites the classifier or the route matrix", () => {
     const result = processRoutes(files(), ["refine"]);
 

@@ -18,6 +18,8 @@ WORKFLOWS_DIR="${HERE}/../../workflows"
 ROUTER_YML="${WORKFLOWS_DIR}/work-router.yml"
 # The scheduled janitor jobs (housekeeping, audit-close, cleanup-artifacts) live in their own file.
 HOUSEKEEPING_WF_YML="${WORKFLOWS_DIR}/agentics-housekeeping.yml"
+# The merge train, the merge gate, merge-approved and the hourly reconcile live in their own file.
+BELT_WF_YML="${WORKFLOWS_DIR}/agentics-merge-belt.yml"
 IMPLEMENT_WORKER_MD="${WORKFLOWS_DIR}/agent-implement.md"
 MERGE_GATE_WORKER_MD="${WORKFLOWS_DIR}/agent-merge-gate.md"
 
@@ -31,11 +33,16 @@ router_env() {
 housekeeping_env() {
   sed -n "s/^  $1: *//p" "$HOUSEKEEPING_WF_YML" | head -1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
 }
-# The workflow file that holds a deterministic job: the router, or the housekeeping file for the
-# three janitor jobs.
+# The same lookup in agentics-merge-belt.yml's own env: block.
+belt_env() {
+  sed -n "s/^  $1: *//p" "$BELT_WF_YML" | head -1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+# The workflow file that holds a job: the router, the housekeeping file for the three janitor
+# jobs, or the merge belt for the merge train's.
 job_file() {
   case "$1" in
     housekeeping | audit-close | cleanup-artifacts) echo "$HOUSEKEEPING_WF_YML" ;;
+    call-merge-gate | merge-gate | merge-train | merge-approved | reconcile-bot-pr-runs) echo "$BELT_WF_YML" ;;
     *) echo "$ROUTER_YML" ;;
   esac
 }
@@ -373,12 +380,20 @@ echo "── Router wiring ─────────────────�
 # maps to no route. Neither produces a red run, so assert the copies here.
 MIRROR_OK=1
 ci_name="$(router_env CI_WORKFLOW_NAME)"
-trigger_name="$(sed -n 's/^ *workflows: \["\(.*\)"\] *$/\1/p' "$ROUTER_YML" | head -1)"
+trigger_name="$(sed -n 's/^ *workflows: \["\(.*\)"\] *$/\1/p' "$BELT_WF_YML" | head -1)"
 if [ -z "$ci_name" ]; then
   MIRROR_OK=0; echo "FAIL: work-router.yml defines no CI_WORKFLOW_NAME in its env: block" >&2
 elif [ "$ci_name" != "$trigger_name" ]; then
   MIRROR_OK=0
-  echo "FAIL: the workflow_run trigger names '${trigger_name}' but env.CI_WORKFLOW_NAME is '${ci_name}'" >&2
+  echo "FAIL: agentics-merge-belt.yml's workflow_run trigger names '${trigger_name}' but work-router.yml's env.CI_WORKFLOW_NAME is '${ci_name}'" >&2
+fi
+if [ "$(belt_env CI_WORKFLOW_NAME)" != "$ci_name" ]; then
+  MIRROR_OK=0
+  echo "FAIL: agentics-merge-belt.yml's env.CI_WORKFLOW_NAME is '$(belt_env CI_WORKFLOW_NAME)' but work-router.yml's is '${ci_name}'" >&2
+fi
+if grep -q '^  workflow_run:' "$ROUTER_YML"; then
+  MIRROR_OK=0
+  echo "FAIL: work-router.yml still has a workflow_run trigger; CI completions belong to agentics-merge-belt.yml" >&2
 fi
 # The audit cron only exists in a router that installed the audit worker.
 if worker_installed audit; then
@@ -401,10 +416,10 @@ if worker_installed docs-audit; then
 fi
 # And nothing may go back to naming the CI workflow directly: a second literal is a second
 # thing to keep in step, and the one that gets forgotten is the one inside a jq filter.
-if [ "$(count -c '"App: CI"' "$ROUTER_YML")" -gt 2 ]; then
+if [ "$(count -c '"App: CI"' "$ROUTER_YML")" -gt 1 ] || [ "$(count -c '"App: CI"' "$BELT_WF_YML")" -gt 2 ]; then
   MIRROR_OK=0
-  echo "FAIL: work-router.yml hardcodes the CI workflow name outside env: and the mirrored trigger" >&2
-  grep -n '"App: CI"' "$ROUTER_YML" >&2
+  echo "FAIL: the CI workflow name is hardcoded outside env: and the belt's mirrored trigger" >&2
+  grep -n '"App: CI"' "$ROUTER_YML" "$BELT_WF_YML" >&2
 fi
 
 # Bot logins are the same shape of problem. Most sites read env.TRUSTED_BOTS, but a job-level
@@ -483,10 +498,10 @@ if [ "$PIN_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # Nothing executed the program. It failed hourly in production for a day, on the one job whose
 # purpose is to keep stuck pull requests moving. Extract it and give it inputs.
 BELT_OK=1
-bot_pr_filter=$(awk '/jq -r --arg repo "\$REPO"/{found=1;next} found && /^ *'"'"' \|$/{exit} found' "$ROUTER_YML")
+bot_pr_filter=$(awk '/jq -r --arg repo "\$REPO"/{found=1;next} found && /^ *'"'"' \|$/{exit} found' "$BELT_WF_YML")
 if [ -z "$bot_pr_filter" ]; then
   BELT_OK=0
-  echo "FAIL: could not extract the open-pull-request filter from work-router.yml" >&2
+  echo "FAIL: could not extract the open-pull-request filter from agentics-merge-belt.yml" >&2
 else
   # One of each: a trusted App under both spellings, a human, a draft, and a fork.
   belt_fixture='[
@@ -527,12 +542,12 @@ SWEEP_OK=1
 # The live runs come from status-filtered queries. Reading the repository's latest hundred runs of
 # any kind let a long-queued implement fall out of the window, and the sweep cleared bot-working
 # from issues whose runs were alive (Pliny-Bot #693 and #707).
-if grep -q 'gh api "repos/\$REPO/actions/runs?per_page=100"' "$ROUTER_YML" ||
-  ! grep -qF 'actions/runs?status=$status&per_page=100' "$ROUTER_YML"; then
+if grep -q 'gh api "repos/\$REPO/actions/runs?per_page=100"' "$BELT_WF_YML" ||
+  ! grep -qF 'actions/runs?status=$status&per_page=100' "$BELT_WF_YML"; then
   SWEEP_OK=0
   echo "FAIL: the stale-reservation sweep must read live runs by status, not the latest hundred runs" >&2
 fi
-if ! grep -qF 'test(\"#${issue}[^0-9]\")' "$ROUTER_YML"; then
+if ! grep -qF 'test(\"#${issue}[^0-9]\")' "$BELT_WF_YML"; then
   SWEEP_OK=0
   echo "FAIL: the stale-reservation sweep does not match a run title with a character class; a word boundary there is eaten by bash and jq" >&2
 else
@@ -581,7 +596,7 @@ if [ "$SWEEP_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # And nothing may go back to a word boundary in a double-quoted jq program anywhere, because the
 # failure is silent in both directions: the filter matches nothing and the job stays green.
 BOUNDARY_OK=1
-for candidate in "$ROUTER_YML" "${WORKFLOWS_DIR}"/agent-*.md; do
+for candidate in "$ROUTER_YML" "$BELT_WF_YML" "$HOUSEKEEPING_WF_YML" "${WORKFLOWS_DIR}"/agent-*.md; do
   [ -f "$candidate" ] || continue
   offenders=$(grep -n -- '--jq "' "$candidate" 2>/dev/null | grep -F '\b' || true)
   if [ -n "$offenders" ]; then
@@ -729,7 +744,7 @@ if worker_installed merge-gate; then
   # rebase onto bases other gates are about to invalidate. A per-issue group here would
   # reintroduce that race, so assert the repo-wide lock is the one in use. The exception is a gate
   # handed red CI: it repairs and pushes and can never merge, so it queues per pull request.
-  gate_group="$(sed -n '/^  call-merge-gate:/,/^    permissions:/p' "$ROUTER_YML" | grep 'group:')"
+  gate_group="$(sed -n '/^  call-merge-gate:/,/^    permissions:/p' "$BELT_WF_YML" | grep 'group:')"
   if grep -q "'merge-belt'" <<<"$gate_group" &&
     grep -q "ci-conclusion == 'failure' && format('merge-repair-{0}', needs.classify.outputs.pr-number)" <<<"$gate_group"; then
     PASS=$((PASS + 1))
@@ -761,8 +776,8 @@ if worker_installed merge-gate; then
     # One gate at a time, found by the title run-name gives it. The belt looked for a title that
     # run-name had stopped producing, saw no live gate ever, and dispatched #680 five times in
     # an hour onto a belt that runs one gate at a time.
-    gate_title="$(sed -n "s/.*format('\(Agent: Merge Gate - PR #\){0}{1}'.*/\1/p" "$ROUTER_YML" | head -1)"
-    grep -q "' (repair)'" "$ROUTER_YML" ||
+    gate_title="$(sed -n "s/.*format('\(Agent: Merge Gate - PR #\){0}{1}'.*/\1/p" "$BELT_WF_YML" | head -1)"
+    grep -q "' (repair)'" "$BELT_WF_YML" ||
       { BELT_OK=0; echo "FAIL: run-name must mark a gate handed red CI as a (repair), the train counts them by it" >&2; }
     if [ -z "$gate_title" ] || ! grep -qF "GATE_TITLE_PREFIX=\"${gate_title}\"" "$TRAIN_SH"; then
       BELT_OK=0
@@ -781,7 +796,7 @@ if worker_installed merge-gate; then
       { BELT_OK=0; echo "FAIL: the train must key a verdict's park to the head commit" >&2; }
   fi
   # The App token: a dispatch or a branch update made with GITHUB_TOKEN starts no workflow.
-  train_job="$(sed -n '/^  merge-train:$/,/^  [a-z-]*:$/p' "$ROUTER_YML")"
+  train_job="$(sed -n '/^  merge-train:$/,/^  [a-z-]*:$/p' "$BELT_WF_YML")"
   if ! grep -q 'token: ${{ steps.app-token.outputs.token }}' <<<"$train_job" ||
     ! grep -q 'group: merge-train' <<<"$train_job" ||
     ! grep -q 'needs: \[classify, call-merge-gate\]' <<<"$train_job"; then
@@ -822,19 +837,21 @@ done
 # attempts_so_far='' (the classifier emitted merge-gate-attempts, the job never exported it),
 # fromJson('') killed the incomplete job before its attempt comment, and the belt re-dispatched
 # the same crash every hour. Every name the router reads must be exported by the classify job.
-CLASSIFY_EXPORTS="$(tr -d '\r' <"$ROUTER_YML" |
-  sed -n '/^  classify:$/,/^  [a-z-]*:$/p' |
-  sed -n '/^    outputs:$/,/^    [a-z]*:$/p' |
-  sed -n 's/^      \([a-zA-Z0-9_-]*\):.*/\1/p')"
 CLASSIFY_OK=1
-[ -n "$CLASSIFY_EXPORTS" ] || { CLASSIFY_OK=0; echo "FAIL: could not read the classify job's outputs from work-router.yml" >&2; }
-while read -r name; do
-  [ -n "$name" ] || continue
-  if ! grep -qx "$name" <<<"$CLASSIFY_EXPORTS"; then
-    CLASSIFY_OK=0
-    echo "FAIL: work-router.yml reads needs.classify.outputs.${name} but the classify job does not export it" >&2
-  fi
-done < <(grep -oE 'needs\.classify\.outputs\.[a-zA-Z0-9_-]+' "$ROUTER_YML" | sed 's/.*\.//' | sort -u)
+for classify_file in "$ROUTER_YML" "$BELT_WF_YML"; do
+  CLASSIFY_EXPORTS="$(tr -d '\r' <"$classify_file" |
+    sed -n '/^  classify:$/,/^  [a-z-]*:$/p' |
+    sed -n '/^    outputs:$/,/^    [a-z]*:$/p' |
+    sed -n 's/^      \([a-zA-Z0-9_-]*\):.*/\1/p')"
+  [ -n "$CLASSIFY_EXPORTS" ] || { CLASSIFY_OK=0; echo "FAIL: could not read the classify job's outputs from $(basename "$classify_file")" >&2; }
+  while read -r name; do
+    [ -n "$name" ] || continue
+    if ! grep -qx "$name" <<<"$CLASSIFY_EXPORTS"; then
+      CLASSIFY_OK=0
+      echo "FAIL: $(basename "$classify_file") reads needs.classify.outputs.${name} but its classify job does not export it" >&2
+    fi
+  done < <(grep -oE 'needs\.classify\.outputs\.[a-zA-Z0-9_-]+' "$classify_file" | sed 's/.*\.//' | sort -u)
+done
 if [ "$CLASSIFY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 if worker_installed merge-gate; then
@@ -1153,10 +1170,10 @@ done
 
 # merge-approved serves the gate and leaves with it.
 if worker_installed merge-gate; then
-  if grep -q "route == 'merge-approved'" "$ROUTER_YML"; then PASS=$((PASS + 1)); else
-    FAIL=$((FAIL + 1)); echo "FAIL: work-router.yml has no job for route 'merge-approved'" >&2
+  if grep -q "route == 'merge-approved'" "$BELT_WF_YML"; then PASS=$((PASS + 1)); else
+    FAIL=$((FAIL + 1)); echo "FAIL: agentics-merge-belt.yml has no job for route 'merge-approved'" >&2
   fi
-elif grep -q "route == 'merge-approved'" "$ROUTER_YML"; then
+elif grep -q "route == 'merge-approved'" "$ROUTER_YML" "$BELT_WF_YML"; then
   FAIL=$((FAIL + 1)); echo "FAIL: merge-approved is installed without the merge gate" >&2
 else
   PASS=$((PASS + 1))
@@ -1364,6 +1381,112 @@ else
     hw_fail "agentics-housekeeping.yml has no ownership header"
 fi
 if [ "$HW_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+echo "── Merge belt workflow ───────────────────────────────────────────────────"
+
+# The merge train's jobs left the router for agentics-merge-belt.yml. As with the janitor, both
+# halves of the move are asserted: a job in both files runs twice, a trigger in neither is an event
+# nothing hears, and a forward that never arrives looks exactly like a quiet day.
+MB_OK=1
+mb_fail() { MB_OK=0; echo "FAIL: $1" >&2; }
+if [ ! -f "$BELT_WF_YML" ]; then
+  mb_fail "agentics-merge-belt.yml is missing"
+else
+  # The jobs that serve the gate leave with it; the reconcile is always there.
+  belt_jobs=(reconcile-bot-pr-runs)
+  if worker_installed merge-gate; then belt_jobs+=(call-merge-gate merge-train merge-approved); fi
+  for job in classify "${belt_jobs[@]}"; do
+    grep -q "^  ${job}:$" "$BELT_WF_YML" || mb_fail "agentics-merge-belt.yml has no ${job} job"
+  done
+  for job in "${belt_jobs[@]}"; do
+    if grep -q "^  ${job}:$" "$ROUTER_YML"; then mb_fail "work-router.yml still has a ${job} job, so it would run twice"; fi
+  done
+  # The off switch is the classify job's: every other belt job needs it.
+  sed -n '/^  classify:$/,/^  [a-z0-9_-]*:$/p' "$BELT_WF_YML" | grep -qF "if: vars.AGENTIC_WORKFLOWS_DISABLED == ''" ||
+    mb_fail "the belt's classify job ignores the AGENTIC_WORKFLOWS_DISABLED off switch"
+  for job in "${belt_jobs[@]}"; do
+    [ "$job" = classify ] && continue
+    sed -n "/^  ${job}:$/,/^  [a-z0-9_-]*:$/p" "$BELT_WF_YML" | grep -qE '^    needs: (classify|\[classify)' ||
+      mb_fail "the belt's ${job} job does not need classify, so the off switch does not stop it"
+  done
+  # The events moved with the jobs.
+  grep -qF -- '- cron: "17 * * * *"' "$BELT_WF_YML" || mb_fail "agentics-merge-belt.yml does not schedule the hourly reconcile"
+  if grep -qF -- '- cron: "17 * * * *"' "$ROUTER_YML"; then mb_fail "work-router.yml still fires the hourly reconcile cron"; fi
+  [ "$(route_field route EVENT=schedule 'SCHEDULE=17 * * * *')" = reconcile-bot-pr-runs ] ||
+    mb_fail "the hourly cron no longer routes to reconcile-bot-pr-runs"
+  for trigger in workflow_run pull_request_review pull_request_target; do
+    grep -q "^  ${trigger}:$" "$BELT_WF_YML" || mb_fail "agentics-merge-belt.yml does not hear ${trigger}"
+  done
+  sed -n '/^  pull_request_target:$/,/^  [a-z_]*:$/p' "$BELT_WF_YML" | grep -qF 'types: [closed]' ||
+    mb_fail "agentics-merge-belt.yml must hear only closed pull requests; labeled stays with the router and is forwarded"
+  # The run titles merge-train.sh and the housekeeping sweep read.
+  if worker_installed merge-gate; then
+    grep -qF "format('Agent: Merge Gate - PR #{0}{1}'" "$BELT_WF_YML" || mb_fail "agentics-merge-belt.yml no longer titles a gate run 'Agent: Merge Gate - PR #'"
+    if grep -qF "format('Agent: Merge Gate - PR #" "$ROUTER_YML"; then
+      mb_fail "work-router.yml still titles a run as a merge gate, so the train would count a forward as a live gate"
+    fi
+    grep -qF 'GATE_WORKFLOW="agentics-merge-belt.yml"' "$TRAIN_SH" || mb_fail "merge-train.sh dispatches the gate somewhere other than agentics-merge-belt.yml"
+    grep -qF 'GATE_WORKFLOWS="agentics-merge-belt.yml work-router.yml"' "$TRAIN_SH" ||
+      mb_fail "merge-train.sh must look for live gates in both files while runs started before the split may be queued"
+    grep -q 'workflows/work-router.yml/' "$TRAIN_SH" && mb_fail "merge-train.sh still reads or dispatches work-router.yml by name"
+  fi
+  # Concurrency groups are unchanged by the move.
+  sed -n '/^  merge-train:$/,/^  [a-z0-9_-]*:$/p' "$BELT_WF_YML" | grep -qE '^      group: merge-train$' ||
+    { worker_installed merge-gate && mb_fail "the merge-train job lost its 'merge-train' concurrency group"; }
+  sed -n '/^  merge-approved:$/,/^  [a-z0-9_-]*:$/p' "$BELT_WF_YML" | grep -qF 'group: merge-approved-${{ needs.classify.outputs.pr-number }}' ||
+    { worker_installed merge-gate && mb_fail "the merge-approved job lost its 'merge-approved-<pr>' concurrency group"; }
+  # The old entry points still work: the router accepts each operation and forwards the route.
+  for op in merge-gate merge-train reconcile-bot-pr-runs; do
+    { [ "$op" = reconcile-bot-pr-runs ] || worker_installed merge-gate; } || continue
+    sed -n '/^      operation:/,/^      issue-number:/p' "$ROUTER_YML" | grep -qx "          - ${op}" ||
+      mb_fail "work-router.yml no longer accepts operation=${op}"
+    sed -n '/^      operation:/,/^      pr-number:/p' "$BELT_WF_YML" | grep -qx "          - ${op}" ||
+      mb_fail "agentics-merge-belt.yml does not offer operation=${op}"
+  done
+  if worker_installed merge-gate; then
+    fwd=$(sed -n '/^  forward-merge-train:$/,/^  [a-z0-9_-]*:$/p' "$ROUTER_YML")
+    printf '%s' "$fwd" | grep -qF 'gh workflow run agentics-merge-belt.yml' ||
+      mb_fail "work-router.yml does not forward merge-gate and merge-train to agentics-merge-belt.yml"
+    # A merge-gate dispatched by github-actions[bot] classifies as a CI handover, so the forward must
+    # carry another identity or the gate a person asked for becomes a train tick.
+    printf '%s' "$fwd" | grep -qF 'GH_TOKEN: ${{ steps.app-token.outputs.token }}' ||
+      mb_fail "the merge-gate forward must use the App token; GITHUB_TOKEN would turn it into a train tick"
+    [ "$(route_field route EVENT=workflow_dispatch OPERATION=merge-gate INPUT_PR_NUMBER=7 'ACTOR=platform-devbox[bot]')" = merge-gate ] ||
+      mb_fail "a merge-gate forwarded by the App no longer reaches the gate"
+    [ "$(route_field route EVENT=pull_request_target ACTION=labeled LABEL=merge-gate EVENT_PR_NUMBER=7)" = merge-gate ] ||
+      mb_fail "the merge-gate label no longer routes to merge-gate, so the router cannot forward it"
+    printf '%s' "$fwd" | grep -qF "needs.classify.outputs.route == 'merge-gate'" ||
+      mb_fail "the forwarder does not pick up the merge-gate route"
+  elif grep -q '^  forward-merge-train:$' "$ROUTER_YML"; then
+    mb_fail "work-router.yml forwards merge-gate without the merge gate installed"
+  fi
+  fwd=$(sed -n '/^  forward-reconcile:$/,/^  [a-z0-9_-]*:$/p' "$ROUTER_YML")
+  printf '%s' "$fwd" | grep -qF 'gh workflow run agentics-merge-belt.yml' ||
+    mb_fail "work-router.yml does not forward reconcile-bot-pr-runs to agentics-merge-belt.yml"
+  printf '%s' "$fwd" | grep -qE '^      actions: write$' ||
+    mb_fail "the reconcile forwarder cannot start a workflow run without actions: write"
+  # The housekeeping sweep ticks the train in its new home and sees gates there.
+  HK_ACTION="${HERE}/../housekeeping/action.yml"
+  if [ -f "$HK_ACTION" ]; then
+    grep -qF "workflow_id: 'agentics-merge-belt.yml'" "$HK_ACTION" || mb_fail "the housekeeping sweep does not tick the merge train in agentics-merge-belt.yml"
+    grep -qF "const AGENT_WORKFLOWS = ['work-router.yml', 'agentics-merge-belt.yml'];" "$HK_ACTION" ||
+      mb_fail "the housekeeping sweep does not look for stuck runs in agentics-merge-belt.yml"
+  fi
+  # Values both files need are copied from the router by the installer, so what ships must agree.
+  for knob in CI_WORKFLOW_NAME TRUSTED_BOTS MERGE_TRAIN_HOLD_LABEL; do
+    [ "$(router_env "$knob")" = "$(belt_env "$knob")" ] ||
+      mb_fail "${knob} differs between work-router.yml and agentics-merge-belt.yml"
+  done
+  # The train's own settings moved with it; a copy left in the router would be dead.
+  for knob in MAX_GATE_ATTEMPTS MERGE_TRAIN_MAX_RETRIES MERGE_TRAIN_STACK_ROOT_AUTOMERGE MERGE_TRAIN_DRY_RUN \
+    MERGE_TRAIN_REPAIRS REFINE_ANSWER_TIMEOUT_HOURS; do
+    [ -z "$(router_env "$knob")" ] || mb_fail "work-router.yml still declares ${knob}; it belongs to agentics-merge-belt.yml"
+    [ -n "$(belt_env "$knob")" ] || mb_fail "agentics-merge-belt.yml does not declare ${knob}"
+  done
+  grep -q 'Source: loops/workflows/agentics-merge-belt.yml' "$BELT_WF_YML" ||
+    mb_fail "agentics-merge-belt.yml has no ownership header"
+fi
+if [ "$MB_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # Dependabot merges ride the maintenance run. They merge code nobody on the team wrote, so the
 # guarantees are asserted: the App token (a GITHUB_TOKEN merge starts no push workflow), the knobs
@@ -2182,7 +2305,7 @@ if worker_installed merge-gate; then
   GATE_OK=1
 
   # Nothing may key the park to CI timing again.
-  stale_horizon=$(count -cE 'verdict" \> "\$ci_finished"|latest_verdict" \> "\$ci_finished"' "$ROUTER_YML")
+  stale_horizon=$(( $(count -cE 'verdict" \> "\$ci_finished"|latest_verdict" \> "\$ci_finished"' "$ROUTER_YML") + $(count -cE 'verdict" \> "\$ci_finished"|latest_verdict" \> "\$ci_finished"' "$BELT_WF_YML") ))
   if [ "$stale_horizon" -eq 0 ]; then
     PASS=$((PASS + 1))
   else
@@ -2241,7 +2364,7 @@ if worker_installed merge-gate; then
   fi
 
   # One cap, not four literals, and it has to match what the worker tells the reader.
-  router_cap="$(router_env MAX_GATE_ATTEMPTS)"
+  router_cap="$(belt_env MAX_GATE_ATTEMPTS)"
   worker_cap="$(sed -n 's/^  MAX_ATTEMPTS: "\([0-9]*\)"$/\1/p' "${WORKFLOWS_DIR}/agent-merge-gate.md" | head -1)"
   if [ -n "$router_cap" ] && [ "$router_cap" = "$worker_cap" ]; then
     PASS=$((PASS + 1))
@@ -2251,12 +2374,12 @@ if worker_installed merge-gate; then
   fi
   # And no path may go back to a literal. Counting the word `6` would match a hundred things,
   # so this looks only at the attempt comparison and the message beside it.
-  if ! grep -qE '"\$attempts" -ge 6|attempts \+ 1\)\) of 6' "$ROUTER_YML"; then
+  if ! grep -qE '"\$attempts" -ge 6|attempts \+ 1\)\) of 6' "$ROUTER_YML" "$BELT_WF_YML"; then
     PASS=$((PASS + 1))
   else
     GATE_OK=0
-    echo "FAIL: the gate attempt cap is hardcoded in work-router.yml instead of read from env.MAX_GATE_ATTEMPTS" >&2
-    grep -nE '"\$attempts" -ge 6|attempts \+ 1\)\) of 6' "$ROUTER_YML" >&2
+    echo "FAIL: the gate attempt cap is hardcoded instead of read from env.MAX_GATE_ATTEMPTS" >&2
+    grep -nE '"\$attempts" -ge 6|attempts \+ 1\)\) of 6' "$ROUTER_YML" "$BELT_WF_YML" >&2
   fi
 
   if [ "$GATE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
@@ -3156,7 +3279,7 @@ fi
 # Tiered CI: the train deepens a light green run instead of gating it, and never gates a light run.
 if grep -qF 'move=deepen' "${HERE}/../merge-train/merge-train.sh" &&
   grep -qF 'deepen_ci "$pr" "${ci_run_id:-}"' "${HERE}/../merge-train/merge-train.sh" &&
-  grep -qF "ci-depth-tiered: \${{ vars.CI_DEPTH_TIERED || 'false' }}" "${WORKFLOWS_DIR}/work-router.yml"; then
+  grep -qF "ci-depth-tiered: \${{ vars.CI_DEPTH_TIERED || 'false' }}" "$BELT_WF_YML"; then
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))
@@ -3179,7 +3302,7 @@ fi
 # Merge queue: the train hands the queue what it can, repairs what the queue ejects, and the gate lands
 # through the queue when the base branch has one.
 if grep -qF 'queue_ejection_run' "${HERE}/../merge-train/merge-train.sh" &&
-  grep -qF "merge-queue: \${{ vars.MERGE_QUEUE || 'false' }}" "${WORKFLOWS_DIR}/work-router.yml" &&
+  grep -qF "merge-queue: \${{ vars.MERGE_QUEUE || 'false' }}" "$BELT_WF_YML" &&
   grep -qF 'enqueuePullRequest' "${HERE}/../land-pull-request/land-pull-request.sh" &&
   grep -qF 'uses: ./.github/actions/land-pull-request' "${WORKFLOWS_DIR}/agent-merge-gate.md"; then
   PASS=$((PASS + 1))
@@ -3402,7 +3525,7 @@ done
 # which pools_named reads as its first token. That is the shape the compile step rewrites every
 # worker lock to as well, so it is the router's pool, not a drift from agents-arc.
 AFFINITY_POOL="[agents-aw,"
-router_pools="$(pools_named "$ROUTER_YML" | tr '\n' ' ' | sed 's/ $//')"
+router_pools="$(for f in "$ROUTER_YML" "$BELT_WF_YML" "$HOUSEKEEPING_WF_YML"; do pools_named "$f"; done | tr '\n' ' ' | sed 's/ $//')"
 router_ok=1
 for p in $router_pools; do
   case " ${AGENT_POOL} ${PLUMBING_POOL} ${AFFINITY_POOL} " in *" $p "*) ;; *) router_ok=0 ;; esac
@@ -3470,7 +3593,7 @@ if [ "$INPUT_WIRING_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)
 # can still dispatch one beside it. Without `queue: max` GitHub keeps one pending run in the group and cancels the
 # rest with no comment and no recorded attempt; every dispatch still returns 204.
 BELT_QUEUE_OK=1
-belt_caller=$(awk '/^  call-merge-gate:/ { found = 1; print; next } found && /^  [a-z]/ { exit } found { print }' "$ROUTER_YML")
+belt_caller=$(awk '/^  call-merge-gate:/ { found = 1; print; next } found && /^  [a-z]/ { exit } found { print }' "$BELT_WF_YML")
 printf '%s
 ' "$belt_caller" | grep -qE "^ *group: .*'merge-belt'" ||
   { BELT_QUEUE_OK=0; echo "FAIL: the merge gate is no longer serialised on the merge-belt concurrency group" >&2; }
@@ -3483,8 +3606,8 @@ if [ "$BELT_QUEUE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1));
 # forwards it, and the action seeds from it rather than only from its own lookup.
 if worker_installed merge-gate; then
   GATE_RUN_ID_OK=1
-  grep -Fq 'ci-run-id: ${{ needs.classify.outputs.ci-run-id }}' "$ROUTER_YML" ||
-    { GATE_RUN_ID_OK=0; echo "FAIL: the router no longer passes ci-run-id to the merge gate" >&2; }
+  grep -Fq 'ci-run-id: ${{ needs.classify.outputs.ci-run-id }}' "$BELT_WF_YML" ||
+    { GATE_RUN_ID_OK=0; echo "FAIL: the merge belt no longer passes ci-run-id to the merge gate" >&2; }
   grep -Fq 'ci-run-id: ${{ inputs.ci-run-id }}' "$MERGE_GATE_WORKER_MD" ||
     { GATE_RUN_ID_OK=0; echo "FAIL: the merge gate does not forward ci-run-id to identify-gate-subject, so it has no CI failure evidence" >&2; }
   GATE_SUBJECT_ACTION="${HERE}/../identify-gate-subject/action.yml"

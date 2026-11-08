@@ -127,7 +127,7 @@ jobs:
             -ignore 'unexpected key "queue" for "concurrency" section' \
             -ignore 'could not read reusable workflow file' \
             loops/workflows/work-router.yml \
-            loops/workflows/agentics-housekeeping.yml
+            loops/workflows/agentics-housekeeping.yml             loops/workflows/agentics-merge-belt.yml
           # The workflows the bundle templates install, with the shellcheck pass actionlint runs.
           "$RUNNER_TEMP/actionlint" -config-file loops/templates/agentics/actionlint.yaml             loops/templates/ci/app-ci-dotnet-next.yml             loops/templates/platform-template/.github/workflows/platform-template-sync.yml             loops/templates/dependabot-merge/.github/workflows/dependabot-merge.yml
       # The quality-gates scripts ship with their node:test suites; they run here on the source.

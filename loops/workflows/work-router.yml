@@ -52,8 +52,6 @@ run-name: >-
   && format('Event: Review comment on PR #{0} by {1}', github.event.pull_request.number, github.actor)
   || github.event_name == 'pull_request_target'
   && format('Event: PR #{0} {1} by {2}', github.event.pull_request.number, github.event.action, github.actor)
-  || github.event_name == 'workflow_run'
-  && format('Event: CI {0} on {1}', github.event.workflow_run.conclusion, github.event.workflow_run.head_branch)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'triage'
   && format('Agent: Triage - #{0}', inputs.issue-number)
@@ -64,15 +62,8 @@ run-name: >-
   && inputs.operation == 'implement'
   && format('Agent: Implement - #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
-  && inputs.operation == 'merge-gate'
-  && github.actor == 'github-actions[bot]'
-  && format('Agentics: Merge Train - CI on PR #{0}', inputs.pr-number)
-  || github.event_name == 'workflow_dispatch'
-  && inputs.operation == 'merge-gate'
-  && format('Agent: Merge Gate - PR #{0}{1}', inputs.pr-number, inputs.ci-conclusion == 'failure' && ' (repair)' || '')
-  || github.event_name == 'workflow_dispatch'
-  && inputs.operation == 'merge-train'
-  && format('Agentics: Merge Train{0}', '')
+  && (inputs.operation == 'merge-gate' || inputs.operation == 'merge-train' || inputs.operation == 'reconcile-bot-pr-runs')
+  && format('Event: {0}{1} forwarded to Agentics: Merge Belt', inputs.operation, inputs.pr-number != '' && format(' on PR #{0}', inputs.pr-number) || '')
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'evidence'
   && format('Agentics: Evidence - PR #{0}', inputs.pr-number)
@@ -100,9 +91,6 @@ run-name: >-
   && github.event.schedule == '47 2 1,15 * *'
   && format('Agent: Docs Audit - fortnightly{0}', '')
   || github.event_name == 'schedule'
-  && github.event.schedule == '17 * * * *'
-  && format('Agentics: Reconcile - hourly{0}', '')
-  || github.event_name == 'schedule'
   && format('schedule {0}', github.event.schedule)
   || github.event_name }}
 
@@ -112,13 +100,15 @@ run-name: >-
 #
 # Neither can be read where it is also needed: GitHub evaluates no expression in a
 # `workflow_run.workflows:` list or in a `cron:`. The installer therefore mirrors both values
-# into those two literal lines below, and the route matrix asserts the copies still agree.
-# Everything that runs inside a job reads them from here, including the classifier, which
-# takes AUDIT_CRON from this environment.
+# into the literal lines that need them (the audit slot below, the workflow_run trigger of
+# agentics-merge-belt.yml), and the route matrix asserts the copies still agree. Everything
+# that runs inside a job reads them from an env: block, including the classifier, which takes
+# AUDIT_CRON from this environment.
 env:
   # The CI workflow the merge belt reads its verdict from. A repository whose CI has another
   # name gets no gate at all: the belt logs "no completed CI run" and the pull request waits
-  # forever, which is a silent failure rather than a red run.
+  # forever, which is a silent failure rather than a red run. No job here reads it any more;
+  # `workflows update` copies it into agentics-merge-belt.yml, so this stays the place to set it.
   CI_WORKFLOW_NAME: "App: CI"
   # Slot 0. Every consumer installs this same router, and the agent fleet is one shared,
   # two-VM scale set, so a second repository left on slot 0 audits at the same minute as the
@@ -134,24 +124,14 @@ env:
   # Adding a third bot used to mean finding four hand-written comparisons across this file.
   TRUSTED_BOTS: "github-actions[bot] app/github-actions platform-devbox[bot]"
   # The housekeeping settings (HOUSEKEEPING_*, DEPENDABOT_*, AUDIT_STALE_AFTER_DAYS) live in
-  # agentics-housekeeping.yml, next to the jobs that read them.
-  # How many failed merge-gate attempts one pull request head may consume before the belt
-  # parks it for a person. It was written as the literal 6 in four places here while the
-  # merge-gate worker carried its own MAX_ATTEMPTS; the route matrix now asserts the two
-  # agree, because a belt that gives up later than the worker says burns whole runs.
-  MAX_GATE_ATTEMPTS: "6"
+  # agentics-housekeeping.yml, and the merge train's (MAX_GATE_ATTEMPTS, MERGE_TRAIN_* except
+  # the hold label, REFINE_ANSWER_TIMEOUT_HOURS) in agentics-merge-belt.yml, next to the jobs
+  # that read them.
   # The merge train takes the oldest open pull request, bot or person, and moves it one step at a
   # time until it merges or a person has to decide. A pull request with this label stays off it.
-  # `workflows update` copies this value into agentics-housekeeping.yml, whose Dependabot merge
-  # skips the same label.
+  # `workflows update` copies this value into agentics-merge-belt.yml and
+  # agentics-housekeeping.yml, whose Dependabot merge skips the same label.
   MERGE_TRAIN_HOLD_LABEL: "hold"
-  # How many times a `blocked` verdict, or a merge that did not happen, is retried once the base
-  # branch has moved. After that the pull request waits for a person or a new commit.
-  MERGE_TRAIN_MAX_RETRIES: "3"
-  # "true" lets a stack root merge itself once every child has landed and CI is green, through the
-  # same gate as any pull request: a change over the blast radius limit, a protected path or an
-  # unresolved finding still goes to a person. "false" keeps every root for a human.
-  MERGE_TRAIN_STACK_ROOT_AUTOMERGE: "true"
   # "true" lets a chain of features run without a person between them. A feature whose issue is
   # blocked by another (GitHub's "blocked by" relation, or a `Blocked by #N` line in its body) keeps
   # its children held until that feature's stack root merges; the merge brings the default branch
@@ -159,13 +139,6 @@ env:
   # issue naming every pull request that merged on a judgement call. Set the merge gate's own
   # UNATTENDED to the same value. "false" leaves features to be started and read by a person.
   UNATTENDED: "false"
-  # "true" logs the move the train would make and makes none. For trying the train on a
-  # repository before letting it act.
-  MERGE_TRAIN_DRY_RUN: "false"
-  # How many pull requests the merge train may have in repair at once. A repair moves nothing on
-  # the default branch, so repairs of different pull requests do not race; only merges are serial.
-  # 1 repairs one pull request at a time.
-  MERGE_TRAIN_REPAIRS: "1"
   # How many implement runs may work at once. Each queue is FIFO and serial. An issue joins the
   # queue of its split parent when it has one, so the children of one refine never run side by
   # side on the code they share; independent issues spread across the queues. 1 is one queue
@@ -176,12 +149,6 @@ env:
   # `pnpm run dev`, and a pull request with no plan costs one API call. Set it to "false" for a
   # repository whose app cannot start on a runner; operation=evidence still works by hand.
   EVIDENCE_ENABLED: "true"
-  # Working hours, Monday to Friday, that refine's questions wait for an answer. Every question
-  # carries the answer the bot would take; once this passes with no reply, or as soon as the
-  # author reacts with a thumbs-up, refine carries on with those answers and labels the issue
-  # `assumed`. A question marked as needing a decision is never assumed. "0" turns this off, and
-  # questions wait for a person however long that takes.
-  REFINE_ANSWER_TIMEOUT_HOURS: "24"
 
 on:
   issues:
@@ -194,33 +161,20 @@ on:
     types: [submitted]
 
   pull_request_target:
-    # opened / reopened / synchronize feed bot-approve. closed feeds the merge train: a merge
-    # moved the base branch, so the next pull request in line can move. A merge into a feature
-    # branch also lands a stack child (land-stack-child), and every merge routes to evidence,
-    # which replays the pull request's verification plan.
+    # opened / reopened / synchronize feed bot-approve. labeled with merge-gate is forwarded to
+    # agentics-merge-belt.yml. A merge into a feature branch lands a stack child
+    # (land-stack-child), and every merge routes to evidence, which replays the pull request's
+    # verification plan. agentics-merge-belt.yml hears the same merge to move the merge train.
     types: [opened, synchronize, reopened, labeled, closed]
 
-  # CI completion on a pull request moves the merge train, green or red: the train decides
-  # whether that pull request is the one in front, and what it needs.
-  #
-  # Delivery (verified 2026-09-06 in Pliny-Bot): GitHub delivers workflow_run only for CI runs
-  # whose actor is a human. A pull request opened or updated with a bot token has the bot as the
-  # actor of every CI run that follows, and no workflow_run arrives for any of them. For those
-  # the consumer CI's dispatch job (templates/ci) and the hourly schedule are the paths.
-  # Security: workflow_run runs from the default branch with secrets, but the train only ever
-  # moves pull requests from this repository opened by a trusted bot or someone with write
-  # access, and the gate's subject job checks the same again.
-  workflow_run:
-    # Mirrored from env.CI_WORKFLOW_NAME by the installer. A trigger evaluates no expression.
-    workflows: ["App: CI"]
-    types: [completed]
+  # CI completions (workflow_run) move the merge train in agentics-merge-belt.yml.
 
   # Cron to route mapping lives in .github/actions/classify-route/classify-route.sh.
   schedule:
     - cron: "17 1 * * 1" # audit slot, mirrored from env.AUDIT_CRON by the installer
     - cron: "47 2 1,15 * *" # docs-audit slot, mirrored from env.DOCS_AUDIT_CRON by the installer
-    - cron: "17 * * * *"
-    # The housekeeping, audit-close and cleanup-artifacts crons are in agentics-housekeeping.yml.
+    # The hourly reconcile is in agentics-merge-belt.yml; the housekeeping, audit-close and
+    # cleanup-artifacts crons are in agentics-housekeeping.yml.
 
   workflow_dispatch:
     inputs:
@@ -919,202 +873,6 @@ jobs:
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
 
-  # The merge belt is one lock for the whole repository, not one group per pull request.
-  # A batch of six overnight pull requests means every merge moves the default branch
-  # under the other five; gates running at once would each rebase onto a base another
-  # gate is about to invalidate. The merge train dispatches one gate at a time, oldest pull
-  # request first; the lock is what still holds when a person or a consumer CI dispatches one
-  # beside it.
-  #
-  # `queue: max` keeps up to 100 gates waiting in order. Without it GitHub keeps one pending run
-  # per group and silently cancels the previous one: in one week Numa cancelled 12 gates and
-  # finished 6, and those pull requests were merged by hand without a verdict.
-  call-merge-gate:
-    needs: classify
-    if: needs.classify.outputs.route == 'merge-gate'
-    uses: ./.github/workflows/agent-merge-gate.lock.yml
-    # A gate that was handed red CI repairs and pushes: it can never merge (the validator blocks a
-    # non-success conclusion), so it moves nothing on the default branch and cannot race another
-    # gate. Those run in a group of their own per pull request, in parallel, while everything that
-    # may merge still waits its turn on the one belt.
-    concurrency:
-      group: ${{ needs.classify.outputs.ci-conclusion == 'failure' && format('merge-repair-{0}', needs.classify.outputs.pr-number) || (vars.MERGE_QUEUE == 'true' && format('merge-gate-{0}', needs.classify.outputs.pr-number) || 'merge-belt') }}
-      cancel-in-progress: false
-      queue: max
-    permissions: write-all
-    with:
-      pr-number: ${{ needs.classify.outputs.pr-number }}
-      linked-issue: ${{ needs.classify.outputs.linked-issue }}
-      ci-conclusion: ${{ needs.classify.outputs.ci-conclusion }}
-      ci-run-id: ${{ needs.classify.outputs.ci-run-id }}
-      attempts_so_far: ${{ needs.classify.outputs.merge-gate-attempts }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-
-  # The merge train: one step for the oldest open pull request that can move, bot or person.
-  # It merges the base branch into a green pull request that fell behind, hands a red,
-  # conflicting or green-and-current one to the gate, and skips one a person has to decide on,
-  # so a parked pull request never blocks the line. One gate in flight at a time; everything
-  # else waits untouched. It ticks on every merge, every CI completion, after every gate (this
-  # job waits for call-merge-gate in the same run), and hourly as the fallback. Deterministic:
-  # it reads GitHub and dispatches, and never checks out or runs pull request code.
-  #
-  # One tick at a time. A pending tick replaced by a newer one loses nothing: each reads the
-  # whole repository afresh.
-  merge-train:
-    needs: [classify, call-merge-gate]
-    if: >
-      always() &&
-      needs.classify.result == 'success' &&
-      !github.event.repository.fork &&
-      (
-        needs.classify.outputs.route == 'merge-train' ||
-        needs.classify.outputs.route == 'merge-gate' ||
-        needs.classify.outputs.route == 'reconcile-bot-pr-runs' ||
-        (github.event_name == 'pull_request_target' &&
-         github.event.action == 'closed' &&
-         github.event.pull_request.merged == true)
-      )
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
-    timeout-minutes: 15
-    concurrency:
-      group: merge-train
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - name: Checkout workflow actions
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # The App token, not GITHUB_TOKEN: a gate dispatch and a branch update made with
-      # GITHUB_TOKEN start no workflow, so the gate would never run and CI never rerun.
-      - name: Generate App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - uses: ./.github/actions/merge-train
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          ci-workflow-name: ${{ env.CI_WORKFLOW_NAME }}
-          trusted-bots: ${{ env.TRUSTED_BOTS }}
-          hold-label: ${{ env.MERGE_TRAIN_HOLD_LABEL }}
-          max-gate-attempts: ${{ env.MAX_GATE_ATTEMPTS }}
-          max-retries: ${{ env.MERGE_TRAIN_MAX_RETRIES }}
-          stack-root-automerge: ${{ env.MERGE_TRAIN_STACK_ROOT_AUTOMERGE }}
-          max-repairs: ${{ env.MERGE_TRAIN_REPAIRS }}
-          dry-run: ${{ env.MERGE_TRAIN_DRY_RUN }}
-          ci-run-id: ${{ needs.classify.outputs.ci-run-id }}
-          ci-conclusion: ${{ needs.classify.outputs.ci-conclusion }}
-          # Repository variable, read by the repository's CI as well: one switch for both sides.
-          ci-depth-tiered: ${{ vars.CI_DEPTH_TIERED || 'false' }}
-          merge-queue: ${{ vars.MERGE_QUEUE || 'false' }}
-
-  # The decision the gate parked for: a person with write access approves a pull request the
-  # gate handed to them (human-review or owner-review), and the bot merges the commit they
-  # approved. Re-running the gate would only reproduce the same parked verdict.
-  merge-approved:
-    needs: classify
-    if: needs.classify.outputs.route == 'merge-approved'
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
-    timeout-minutes: 5
-    concurrency:
-      group: merge-approved-${{ needs.classify.outputs.pr-number }}
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Checkout for App token action
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Generate App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - name: Merge the approved commit
-        id: merge
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ needs.classify.outputs.pr-number }}
-          ISSUE: ${{ needs.classify.outputs.linked-issue }}
-          REVIEWER: ${{ github.event.review.user.login }}
-          REVIEW_COMMIT: ${{ github.event.review.commit_id }}
-        run: |
-          set -euo pipefail
-          skip() { echo "::notice::Not merging #$PR: $1"; exit 0; }
-
-          permission=$(gh api "repos/$REPO/collaborators/$REVIEWER/permission" --jq '.permission' 2>/dev/null || echo none)
-          case "$permission" in admin|maintain|write) ;; *) skip "$REVIEWER has $permission access" ;; esac
-
-          read -r state author head_sha < <(gh api "repos/$REPO/pulls/$PR" --jq '[.state, .user.login, .head.sha] | @tsv')
-          [ "$state" = open ] || skip "it is $state"
-          # The gate parks pull requests by people too. Its author needs write access, like
-          # everyone the merge train carries; a bot needs to be one this router trusts.
-          case " $TRUSTED_BOTS " in
-            *" $author "*) ;;
-            *)
-              author_permission=$(gh api "repos/$REPO/collaborators/$author/permission" --jq '.permission' 2>/dev/null || echo none)
-              case "$author_permission" in admin|maintain|write) ;; *) skip "it was opened by $author, who has $author_permission access" ;; esac
-              ;;
-          esac
-          [ "$head_sha" = "$REVIEW_COMMIT" ] || skip "$REVIEWER approved ${REVIEW_COMMIT:0:7}, the head is now ${head_sha:0:7}"
-
-          # Another reviewer's change request still stands.
-          decision=$(gh pr view "$PR" --repo "$REPO" --json reviewDecision --jq '.reviewDecision // ""')
-          [ "$decision" = APPROVED ] || skip "the review decision is '${decision:-none}'"
-
-          # The gate parked it for a person. A protected-path hold comments on the issue rather
-          # than the pull request, so the issue's labels speak for it.
-          verdict=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
-            --jq '.[] | select((.body | contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))) | .body' |
-            grep -oE '\*\*Verdict:\*\* [a-z-]+' | tail -1 | sed 's/.* //' || true)
-          if [ -z "$verdict" ] && [ -n "$ISSUE" ]; then
-            labels=$(gh api "repos/$REPO/issues/$ISSUE/labels" --jq '[.[].name] | join(" ")')
-            case " $labels " in *" blocked "*) ;; *" owner-review "*) verdict=owner-review ;; esac
-          fi
-          case "$verdict" in human-review|owner-review) ;; *) skip "the gate's verdict is '${verdict:-none}', not a hand-over" ;; esac
-
-          ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
-            --jq '[.workflow_runs[] | select(.name == env.CI_WORKFLOW_NAME)] | sort_by(.created_at) | last | .conclusion // ""')
-          [ "$ci" = success ] || skip "$CI_WORKFLOW_NAME on ${head_sha:0:7} is '${ci:-not run}'"
-
-          # Into the merge queue where the base branch has one, merged otherwise.
-          landed=$(HEAD_SHA="$head_sha" GITHUB_OUTPUT=/dev/stdout bash ./.github/actions/land-pull-request/land-pull-request.sh | sed -n 's/^landed=//p' | tail -1)
-          if [ -n "$landed" ]; then echo "merged=true" >> "$GITHUB_OUTPUT"; fi
-      - name: Clear the issue's labels
-        if: steps.merge.outputs.merged == 'true' && needs.classify.outputs.linked-issue != ''
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPO: ${{ github.repository }}
-          ISSUE: ${{ needs.classify.outputs.linked-issue }}
-        run: |
-          for label in implement bot-working review owner-review blocked pr-pending; do
-            gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/$label" >/dev/null 2>&1 || true
-          done
-      # GITHUB_TOKEN: its comment raises no event for the router to read.
-      - name: Say whose approval merged it
-        if: steps.merge.outputs.merged == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ needs.classify.outputs.pr-number }}
-          REVIEWER: ${{ github.event.review.user.login }}
-          REVIEW_COMMIT: ${{ github.event.review.commit_id }}
-        run: gh pr comment "$PR" --repo "$REPO" --body "Merged on @$REVIEWER's approval of \`${REVIEW_COMMIT:0:7}\`."
-
   # Screenshots of a merged pull request, replayed from the verification plan its implementation
   # wrote and archived beside that plan. Plain YAML with no model, so no secret is passed and the
   # grant is exactly what the publish job writes: one commit of evidence/ folders and one comment. Its capture
@@ -1579,169 +1337,72 @@ jobs:
           gh label create unattended-report --repo "$REPO" --color 0E8A16 --description "What an unattended feature delivered" >/dev/null 2>&1 || true
           gh issue create --repo "$REPO" --title "Unattended report: $title" --label "$label" --body-file /tmp/report.md
 
-  reconcile-bot-pr-runs:
+  # The merge gate, the merge train and the merge of an approved pull request live in
+  # agentics-merge-belt.yml, which hears CI completions, merges and approvals itself. A person
+  # adding the merge-gate label, and a dispatch of merge-gate or merge-train to this router, are
+  # passed on to that file, so the old entry points keep working.
+  #
+  # The route, not the operation, is forwarded: a consumer CI that still dispatches merge-gate
+  # with GITHUB_TOKEN has already been classified as a merge train tick here. The App token, not
+  # GITHUB_TOKEN, carries the forward, because a merge-gate dispatched by github-actions[bot]
+  # classifies as that same CI handover and would never reach the gate.
+  forward-merge-train:
     needs: classify
-    if: needs.classify.outputs.route == 'reconcile-bot-pr-runs'
+    if: >-
+      needs.classify.outputs.route == 'merge-gate' ||
+      needs.classify.outputs.route == 'merge-train'
     runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 5
     permissions:
       contents: read
-      actions: write
-      pull-requests: read
-      # the stale reservation sweep clears bot-working from parked issues
-      issues: write
-    env:
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
     steps:
-      - name: Checkout for App token action
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
       - name: Generate App token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      # Runs only the default-branch workflow and never checks out pull-request code.
-      # External users cannot impersonate github-actions[bot].
-      # Moving pull requests towards a merge is the merge train's, which this schedule also ticks.
-      - name: Approve trusted bot CI and clear stale reservations
+      - name: Forward the route to agentics-merge-belt.yml
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch }}
+          ROUTE: ${{ needs.classify.outputs.route }}
+          PR_NUMBER: ${{ needs.classify.outputs.pr-number }}
+          CI_CONCLUSION: ${{ needs.classify.outputs.ci-conclusion }}
+          CI_RUN_ID: ${{ needs.classify.outputs.ci-run-id }}
+          ATTEMPTS: ${{ needs.classify.outputs.merge-gate-attempts }}
         run: |
           set -euo pipefail
+          # Only the inputs that have a value: ci-conclusion is a choice, and an empty one is refused.
+          args=(-f operation="$ROUTE")
+          [ -z "$PR_NUMBER" ] || args+=(-f pr-number="$PR_NUMBER")
+          [ -z "$CI_CONCLUSION" ] || args+=(-f ci-conclusion="$CI_CONCLUSION")
+          [ -z "$CI_RUN_ID" ] || args+=(-f ci-run-id="$CI_RUN_ID")
+          [ "$ROUTE" != merge-gate ] || args+=(-f attempts_so_far="${ATTEMPTS:-0}")
+          gh workflow run agentics-merge-belt.yml --repo "$REPO" --ref "$REF" "${args[@]}"
+          echo "::notice::Forwarded ${ROUTE}${PR_NUMBER:+ for #$PR_NUMBER} to agentics-merge-belt.yml"
 
-          # Stale reservation sweep. Labelling ten issues at once labels all ten immediately,
-          # because authorize-bot-work is keyed per issue, while each implement queue lets exactly
-          # one run at a time. A queued run that is cancelled therefore leaves its issue
-          # carrying bot-working with no run and no pull request: parked, invisible, and not
-          # re-triggerable, because classify refuses an issue that is already reserved.
-          #
-          # The live runs are read by status, not as the repository's latest hundred runs. Every
-          # comment and label is a router run, so a busy repository pushes an implement that has
-          # waited two hours in the queue out of the latest hundred, and the sweep then cleared
-          # bot-working from issues whose runs were alive and about to start (Pliny-Bot #693 and
-          # #707, both still queued from 07:32). Runs that are not finished are few, whatever
-          # their age.
-          active_runs=$(for status in queued in_progress pending waiting requested; do
-              gh api "repos/$REPO/actions/runs?status=$status&per_page=100" --jq '.workflow_runs[]' 2>/dev/null || true
-            done | jq -s '{workflow_runs: .}')
-          gh issue list --repo "$REPO" --label bot-working --state open --limit 100 \
-            --json number --jq '.[].number' |
-            while IFS= read -r issue; do
-              [ -n "$issue" ] || continue
-
-              live=$(jq "[.workflow_runs[]
-                  | select(.status == \"queued\" or .status == \"in_progress\" or .status == \"pending\" or .status == \"waiting\")
-                  | select((.display_title + \" \") | test(\"#${issue}[^0-9]\"))] | length" <<<"$active_runs")
-              [ "${live:-0}" -eq 0 ] || continue
-
-              has_pr=$(gh pr list --repo "$REPO" --state open --json body \
-                --jq "[.[] | select(((.body // \"\") + \" \") | ascii_downcase | test(\"clos(e|es|ed) #${issue}[^0-9]|fix(es|ed)? #${issue}[^0-9]|resolves? #${issue}[^0-9]\"))] | length")
-              [ "${has_pr:-0}" -eq 0 ] || continue
-
-              echo "Clearing a stale bot-working reservation on #$issue: no run, no pull request."
-              gh issue edit "$issue" --repo "$REPO" --remove-label bot-working
-            done
-
-          gh api "repos/$REPO/pulls?state=open&per_page=100" |
-            jq -r --arg repo "$REPO" '
-              .[]
-              | select(
-                    # Bind the login first. Inside index(...) the input is the array, so a bare
-                    # .user.login there indexes the array and jq dies with "Cannot index array
-                    # with string \"user\"", taking the whole hourly belt with it.
-                    ((.user.login) as $login | (env.TRUSTED_BOTS | split(" ")) | index($login) != null)
-                    and .draft == false
-                    and .head.repo.full_name == $repo
-                 )
-              | [.number, .head.ref, .head.sha] | @tsv
-            ' |
-            while IFS=$'\t' read -r _ branch _; do
-              gh api "repos/$REPO/actions/runs?status=action_required&branch=$branch" \
-                --jq '.workflow_runs[]
-                  | select(
-                      .event == "pull_request"
-                      and .name == env.CI_WORKFLOW_NAME
-                    )
-                  | .id' |
-                while IFS= read -r run_id; do
-                  echo "Approving trusted bot run $run_id"
-                  gh api "repos/$REPO/actions/runs/$run_id/approve" --method POST
-                done
-            done
-      # Refine's questions do not wait forever. Nine of the 21 batches that were really asked in
-      # Odyssey, Numa, Bots and DeliveryMetrics up to November 2026 never got a reply, and those
-      # issues stayed parked. Each question now carries the answer the bot would take, and once
-      # the working hours pass, or the author or an assignee reacts with a thumbs-up, refine runs
-      # again in assume mode and takes them. Batches written before the proposals existed, and any
-      # batch holding a question that needs a decision, still wait for a person.
-      - name: Take refine's proposed answers once nobody replied in time
-        if: env.REFINE_ANSWER_TIMEOUT_HOURS != '0'
+  # reconcile-bot-pr-runs runs hourly in agentics-merge-belt.yml. A dispatch of it to this router
+  # is passed on to that file. GitHub lets GITHUB_TOKEN start a workflow_dispatch run.
+  forward-reconcile:
+    needs: classify
+    if: needs.classify.outputs.route == 'reconcile-bot-pr-runs'
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Forward the operation to agentics-merge-belt.yml
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          REFINE_MARKER: "<!-- agent-refine -->"
-          QUESTIONS_LINE: "I have some questions about this issue"
-          PROPOSED_TAG: "**Proposed:**"
-          DECISION_TAG: "**Your decision needed:**"
+          REF: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          timeout_hours="${REFINE_ANSWER_TIMEOUT_HOURS:-24}"
-
-          # Hours since $1 that fall on a weekday, in UTC, counted up to the timeout and no further.
-          working_hours_since() {
-            local t now h=0
-            t=$(date -u -d "$1" +%s)
-            now=$(date -u +%s)
-            while [ "$t" -lt "$now" ] && [ "$h" -lt "$timeout_hours" ]; do
-              [ "$(date -u -d "@$t" +%u)" -le 5 ] && h=$((h + 1))
-              t=$((t + 3600))
-            done
-            echo "$h"
-          }
-
-          gh issue list --repo "$REPO" --state open --label refine --label review --limit 100 \
-            --json number,author,assignees,labels \
-            --jq '.[] | select([.labels[].name] | (index("bot-working") or index("assumed")) | not)
-                  | [.number, ([.author.login] + [.assignees[].login] | join(" "))] | @tsv' |
-            while IFS=$'\t' read -r issue people; do
-              [ -n "$issue" ] || continue
-              comments=$(gh api --paginate "repos/$REPO/issues/$issue/comments?per_page=100" | jq -s 'add // []')
-              asked=$(jq -c --arg marker "$REFINE_MARKER" --arg line "$QUESTIONS_LINE" '
-                [.[] | select(.user.type == "Bot" and (.body | contains($marker)) and (.body | contains($line)))]
-                | last // empty | {id, created_at, body}' <<<"$comments")
-              [ -n "$asked" ] || continue
-              asked_at=$(jq -r '.created_at' <<<"$asked")
-              body=$(jq -r '.body' <<<"$asked")
-
-              # A person spoke after the questions: that reply is refine's to read, not a silence.
-              replied=$(jq --arg at "$asked_at" '[.[] | select(.user.type != "Bot" and .created_at > $at)] | length' <<<"$comments")
-              [ "$replied" -eq 0 ] || continue
-              case "$body" in *"$DECISION_TAG"*) echo "#$issue waits for a decision; not assuming."; continue ;; esac
-              case "$body" in *"$PROPOSED_TAG"*) ;; *) continue ;; esac
-
-              accepted=false
-              thumbs=$(gh api "repos/$REPO/issues/comments/$(jq -r '.id' <<<"$asked")/reactions" \
-                --jq '[.[] | select(.content == "+1") | .user.login] | join(" ")' 2>/dev/null || true)
-              for login in $thumbs; do
-                case " $people " in *" $login "*) accepted=true ;; esac
-              done
-              hours=$(working_hours_since "$asked_at")
-              if [ "$accepted" = true ]; then
-                echo "#$issue: the proposed answers were accepted with a thumbs-up; refining with them."
-              elif [ "$hours" -ge "$timeout_hours" ]; then
-                echo "#$issue: no reply in ${timeout_hours} working hours; refining with the proposed answers."
-              else
-                continue
-              fi
-              gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
-                -f ref="$(gh api "repos/$REPO" --jq .default_branch)" \
-                -f "inputs[operation]=refine" -f "inputs[issue-number]=$issue" -f "inputs[mode]=assume"
-            done
+          gh workflow run agentics-merge-belt.yml --repo "$REPO" --ref "$REF" -f operation=reconcile-bot-pr-runs
+          echo "::notice::Forwarded operation=reconcile-bot-pr-runs to agentics-merge-belt.yml"
 
   # The housekeeping, audit-close and cleanup-artifacts jobs live in agentics-housekeeping.yml,
   # which runs them on its own crons. A dispatch of one of their operations to this router is
