@@ -48,8 +48,13 @@ context, give it a bounded task, and require one complete final Safe Outputs pay
 
 ## Source contract
 
-- `loops/workflows/work-router.yml` owns public triggers, route selection, concurrency, and calls to
-  workers. It is plain YAML, not a gh-aw markdown workflow.
+- `loops/workflows/work-router.yml` owns the public triggers that can start an agent, route
+  selection, concurrency, and calls to workers. It is plain YAML, not a gh-aw markdown workflow.
+- `loops/workflows/agentics-*.yml` are plain YAML workflows split out of the router for deterministic
+  work that never starts an agent (`agentics-housekeeping.yml`: housekeeping, audit-close,
+  cleanup-artifacts). Each owns its own triggers, an `env:` block the installer keeps, and the
+  `AGENTIC_WORKFLOWS_DISABLED` check on every job. When an operation moves to one, the router keeps
+  the operation and forwards it, because other code and people still dispatch it there.
 - `loops/workflows/agent-*.md` are `workflow_call` workers only. They have no public trigger and
   declare no concurrency.
 - `loops/workflows/shared/*.md` are imported mechanics files with no `on:`. The compiler validates
@@ -89,7 +94,8 @@ loops/workflows/
       call-evidence            evidence.yml                 plain YAML, no model
       deterministic jobs       check-implement-pr, dispatch-triage, bot-approve,
                               merge-train, land-stack-child, reconcile-bot-pr-runs,
-                              audit-close, cleanup-artifacts, validate
+                              forward-housekeeping, validate
+  agentics-housekeeping.yml    its own crons: housekeeping, audit-close, cleanup-artifacts
   authorize-bot-work.yml       human adds implement/refine → bot adds bot-working
 ```
 

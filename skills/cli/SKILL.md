@@ -90,6 +90,15 @@ reads the values from `env:`, including `classify-route.sh`, whose `AUDIT_CRON` 
 `"${AUDIT_CRON:-<package default>}"`. `verify-route-matrix.sh` asserts the copies still agree and
 that no third literal appears.
 
+A workflow split out of the router (`plumbingWorkflowFiles` in `workflow-catalog.ts`, today
+`agentics-housekeeping.yml`) is merged by `mergePlumbing`, after the router. Its `env:` is kept like
+the router's, with two more rules. On its first install the consumer has no copy, so its values are
+taken from the consumer's router, with that router's release as the baseline: a setting that moved
+out of the router keeps the consumer's value, and an untouched old default follows the package. A
+key the router also declares (`MERGE_TRAIN_HOLD_LABEL`) is copied from the merged router, so the
+router stays the one place to change it. `dropMovedRouterEnv` then removes the moved keys from the
+router, or a consumer who had changed one would keep a dead copy there.
+
 A worker (`agent-*.md`) is merged by `worker-env.ts`: the package file with the consumer's `env:`
 values put back. Package comments in the block are kept; consumer values replace package values;
 keys the package added get their defaults; keys only the consumer defines are appended. With a

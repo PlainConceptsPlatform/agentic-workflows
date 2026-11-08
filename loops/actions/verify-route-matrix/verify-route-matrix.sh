@@ -16,6 +16,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKFLOWS_DIR="${HERE}/../../workflows"
 ROUTER_YML="${WORKFLOWS_DIR}/work-router.yml"
+# The scheduled janitor jobs (housekeeping, audit-close, cleanup-artifacts) live in their own file.
+HOUSEKEEPING_WF_YML="${WORKFLOWS_DIR}/agentics-housekeeping.yml"
 IMPLEMENT_WORKER_MD="${WORKFLOWS_DIR}/agent-implement.md"
 MERGE_GATE_WORKER_MD="${WORKFLOWS_DIR}/agent-merge-gate.md"
 
@@ -24,6 +26,18 @@ MERGE_GATE_WORKER_MD="${WORKFLOWS_DIR}/agent-merge-gate.md"
 # fallback rather than the cron the router actually fires on.
 router_env() {
   sed -n "s/^  $1: *//p" "$ROUTER_YML" | head -1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+# The same lookup in agentics-housekeeping.yml's own env: block.
+housekeeping_env() {
+  sed -n "s/^  $1: *//p" "$HOUSEKEEPING_WF_YML" | head -1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+# The workflow file that holds a deterministic job: the router, or the housekeeping file for the
+# three janitor jobs.
+job_file() {
+  case "$1" in
+    housekeeping | audit-close | cleanup-artifacts) echo "$HOUSEKEEPING_WF_YML" ;;
+    *) echo "$ROUTER_YML" ;;
+  esac
 }
 AUDIT_CRON="$(router_env AUDIT_CRON)"
 DOCS_AUDIT_CRON="$(router_env DOCS_AUDIT_CRON)"
@@ -1163,15 +1177,16 @@ done < <(sed -n '/^      operation:/,/^      issue-number:/p' "$ROUTER_YML" |
 # Paired job-to-scope rather than parsed out of each action: the jobs that touch pull
 # requests are few and known, and naming them here is what makes the omission visible.
 for pr_job in audit-close reconcile-bot-pr-runs merge-train land-stack-child housekeeping; do
-  if ! grep -q "^  ${pr_job}:$" "$ROUTER_YML"; then
+  pr_file="$(job_file "$pr_job")"
+  if ! grep -q "^  ${pr_job}:$" "$pr_file" 2>/dev/null; then
     continue
   fi
-  pr_scopes=$(sed -n "/^  ${pr_job}:$/,/^    steps:$/p" "$ROUTER_YML")
+  pr_scopes=$(sed -n "/^  ${pr_job}:$/,/^    steps:$/p" "$pr_file")
   if printf '%s' "$pr_scopes" | grep -qE '^      pull-requests: (read|write)$'; then
     PASS=$((PASS + 1))
   else
     FAIL=$((FAIL + 1))
-    echo "FAIL: router job '${pr_job}' reads pull requests but grants no pull-requests scope" >&2
+    echo "FAIL: job '${pr_job}' in $(basename "$pr_file") reads pull requests but grants no pull-requests scope" >&2
   fi
 done
 
@@ -1255,7 +1270,11 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
   # A retry is a workflow_dispatch, and GitHub starts no workflow run from an event raised
   # with GITHUB_TOKEN. Wiring the default token here would make every retry a silent no-op:
   # green run, comment posted, labels removed, and nothing ever picks the issue up again.
-  hk_job=$(sed -n '/^  housekeeping:$/,/^  [a-z0-9_-]*:$/p' "$ROUTER_YML")
+  hk_job=$(sed -n '/^  housekeeping:$/,/^  [a-z0-9_-]*:$/p' "$HOUSEKEEPING_WF_YML" 2>/dev/null || true)
+  if [ -z "$hk_job" ]; then
+    HK_OK=0
+    echo "FAIL: agentics-housekeeping.yml has no housekeeping job" >&2
+  fi
   if printf '%s' "$hk_job" | grep -q 'app-token.outputs.token'; then
     PASS=$((PASS + 1))
   else
@@ -1272,13 +1291,13 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
   fi
 
   # Every knob the action takes is a repository's to change, so each has to come from the
-  # router's env: block, which is the one part of the file `workflows update` preserves.
+  # housekeeping file's env: block, which is the one part of the file `workflows update` preserves.
   for knob in HOUSEKEEPING_RETRY_AFTER_HOURS HOUSEKEEPING_MAX_RETRIES HOUSEKEEPING_STALE_PR_DAYS HOUSEKEEPING_DIGEST_TITLE; do
-    if [ -n "$(router_env "$knob")" ] && printf '%s' "$hk_job" | grep -q "env.${knob}"; then
+    if [ -n "$(housekeeping_env "$knob")" ] && printf '%s' "$hk_job" | grep -q "env.${knob}"; then
       PASS=$((PASS + 1))
     else
       HK_OK=0
-      echo "FAIL: ${knob} is not both declared in the router env: block and read by the housekeeping job" >&2
+      echo "FAIL: ${knob} is not both declared in agentics-housekeeping.yml's env: block and read by the housekeeping job" >&2
     fi
   done
 
@@ -1296,13 +1315,64 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
   if [ "$HK_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+echo "── Housekeeping workflow ─────────────────────────────────────────────────"
+
+# The janitor jobs left the router for agentics-housekeeping.yml. Both halves of that move are
+# asserted, because either half alone fails without a sound: a job in both files runs twice, a
+# job in neither never runs, and a cron with no job is a green run that did nothing.
+HW_OK=1
+hw_fail() { HW_OK=0; echo "FAIL: $1" >&2; }
+if [ ! -f "$HOUSEKEEPING_WF_YML" ]; then
+  hw_fail "agentics-housekeeping.yml is missing"
+else
+  for spec in "housekeeping|23 */6 * * *" "audit-close|43 3 * * *" "cleanup-artifacts|0 6 * * *"; do
+    job="${spec%%|*}"
+    cron="${spec#*|}"
+    grep -q "^  ${job}:$" "$HOUSEKEEPING_WF_YML" || hw_fail "agentics-housekeeping.yml has no ${job} job"
+    if grep -q "^  ${job}:$" "$ROUTER_YML"; then hw_fail "work-router.yml still has a ${job} job, so it would run twice"; fi
+    grep -qF -- "- cron: \"${cron}\"" "$HOUSEKEEPING_WF_YML" || hw_fail "agentics-housekeeping.yml does not schedule ${job} at '${cron}'"
+    if grep -qF -- "- cron: \"${cron}\"" "$ROUTER_YML"; then hw_fail "work-router.yml still fires the ${job} cron '${cron}'"; fi
+    job_block=$(sed -n "/^  ${job}:$/,/^  [a-z0-9_-]*:$/p" "$HOUSEKEEPING_WF_YML")
+    printf '%s' "$job_block" | grep -qF "github.event.schedule == '${cron}'" || hw_fail "the ${job} job does not run on its cron '${cron}'"
+    printf '%s' "$job_block" | grep -qF "inputs.operation == '${job}'" || hw_fail "the ${job} job cannot be started by its operation"
+    printf '%s' "$job_block" | grep -qF "vars.AGENTIC_WORKFLOWS_DISABLED == ''" || hw_fail "the ${job} job ignores the AGENTIC_WORKFLOWS_DISABLED off switch"
+    printf '%s' "$job_block" | grep -qE "^      group: ${job}$" || hw_fail "the ${job} job lost its '${job}' concurrency group"
+    # The old entry point still works: the router accepts the operation and forwards it.
+    sed -n '/^      operation:/,/^      issue-number:/p' "$ROUTER_YML" | grep -qx "          - ${job}" ||
+      hw_fail "work-router.yml no longer accepts operation=${job}"
+    sed -n '/^      operation:/,/^      dry-run:/p' "$HOUSEKEEPING_WF_YML" | grep -qx "          - ${job}" ||
+      hw_fail "agentics-housekeeping.yml does not offer operation=${job}"
+    [ "$(route_field route EVENT=workflow_dispatch "OPERATION=${job}")" = "$job" ] ||
+      hw_fail "operation=${job} no longer routes to ${job}, so the router cannot forward it"
+  done
+  fwd=$(sed -n '/^  forward-housekeeping:$/,/^  [a-z0-9_-]*:$/p' "$ROUTER_YML")
+  printf '%s' "$fwd" | grep -qF 'gh workflow run agentics-housekeeping.yml' ||
+    hw_fail "work-router.yml does not forward the janitor operations to agentics-housekeeping.yml"
+  printf '%s' "$fwd" | grep -qE '^      actions: write$' ||
+    hw_fail "the forwarder cannot start a workflow run without actions: write"
+  # A value both files need is copied from the router by the installer, so what ships must agree.
+  for knob in MERGE_TRAIN_HOLD_LABEL; do
+    [ "$(router_env "$knob")" = "$(housekeeping_env "$knob")" ] ||
+      hw_fail "${knob} differs between work-router.yml and agentics-housekeeping.yml"
+  done
+  # The janitor's own settings moved with it; a copy left in the router would be dead.
+  for knob in HOUSEKEEPING_RETRY_AFTER_HOURS HOUSEKEEPING_MAX_RETRIES HOUSEKEEPING_STALE_PR_DAYS \
+    HOUSEKEEPING_DIGEST_TITLE DEPENDABOT_MERGE DEPENDABOT_MERGE_WITHOUT_CHECKS AUDIT_STALE_AFTER_DAYS; do
+    [ -z "$(router_env "$knob")" ] || hw_fail "work-router.yml still declares ${knob}; it belongs to agentics-housekeeping.yml"
+  done
+  grep -q 'Source: loops/workflows/agentics-housekeeping.yml' "$HOUSEKEEPING_WF_YML" ||
+    hw_fail "agentics-housekeeping.yml has no ownership header"
+fi
+if [ "$HW_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 # Dependabot merges ride the maintenance run. They merge code nobody on the team wrote, so the
 # guarantees are asserted: the App token (a GITHUB_TOKEN merge starts no push workflow), the knobs
 # in the env: block, no checkout or process of the pull request's code, and only verified commits.
 DEPENDABOT_DIR="${HERE}/../merge-dependabot"
-if [ -f "${DEPENDABOT_DIR}/action.yml" ] && grep -q '^  housekeeping:$' "$ROUTER_YML"; then
+if [ -f "${DEPENDABOT_DIR}/action.yml" ]; then
   DB_OK=1
-  hk_job=$(sed -n '/^  housekeeping:$/,/^  [a-z0-9_-]*:$/p' "$ROUTER_YML")
+  hk_job=$(sed -n '/^  housekeeping:$/,/^  [a-z0-9_-]*:$/p' "$HOUSEKEEPING_WF_YML" 2>/dev/null || true)
+  [ -n "$hk_job" ] || { DB_OK=0; echo "FAIL: agentics-housekeeping.yml has no housekeeping job to merge Dependabot pull requests" >&2; }
   db_step=$(printf '%s\n' "$hk_job" | sed -n '/uses: \.\/\.github\/actions\/merge-dependabot/,/^      - /p')
   printf '%s' "$db_step" | grep -q 'token: ${{ steps.app-token.outputs.token }}' ||
     { DB_OK=0; echo "FAIL: the maintenance run does not merge Dependabot pull requests with the App token" >&2; }
@@ -1312,9 +1382,9 @@ if [ -f "${DEPENDABOT_DIR}/action.yml" ] && grep -q '^  housekeeping:$' "$ROUTER
     DB_OK=0; echo "FAIL: the Dependabot merge must read checks with GITHUB_TOKEN granted checks: read" >&2
   fi
   for knob in DEPENDABOT_MERGE DEPENDABOT_MERGE_WITHOUT_CHECKS; do
-    if [ -z "$(router_env "$knob")" ] || ! printf '%s' "$db_step" | grep -q "env.${knob}"; then
+    if [ -z "$(housekeeping_env "$knob")" ] || ! printf '%s' "$db_step" | grep -q "env.${knob}"; then
       DB_OK=0
-      echo "FAIL: ${knob} is not both declared in the router env: block and read by the Dependabot merge step" >&2
+      echo "FAIL: ${knob} is not both declared in agentics-housekeeping.yml's env: block and read by the Dependabot merge step" >&2
     fi
   done
   if grep -q 'actions/checkout' "${DEPENDABOT_DIR}/action.yml" ||

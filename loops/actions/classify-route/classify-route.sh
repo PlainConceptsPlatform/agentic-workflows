@@ -14,10 +14,10 @@ set -euo pipefail
 # route matrix asserts the two still agree.
 readonly AUDIT_CRON="${AUDIT_CRON:-17 1 * * 1}"
 readonly DOCS_AUDIT_CRON="${DOCS_AUDIT_CRON:-47 2 1,15 * *}"
-readonly AUDIT_CLOSE_CRON="43 3 * * *"
-readonly CLEANUP_ARTIFACTS_CRON="0 6 * * *"
 readonly RECONCILE_BOT_PR_RUNS_CRON="17 * * * *"
-readonly HOUSEKEEPING_CRON="23 */6 * * *"
+# The housekeeping, audit-close and cleanup-artifacts crons belong to agentics-housekeeping.yml,
+# which never calls this classifier. Their operations still route here, and the router forwards
+# them.
 
 has_label() {
   jq -e --arg name "$1" 'index($name)' >/dev/null 2>&1 <<<"${ISSUE_LABELS:-[]}"
@@ -194,10 +194,7 @@ classify_route() {
       case "${SCHEDULE:-}" in
         "$AUDIT_CRON") route="audit" ;;
         "$DOCS_AUDIT_CRON") route="docs-audit" ;;
-        "$AUDIT_CLOSE_CRON") route="audit-close" ;;
-        "$CLEANUP_ARTIFACTS_CRON") route="cleanup-artifacts" ;;
         "$RECONCILE_BOT_PR_RUNS_CRON") route="reconcile-bot-pr-runs" ;;
-        "$HOUSEKEEPING_CRON") route="housekeeping" ;;
         *) error="no route for cron '${SCHEDULE:-}'" ;;
       esac
       ;;

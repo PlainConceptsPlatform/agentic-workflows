@@ -343,6 +343,77 @@ describe("catalog installation", () => {
     expect(written).not.toContain("hand-edited");
   });
 
+  // agentics-housekeeping.yml took the janitor jobs and their settings out of the router. A
+  // repository that tuned those settings in its router must find them in the new file.
+  describe("split-out housekeeping workflow", () => {
+    const routerWith = (env: string, version?: string) =>
+      `${header("loops/workflows/work-router.yml", version)}name: "# Main Work Router"\n\nenv:\n${env}\non:\n  workflow_dispatch:\n\njobs:\n  classify:\n    runs-on: x\n`;
+    const housekeepingWith = (env: string, version?: string) =>
+      `${header("loops/workflows/agentics-housekeeping.yml", version)}name: "Agentics: Housekeeping"\n\nenv:\n${env}\non:\n  workflow_dispatch:\n\njobs:\n  housekeeping:\n    runs-on: x\n`;
+    const packageRouter = routerWith('  TRUSTED_BOTS: "bot"\n  MERGE_TRAIN_HOLD_LABEL: "hold"\n');
+    const packageHousekeeping = housekeepingWith('  HOUSEKEEPING_RETRY_AFTER_HOURS: "1"\n  MERGE_TRAIN_HOLD_LABEL: "hold"\n');
+    const packageSource = () => createDirectory({
+      "workflows/work-router.yml": packageRouter,
+      "workflows/agentics-housekeeping.yml": packageHousekeeping,
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+
+    it("takes a setting the consumer tuned in its router into the new file, and drops it from the router", async () => {
+      const sourcePath = await packageSource();
+      const repositoryPath = await createDirectory({
+        ".github/workflows/work-router.yml": routerWith(
+          '  TRUSTED_BOTS: "bot"\n  HOUSEKEEPING_RETRY_AFTER_HOURS: "12"\n  MERGE_TRAIN_HOLD_LABEL: "parked"\n', "0.6.0"),
+      });
+
+      const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", baseline: offline });
+
+      expect(result.changes.find((change) => change.target === ".github/workflows/agentics-housekeeping.yml"))
+        .toMatchObject({ status: "added", keptEnv: ["HOUSEKEEPING_RETRY_AFTER_HOURS", "MERGE_TRAIN_HOLD_LABEL"] });
+      const housekeeping = await readFile(join(repositoryPath, ".github/workflows/agentics-housekeeping.yml"), "utf8");
+      expect(housekeeping).toContain('  HOUSEKEEPING_RETRY_AFTER_HOURS: "12"\n');
+      expect(housekeeping).toContain('  MERGE_TRAIN_HOLD_LABEL: "parked"\n');
+      const router = await readFile(join(repositoryPath, ".github/workflows/work-router.yml"), "utf8");
+      expect(router).not.toContain("HOUSEKEEPING_RETRY_AFTER_HOURS");
+      expect(router).toContain('  MERGE_TRAIN_HOLD_LABEL: "parked"\n');
+      expect(result.changes.find((change) => change.target === ".github/workflows/work-router.yml")?.consumerOnlyEnv)
+        .toBeUndefined();
+    });
+
+    it("lets an untouched old router default follow the package", async () => {
+      const sourcePath = await packageSource();
+      const baselineLoops = await createDirectory({
+        "workflows/work-router.yml": routerWith('  TRUSTED_BOTS: "bot"\n  HOUSEKEEPING_RETRY_AFTER_HOURS: "6"\n  MERGE_TRAIN_HOLD_LABEL: "hold"\n'),
+      });
+      const repositoryPath = await createDirectory({
+        ".github/workflows/work-router.yml": routerWith(
+          '  TRUSTED_BOTS: "bot"\n  HOUSEKEEPING_RETRY_AFTER_HOURS: "6"\n  MERGE_TRAIN_HOLD_LABEL: "hold"\n', "0.6.0"),
+      });
+
+      await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", baseline: async () => baselineLoops });
+
+      const housekeeping = await readFile(join(repositoryPath, ".github/workflows/agentics-housekeeping.yml"), "utf8");
+      expect(housekeeping).toContain('  HOUSEKEEPING_RETRY_AFTER_HOURS: "1"\n');
+    });
+
+    it("keeps the file's own values on later updates and copies the router's shared ones", async () => {
+      const sourcePath = await packageSource();
+      const repositoryPath = await createDirectory({
+        ".github/workflows/work-router.yml": routerWith('  TRUSTED_BOTS: "bot"\n  MERGE_TRAIN_HOLD_LABEL: "frozen"\n', "0.7.0"),
+        ".github/workflows/agentics-housekeeping.yml": housekeepingWith(
+          '  HOUSEKEEPING_RETRY_AFTER_HOURS: "24"\n  MERGE_TRAIN_HOLD_LABEL: "hold"\n', "0.7.0"),
+      });
+
+      const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.8.0", baseline: offline });
+
+      expect(result.changes.find((change) => change.target === ".github/workflows/agentics-housekeeping.yml"))
+        .toMatchObject({ status: "updated", keptEnv: ["HOUSEKEEPING_RETRY_AFTER_HOURS"] });
+      const housekeeping = await readFile(join(repositoryPath, ".github/workflows/agentics-housekeeping.yml"), "utf8");
+      expect(housekeeping).toContain('  HOUSEKEEPING_RETRY_AFTER_HOURS: "24"\n');
+      expect(housekeeping).toContain('  MERGE_TRAIN_HOLD_LABEL: "frozen"\n');
+    });
+  });
+
   it("dry-run computes the plan and writes nothing", async () => {
     const sourcePath = await createDirectory({
       "actions/check/action.yml": header("loops/actions/check/action.yml") + "name: Check\n",

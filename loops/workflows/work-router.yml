@@ -89,6 +89,9 @@ run-name: >-
   && inputs.operation == 'release'
   && format('Agent: Release{0}', '')
   || github.event_name == 'workflow_dispatch'
+  && (inputs.operation == 'housekeeping' || inputs.operation == 'audit-close' || inputs.operation == 'cleanup-artifacts')
+  && format('Event: {0} forwarded to Agentics: Housekeeping', inputs.operation)
+  || github.event_name == 'workflow_dispatch'
   && format('dispatch: {0}', inputs.operation)
   || github.event_name == 'schedule'
   && github.event.schedule == '17 1 * * 1'
@@ -97,17 +100,8 @@ run-name: >-
   && github.event.schedule == '47 2 1,15 * *'
   && format('Agent: Docs Audit - fortnightly{0}', '')
   || github.event_name == 'schedule'
-  && github.event.schedule == '43 3 * * *'
-  && format('Agentics: Audit Close - daily{0}', '')
-  || github.event_name == 'schedule'
-  && github.event.schedule == '0 6 * * *'
-  && format('Agentics: Cleanup - daily{0}', '')
-  || github.event_name == 'schedule'
   && github.event.schedule == '17 * * * *'
   && format('Agentics: Reconcile - hourly{0}', '')
-  || github.event_name == 'schedule'
-  && github.event.schedule == '23 */6 * * *'
-  && format('Agentics: Maintenance - 6h{0}', '')
   || github.event_name == 'schedule'
   && format('schedule {0}', github.event.schedule)
   || github.event_name }}
@@ -139,30 +133,8 @@ env:
   # `name[bot]` on some endpoints and `app/name` on others, so both spellings belong here.
   # Adding a third bot used to mean finding four hand-written comparisons across this file.
   TRUSTED_BOTS: "github-actions[bot] app/github-actions platform-devbox[bot]"
-  # How long an issue may sit parked with `stalled` before the janitor retries it, and how many
-  # times it tries before leaving the issue to a person. Only machine failures are retried; a
-  # verdict the agent reached on purpose is reported and never re-run, because re-running a
-  # decision reproduces it.
-  HOUSEKEEPING_RETRY_AFTER_HOURS: "1"
-  HOUSEKEEPING_MAX_RETRIES: "3"
-  # A bot pull request older than this with no merge-gate verdict at all is reported, never
-  # closed: the janitor deletes branches and labels, never someone's work.
-  HOUSEKEEPING_STALE_PR_DAYS: "3"
-  # The single issue that lists what genuinely needs a person. Set it empty to turn the digest
-  # off and keep the rest of the janitor.
-  HOUSEKEEPING_DIGEST_TITLE: "Needs a human"
-  # Which Dependabot pull requests the six-hourly maintenance squash-merges once every check is
-  # green: "all", "minor" (minor and patch), "patch", or "off". CI is the gate; only pull requests
-  # Dependabot opened, with every commit Dependabot's, are touched. A repository variable of the
-  # same name overrides this without a commit.
-  DEPENDABOT_MERGE: "all"
-  # "true" also merges a Dependabot pull request in a repository with no checks at all, once its
-  # head is an hour old. "false" leaves those for a person.
-  DEPENDABOT_MERGE_WITHOUT_CHECKS: "true"
-  # How long an audit report may sit open before it is labelled `stale-audit`. The audit's own
-  # backpressure ignores a stale report, so three abandoned reports can no longer disable the
-  # weekly audit for good; the digest lists them instead. Two missed weekly cycles.
-  AUDIT_STALE_AFTER_DAYS: "14"
+  # The housekeeping settings (HOUSEKEEPING_*, DEPENDABOT_*, AUDIT_STALE_AFTER_DAYS) live in
+  # agentics-housekeeping.yml, next to the jobs that read them.
   # How many failed merge-gate attempts one pull request head may consume before the belt
   # parks it for a person. It was written as the literal 6 in four places here while the
   # merge-gate worker carried its own MAX_ATTEMPTS; the route matrix now asserts the two
@@ -170,6 +142,8 @@ env:
   MAX_GATE_ATTEMPTS: "6"
   # The merge train takes the oldest open pull request, bot or person, and moves it one step at a
   # time until it merges or a person has to decide. A pull request with this label stays off it.
+  # `workflows update` copies this value into agentics-housekeeping.yml, whose Dependabot merge
+  # skips the same label.
   MERGE_TRAIN_HOLD_LABEL: "hold"
   # How many times a `blocked` verdict, or a merge that did not happen, is retried once the base
   # branch has moved. After that the pull request waits for a person or a new commit.
@@ -245,10 +219,8 @@ on:
   schedule:
     - cron: "17 1 * * 1" # audit slot, mirrored from env.AUDIT_CRON by the installer
     - cron: "47 2 1,15 * *" # docs-audit slot, mirrored from env.DOCS_AUDIT_CRON by the installer
-    - cron: "43 3 * * *"
-    - cron: "0 6 * * *"
     - cron: "17 * * * *"
-    - cron: "23 */6 * * *" # housekeeping: retry what stalled, tidy what it stranded
+    # The housekeeping, audit-close and cleanup-artifacts crons are in agentics-housekeeping.yml.
 
   workflow_dispatch:
     inputs:
@@ -1771,110 +1743,35 @@ jobs:
                 -f "inputs[operation]=refine" -f "inputs[issue-number]=$issue" -f "inputs[mode]=assume"
             done
 
-  audit-close:
+  # The housekeeping, audit-close and cleanup-artifacts jobs live in agentics-housekeeping.yml,
+  # which runs them on its own crons. A dispatch of one of their operations to this router is
+  # passed on to that file, so the old entry point keeps working. GitHub lets GITHUB_TOKEN start a
+  # workflow_dispatch run, so no App token is needed here.
+  forward-housekeeping:
     needs: classify
-    if: needs.classify.outputs.route == 'audit-close'
+    if: >-
+      needs.classify.outputs.route == 'housekeeping' ||
+      needs.classify.outputs.route == 'audit-close' ||
+      needs.classify.outputs.route == 'cleanup-artifacts'
     runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
-    timeout-minutes: 15
-    concurrency:
-      group: audit-close
-      cancel-in-progress: false
+    timeout-minutes: 5
     permissions:
-      contents: read
-      issues: write
-      # It reads the open pull requests before closing a report, so a report whose
-      # implement workers are still in review is left alone. Without this the list
-      # call answers 403 and the nightly job fails having closed nothing.
-      pull-requests: read
-    steps:
-      - name: Checkout workflow actions
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/audit-close
-        with:
-          token: ${{ github.token }}
-          stale-after-days: ${{ env.AUDIT_STALE_AFTER_DAYS }}
-
-  cleanup-artifacts:
-    needs: classify
-    if: needs.classify.outputs.route == 'cleanup-artifacts' && !github.event.repository.fork
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
-    timeout-minutes: 15
-    concurrency:
-      group: cleanup-artifacts
-      cancel-in-progress: false
-    permissions:
-      contents: read
       actions: write
+      contents: read
     steps:
-      - name: Checkout workflow actions
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/cleanup-artifacts
-        with:
-          token: ${{ github.token }}
-          artifact-retention-days: ${{ vars.ARTIFACT_RETENTION_DAYS }}
-
-  # The janitor. Deterministic, no model: it retries work the machine stalled on, clears the state
-  # a dead run stranded, deletes branches whose pull request is finished, and keeps one issue
-  # listing what genuinely needs a person.
-  housekeeping:
-    needs: classify
-    if: needs.classify.outputs.route == 'housekeeping' && !github.event.repository.fork
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
-    timeout-minutes: 15
-    concurrency:
-      group: housekeeping
-      cancel-in-progress: false
-    permissions:
-      # contents: write deletes branches whose pull request is closed or merged.
-      contents: write
-      issues: write
-      pull-requests: read
-      # actions: write cancels workflow runs stuck pending in the fleet queue.
-      actions: write
-      # The Dependabot merge reads check runs and statuses with this token, not the App's.
-      checks: read
-      statuses: read
-    env:
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-    steps:
-      - name: Checkout workflow actions
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # A retry is a workflow_dispatch, and GitHub refuses to start a workflow run from an event
-      # raised with GITHUB_TOKEN. With the default token every retry would report success and do
-      # nothing, which is the exact failure mode this job exists to remove.
-      - name: Generate App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - uses: ./.github/actions/housekeeping
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          retry-after-hours: ${{ env.HOUSEKEEPING_RETRY_AFTER_HOURS }}
-          max-retries: ${{ env.HOUSEKEEPING_MAX_RETRIES }}
-          stale-pr-days: ${{ env.HOUSEKEEPING_STALE_PR_DAYS }}
-          digest-title: ${{ env.HOUSEKEEPING_DIGEST_TITLE }}
-          dry-run: ${{ github.event.inputs.dry-run || 'false' }}
-      # Dependabot updates merge here rather than on a cron of their own. API calls only: no pull
-      # request code is checked out. It runs even when the sweep above failed.
-      - name: Merge Dependabot pull requests
-        if: ${{ !cancelled() && steps.app-token.outcome == 'success' }}
-        uses: ./.github/actions/merge-dependabot
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          read-token: ${{ github.token }}
-          scope: ${{ vars.DEPENDABOT_MERGE || env.DEPENDABOT_MERGE }}
-          merge-without-checks: ${{ env.DEPENDABOT_MERGE_WITHOUT_CHECKS }}
-          skip-labels: do-not-merge blocked human-review ${{ env.MERGE_TRAIN_HOLD_LABEL }}
-          dry-run: ${{ github.event.inputs.dry-run || 'false' }}
+      - name: Forward the operation to agentics-housekeeping.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch }}
+          OPERATION: ${{ needs.classify.outputs.route }}
+          DRY_RUN: ${{ github.event.inputs.dry-run || 'false' }}
+        run: |
+          set -euo pipefail
+          gh workflow run agentics-housekeeping.yml --repo "$REPO" --ref "$REF" \
+            -f operation="$OPERATION" \
+            -f dry-run="$DRY_RUN"
+          echo "::notice::Forwarded operation=${OPERATION} to agentics-housekeeping.yml"
 
   validate:
     needs: classify

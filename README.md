@@ -27,8 +27,10 @@ to sit at the bottom of each worker's markdown, which is the prompt, so every ru
 240 lines of Mermaid and then read an instruction telling it to ignore them. `verify-route-matrix.sh`
 now fails if one reappears in a prompt.
 
-Every worker is a `workflow_call` reusable workflow. Nothing triggers itself: `work-router.yml`
-owns all the triggers, classifies the event into exactly one route, and calls one worker. That
+Every worker is a `workflow_call` reusable workflow. No worker triggers itself: `work-router.yml`
+owns every trigger that can start an agent, classifies the event into exactly one route, and calls
+one worker. The scheduled janitor jobs, which start no agent, have their own file,
+`agentics-housekeeping.yml`. That
 is why a worker can be added or removed without touching the others, and why the route matrix
 in `verify-route-matrix.sh` is the thing to run after changing any of them.
 
@@ -44,6 +46,7 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | `release` | `agent-release.md` | on demand (`operation=release`) | a `chore(release): vX.Y.Z` pull request with auto-merge; `release-tag.yml` tags it and publishes the GitHub Release once it merges |
 
 Plus the plumbing, which has no agent in it: `work-router.yml` (the router itself),
+`agentics-housekeeping.yml` (the janitor jobs below, on their own crons),
 `authorize-bot-work.yml` (a human's label is checked, then the bot re-labels so the workers see
 a trusted actor), `release-tag.yml` (installed with the `release` route: tags a merged release
 pull request), `evidence.yml` (when a pull request merges, replays the verification plan its
@@ -75,7 +78,7 @@ left to.
 ### Keeping itself running
 
 Two deterministic jobs exist because the measured problem was never bad decisions, it was
-silence. Across four consumers, 58 of the 237 issues closed since 1 August were closed by the
+silence. Both run from `agentics-housekeeping.yml`. Across four consumers, 58 of the 237 issues closed since 1 August were closed by the
 bot: autonomy between 6% and 50%. The rest stopped somewhere and told nobody.
 
 | Job | Runs | Does |
@@ -96,8 +99,8 @@ one climbs.
 
 It runs on the App token, because GitHub starts no workflow run from an event raised with
 `GITHUB_TOKEN` -- with the default token every retry would be a green no-op. Every write goes
-through one wrapper, which is the only place `dry-run` is read, so `operation=housekeeping` with
-`dry-run` on prints exactly what it would change and writes nothing. `verify-route-matrix.sh`
+through one wrapper, which is the only place `dry-run` is read, so running `agentics-housekeeping.yml`
+with `operation=housekeeping` and `dry-run` on prints exactly what it would change and writes nothing. `verify-route-matrix.sh`
 asserts all of that, including that it closes only two kinds of issue.
 
 The same run merges Dependabot's updates, so nobody has to: a pull request Dependabot opened, with every commit verified and Dependabot's, targeting the default branch and carrying no hold label, is squash-merged once every check is green. A stale one gets one `@dependabot rebase`, a failing one is listed in the job summary, and nothing of the pull request is checked out or run. `DEPENDABOT_MERGE` (`all`, `minor`, `patch` or `off`) and `DEPENDABOT_MERGE_WITHOUT_CHECKS` in the `env:` block set the scope; a repository variable `DEPENDABOT_MERGE` overrides it. A repository without the router gets the same from the `dependabot-merge` template. See [docs/dependabot-merge.md](docs/dependabot-merge.md) for the rules, the security model and how to turn it off.
@@ -367,23 +370,33 @@ The other value in that block is `CI_WORKFLOW_NAME`, the name of the CI workflow
 reads its verdict from. It works the same way, mirrored into the `workflow_run` trigger, and
 getting it wrong is equally quiet: the belt logs no completed CI run and the pull request waits.
 
-The daily and hourly crons (`audit-close`, `cleanup-artifacts`, `reconcile-bot-pr-runs`,
-`housekeeping`) do not need staggering: they run on
-GitHub-hosted runners and never touch the fleet. The reconcile cron runs hourly at minute 17 and
-ticks the merge train.
+The janitor's crons (`housekeeping` every six hours, `audit-close` and `cleanup-artifacts` daily)
+are in their own workflow, `agentics-housekeeping.yml`, so a cron tick starts only the job it is
+for and the router keeps the events that can start an agent. The router still accepts their
+operations and forwards them there. The reconcile cron stays in the router: it runs hourly at
+minute 17 and ticks the merge train.
 
-The rest of that `env:` block belongs to the janitor and the audit chain, and each value is a
-repository's to change:
+`agentics-housekeeping.yml` has its own `env:` block, which `workflows update` keeps like the
+router's. When it is first installed it takes the values a repository had set for these keys in
+its router:
 
 | Value | Default | Means |
 |---|---|---|
-| `HOUSEKEEPING_RETRY_AFTER_HOURS` | `6` | how long a `stalled` issue waits before a retry |
+| `HOUSEKEEPING_RETRY_AFTER_HOURS` | `1` | how long a `stalled` issue waits before a retry |
 | `HOUSEKEEPING_MAX_RETRIES` | `3` | retries before the issue is left to a person |
 | `HOUSEKEEPING_STALE_PR_DAYS` | `3` | a bot pull request older than this with no gate verdict is reported, never closed |
 | `HOUSEKEEPING_DIGEST_TITLE` | `Needs a human` | the one issue listing what needs a person; empty turns the digest off |
 | `DEPENDABOT_MERGE` | `all` | which Dependabot updates the maintenance run merges once green: `all`, `minor`, `patch` or `off`; a repository variable of the same name overrides it |
 | `DEPENDABOT_MERGE_WITHOUT_CHECKS` | `true` | merge a Dependabot update in a repository with no checks at all, once its head is an hour old |
 | `AUDIT_STALE_AFTER_DAYS` | `14` | when an unactioned audit report stops blocking the next audit |
+
+The rest of the router's `env:` block belongs to the merge train and the workers it starts, and each
+value is a repository's to change. `MERGE_TRAIN_HOLD_LABEL` is also read by the Dependabot merge in
+`agentics-housekeeping.yml`; `workflows update` copies it there from the router, so change it in the
+router only:
+
+| Value | Default | Means |
+|---|---|---|
 | `MAX_GATE_ATTEMPTS` | `6` | failed merge-gate attempts one pull request head may consume before the train passes it by |
 | `MERGE_TRAIN_HOLD_LABEL` | `hold` | a pull request with this label stays off the merge train |
 | `MERGE_TRAIN_MAX_RETRIES` | `3` | how often a `blocked` verdict is retried after the base branch moves |
