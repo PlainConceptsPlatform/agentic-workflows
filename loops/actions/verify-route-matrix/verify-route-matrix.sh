@@ -1368,10 +1368,8 @@ else
   printf '%s' "$fwd" | grep -qE '^      actions: write$' ||
     hw_fail "the forwarder cannot start a workflow run without actions: write"
   # A value both files need is copied from the router by the installer, so what ships must agree.
-  for knob in MERGE_TRAIN_HOLD_LABEL; do
-    [ "$(router_env "$knob")" = "$(housekeeping_env "$knob")" ] ||
-      hw_fail "${knob} differs between work-router.yml and agentics-housekeeping.yml"
-  done
+  [ "$(router_env MERGE_TRAIN_HOLD_LABEL)" = "$(housekeeping_env MERGE_TRAIN_HOLD_LABEL)" ] ||
+    hw_fail "MERGE_TRAIN_HOLD_LABEL differs between work-router.yml and agentics-housekeeping.yml"
   # The janitor's own settings moved with it; a copy left in the router would be dead.
   for knob in HOUSEKEEPING_RETRY_AFTER_HOURS HOUSEKEEPING_MAX_RETRIES HOUSEKEEPING_STALE_PR_DAYS \
     HOUSEKEEPING_DIGEST_TITLE DEPENDABOT_MERGE DEPENDABOT_MERGE_WITHOUT_CHECKS AUDIT_STALE_AFTER_DAYS; do
