@@ -52,6 +52,7 @@ export const retiredWorkflowFiles = [
 export const plumbingWorkflowFiles = [
   "agentics-housekeeping.yml",
   "agentics-merge-belt.yml",
+  "agentics-pr-plumbing.yml",
 ] as const;
 
 export const packageOwnedTargets = [

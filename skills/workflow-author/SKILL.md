@@ -53,7 +53,8 @@ context, give it a bounded task, and require one complete final Safe Outputs pay
 - `loops/workflows/agentics-*.yml` are plain YAML workflows split out of the router
   (`agentics-housekeeping.yml`: housekeeping, audit-close, cleanup-artifacts;
   `agentics-merge-belt.yml`: the merge train, merge-approved, the hourly reconcile, and the merge
-  gate it calls, the one worker that does not start from the router). Each owns its own triggers,
+  gate it calls, the one worker that does not start from the router;
+  `agentics-pr-plumbing.yml`: bot-approve, land-stack-child, stack-landed). Each owns its own triggers,
   an `env:` block the installer keeps, and the `AGENTIC_WORKFLOWS_DISABLED` check on every job. When an operation moves to one, the router keeps
   the operation and forwards it, because other code and people still dispatch it there.
 - `loops/workflows/agent-*.md` are `workflow_call` workers only. They have no public trigger and
@@ -92,14 +93,16 @@ loops/workflows/
       call-audit               agent-audit.md               workflow_call only
       call-release             agent-release.md             workflow_call only
       call-evidence            evidence.yml                 plain YAML, no model
-      deterministic jobs       check-implement-pr, dispatch-triage, bot-approve,
-                              land-stack-child, stack-landed, forward-merge-train,
+      deterministic jobs       check-implement-pr, dispatch-triage, forward-merge-train,
                               forward-reconcile, forward-housekeeping, validate
   agentics-housekeeping.yml    its own crons: housekeeping, audit-close, cleanup-artifacts
   agentics-merge-belt.yml      CI completions, merges, approvals, the hourly cron
     classify                   the same classifier as the router
       call-merge-gate          agent-merge-gate.md          workflow_call only
       merge-train, merge-approved, reconcile-bot-pr-runs
+  agentics-pr-plumbing.yml     pull requests opened, pushed, labeled, closed
+    classify                   the same classifier as the router
+      bot-approve, land-stack-child, stack-landed
   authorize-bot-work.yml       human adds implement/refine → bot adds bot-working
 ```
 

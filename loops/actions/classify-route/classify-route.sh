@@ -159,9 +159,9 @@ classify_route() {
         ci_run_id=""
       elif [ "${ACTION:-}" = "closed" ] && [ "${PR_MERGED:-false}" = "true" ]; then
         # A merge is when the change's verification plan describes what the default branch now
-        # does, so the evidence run replays it then. The merge train and land-stack-child react
-        # to this same event as event-gated jobs, not as routes, so taking the route here costs
-        # them nothing.
+        # does, so the evidence run replays it then. The merge train (agentics-merge-belt.yml) and
+        # land-stack-child and stack-landed (agentics-pr-plumbing.yml) react to this same event as
+        # event-gated jobs, not as routes, so taking the route here costs them nothing.
         if [ "${EVIDENCE_ENABLED:-true}" = "true" ]; then
           route="evidence"
           pr_number="${EVENT_PR_NUMBER:-}"
@@ -169,6 +169,7 @@ classify_route() {
           error="evidence is turned off for this repository (EVIDENCE_ENABLED)"
         fi
       else
+        # Answered by bot-approve in agentics-pr-plumbing.yml; the router has no job for it.
         route="bot-approve"
       fi
       ;;

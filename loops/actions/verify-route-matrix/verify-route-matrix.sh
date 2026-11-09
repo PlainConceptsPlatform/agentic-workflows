@@ -20,6 +20,8 @@ ROUTER_YML="${WORKFLOWS_DIR}/work-router.yml"
 HOUSEKEEPING_WF_YML="${WORKFLOWS_DIR}/agentics-housekeeping.yml"
 # The merge train, the merge gate, merge-approved and the hourly reconcile live in their own file.
 BELT_WF_YML="${WORKFLOWS_DIR}/agentics-merge-belt.yml"
+# bot-approve and the two stack jobs (land-stack-child, stack-landed) live in their own file.
+PLUMBING_WF_YML="${WORKFLOWS_DIR}/agentics-pr-plumbing.yml"
 IMPLEMENT_WORKER_MD="${WORKFLOWS_DIR}/agent-implement.md"
 MERGE_GATE_WORKER_MD="${WORKFLOWS_DIR}/agent-merge-gate.md"
 
@@ -37,12 +39,18 @@ housekeeping_env() {
 belt_env() {
   sed -n "s/^  $1: *//p" "$BELT_WF_YML" | head -1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
 }
+# The same lookup in agentics-pr-plumbing.yml's own env: block.
+plumbing_env() {
+  sed -n "s/^  $1: *//p" "$PLUMBING_WF_YML" | head -1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
 # The workflow file that holds a job: the router, the housekeeping file for the three janitor
-# jobs, or the merge belt for the merge train's.
+# jobs, the merge belt for the merge train's, or the pull request plumbing for bot-approve and
+# the stack jobs.
 job_file() {
   case "$1" in
     housekeeping | audit-close | cleanup-artifacts) echo "$HOUSEKEEPING_WF_YML" ;;
     call-merge-gate | merge-gate | merge-train | merge-approved | reconcile-bot-pr-runs) echo "$BELT_WF_YML" ;;
+    bot-approve | land-stack-child | stack-landed) echo "$PLUMBING_WF_YML" ;;
     *) echo "$ROUTER_YML" ;;
   esac
 }
@@ -424,7 +432,8 @@ fi
 
 # Bot logins are the same shape of problem. Most sites read env.TRUSTED_BOTS, but a job-level
 # `if:` cannot: GitHub does not expose the env context there, so bot-approve keeps literals and
-# they have to agree. Assert every bot login written anywhere in the router is in the list.
+# they have to agree. Assert every bot login written anywhere in the router, or in
+# agentics-pr-plumbing.yml where bot-approve now lives, is in the list.
 trusted="$(router_env TRUSTED_BOTS)"
 if [ -z "$trusted" ]; then
   MIRROR_OK=0; echo "FAIL: work-router.yml defines no TRUSTED_BOTS in its env: block" >&2
@@ -438,7 +447,7 @@ else
         echo "FAIL: work-router.yml names bot '${login}' but env.TRUSTED_BOTS does not list it" >&2
         ;;
     esac
-  done < <(grep -oE "'(app/[a-z-]+|[a-z-]+\[bot\])'|\"(app/[a-z-]+|[a-z-]+\[bot\])\"" "$ROUTER_YML" |
+  done < <(grep -ohE "'(app/[a-z-]+|[a-z-]+\[bot\])'|\"(app/[a-z-]+|[a-z-]+\[bot\])\"" "$ROUTER_YML" "$PLUMBING_WF_YML" |
     tr -d "'\"" | sort -u)
 fi
 if [ "$MIRROR_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
@@ -596,7 +605,7 @@ if [ "$SWEEP_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # And nothing may go back to a word boundary in a double-quoted jq program anywhere, because the
 # failure is silent in both directions: the filter matches nothing and the job stays green.
 BOUNDARY_OK=1
-for candidate in "$ROUTER_YML" "$BELT_WF_YML" "$HOUSEKEEPING_WF_YML" "${WORKFLOWS_DIR}"/agent-*.md; do
+for candidate in "$ROUTER_YML" "$BELT_WF_YML" "$HOUSEKEEPING_WF_YML" "$PLUMBING_WF_YML" "${WORKFLOWS_DIR}"/agent-*.md; do
   [ -f "$candidate" ] || continue
   offenders=$(grep -n -- '--jq "' "$candidate" 2>/dev/null | grep -F '\b' || true)
   if [ -n "$offenders" ]; then
@@ -838,7 +847,7 @@ done
 # fromJson('') killed the incomplete job before its attempt comment, and the belt re-dispatched
 # the same crash every hour. Every name the router reads must be exported by the classify job.
 CLASSIFY_OK=1
-for classify_file in "$ROUTER_YML" "$BELT_WF_YML"; do
+for classify_file in "$ROUTER_YML" "$BELT_WF_YML" "$PLUMBING_WF_YML"; do
   CLASSIFY_EXPORTS="$(tr -d '\r' <"$classify_file" |
     sed -n '/^  classify:$/,/^  [a-z-]*:$/p' |
     sed -n '/^    outputs:$/,/^    [a-z]*:$/p' |
@@ -1151,12 +1160,15 @@ fi
 
 # Every installed worker and every plumbing route has a job; a worker that is not installed
 # has none, or the router would call a lock file that does not exist.
+# bot-approve's job is in agentics-pr-plumbing.yml, which classifies the same event itself.
 for route in "${INSTALLED_ROUTES[@]}" "${PLUMBING_ROUTES[@]}"; do
-  if grep -q "route == '${route}'" "$ROUTER_YML"; then
+  route_file="$ROUTER_YML"
+  [ "$route" = bot-approve ] && route_file="$PLUMBING_WF_YML"
+  if grep -q "route == '${route}'" "$route_file"; then
     PASS=$((PASS + 1))
   else
     FAIL=$((FAIL + 1))
-    echo "FAIL: work-router.yml has no job for route '${route}'" >&2
+    echo "FAIL: $(basename "$route_file") has no job for route '${route}'" >&2
   fi
 done
 for route in "${EXCLUDED_ROUTES[@]}"; do
@@ -1485,6 +1497,69 @@ else
     mb_fail "agentics-merge-belt.yml has no ownership header"
 fi
 if [ "$MB_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+echo "── PR plumbing workflow ──────────────────────────────────────────────────"
+
+# bot-approve and the stack jobs left the router for agentics-pr-plumbing.yml. As with the belt,
+# both halves of the move are asserted: a job in both files runs twice, and an event neither file
+# hears is a bot pull request whose CI waits for approval, or a stack that never moves on.
+PP_OK=1
+pp_fail() { PP_OK=0; echo "FAIL: $1" >&2; }
+if [ ! -f "$PLUMBING_WF_YML" ]; then
+  pp_fail "agentics-pr-plumbing.yml is missing"
+else
+  pp_jobs=(bot-approve land-stack-child stack-landed)
+  for job in classify "${pp_jobs[@]}"; do
+    grep -q "^  ${job}:$" "$PLUMBING_WF_YML" || pp_fail "agentics-pr-plumbing.yml has no ${job} job"
+  done
+  for job in "${pp_jobs[@]}"; do
+    if grep -q "^  ${job}:$" "$ROUTER_YML" "$BELT_WF_YML" "$HOUSEKEEPING_WF_YML"; then
+      pp_fail "${job} is still in another workflow, so it would run twice"
+    fi
+    sed -n "/^  ${job}:$/,/^  [a-z0-9_-]*:$/p" "$PLUMBING_WF_YML" | grep -qE '^    needs: (classify|\[classify)' ||
+      pp_fail "the plumbing's ${job} job does not need classify, so the off switch does not stop it"
+  done
+  sed -n '/^  classify:$/,/^  [a-z0-9_-]*:$/p' "$PLUMBING_WF_YML" | grep -qF "if: vars.AGENTIC_WORKFLOWS_DISABLED == ''" ||
+    pp_fail "the plumbing's classify job ignores the AGENTIC_WORKFLOWS_DISABLED off switch"
+  # Every pull request event bot-approve answered in the router reaches it here; the router keeps
+  # only labeled (the merge-gate label) and closed (evidence).
+  sed -n '/^  pull_request_target:$/,/^  [a-z_]*:$/p' "$PLUMBING_WF_YML" | grep -qF 'types: [opened, synchronize, reopened, labeled, closed]' ||
+    pp_fail "agentics-pr-plumbing.yml must hear opened, synchronize, reopened, labeled and closed pull requests"
+  sed -n '/^  pull_request_target:$/,/^  [a-z_]*:$/p' "$ROUTER_YML" | grep -qF 'types: [labeled, closed]' ||
+    pp_fail "work-router.yml must hear only labeled and closed pull requests; the rest belong to agentics-pr-plumbing.yml"
+  for trigger in issues issue_comment pull_request_review pull_request_review_comment workflow_run schedule workflow_dispatch; do
+    if grep -q "^  ${trigger}:$" "$PLUMBING_WF_YML"; then pp_fail "agentics-pr-plumbing.yml hears ${trigger}, which none of its jobs answers"; fi
+  done
+  # The classifier still sends these events where the jobs expect them.
+  [ "$(route_field route EVENT=pull_request_target ACTION=synchronize EVENT_PR_NUMBER=7)" = bot-approve ] ||
+    pp_fail "a pushed pull request no longer routes to bot-approve"
+  [ "$(route_field route EVENT=pull_request_target ACTION=labeled LABEL=bug EVENT_PR_NUMBER=7)" = bot-approve ] ||
+    pp_fail "a pull request labeled other than merge-gate no longer routes to bot-approve"
+  # The guards that keep pull request code and other actors out did not move a character.
+  sed -n '/^  bot-approve:$/,/^  [a-z0-9_-]*:$/p' "$PLUMBING_WF_YML" |
+    grep -qF "(github.actor == 'app/github-actions' || github.actor == 'platform-devbox[bot]')" ||
+    pp_fail "bot-approve no longer approves for the two bot actors only"
+  sed -n '/^  bot-approve:$/,/^  [a-z0-9_-]*:$/p' "$PLUMBING_WF_YML" | grep -qE '^      actions: write$' ||
+    pp_fail "bot-approve cannot approve a run without actions: write"
+  sed -n '/^  land-stack-child:$/,/^  [a-z0-9_-]*:$/p' "$PLUMBING_WF_YML" |
+    grep -qF 'github.event.pull_request.base.ref != github.event.repository.default_branch' ||
+    pp_fail "land-stack-child no longer runs only for a merge into a feature branch"
+  sed -n '/^  stack-landed:$/,/^  [a-z0-9_-]*:$/p' "$PLUMBING_WF_YML" |
+    grep -qF 'github.event.pull_request.base.ref == github.event.repository.default_branch' ||
+    pp_fail "stack-landed no longer runs only for a merge into the default branch"
+  if grep -qE '^ *- uses: actions/checkout' "$PLUMBING_WF_YML" &&
+    grep -A3 -E '^ *- uses: actions/checkout' "$PLUMBING_WF_YML" | grep -qE 'ref: .*(head|pull_request)'; then
+    pp_fail "agentics-pr-plumbing.yml checks out pull request code on pull_request_target"
+  fi
+  # stack-landed reads UNATTENDED from its own env:, and check-stack-branch from the router's. The
+  # installer copies the router's value, so what ships must agree.
+  [ -n "$(plumbing_env UNATTENDED)" ] || pp_fail "agentics-pr-plumbing.yml does not declare UNATTENDED, so stack-landed never chains a feature"
+  [ "$(router_env UNATTENDED)" = "$(plumbing_env UNATTENDED)" ] ||
+    pp_fail "UNATTENDED differs between work-router.yml and agentics-pr-plumbing.yml"
+  grep -q 'Source: loops/workflows/agentics-pr-plumbing.yml' "$PLUMBING_WF_YML" ||
+    pp_fail "agentics-pr-plumbing.yml has no ownership header"
+fi
+if [ "$PP_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # Dependabot merges ride the maintenance run. They merge code nobody on the team wrote, so the
 # guarantees are asserted: the App token (a GITHUB_TOKEN merge starts no push workflow), the knobs
@@ -3335,11 +3410,11 @@ fi
 # router holds a child while a sibling's pull request is open on the feature branch (Odyssey
 # feat/323 built three children side by side and two landed conflicting).
 ONE_AT_A_TIME_OK=1
-grep -qF 'The next landing releases the next one."' "${WORKFLOWS_DIR}/work-router.yml" ||
+grep -qF 'The next landing releases the next one."' "$PLUMBING_WF_YML" ||
   { ONE_AT_A_TIME_OK=0; echo "FAIL: land-stack-child releases every free sibling at once" >&2; }
 # shellcheck disable=SC2015
-grep -qF 'echo "Released #$child of feature #$feature."' "${WORKFLOWS_DIR}/work-router.yml" &&
-  grep -A1 -F 'echo "Released #$child of feature #$feature."' "${WORKFLOWS_DIR}/work-router.yml" | grep -qE '^\s+break$' ||
+grep -qF 'echo "Released #$child of feature #$feature."' "$PLUMBING_WF_YML" &&
+  grep -A1 -F 'echo "Released #$child of feature #$feature."' "$PLUMBING_WF_YML" | grep -qE '^\s+break$' ||
   { ONE_AT_A_TIME_OK=0; echo "FAIL: stack-landed releases every free child of the next feature at once" >&2; }
 grep -qF -- '--base "$STACK_BRANCH" --limit 100 --json number,body' "${WORKFLOWS_DIR}/work-router.yml" ||
   { ONE_AT_A_TIME_OK=0; echo "FAIL: check-stack-branch dispatches a child while a sibling's pull request is open" >&2; }
@@ -3523,7 +3598,7 @@ done
 # which pools_named reads as its first token. That is the shape the compile step rewrites every
 # worker lock to as well, so it is the router's pool, not a drift from agents-arc.
 AFFINITY_POOL="[agents-aw,"
-router_pools="$(for f in "$ROUTER_YML" "$BELT_WF_YML" "$HOUSEKEEPING_WF_YML"; do pools_named "$f"; done | tr '\n' ' ' | sed 's/ $//')"
+router_pools="$(for f in "$ROUTER_YML" "$BELT_WF_YML" "$HOUSEKEEPING_WF_YML" "$PLUMBING_WF_YML"; do pools_named "$f"; done | tr '\n' ' ' | sed 's/ $//')"
 router_ok=1
 for p in $router_pools; do
   case " ${AGENT_POOL} ${PLUMBING_POOL} ${AFFINITY_POOL} " in *" $p "*) ;; *) router_ok=0 ;; esac
@@ -3803,7 +3878,7 @@ if [ -n "$CHECK_STACK_JOB" ]; then
     st_str "stack-blocked != 'true'" "$DISPATCH_JOB" 'dispatches a child whose blockers have not landed'
     st 'name: Hold a child whose blockers have not landed' "$ROUTER_YML" 'never holds a child behind the siblings it is blocked by'
     st 'state merged --base "\$STACK_BRANCH"' "$ROUTER_YML" 'holds a child behind a blocker whose pull request already landed, which nothing releases again'
-    st 'Released #\$child: everything it was blocked by has landed' "$ROUTER_YML" 'holds blocked children but never releases them'
+    st 'Released #\$child: everything it was blocked by has landed' "$PLUMBING_WF_YML" 'holds blocked children but never releases them'
   fi
   # The child's pull request targets the ref the run was dispatched on, taken from the run.
   # Asking the agent for it failed in practice (Lyceum #72, run 38694942046): it emitted no
@@ -3823,17 +3898,18 @@ else
 fi
 
 # 2. Completion. The merge of a child PR into a feature branch (base != default branch) is
-# the only event that can mean "one fewer open child". The router block must be idempotent:
+# the only event that can mean "one fewer open child". land-stack-child, in
+# agentics-pr-plumbing.yml, must be idempotent:
 # the announcement carries <!-- stack-complete --> and a re-run that finds it stays silent.
-st 'stack-complete' "$ROUTER_YML" 'has no idempotent completion marker on the root pull request'
-st 'closingIssuesReferences\[0\]\.number // empty' "$ROUTER_YML" 'does not read the child PR to find the closed issue'
-st 'split-parent: \[0-9\]+' "$ROUTER_YML" 'does not walk from the child to its feature issue'
-st 'stack-root-pr: \[0-9\]+' "$ROUTER_YML" 'does not read the root pull request number off the feature issue'
+st 'stack-complete' "$PLUMBING_WF_YML" 'has no idempotent completion marker on the root pull request'
+st 'closingIssuesReferences\[0\]\.number // empty' "$PLUMBING_WF_YML" 'does not read the child PR to find the closed issue'
+st 'split-parent: \[0-9\]+' "$PLUMBING_WF_YML" 'does not walk from the child to its feature issue'
+st 'stack-root-pr: \[0-9\]+' "$PLUMBING_WF_YML" 'does not read the root pull request number off the feature issue'
 # gh pr view and gh issue view answer OPEN, not open. An exact lowercase match on their state
 # never matches, which left every root closed and every child done as far as completion knew.
 # The child whose pull request just landed is done even if the gate has not closed its issue yet.
-st '# Landed, though the gate may not have closed its issue yet' "$ROUTER_YML" 'counts the child that just landed as still open, so the stack never reads complete'
-if grep -nE "(gh pr view|gh issue view)[^|]*--json state[^|]*\| *grep -q?x open" "$ROUTER_YML" >/dev/null; then
+st '# Landed, though the gate may not have closed its issue yet' "$PLUMBING_WF_YML" 'counts the child that just landed as still open, so the stack never reads complete'
+if grep -nE "(gh pr view|gh issue view)[^|]*--json state[^|]*\| *grep -q?x open" "$ROUTER_YML" "$PLUMBING_WF_YML" >/dev/null; then
   STACK_OK=0
   echo "FAIL: stacked features compares a GraphQL state (OPEN) to lowercase open; the root and children never read as open" >&2
 fi
@@ -3943,7 +4019,7 @@ fi
 # 7. No stack label anywhere. Stack semantics live in markers on issues and pull requests;
 # a label would have to be moved by the App token to raise events, and every new label is a
 # new consumer-visible surface. Assert the absence of any stack-named label action.
-if grep -nE "add-label .*$|add-labels$" "$ROUTER_YML" "$MERGE_GATE_WORKER_MD" "${WORKFLOWS_DIR}/agent-refine.md" "$IMPLEMENT_WORKER_MD" 2>/dev/null |
+if grep -nE "add-label .*$|add-labels$" "$ROUTER_YML" "$PLUMBING_WF_YML" "$MERGE_GATE_WORKER_MD" "${WORKFLOWS_DIR}/agent-refine.md" "$IMPLEMENT_WORKER_MD" 2>/dev/null |
    grep -qiE 'stack'; then
   STACK_OK=0
   echo "FAIL: a workflow adds a stack-named label; stack semantics belong to markers" >&2

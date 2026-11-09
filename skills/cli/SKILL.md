@@ -93,7 +93,7 @@ reads the values from `env:`, including `classify-route.sh`, whose `AUDIT_CRON` 
 that no third literal appears.
 
 A workflow split out of the router (`plumbingWorkflowFiles` in `workflow-catalog.ts`, today
-`agentics-housekeeping.yml` and `agentics-merge-belt.yml`) is merged by `mergePlumbing`, after the
+`agentics-housekeeping.yml`, `agentics-merge-belt.yml` and `agentics-pr-plumbing.yml`) is merged by `mergePlumbing`, after the
 router. Its `env:` is kept like
 the router's, with two more rules. On its first install the consumer has no copy, so its values are
 taken from the consumer's router, with that router's release as the baseline: a setting that moved

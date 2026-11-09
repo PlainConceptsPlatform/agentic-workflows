@@ -29,9 +29,10 @@ now fails if one reappears in a prompt.
 
 Every worker is a `workflow_call` reusable workflow. No worker triggers itself: `work-router.yml`
 owns every trigger that can start an agent, classifies the event into exactly one route, and calls
-one worker. Two groups of jobs have their own files: the scheduled janitor jobs, which start no
-agent, in `agentics-housekeeping.yml`, and the merge train with the gate it calls in
-`agentics-merge-belt.yml`, which hears CI completions, merges and approvals itself. That
+one worker. Three groups of jobs have their own files: the scheduled janitor jobs, which start no
+agent, in `agentics-housekeeping.yml`; the merge train with the gate it calls in
+`agentics-merge-belt.yml`, which hears CI completions, merges and approvals itself; and the pull
+request and stack jobs in `agentics-pr-plumbing.yml`, which hear pull request events. That
 is why a worker can be added or removed without touching the others, and why the route matrix
 in `verify-route-matrix.sh` is the thing to run after changing any of them.
 
@@ -50,6 +51,8 @@ Plus the plumbing, which has no agent in it: `work-router.yml` (the router itsel
 `agentics-housekeeping.yml` (the janitor jobs below, on their own crons),
 `agentics-merge-belt.yml` (the merge train, the merge gate it calls, the merge of a pull request a
 person approved, and the hourly reconcile),
+`agentics-pr-plumbing.yml` (approving the CI of a bot's pull request, and moving a stack on when a
+child or a root merges),
 `authorize-bot-work.yml` (a human's label is checked, then the bot re-labels so the workers see
 a trusted actor), `release-tag.yml` (installed with the `release` route: tags a merged release
 pull request), `evidence.yml` (when a pull request merges, replays the verification plan its
@@ -167,7 +170,7 @@ to work alone: the people refine and answer questions by day, the pipeline build
   check-diff, anything the workflow could not measure.
 - Features chain. A feature issue blocked by another (GitHub's "blocked by" relation, or a
   `Blocked by #N` line in its body) keeps its children held until that feature's stack root merges.
-  The router's `stack-landed` job then merges the default branch into the waiting feature's branch,
+  The `stack-landed` job (in `agentics-pr-plumbing.yml`) then merges the default branch into the waiting feature's branch,
   releases its children, and opens an **Unattended report** issue listing the pull requests that
   merged, labelled `needs-human` when any merged on a judgement call. A branch that will not merge
   cleanly keeps its feature held and labels it `needs-human`.
@@ -379,15 +382,19 @@ and the pull request waits. Set it in the router; `workflows update` copies it i
 The janitor's crons (`housekeeping` every six hours, `audit-close` and `cleanup-artifacts` daily)
 are in their own workflow, `agentics-housekeeping.yml`, and the hourly reconcile (minute 17, which
 also ticks the merge train) is in `agentics-merge-belt.yml`. A cron tick starts only the job it is
-for, and the router keeps the events that can start an agent. The router still accepts the moved
+for, and the router keeps the events that can start an agent. A push to a pull request reaches
+`agentics-pr-plumbing.yml` only; the router hears a pull request only when it is labelled or closed.
+The router still accepts the moved
 operations (`housekeeping`, `audit-close`, `cleanup-artifacts`, `merge-gate`, `merge-train`,
 `reconcile-bot-pr-runs`) and forwards them.
 
-`agentics-housekeeping.yml` and `agentics-merge-belt.yml` each have their own `env:` block, which
-`workflows update` keeps like the router's. When one is first installed it takes the values a
-repository had set for its keys in its router. A key both files need (`CI_WORKFLOW_NAME`,
-`TRUSTED_BOTS`, `MERGE_TRAIN_HOLD_LABEL`) is copied from the router on every update, so change it
-in the router only. `agentics-housekeeping.yml`:
+`agentics-housekeeping.yml`, `agentics-merge-belt.yml` and `agentics-pr-plumbing.yml` each have
+their own `env:` block, which `workflows update` keeps like the router's. When one is first
+installed it takes the values a repository had set for its keys in its router. A key the router
+also needs (`CI_WORKFLOW_NAME`, `TRUSTED_BOTS`, `MERGE_TRAIN_HOLD_LABEL`, `UNATTENDED`) is copied
+from the router on every update, so change it in the router only. `agentics-pr-plumbing.yml` has
+no setting of its own: it carries only `UNATTENDED`, for `stack-landed`.
+`agentics-housekeeping.yml`:
 
 | Value | Default | Means |
 |---|---|---|
