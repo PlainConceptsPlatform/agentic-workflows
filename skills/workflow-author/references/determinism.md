@@ -363,7 +363,8 @@ refine issue with `review` is waiting for the author's reply.
 ### DispatchOps
 
 The router's `workflow_dispatch` carries an `operation` input covering every route plus a `validate`
-operation that runs the route matrix on a runner. Workers get no dispatch trigger of their own.
+operation that runs the route matrix on a runner. Workers accept `workflow_dispatch` only so the
+router can start them; a person's entry point is an operation on the router.
 
 ---
 

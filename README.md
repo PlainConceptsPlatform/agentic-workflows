@@ -27,9 +27,13 @@ to sit at the bottom of each worker's markdown, which is the prompt, so every ru
 240 lines of Mermaid and then read an instruction telling it to ignore them. `verify-route-matrix.sh`
 now fails if one reappears in a prompt.
 
-Every worker is a `workflow_call` reusable workflow. No worker triggers itself: `work-router.yml`
-owns every trigger that can start an agent, classifies the event into exactly one route, and calls
-one worker. Three groups of jobs have their own files: the scheduled janitor jobs, which start no
+No worker triggers itself: `work-router.yml` owns every trigger that can start an agent,
+classifies the event into exactly one route, and dispatches one worker with `gh workflow run`.
+The router run ends there, and the worker is a run of its own in the Actions tab, under its own
+name and titled with its issue or pull request (`Agent: Implement - #42`), so following one agent
+means opening one run. Each worker holds its own concurrency group, which the router's call used to
+hold. The merge gate is the exception: the merge belt still calls it, because the train waits for
+its verdict in the same run. Three groups of jobs have their own files: the scheduled janitor jobs, which start no
 agent, in `agentics-housekeeping.yml`; the merge train with the gate it calls in
 `agentics-merge-belt.yml`, which hears CI completions, merges and approvals itself; and the pull
 request and stack jobs in `agentics-pr-plumbing.yml`, which hear pull request events. That

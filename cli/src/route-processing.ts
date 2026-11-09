@@ -13,8 +13,7 @@ const routeCrons: Partial<Record<RouteName, string>> = {
 // matrix finds a `route == 'implement'` guard in a router with no implement worker. The merge
 // gate's live in agentics-merge-belt.yml, except the router's forwarder.
 const routeHelperJobs: Partial<Record<RouteName, readonly string[]>> = {
-  implement: ["check-implement-pr"],
-  triage: ["dispatch-triage"],
+  implement: ["check-implement-pr", "check-stack-branch"],
   "merge-gate": ["merge-approved", "merge-train", "forward-merge-train"],
 };
 
@@ -40,7 +39,9 @@ export function stripRouteFromRouter(yaml: string, route: RouteName): string {
     );
   }
 
-  for (const job of [`call-${route}`, ...(routeHelperJobs[route] ?? [])]) {
+  // A worker the router starts is a dispatch-<route> job; the merge gate is still called from the
+  // belt, as call-merge-gate.
+  for (const job of [`dispatch-${route}`, `call-${route}`, ...(routeHelperJobs[route] ?? [])]) {
     result = removeJobBlock(result, job);
   }
 

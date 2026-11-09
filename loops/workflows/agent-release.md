@@ -1,6 +1,9 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-release.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
+  # The router dispatches this worker with the App token, so the run's actor is the bot, which the
+  # pre-activation membership check refuses unless it is listed here.
+  GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
   # The model this worker's own session runs on. opencode.ci.json's `model` is the cheap default
   # every agent without its own model falls back to; the lead is where a wrong call costs a run,
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
@@ -26,6 +29,10 @@ description: |
   Contract input: version-bump(patch|minor|major|auto).
 
 name: "Agent: Release"
+# The router dispatches this worker (gh workflow run), so it is a run of its own in the Actions
+# tab. The title carries the number the bot-working sweep and the stuck-run janitor look for, and
+# the concurrency group is the one the router's call job used to hold.
+run-name: "Agent: Release - ${{ inputs.version-bump }}"
 
 imports:
   - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
@@ -34,6 +41,14 @@ imports:
 
 on:
   workflow_call:
+    inputs:
+      version-bump:
+        description: "Version bump strategy: patch, minor, major, or auto"
+        required: false
+        type: string
+        default: "auto"
+  # The router starts this worker with gh workflow run; the inputs match workflow_call's.
+  workflow_dispatch:
     inputs:
       version-bump:
         description: "Version bump strategy: patch, minor, major, or auto"

@@ -1,6 +1,9 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-audit.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
+  # The router dispatches this worker with the App token, so the run's actor is the bot, which the
+  # pre-activation membership check refuses unless it is listed here.
+  GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
   # The model this worker's own session runs on. opencode.ci.json's `model` is the cheap default
   # every agent without its own model falls back to; the lead is where a wrong call costs a run,
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
@@ -45,6 +48,13 @@ description: |
   are still unactioned.
 
 name: "Agent: Audit"
+# The router dispatches this worker (gh workflow run), so it is a run of its own in the Actions
+# tab. The title carries the number the bot-working sweep and the stuck-run janitor look for, and
+# the concurrency group is the one the router's call job used to hold.
+run-name: "Agent: Audit - ${{ inputs.trigger-kind }}"
+concurrency:
+  group: audit
+  cancel-in-progress: false
 
 # Shared: network policy only. This workflow owns its Safe Outputs and OpenCode configuration.
 # permissions, engine, model and runs-on cannot be shared , see shared/platform-defaults.md.
@@ -55,6 +65,14 @@ imports:
 
 on:
   workflow_call:
+    inputs:
+      trigger-kind:
+        description: "Audit trigger: scheduled or manual"
+        required: false
+        type: string
+        default: manual
+  # The router starts this worker with gh workflow run; the inputs match workflow_call's.
+  workflow_dispatch:
     inputs:
       trigger-kind:
         description: "Audit trigger: scheduled or manual"

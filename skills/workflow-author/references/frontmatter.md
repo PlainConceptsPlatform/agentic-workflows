@@ -22,7 +22,9 @@ attached.
 
 ## The worker contract
 
-A Platform agentic workflow is a router-only worker: it exposes `workflow_call` and nothing else.
+A Platform agentic workflow is a router-started worker: the router dispatches it with
+`gh workflow run`, so it declares `workflow_dispatch`, and keeps `workflow_call` with the same
+inputs. It has no event trigger.
 
 ```yaml
 on:
@@ -37,39 +39,54 @@ on:
         required: false
         type: string
         default: first
+  workflow_dispatch:
+    inputs:            # the same inputs, so the router's -f flags land
+      ...
 ```
 
 Rules the compiler will not enforce for you:
 
-- The router must pass exactly the declared inputs. Passing an undeclared input, or omitting a
-  required one, is a startup failure with no jobs and no annotation.
-- A worker declares no `concurrency:`. The router owns it. Both layers apply if you set both, and the
-  narrower one silently wins.
-- A worker declares no public trigger. Adding one bypasses the router and breaks the
+- The router must send only declared inputs, and every required one. `gh workflow run` with an
+  unknown `-f` input fails the dispatch job; the route matrix compares the two lists.
+- The worker declares its own `concurrency:`, keyed on its inputs, because the router run that
+  dispatched it has ended. See Concurrency below.
+- The worker declares a `run-name` that carries the issue or pull request number.
+- The worker lists the App in `GH_AW_ALLOWED_BOTS`: the App dispatches it, so the App is its actor.
+- A worker declares no event trigger. Adding one bypasses the router and breaks the
   one-route-per-event guarantee. For a manual entry point, add an operation to the router's
   `workflow_dispatch`.
 
-### The caller job
+### The dispatch job
 
 ```yaml
-call-refine:
-  needs: classify
-  if: needs.classify.outputs.route == 'refine'
-  uses: ./.github/workflows/agent-refine.lock.yml
-  concurrency:
-    group: refine-${{ needs.classify.outputs.issue-number }}
-    cancel-in-progress: false
-  permissions: write-all
-  with:
-    issue-number: ${{ needs.classify.outputs.issue-number }}
-    mode: ${{ needs.classify.outputs.refine-mode }}
-  secrets:
-    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-    CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
-    BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-    BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+dispatch-refine:
+  needs: [classify, authorize]
+  if: needs.classify.outputs.route == 'refine' && needs.authorize.outputs.trusted == 'true'
+  runs-on: agents-arc
+  permissions:
+    actions: write
+    contents: read
+  steps:
+    - name: Create bot token
+      id: app-token
+      uses: actions/create-github-app-token@...
+      with:
+        client-id: ${{ secrets.BOT_APP_ID }}
+        private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+    - env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        ...
+      run: |
+        gh workflow run agent-refine.lock.yml --repo "$REPO" --ref "$REF" \
+          -f issue-number="$ISSUE_NUMBER" -f mode="$MODE" -f attempts_so_far="$ATTEMPTS"
 ```
 
+No secret travels with a dispatch. The worker reads the repository's secrets, and the compile step
+gives its engine key a `FORGE_API_KEY` fallback.
+
+### The caller job (the merge gate)
+
+The belt still calls the merge gate, so the rules for a caller job apply there.
 `permissions: write-all` is mandatory, and the reason is not obvious. Every gh-aw agent job compiles
 to `permissions: read-all`, which requests read on every scope. A caller granting a tidier explicit
 map cannot satisfy that, and GitHub rejects the reusable workflow call before creating any job:
@@ -143,13 +160,14 @@ awk '/^  activation:/{f=1} f&&/^    needs:/{g=1;next} g&&/^      - /{print $2; n
 `needs.<x>` for an `x` outside that job's `needs`, and the route matrix asserts that every job the
 gate's top-level `if:` reads is either hoistable or listed under `on.needs`.
 
-### Authorizing bot actors for workflow_call workers
+### Authorizing the App as a worker's actor
 
 gh-aw's `pre_activation` runs `check_membership.cjs`, which checks `github.actor` permission.
 Bots like `platform-devbox[bot]` always return `permission: none` because GitHub does not treat
 app bots as repository collaborators with write access.
 
-`on.bots:` does not work for `workflow_call` workers (it has no triggering event to filter).
+The router dispatches every worker with the App token, so the App is the actor of every worker run.
+`on.bots:` filters a triggering event, and a worker has none, so it does not apply.
 The bypass is `GH_AW_ALLOWED_BOTS`, a workflow-level `env:` variable that `check_membership.cjs`
 reads via `parseAllowedBots()`. When the actor matches an entry, the script checks if the bot
 is installed on the repository via `getCollaboratorPermissionLevel`. If the API returns 200
@@ -270,7 +288,7 @@ name the trigger but never the route the classifier picks. Allowed contexts are 
 | `runs-on-slim:` | Platform: `agents-arc`. The framework jobs. Defaults to a GitHub-hosted `ubuntu-slim` if omitted |
 | `timeout-minutes:` | Platform: always set. Default 20, which is too short. Compiles to the `Execute OpenCode CLI` step, not the job. See Timeouts below |
 | `env:` | Top-level pairs available to agent `steps:` and interpolated into the prompt. Use for labels, markers, paths, comment templates |
-| `concurrency:` | Platform: never on a worker. The router owns it |
+| `concurrency:` | Platform: on every worker the router dispatches, keyed on its inputs. See Concurrency |
 | `environment:` | Ties the run to an Actions environment, so protection rules apply |
 
 ### Timeouts
@@ -310,13 +328,16 @@ timeout and pushing does nothing for runs already in flight.
 The compiler generates a group when you do not, keyed by trigger type: per issue number for `issues`,
 per PR number for `pull_request` (and cancels in progress), per ref for `push`, per workflow otherwise.
 
-For a `workflow_call` worker none of that is meaningful, which is another reason the router owns the
-key. The groups this package uses:
+None of that fits a worker the router dispatches, so each worker declares its group, keyed on its
+inputs. The groups this package uses:
 
 | Route | Group | Effect |
 |---|---|---|
 | `refine` | `refine-<issue>` | Issues refine in parallel, one run per issue |
-| `implement` | `write-pipeline-<issue>` | One writer per issue |
+| `implement` | `implement-queue-<queue>`, `queue: max` | `IMPLEMENT_PARALLELISM` FIFO queues; the children of one refine share one |
+| `triage` | `triage-<issue>` | One triage per issue |
+| `evidence` | `evidence-<pr>` | One replay per pull request |
+| `docs-audit` | `docs-audit` | Singleton |
 | `merge-gate` | `merge-belt`, `queue: max` | One repo-wide slot with a FIFO queue. A gate run may merge, so two of them racing can merge onto a branch the other just read |
 | `apply-review` | `pr-feedback-<pr>` | Pull requests take feedback in parallel |
 | `audit` | `audit` | Singleton |
@@ -485,7 +506,7 @@ import.
 | Form | Notes |
 |---|---|
 | `${{ github.event.* }}` | Event payload |
-| `${{ inputs.* }}` | `workflow_call` inputs. The normal way a worker reads its contract |
+| `${{ inputs.* }}` | The dispatch (or call) inputs. The normal way a worker reads its contract |
 | `${{ needs.<job>.outputs.<name> }}` | Custom job outputs. Verified to reach the prompt |
 | `${{ steps.sanitized.outputs.text }}` | Sanitised triggering comment text. Use this, never the raw body |
 | `{{#if expr }}...{{/if}}` | Conditional block |

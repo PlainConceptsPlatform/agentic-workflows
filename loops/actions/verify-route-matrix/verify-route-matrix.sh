@@ -1479,7 +1479,7 @@ else
   HK_ACTION="${HERE}/../housekeeping/action.yml"
   if [ -f "$HK_ACTION" ]; then
     grep -qF "workflow_id: 'agentics-merge-belt.yml'" "$HK_ACTION" || mb_fail "the housekeeping sweep does not tick the merge train in agentics-merge-belt.yml"
-    grep -qF "const AGENT_WORKFLOWS = ['work-router.yml', 'agentics-merge-belt.yml'];" "$HK_ACTION" ||
+    sed -n '/const AGENT_WORKFLOWS = \[/,/\];/p' "$HK_ACTION" | grep -qF "'agentics-merge-belt.yml'" ||
       mb_fail "the housekeeping sweep does not look for stuck runs in agentics-merge-belt.yml"
   fi
   # Values both files need are copied from the router by the installer, so what ships must agree.
@@ -2277,12 +2277,13 @@ if worker_installed merge-gate; then
   # Implement runs spread over IMPLEMENT_PARALLELISM queues, but the children of one refine share
   # a queue keyed on their split parent: they build on each other's code. The queue step's
   # arithmetic is exercised with the same expression the router runs.
-  if grep -q 'group: implement-queue-${{ needs.check-stack-branch.outputs.implement-queue' "$ROUTER_YML" &&
+  if grep -qF 'group: implement-queue-${{ inputs.queue || '"'0'"' }}' "$IMPLEMENT_MD" &&
+    grep -qF 'QUEUE: ${{ needs.check-stack-branch.outputs.implement-queue' "$ROUTER_YML" &&
     sed -n '/- name: Pick the implement queue/,/- name: Resolve the feature branch/p' "$ROUTER_YML" | grep -q 'key="${parent:-$ISSUE_NUMBER}"'; then
     PASS=$((PASS + 1))
   else
     FAIL=$((FAIL + 1))
-    echo "FAIL: call-implement must queue on check-stack-branch's implement-queue, keyed on the split parent" >&2
+    echo "FAIL: agent-implement must queue on the implement-queue check-stack-branch picks, keyed on the split parent" >&2
   fi
   queue_for() { local parent="$1" issue="$2" queues="$3"; case "$queues" in ''|*[!0-9]*|0) queues=1 ;; esac; local key="${parent:-$issue}"; echo $(( key % queues )); }
   assert "siblings of one refine share a queue" "$(queue_for 690 693 3)" "$(queue_for 690 694 3)"
@@ -2477,7 +2478,7 @@ if [ ! -f "$EVIDENCE_YML" ]; then
   EV_OK=0
   echo "FAIL: evidence.yml does not exist" >&2
 else
-  ev 'uses: \./\.github/workflows/evidence\.yml' "$ROUTER_YML" 'the router does not call evidence.yml'
+  ev 'gh workflow run evidence\.yml ' "$ROUTER_YML" 'the router does not dispatch evidence.yml'
   ev '^  EVIDENCE_ENABLED: ' "$ROUTER_YML" 'the router env does not declare EVIDENCE_ENABLED'
   ev 'uses: \./\.github/actions/capture-evidence' "$EVIDENCE_YML" 'evidence.yml does not use the capture-evidence action'
   if [ ! -f "${HERE}/../capture-evidence/action.yml" ] || [ ! -f "${HERE}/../capture-evidence/capture.mjs" ]; then
@@ -3053,7 +3054,8 @@ for route in refine implement triage apply-review; do
     RETRY_OK=0
     echo "FAIL: agent-${route} does not take attempts_so_far, so every retry arrives as the first and the budget never binds" >&2
   fi
-  if [ "$(count -cF 'attempts_so_far: ${{ needs.classify.outputs.attempts }}' "$ROUTER_YML")" -eq 0 ]; then
+  if [ "$(count -cF 'ATTEMPTS: ${{ needs.classify.outputs.attempts }}' "$ROUTER_YML")" -eq 0 ] ||
+     [ "$(count -cF -- '-f attempts_so_far="$ATTEMPTS"' "$ROUTER_YML")" -eq 0 ]; then
     RETRY_OK=0
     echo "FAIL: the router does not pass classify's attempts to its workers" >&2
   fi
@@ -3617,6 +3619,141 @@ fi
 
 if [ "$POOL_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+echo "── Worker dispatch ───────────────────────────────────────────────────────"
+
+# The router starts every worker with `gh workflow run` and ends, so each worker is a run of its
+# own in the Actions tab. What a workflow_call gave for free has to be carried by hand, and each
+# check below is one of those things: the inputs reach the worker, the worker holds the queue the
+# router's call job used to hold, its run title names the issue the bot-working sweep and the
+# janitor look for, and a retry is not mistaken for a duplicate.
+WD_OK=1
+wd_fail() { WD_OK=0; echo "FAIL: worker dispatch: $1" >&2; }
+router_job() {
+  awk -v j="  $1:" '$0 == j { found = 1; print; next } found && /^  [a-z][a-z0-9-]*:$/ { exit } found { print }' "$ROUTER_YML"
+}
+# The declared inputs of one trigger (workflow_call or workflow_dispatch), sorted.
+trigger_inputs() {
+  awk -v trig="  $2:" '
+    /^on:/ { in_on = 1; next }
+    in_on && /^[a-z]/ { exit }
+    in_on && $0 == trig { in_t = 1; next }
+    in_t && /^  [a-z]/ { in_t = 0 }
+    in_t && /^    inputs:/ { in_i = 1; next }
+    in_i && /^    [a-z]/ { in_i = 0 }
+    in_t && in_i && /^      [a-z0-9_-]+:[[:space:]]*$/ { gsub(/[ :]/, ""); print }
+  ' "$1" | sort
+}
+# The top-level value of a key in a worker's frontmatter (run-name), or the group under concurrency.
+front_value() { sed -n "s/^$2: *//p" "$1" | head -1 | sed -e 's/^"\(.*\)"$/\1/'; }
+front_group() { awk '/^concurrency:/ { c = 1; next } c && /^  group:/ { sub(/^  group: */, ""); print; exit } c && /^[a-z]/ { exit }' "$1"; }
+front_queue() { awk '/^concurrency:/ { c = 1; next } c && /^  queue:/ { sub(/^  queue: */, ""); print; exit } c && /^[a-z]/ { exit }' "$1"; }
+
+# No worker is called from the router any more.
+if grep -qE '^    uses: \./\.github/workflows/' "$ROUTER_YML"; then
+  wd_fail "the router still calls a workflow with uses:; every worker is dispatched"
+fi
+
+# route ; worker file ; run title ; concurrency group ; queue
+WD_TABLE="refine;agent-refine;Agent: Refine - #\${{ inputs.issue-number }};refine-\${{ inputs.issue-number }};
+implement;agent-implement;Agent: Implement - #\${{ inputs.issue-number }};implement-queue-\${{ inputs.queue || '0' }};max
+triage;agent-triage;Agent: Triage - #\${{ inputs.issue-number }};triage-\${{ inputs.issue-number }};
+apply-review;agent-apply-review;Agent: Apply Review - PR #\${{ inputs.pr-number }};pr-feedback-\${{ inputs.pr-number }};
+audit;agent-audit;Agent: Audit - \${{ inputs.trigger-kind }};audit;
+docs-audit;agent-docs-audit;Agent: Docs Audit - \${{ inputs.trigger-kind }};docs-audit;
+release;agent-release;Agent: Release - \${{ inputs.version-bump }};;
+evidence;evidence;Agentics: Evidence - PR #\${{ inputs.pr-number }};evidence-\${{ inputs.pr-number }};"
+while IFS=';' read -r route worker title group queue; do
+  [ -n "$route" ] || continue
+  if [ "$route" = evidence ]; then src="${WORKFLOWS_DIR}/evidence.yml"; lock="evidence.yml"
+  else src="${WORKFLOWS_DIR}/${worker}.md"; lock="${worker}.lock.yml"; fi
+  job="$(router_job "dispatch-${route}")"
+  if [ "$route" != evidence ] && ! worker_installed "$route"; then
+    [ -z "$job" ] || wd_fail "dispatch-${route} is in a router without the ${route} worker"
+    continue
+  fi
+  [ -f "$src" ] || { wd_fail "${src##*/} is missing"; continue; }
+  [ -n "$job" ] || { wd_fail "the router has no dispatch-${route} job"; continue; }
+  # The router side: one job, gated on the route, that starts the worker on a ref with the App
+  # token and needs nothing but actions: write to do it.
+  grep -qF "needs.classify.outputs.route == '${route}'" <<<"$job" || wd_fail "dispatch-${route} is not gated on the ${route} route"
+  grep -qE "gh workflow run ${lock//./\\.} --repo \"\\\$REPO\" --ref \"\\\$(REF|ref)\"" <<<"$job" ||
+    wd_fail "dispatch-${route} does not run 'gh workflow run ${lock} --repo \$REPO --ref ...'"
+  grep -qF 'GH_TOKEN: ${{ steps.app-token.outputs.token }}' <<<"$job" || wd_fail "dispatch-${route} does not dispatch with the App token"
+  grep -qE '^      actions: write$' <<<"$job" || wd_fail "dispatch-${route} cannot start a workflow run without actions: write"
+  if grep -E 'secrets\.' <<<"$job" | grep -vqE 'secrets\.BOT_(APP_ID|PRIVATE_KEY)'; then
+    wd_fail "dispatch-${route} passes a secret other than the App's; the worker reads its own"
+  fi
+  # Every -f the router sends is an input the worker accepts on dispatch, and every required
+  # input is sent.
+  # Only the flags of the dispatch itself: dispatch-implement also calls the merges API with -f.
+  sent="$(sed -n '/gh workflow run /,$p' <<<"$job" | grep -oE -- '-f [a-z0-9_-]+=' | sed -e 's/^-f //' -e 's/=$//' | sort -u)"
+  accepted="$(trigger_inputs "$src" workflow_dispatch)"
+  for input in $sent; do
+    grep -qx "$input" <<<"$accepted" || wd_fail "dispatch-${route} sends '${input}', which ${src##*/} does not accept on workflow_dispatch"
+  done
+  for input in $(awk '/^  workflow_dispatch:/ { d = 1; next } d && /^  [a-z]/ { d = 0 } d && /^      [a-z0-9_-]+:[[:space:]]*$/ { n = $1; sub(/:$/, "", n) } d && /^        required: true/ { print n }' "$src"); do
+    grep -qx "$input" <<<"$sent" || wd_fail "dispatch-${route} never sends the required input '${input}'"
+  done
+  # The App starts the worker, so the run's actor is the bot, and gh-aw's membership check refuses a
+  # bot the worker does not list. evidence.yml has no model and no such check.
+  if [ "$route" != evidence ] &&
+     ! grep -qE '^  GH_AW_ALLOWED_BOTS: "[^"]*platform-devbox\[bot\]' "$src"; then
+    wd_fail "${src##*/} does not allow platform-devbox[bot], the actor the router dispatches it as"
+  fi
+  # The worker side: the same inputs on both triggers, the title, and the queue.
+  [ "$(trigger_inputs "$src" workflow_call)" = "$accepted" ] ||
+    wd_fail "${src##*/} declares different inputs on workflow_call and workflow_dispatch"
+  [ "$(front_value "$src" run-name)" = "$title" ] || wd_fail "${src##*/} run-name is '$(front_value "$src" run-name)', expected '${title}'"
+  [ "$(front_group "$src")" = "$group" ] || wd_fail "${src##*/} concurrency group is '$(front_group "$src")', expected '${group}'"
+  [ "$(front_queue "$src")" = "$queue" ] || wd_fail "${src##*/} concurrency queue is '$(front_queue "$src")', expected '${queue}'"
+done <<<"$WD_TABLE"
+
+# The janitor's stuck-run check groups runs by the title before " - ", and the bot-working sweep
+# keeps an issue that a live run names as #N. A worker title has to satisfy both.
+wd_kind() { printf '%s' "$1" | awk -F ' - ' '{ print $1 }'; }
+[ "$(wd_kind 'Agent: Implement - #12')" = "Agent: Implement" ] || wd_fail "a worker title does not split into its kind"
+wd_names() { jq -n --arg t "$1" --arg n "$2" '($t + " ") | test("#" + $n + "[^0-9]")'; }
+[ "$(wd_names 'Agent: Implement - #12' 12)" = true ] || wd_fail "the sweep does not see #12 in 'Agent: Implement - #12'"
+[ "$(wd_names 'Agent: Implement - #12' 1)" = false ] || wd_fail "the sweep reads #1 into 'Agent: Implement - #12'"
+[ "$(wd_names 'Agent: Apply Review - PR #40' 40)" = true ] || wd_fail "the sweep does not see #40 in an apply-review title"
+# Every worker's runs are where the janitor looks for stuck ones.
+HK_ACTION="${HERE}/../housekeeping/action.yml"
+for wf in agent-refine.lock.yml agent-implement.lock.yml agent-triage.lock.yml agent-apply-review.lock.yml \
+          agent-audit.lock.yml agent-docs-audit.lock.yml agent-release.lock.yml evidence.yml agentics-merge-belt.yml; do
+  sed -n '/const AGENT_WORKFLOWS = \[/,/\];/p' "$HK_ACTION" | grep -qF "'${wf}'" ||
+    wd_fail "the janitor does not look for stuck runs of ${wf}"
+done
+
+if worker_installed implement; then
+  # The flat and the stack implement are one dispatch; the queue check-stack-branch picked travels.
+  di="$(router_job dispatch-implement)"
+  grep -qF 'QUEUE: ${{ needs.check-stack-branch.outputs.implement-queue' <<<"$di" || wd_fail "dispatch-implement does not pass the implement queue"
+  grep -qF -- '-f queue="$QUEUE"' <<<"$di" || wd_fail "dispatch-implement does not send the queue input"
+  grep -qF 'ref="$STACK_BRANCH"' <<<"$di" || wd_fail "dispatch-implement does not run a stack child on its feature branch"
+  grep -qF "needs.check-stack-branch.outputs.flat-blocked != 'true'" <<<"$di" || wd_fail "dispatch-implement ignores a flat implement held by check-stack-branch"
+  grep -qF "needs.check-stack-branch.outputs.stack-blocked != 'true'" <<<"$di" || wd_fail "dispatch-implement ignores a stack child held by check-stack-branch"
+  # The dispatching router run has ended before the worker starts, so the duplicate check reads
+  # the worker's own live runs, and exempts a retry the worker sends from its own live run.
+  cip="$(router_job check-implement-pr)"
+  grep -qF 'actions/workflows/agent-implement.lock.yml/runs?status=$st' <<<"$cip" || wd_fail "check-implement-pr does not read live agent-implement runs"
+  grep -qF 'select(.display_title == \"Agent: Implement - #${ISSUE_NUMBER}\")' <<<"$cip" || wd_fail "check-implement-pr does not match the worker's run title"
+  grep -qF 'if [ "${ATTEMPTS:-0}" = 0 ]; then' <<<"$cip" || wd_fail "check-implement-pr would block a retry the worker sends from its own live run"
+  for st in queued pending waiting; do
+    grep -qE "for st in [a-z_ ]*\b${st}\b" <<<"$cip" || wd_fail "check-implement-pr does not count a ${st} implement as live"
+  done
+fi
+
+if worker_installed triage; then
+  # One triage job: a trusted actor (not on issue open), or an outside collaborator on any event,
+  # both started by the App so the worker sees a trusted actor.
+  [ "$(grep -c '^  dispatch-triage:$' "$ROUTER_YML")" -eq 1 ] || wd_fail "the router has more than one dispatch-triage job"
+  dt="$(router_job dispatch-triage)"
+  grep -qF "needs.authorize.outputs.is_outside_collaborator == 'true'" <<<"$dt" || wd_fail "dispatch-triage no longer serves outside collaborators"
+  grep -qF "!(github.event_name == 'issues' && github.event.action == 'opened')" <<<"$dt" || wd_fail "dispatch-triage starts triage when a trusted actor opens an issue"
+fi
+
+if [ "$WD_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 echo "── Worker input wiring ───────────────────────────────────────────────────"
 
 # A worker that declares a workflow_call input and never reads it is the shape of the worst
@@ -3860,8 +3997,8 @@ if [ -n "$CHECK_STACK_JOB" ]; then
   st_str 'exit 0' "$CHECK_STACK_JOB" 'resolver hard-fails instead of taking the flat path'
   st_str 'sed .s\|/\|%2F\|g.' "$CHECK_STACK_JOB" 'does not URL-escape the stack branch before the existence check'
   st_str 'sed -E .s/<!-- stack-root-branch: \(\[\^ \]\+\) -->/\\1/.' "$CHECK_STACK_JOB" 'does not strip the marker syntax off the branch'
-  # The dupe guard: only dispatched stack implements run with head_branch = feat/N, so a
-  # workflow_call (flat) run whose head_branch is the default branch can never match it.
+  # The dupe guard: only stack implements run with head_branch = feat/N, so a flat implement,
+  # dispatched on the default branch, can never match it.
   st_str 'head_branch == ..\$\{STACK_BRANCH\}..' "$CHECK_STACK_JOB" 'does not detect an in-flight implement on the feature branch'
   # Dispatch happens on the resolved ref, never on the event SHA. The `gh workflow run`
   # lives in dispatch-implement, which check-stack-branch gates: the two jobs verify the
@@ -3870,7 +4007,8 @@ if [ -n "$CHECK_STACK_JOB" ]; then
   # workflow-call ones, which is the activation prerequisite ownership.md documents.
   DISPATCH_JOB=$(sed -n '/^  dispatch-implement:$/,/^  [a-z0-9_-]*:$/p' "$ROUTER_YML")
   if [ -n "$DISPATCH_JOB" ]; then
-    st_str 'gh workflow run agent-implement\.lock\.yml .* --ref "\$STACK_BRANCH"' "$DISPATCH_JOB" 'does not dispatch the stack implement at all'
+    st_str 'ref="\$STACK_BRANCH"' "$DISPATCH_JOB" 'does not run a stack child on its feature branch'
+    st_str 'gh workflow run agent-implement\.lock\.yml .* --ref "\$ref"' "$DISPATCH_JOB" 'does not dispatch the stack implement at all'
     st_str 'create-github-app-token' "$DISPATCH_JOB" 'dispatches with GITHUB_TOKEN, which can start no run'
     # A child blocked by an open sibling is held, and the sibling's landing releases it. Without
     # both halves a dependent child cuts from a feature branch that lacks its dependency (Lyceum

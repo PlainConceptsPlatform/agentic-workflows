@@ -32,7 +32,10 @@ term is ours, not gh-aw's, so it does not appear in the gh-aw documentation.
 ## The router
 
 Every event that may start an agent arrives at `work-router.yml`, and exactly one thing happens per
-event. The jobs that never start an agent live in three files of their own, each on the events it
+event. The router classifies and authorizes the event, then dispatches one worker with
+`gh workflow run` and ends. The worker runs as its own workflow, so in the Actions tab each agent has
+its own entry and its own run, titled with the issue or pull request it works on. The jobs that
+never start an agent live in three files of their own, each on the events it
 needs: the janitor in `agentics-housekeeping.yml`, the merge train and the gate it calls in
 `agentics-merge-belt.yml`, and the pull request and stack jobs in `agentics-pr-plumbing.yml`. All
 four run the same classifier, so a route means the same thing wherever it is read. No worker
@@ -45,24 +48,25 @@ flowchart TD
     classify["classify (rung 1)<br/>pure shell, no network<br/>one event in, one route out"] --> authorize
     authorize{"authorize (rung 1)<br/>Write permission, or<br/>read only?"}
     authorize -->|"human, trusted"| work
-    authorize -->|"read only"| triageOnly
+    authorize -->|"outside collaborator"| triageOnly
     authorize -.->|"no permission"| idle
-    work{"route"} -->|refine| wRefine
-    work -->|implement| wImpl
-    work -->|apply-review| wReview
-    work -->|audit| wAudit
-    work -->|docs-audit| wDocs
-    work -->|release| wRelease
-    work -->|evidence| wEvidence
-    triageOnly("dispatch-triage<br/>re-enters as the App, so the<br/>worker sees a trusted actor") --> wTriage
-    wRefine("agent-refine")
-    wImpl("check-implement-pr · check-stack-branch<br/>then agent-implement")
-    wReview("agent-apply-review")
-    wAudit("agent-audit")
-    wDocs("agent-docs-audit")
-    wRelease("agent-release")
-    wEvidence("evidence.yml")
-    wTriage("agent-triage")
+    work{"route"} -.->|"dispatch-refine"| wRefine
+    work -.->|"check-implement-pr · check-stack-branch<br/>then dispatch-implement"| wImpl
+    work -.->|"dispatch-apply-review"| wReview
+    work -.->|"dispatch-audit"| wAudit
+    work -.->|"dispatch-docs-audit"| wDocs
+    work -.->|"dispatch-release"| wRelease
+    work -.->|"dispatch-evidence"| wEvidence
+    work -.->|"dispatch-triage"| wTriage
+    triageOnly("dispatch-triage, started by the App,<br/>so the worker sees a trusted actor") -.-> wTriage
+    wRefine("Agent: Refine - #N<br/>its own run")
+    wImpl("Agent: Implement - #N<br/>its own run, FIFO per queue")
+    wReview("Agent: Apply Review - PR #N<br/>its own run")
+    wAudit("Agent: Audit<br/>its own run")
+    wDocs("Agent: Docs Audit<br/>its own run")
+    wRelease("Agent: Release<br/>its own run")
+    wEvidence("Agentics: Evidence - PR #N<br/>its own run")
+    wTriage("Agent: Triage - #N<br/>its own run")
     work -.->|"merge-gate label, or a moved<br/>operation dispatched here"| fwd
     fwd("forward-merge-train · forward-reconcile<br/>forward-housekeeping<br/>dispatch the file that owns the job")
     fwd -.-> belt
@@ -87,6 +91,11 @@ flowchart TD
     class authorize,work decision
     class idle idle
 ```
+
+Dotted arrows are dispatches: the router run has ended by the time the worker starts, so each worker
+holds its own concurrency group (`refine-<issue>`, `implement-queue-<queue>` in FIFO order,
+`triage-<issue>`, `pr-feedback-<pr>`, `evidence-<pr>`, `audit`, `docs-audit`). The merge gate is
+the one worker still called rather than dispatched, from the merge belt.
 
 A run still appears for every matching event even when nothing downstream happens; those cost
 about ten seconds with every job skipped. Splitting the files cut those runs where the event never

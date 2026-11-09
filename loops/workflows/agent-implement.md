@@ -96,6 +96,15 @@ description: |
   from the router's stack path (`--ref` = the feature branch). Contract input: issue-number.
 
 name: "Agent: Implement Issue"
+# The router dispatches this worker (gh workflow run), so it is a run of its own in the Actions
+# tab. The title carries the number the bot-working sweep and the stuck-run janitor look for, and
+# the concurrency group is the one the router's call job used to hold.
+run-name: "Agent: Implement - #${{ inputs.issue-number }}"
+concurrency:
+  group: implement-queue-${{ inputs.queue || '0' }}
+  cancel-in-progress: false
+  # FIFO, up to 100 waiting: labelling six issues at once implements all six, in order.
+  queue: max
 
 # Shared: network policy only. This workflow owns its Safe Outputs and OpenCode configuration.
 # permissions, engine, model and runs-on cannot be shared , see shared/platform-defaults.md.
@@ -107,6 +116,11 @@ imports:
 on:
   workflow_call:
     inputs:
+      queue:
+        description: Implement queue chosen by the router (check-stack-branch). Runs in one queue go one at a time, oldest first.
+        required: false
+        type: string
+        default: '0'
       issue-number:
         description: Issue number to implement.
         required: true
@@ -124,6 +138,11 @@ on:
   # identically from both triggers, so every job below reads inputs.issue-number unchanged.
   workflow_dispatch:
     inputs:
+      queue:
+        description: Implement queue chosen by the router (check-stack-branch). Runs in one queue go one at a time, oldest first.
+        required: false
+        type: string
+        default: '0'
       issue-number:
         description: Issue number to implement.
         required: true

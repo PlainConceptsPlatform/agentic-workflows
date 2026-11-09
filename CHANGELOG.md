@@ -6,6 +6,15 @@ Releases of `@plainconceptsplatform/workflows`. Earlier versions are described i
 
 ### Changed
 
+- **Every agent runs as its own workflow run.** The router classifies and authorizes the event, dispatches the worker with `gh workflow run` and the App token, and ends. In the Actions tab each agent has its own entry and its own run, titled with its issue or pull request (`Agent: Implement - #42`), instead of eight called workflows drawn inside every router run. The router's `call-*` jobs are now `dispatch-refine`, `dispatch-implement`, `dispatch-triage`, `dispatch-apply-review`, `dispatch-audit`, `dispatch-docs-audit`, `dispatch-release` and `dispatch-evidence`. The merge gate is still called from the merge belt, which waits for its verdict.
+  - Each worker accepts `workflow_dispatch` with the same inputs as `workflow_call`, and declares the concurrency group the router's call job held: `refine-<issue>`, `implement-queue-<queue>` (FIFO), `triage-<issue>`, `pr-feedback-<pr>`, `evidence-<pr>`, `audit`, `docs-audit`.
+  - A flat implement and a stack child are one dispatch; only the ref differs. The implement queue travels as a new `queue` input.
+  - Triage for a trusted actor and for an outside collaborator is one job. The outside collaborator's triage no longer re-enters the router.
+  - `check-implement-pr` also treats a live `Agent: Implement - #N` run as a duplicate, except for the worker's own retry.
+  - The janitor looks for stuck pending runs in every worker's workflow.
+  - `agent-audit`, `agent-docs-audit` and `agent-release` list the App in `GH_AW_ALLOWED_BOTS`, because the App is now their actor.
+  - No secret travels with a dispatch. The worker reads the repository's secrets; its engine key already falls back to `FORGE_API_KEY`.
+  - The route matrix has a worker dispatch section that checks, for every worker, the inputs sent against the inputs accepted, the run title, the concurrency group and queue, the App token and allowed bot, and the janitor's list.
 - **The router keeps only the events that may start an agent.** The jobs that never start one move, unchanged, to three plain workflows that hear only the events they need. Every workflow runs the same classifier, checks `AGENTIC_WORKFLOWS_DISABLED`, and keeps its concurrency groups and run titles. A push to a pull request, a CI completion and the hourly tick no longer open a router run.
   - `agentics-housekeeping.yml`: `housekeeping`, `audit-close` and `cleanup-artifacts`, on their crons (`23 */6 * * *`, `43 3 * * *`, `0 6 * * *`), with the `HOUSEKEEPING_*`, `DEPENDABOT_*` and `AUDIT_STALE_AFTER_DAYS` settings.
   - `agentics-merge-belt.yml`: the merge train, `merge-approved`, `reconcile-bot-pr-runs` and the call to the merge gate. It hears CI completions (`workflow_run`), merges, approvals and the hourly cron (`17 * * * *`), and carries `MAX_GATE_ATTEMPTS`, `MERGE_TRAIN_*` (except the hold label) and `REFINE_ANSWER_TIMEOUT_HOURS`.

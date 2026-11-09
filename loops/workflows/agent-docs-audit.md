@@ -1,6 +1,9 @@
 ---
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agent-docs-audit.md. Update with `workflows update --force`; consumer edits may be overwritten.
 env:
+  # The router dispatches this worker with the App token, so the run's actor is the bot, which the
+  # pre-activation membership check refuses unless it is listed here.
+  GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
   # The model this worker's own session runs on. See agent-audit.md for why it names one.
   AGENT_LEAD_MODEL: "forge/glm-5-2"
   # Every harness tier on one model the CI's Forge account is granted; see agent-audit.md.
@@ -45,6 +48,13 @@ description: |
   one would mostly restate the first.
 
 name: "Agent: Docs Audit"
+# The router dispatches this worker (gh workflow run), so it is a run of its own in the Actions
+# tab. The title carries the number the bot-working sweep and the stuck-run janitor look for, and
+# the concurrency group is the one the router's call job used to hold.
+run-name: "Agent: Docs Audit - ${{ inputs.trigger-kind }}"
+concurrency:
+  group: docs-audit
+  cancel-in-progress: false
 
 # Shared: network policy only. This workflow owns its Safe Outputs and OpenCode configuration.
 # permissions, engine, model and runs-on cannot be shared , see shared/platform-defaults.md.
@@ -55,6 +65,14 @@ imports:
 
 on:
   workflow_call:
+    inputs:
+      trigger-kind:
+        description: "Docs audit trigger: scheduled or manual"
+        required: false
+        type: string
+        default: manual
+  # The router starts this worker with gh workflow run; the inputs match workflow_call's.
+  workflow_dispatch:
     inputs:
       trigger-kind:
         description: "Docs audit trigger: scheduled or manual"

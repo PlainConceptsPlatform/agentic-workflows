@@ -81,9 +81,15 @@ runs:
           // ("Agent: Implement", "Agent: Merge Gate") is running or queued to hold the group.
           const stuckCutoff = Date.now() - 3600 * 1000; // 1 hour ago
           const runKind = (run) => String(run.display_title || '').split(' - ')[0];
-          // The merge gate runs in agentics-merge-belt.yml, everything else that starts an agent in
-          // the router. A file that is not installed has no runs.
-          const AGENT_WORKFLOWS = ['work-router.yml', 'agentics-merge-belt.yml'];
+          // Every worker runs as its own workflow, dispatched by the router; the merge gate runs in
+          // agentics-merge-belt.yml. The router stays listed for runs queued before an update that
+          // still call a worker. A file that is not installed has no runs.
+          const AGENT_WORKFLOWS = [
+            'work-router.yml', 'agentics-merge-belt.yml',
+            'agent-refine.lock.yml', 'agent-implement.lock.yml', 'agent-triage.lock.yml',
+            'agent-apply-review.lock.yml', 'agent-audit.lock.yml', 'agent-docs-audit.lock.yml',
+            'agent-release.lock.yml', 'evidence.yml',
+          ];
           const runsOf = async (status) => {
             const runs = [];
             for (const workflow_id of AGENT_WORKFLOWS) {

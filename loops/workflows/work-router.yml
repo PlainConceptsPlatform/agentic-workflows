@@ -361,29 +361,41 @@ jobs:
         with:
           token: ${{ github.token }}
 
-  call-refine:
+  # Every worker is started the same way: this run classifies and authorizes, then dispatches
+  # the worker with `gh workflow run` on the default branch and ends. The worker is a run of its
+  # own in the Actions tab, under its own name, and holds its own concurrency group (declared in
+  # the worker, keyed on its inputs). The dispatch carries no secret: the worker reads the
+  # repository's, and its engine key falls back to FORGE_API_KEY. The App token starts it, so the
+  # worker's actor is the bot, the same actor every retry and release has.
+  dispatch-refine:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'refine' && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-refine.lock.yml
-    concurrency:
-      group: refine-${{ needs.classify.outputs.issue-number }}
-      cancel-in-progress: false
-    # write-all, not a narrower map: every worker's agent job declares `permissions: read-all`,
-    # which requests read on every scope. A caller granting less cannot satisfy it, and GitHub
-    # rejects the call with a startup failure before any job is created. The real boundary is the
-    # worker's own read-all plus safe-outputs, not this grant.
-    permissions: write-all
-    with:
-      issue-number: ${{ needs.classify.outputs.issue-number }}
-      mode: ${{ needs.classify.outputs.refine-mode }}
-      attempts_so_far: ${{ needs.classify.outputs.attempts }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch agent-refine.lock.yml
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
+          ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
+          MODE: ${{ needs.classify.outputs.refine-mode }}
+          ATTEMPTS: ${{ needs.classify.outputs.attempts }}
+        run: |
+          set -euo pipefail
+          gh workflow run agent-refine.lock.yml --repo "$REPO" --ref "$REF" \
+            -f issue-number="$ISSUE_NUMBER" \
+            -f mode="$MODE" \
+            -f attempts_so_far="$ATTEMPTS"
 
   # Checks whether an open bot PR already exists for the issue. If it does, implement is
   # skipped - the merge-gate will handle fixing the existing PR. This prevents duplicate
@@ -405,6 +417,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
+          ATTEMPTS: ${{ needs.classify.outputs.attempts }}
         run: |
           set -euo pipefail
           # A refine-to-implement transition emits two label events (the implement label,
@@ -428,6 +441,22 @@ jobs:
               exit 0
             fi
           done
+
+          # The worker runs on its own, so the router run that dispatched it has already ended:
+          # a live implement for this issue is a run of agent-implement.lock.yml, titled
+          # "Agent: Implement - #N". One waiting in its FIFO queue counts as live too. A retry is
+          # exempt: the worker dispatches it (attempts_so_far 1 or more) from its own run, which is
+          # still in progress at that moment and would otherwise block its own retry.
+          if [ "${ATTEMPTS:-0}" = 0 ]; then
+            for st in in_progress queued pending waiting requested; do
+              live=$(gh api "repos/$REPO/actions/workflows/agent-implement.lock.yml/runs?status=$st&per_page=100"               --jq "[.workflow_runs[] | select(.display_title == \"Agent: Implement - #${ISSUE_NUMBER}\")] | length" 2>/dev/null || echo 0)
+              if [ "${live:-0}" -gt 0 ]; then
+                echo "has-open-pr=true" >> "$GITHUB_OUTPUT"
+                echo "::notice::An implement run for #$ISSUE_NUMBER is already $st; skipping the duplicate."
+                exit 0
+              fi
+            done
+          fi
 
           # Marker-first: implement stamps <!-- implement-pr: N --> on the issue when its
           # pull request is created, so the duplicate check is an exact lookup. Only an
@@ -479,17 +508,13 @@ jobs:
   # feature issue and on every child body at hand-over, so the child is self-describing for
   # the implement prompt, which reads only the child's context. The split-parent chain is the
   # fallback when a child predates the stamp (retries of issues split by an earlier refine).
-  # Missing, empty or garbled markers fail closed: the child takes the flat call-implement
-  # path and lands on the default branch, exactly what a repo without stacks does today.
-  # The in-flight check exists because a dispatched agent-implement run is invisible to
-  # check-implement-pr's older-run dupe check: this router run completes as soon as
-  # `gh workflow run` returns (fire-and-forget), while a workflow_call caller stays
-  # in_progress -- and the dispatch run's title "Working (Implement)" and the App-token
-  # label events' actor "app/..." both miss the title conditions that check matches.
-  # head_branch is the discriminator: a dispatched implement's run records the dispatch ref,
-  # feat/N, while a workflow_call run's head_branch is the default branch. Filtering
-  # in_progress/queued agent-implement.lock.yml runs by head_branch therefore isolates stack
-  # implements with zero effect on flat runs.
+  # Missing, empty or garbled markers fail closed: the child takes the flat path and lands on
+  # the default branch, exactly what a repo without stacks does.
+  # The in-flight check holds one implement per feature branch at a time. head_branch is the
+  # discriminator: every implement is dispatched, and its run records the dispatch ref, feat/N
+  # for a stack child and the default branch for a flat one. Filtering in_progress/queued
+  # agent-implement.lock.yml runs by head_branch therefore isolates stack implements with zero
+  # effect on flat runs.
   check-stack-branch:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true'
@@ -559,14 +584,14 @@ jobs:
           echo "is-stack=false" >> "$GITHUB_OUTPUT"
           echo "stack-branch=" >> "$GITHUB_OUTPUT"
 
-          # Read failures degrade to the flat path, never to a failed job: call-implement
+          # Read failures degrade to the flat path, never to a failed job: dispatch-implement
           # names this job in its needs, so a failure here would block a perfectly ordinary
           # flat implement run. A repo without stack markers must behave exactly as before.
           body=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')
           # Marker-first: the child may carry its own resolved marker from an earlier hop.
           # `|| true` on both pipelines: under `set -o pipefail`, grep's exit 1 on no match
           # (the common flat case) or head's SIGPIPE on a multi-marker body must not fail
-          # the job -- call-implement needs this job, so a failure here would block flat
+          # the job -- dispatch-implement needs this job, so a failure here would block flat
           # implements too.
           branch=$(printf '%s' "$body" | grep -oE '<!-- stack-root-branch: [^ ]+ -->' | head -1 | sed -E 's/<!-- stack-root-branch: ([^ ]+) -->/\1/' || true)
 
@@ -733,49 +758,23 @@ jobs:
             fi
           done
 
-  call-implement:
-    needs: [classify, authorize, check-implement-pr, check-stack-branch]
-    if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true' && needs.check-implement-pr.outputs.has-open-pr != 'true' && needs.check-stack-branch.outputs.is-stack != 'true' && needs.check-stack-branch.outputs.flat-blocked != 'true'
-    uses: ./.github/workflows/agent-implement.lock.yml
-    # One FIFO queue per IMPLEMENT_PARALLELISM slot, chosen by check-stack-branch: the children of
-    # one refine always share a queue, independent issues spread across them.
-    concurrency:
-      group: implement-queue-${{ needs.check-stack-branch.outputs.implement-queue || '0' }}
-      cancel-in-progress: false
-      # FIFO, up to 100 waiting. Without this the default `queue: single` cancels whatever
-      # was pending, so labelling six issues at once implements one and drops the rest.
-      queue: max
-    permissions: write-all
-    with:
-      issue-number: ${{ needs.classify.outputs.issue-number }}
-      attempts_so_far: ${{ needs.classify.outputs.attempts }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-
-  # Stack children dispatch agent-implement by `gh workflow run --ref feat/N` instead of calling
-  # it: a workflow_call would pin the callee to THIS event's SHA, which for a label event is
-  # the default branch, not the feature branch. Dispatch on the feature ref makes the callee's
-  # GITHUB_SHA the feature tip, so the agent patches exactly the tree its PR will target, and
-  # the compile-time checkout ternary keys off `workflow_dispatch` to checkout github.ref_name.
-  # The dispatch itself carries no secrets (gh workflow run cannot forward them); the
-  # dispatched run reads REPO-LEVEL OPENAI_API_KEY / CODEX_API_KEY / COPILOT_GITHUB_TOKEN, the
-  # stack-activation prerequisite documented alongside the markers. BOT_APP_ID / BOT_PRIVATE_KEY
-  # are already repo-level. dispatch-triage proves the pattern: same app-token mint, same
-  # `actions: write` scope needed for `gh workflow run`.
+  # Every implement is dispatched, flat or stacked; only the ref differs. A flat implement runs on
+  # the default branch. A stack child runs on the feature branch its parent names: a dispatch on
+  # that ref makes the worker's GITHUB_SHA the feature tip, so the agent patches exactly the tree
+  # its pull request targets, and the checkout ternary keys off workflow_dispatch to check out
+  # github.ref_name. The queue check-stack-branch picked travels as an input, and the worker holds
+  # implement-queue-<queue> itself, FIFO, so labelling six issues at once still implements all six.
   dispatch-implement:
     needs: [classify, authorize, check-implement-pr, check-stack-branch]
     if: >
       needs.classify.outputs.route == 'implement' &&
       needs.authorize.outputs.trusted == 'true' &&
       needs.check-implement-pr.outputs.has-open-pr != 'true' &&
-      needs.check-stack-branch.outputs.is-stack == 'true' &&
-      needs.check-stack-branch.outputs.stack-in-flight != 'true' &&
-      needs.check-stack-branch.outputs.stack-blocked != 'true'
+      ((needs.check-stack-branch.outputs.is-stack == 'true' &&
+        needs.check-stack-branch.outputs.stack-in-flight != 'true' &&
+        needs.check-stack-branch.outputs.stack-blocked != 'true') ||
+       (needs.check-stack-branch.outputs.is-stack != 'true' &&
+        needs.check-stack-branch.outputs.flat-blocked != 'true'))
     runs-on: agents-arc
     timeout-minutes: 5
     permissions:
@@ -788,30 +787,43 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - name: Dispatch stack implement on the feature branch
+      - name: Dispatch agent-implement
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
+          IS_STACK: ${{ needs.check-stack-branch.outputs.is-stack }}
           STACK_BRANCH: ${{ needs.check-stack-branch.outputs.stack-branch }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || github.ref_name }}
           ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
           ATTEMPTS: ${{ needs.classify.outputs.attempts }}
+          QUEUE: ${{ needs.check-stack-branch.outputs.implement-queue || '0' }}
         run: |
           set -euo pipefail
-          # A dispatch on the feature ref runs the feature branch's own copy of the workflows, so a
-          # branch cut before a workflow fix keeps running the old one: Pliny-Bot #774 ran every
-          # tier on glm-5-2 from feat/767 after main had dropped the pin. Bring the default branch
-          # in first. A conflict (409) leaves the branch as it is; the run still goes ahead.
-          code=$(gh api -X POST "repos/$REPO/merges" -f base="$STACK_BRANCH" -f head="$DEFAULT_BRANCH"             -f commit_message="chore: bring $DEFAULT_BRANCH into $STACK_BRANCH before a child runs"             --silent -i 2>/dev/null | head -1 | awk '{print $2}' || true)
-          echo "Merged $DEFAULT_BRANCH into $STACK_BRANCH: HTTP ${code:-unknown} (201 merged, 204 up to date, 409 conflict)"
-          gh workflow run agent-implement.lock.yml --repo "$REPO" --ref "$STACK_BRANCH" \
+          ref="$DEFAULT_BRANCH"
+          if [ "$IS_STACK" = true ]; then
+            ref="$STACK_BRANCH"
+            # A dispatch on the feature ref runs the feature branch's own copy of the workflows, so a
+            # branch cut before a workflow fix keeps running the old one: Pliny-Bot #774 ran every
+            # tier on glm-5-2 from feat/767 after main had dropped the pin. Bring the default branch
+            # in first. A conflict (409) leaves the branch as it is; the run still goes ahead.
+            code=$(gh api -X POST "repos/$REPO/merges" -f base="$STACK_BRANCH" -f head="$DEFAULT_BRANCH" \
+              -f commit_message="chore: bring $DEFAULT_BRANCH into $STACK_BRANCH before a child runs" \
+              --silent -i 2>/dev/null | head -1 | awk '{print $2}' || true)
+            echo "Merged $DEFAULT_BRANCH into $STACK_BRANCH: HTTP ${code:-unknown} (201 merged, 204 up to date, 409 conflict)"
+          fi
+          gh workflow run agent-implement.lock.yml --repo "$REPO" --ref "$ref" \
             -f issue-number="$ISSUE_NUMBER" \
-            -f attempts_so_far="$ATTEMPTS"
+            -f attempts_so_far="$ATTEMPTS" \
+            -f queue="$QUEUE"
 
+  # Triage on issue open is for read-only outside collaborators only. A trusted actor who opens
+  # an issue should not start triage: they can add refine/implement/direct labels or dispatch
+  # triage by hand. Every other triage route (labeled, comment, dispatch) is trusted. An outside
+  # collaborator's triage is started by the App like any other, so the worker sees a trusted actor.
   dispatch-triage:
     needs: [classify, authorize]
-    if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.is_outside_collaborator == 'true'
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    if: needs.classify.outputs.route == 'triage' && ((needs.authorize.outputs.trusted == 'true' && !(github.event_name == 'issues' && github.event.action == 'opened')) || needs.authorize.outputs.is_outside_collaborator == 'true')
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       actions: write
@@ -823,130 +835,157 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - name: Dispatch trusted triage run
+      - name: Dispatch agent-triage.lock.yml
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
-          REF: ${{ github.event.repository.default_branch }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
           ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
           MODE: ${{ needs.classify.outputs.triage-mode }}
+          ATTEMPTS: ${{ needs.classify.outputs.attempts }}
         run: |
           set -euo pipefail
-          gh workflow run work-router.yml --repo "$REPO" --ref "$REF" \
-            -f operation=triage \
+          gh workflow run agent-triage.lock.yml --repo "$REPO" --ref "$REF" \
             -f issue-number="$ISSUE_NUMBER" \
-            -f mode="$MODE"
+            -f mode="$MODE" \
+            -f attempts_so_far="$ATTEMPTS"
 
-  call-triage:
-    needs: [classify, authorize]
-    # Triage on issue open is for read-only outside collaborators only (handled by dispatch-triage).
-    # A trusted actor who opens an issue should not start triage - they can add refine/implement/direct
-    # labels or manually dispatch triage. All other triage routes (labeled, comment, dispatch) are trusted.
-    if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.trusted == 'true' && !(github.event_name == 'issues' && github.event.action == 'opened')
-    uses: ./.github/workflows/agent-triage.lock.yml
-    concurrency:
-      group: triage-${{ needs.classify.outputs.issue-number }}
-      cancel-in-progress: false
-    permissions: write-all
-    with:
-      issue-number: ${{ needs.classify.outputs.issue-number }}
-      mode: ${{ needs.classify.outputs.triage-mode }}
-      attempts_so_far: ${{ needs.classify.outputs.attempts }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-
-  call-apply-review:
+  dispatch-apply-review:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'apply-review' && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-apply-review.lock.yml
-    concurrency:
-      group: pr-feedback-${{ needs.classify.outputs.pr-number }}
-      cancel-in-progress: false
-    permissions: write-all
-    with:
-      pr-number: ${{ needs.classify.outputs.pr-number }}
-      linked-issue: ${{ needs.classify.outputs.linked-issue }}
-      attempts_so_far: ${{ needs.classify.outputs.attempts }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch agent-apply-review.lock.yml
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
+          PR_NUMBER: ${{ needs.classify.outputs.pr-number }}
+          LINKED_ISSUE: ${{ needs.classify.outputs.linked-issue }}
+          ATTEMPTS: ${{ needs.classify.outputs.attempts }}
+        run: |
+          set -euo pipefail
+          gh workflow run agent-apply-review.lock.yml --repo "$REPO" --ref "$REF" \
+            -f pr-number="$PR_NUMBER" \
+            -f linked-issue="$LINKED_ISSUE" \
+            -f attempts_so_far="$ATTEMPTS"
 
   # Screenshots of a merged pull request, replayed from the verification plan its implementation
-  # wrote and archived beside that plan. Plain YAML with no model, so no secret is passed and the
-  # grant is exactly what the publish job writes: one commit of evidence/ folders and one comment. Its capture
-  # job runs the pull request's code with read-only access; only publish holds these writes, and it
-  # runs no repository code.
-  call-evidence:
+  # wrote and archived beside that plan. evidence.yml holds its own grants: its capture job runs the
+  # pull request's code with read-only access, and only publish writes, running no repository code.
+  dispatch-evidence:
     needs: classify
     if: needs.classify.outputs.route == 'evidence'
-    uses: ./.github/workflows/evidence.yml
-    concurrency:
-      group: evidence-${{ needs.classify.outputs.pr-number }}
-      cancel-in-progress: false
+    runs-on: agents-arc
+    timeout-minutes: 5
     permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-    with:
-      pr-number: ${{ needs.classify.outputs.pr-number }}
+      actions: write
+      contents: read
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch evidence.yml
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
+          PR_NUMBER: ${{ needs.classify.outputs.pr-number }}
+        run: |
+          set -euo pipefail
+          gh workflow run evidence.yml --repo "$REPO" --ref "$REF" \
+            -f pr-number="$PR_NUMBER"
 
-  call-audit:
+  dispatch-audit:
     needs: classify
     if: needs.classify.outputs.route == 'audit'
-    uses: ./.github/workflows/agent-audit.lock.yml
-    concurrency:
-      group: audit
-      cancel-in-progress: false
-    permissions: write-all
-    with:
-      trigger-kind: ${{ needs.classify.outputs.trigger-kind }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch agent-audit.lock.yml
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
+          TRIGGER_KIND: ${{ needs.classify.outputs.trigger-kind }}
+        run: |
+          set -euo pipefail
+          gh workflow run agent-audit.lock.yml --repo "$REPO" --ref "$REF" \
+            -f trigger-kind="$TRIGGER_KIND"
 
-  call-docs-audit:
+  dispatch-docs-audit:
     needs: classify
     if: needs.classify.outputs.route == 'docs-audit'
-    uses: ./.github/workflows/agent-docs-audit.lock.yml
-    concurrency:
-      group: docs-audit
-      cancel-in-progress: false
-    permissions: write-all
-    with:
-      trigger-kind: ${{ needs.classify.outputs.trigger-kind }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch agent-docs-audit.lock.yml
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
+          TRIGGER_KIND: ${{ needs.classify.outputs.trigger-kind }}
+        run: |
+          set -euo pipefail
+          gh workflow run agent-docs-audit.lock.yml --repo "$REPO" --ref "$REF" \
+            -f trigger-kind="$TRIGGER_KIND"
 
-  call-release:
+  dispatch-release:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'release' && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-release.lock.yml
-    permissions: write-all
-    with:
-      version-bump: ${{ github.event.inputs.version-bump || 'auto' }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      # The release PR is pushed and opened with the App token so its CI runs; see conclude.
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch agent-release.lock.yml
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
+          VERSION_BUMP: ${{ github.event.inputs.version-bump || 'auto' }}
+        run: |
+          set -euo pipefail
+          gh workflow run agent-release.lock.yml --repo "$REPO" --ref "$REF" \
+            -f version-bump="$VERSION_BUMP"
 
   # bot-approve, land-stack-child and stack-landed live in agentics-pr-plumbing.yml, which hears
   # the pull request events they need. No dispatch operation reaches them, so nothing is forwarded.

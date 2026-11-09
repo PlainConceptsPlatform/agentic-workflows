@@ -53,7 +53,7 @@
       "id": "work",
       "type": "security",
       "label": "Route",
-      "sublabel": "one job per event",
+      "sublabel": "dispatch, one run each",
       "pos": [
         640,
         200
@@ -305,7 +305,7 @@
       "id": "authorize-triage",
       "from": "authorize",
       "to": "wTriage",
-      "label": "read only",
+      "label": "triage, via App",
       "labelAt": [
         540,
         300
@@ -315,38 +315,44 @@
       "id": "work-refine",
       "from": "work",
       "to": "wRefine",
-      "label": "refine",
+      "label": "dispatch",
       "variant": "emphasis"
     },
     {
       "id": "work-impl",
       "from": "work",
-      "to": "wImpl"
+      "to": "wImpl",
+      "variant": "dashed"
     },
     {
       "id": "work-review",
       "from": "work",
-      "to": "wReview"
+      "to": "wReview",
+      "variant": "dashed"
     },
     {
       "id": "work-audit",
       "from": "work",
-      "to": "wAudit"
+      "to": "wAudit",
+      "variant": "dashed"
     },
     {
       "id": "work-docs",
       "from": "work",
-      "to": "wDocs"
+      "to": "wDocs",
+      "variant": "dashed"
     },
     {
       "id": "work-release",
       "from": "work",
-      "to": "wRelease"
+      "to": "wRelease",
+      "variant": "dashed"
     },
     {
       "id": "work-evidence",
       "from": "work",
-      "to": "wEvidence"
+      "to": "wEvidence",
+      "variant": "dashed"
     },
     {
       "id": "work-fwd",
@@ -397,7 +403,7 @@
       "items": [
         "One event creates one run, at most one thing happens",
         "Classification is pure shell with no network calls",
-        "Bots authorize via bot-working label pattern"
+        "Each agent runs as its own workflow run, titled with its issue"
       ]
     },
     {

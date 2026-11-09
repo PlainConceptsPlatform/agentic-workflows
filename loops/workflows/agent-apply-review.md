@@ -50,6 +50,13 @@ description: |
   wildcard fetch: the event is the pull request and gh-aw has already checked out its head.
 
 name: "Agent: Apply Review"
+# The router dispatches this worker (gh workflow run), so it is a run of its own in the Actions
+# tab. The title carries the number the bot-working sweep and the stuck-run janitor look for, and
+# the concurrency group is the one the router's call job used to hold.
+run-name: "Agent: Apply Review - PR #${{ inputs.pr-number }}"
+concurrency:
+  group: pr-feedback-${{ inputs.pr-number }}
+  cancel-in-progress: false
 
 # Router-only worker. The Work Router owns triggers, classification, and rung 1-2 checks.
 # This workflow receives the classified inputs and runs rung 3+.
@@ -60,6 +67,22 @@ imports:
 
 on:
   workflow_call:
+    inputs:
+      attempts_so_far:
+        description: Runs already made for this work that died before producing an answer. Filled by the worker when it re-dispatches itself, not by people.
+        required: false
+        type: string
+        default: '0'
+      pr-number:
+        description: Pull request number to apply review feedback on.
+        required: true
+        type: string
+      linked-issue:
+        description: Issue number the pull request closes. May be empty.
+        required: false
+        type: string
+  # The router starts this worker with gh workflow run; the inputs match workflow_call's.
+  workflow_dispatch:
     inputs:
       attempts_so_far:
         description: Runs already made for this work that died before producing an answer. Filled by the worker when it re-dispatches itself, not by people.
