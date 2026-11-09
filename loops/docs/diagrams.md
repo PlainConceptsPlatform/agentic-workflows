@@ -31,13 +31,17 @@ term is ours, not gh-aw's, so it does not appear in the gh-aw documentation.
 
 ## The router
 
-Every trigger the repository has arrives here, and exactly one thing happens per event. Nothing
-else in the system subscribes to a public event, which is what makes a route addable or removable
-without touching the others.
+Every event that may start an agent arrives at `work-router.yml`, and exactly one thing happens per
+event. The jobs that never start an agent live in three files of their own, each on the events it
+needs: the janitor in `agentics-housekeeping.yml`, the merge train and the gate it calls in
+`agentics-merge-belt.yml`, and the pull request and stack jobs in `agentics-pr-plumbing.yml`. All
+four run the same classifier, so a route means the same thing wherever it is read. No worker
+subscribes to a public event, which is what makes a route addable or removable without touching the
+others.
 
 ```mermaid
 flowchart TD
-    ev{"One GitHub event"} --> classify
+    ev{"An event that may start an agent<br/>issue, comment, review, label,<br/>merge, audit cron, dispatch"} --> classify
     classify["classify (rung 1)<br/>pure shell, no network<br/>one event in, one route out"] --> authorize
     authorize{"authorize (rung 1)<br/>Write permission, or<br/>read only?"}
     authorize -->|"human, trusted"| work
@@ -46,37 +50,61 @@ flowchart TD
     work{"route"} -->|refine| wRefine
     work -->|implement| wImpl
     work -->|apply-review| wReview
-    work -->|merge-gate| wGate
     work -->|audit| wAudit
     work -->|docs-audit| wDocs
     work -->|release| wRelease
+    work -->|evidence| wEvidence
     triageOnly("dispatch-triage<br/>re-enters as the App, so the<br/>worker sees a trusted actor") --> wTriage
     wRefine("agent-refine")
-    wImpl("agent-implement")
+    wImpl("check-implement-pr · check-stack-branch<br/>then agent-implement")
     wReview("agent-apply-review")
-    wGate("agent-merge-gate<br/>one lock for the whole repo")
     wAudit("agent-audit")
     wDocs("agent-docs-audit")
     wRelease("agent-release")
+    wEvidence("evidence.yml")
     wTriage("agent-triage")
-    classify -.->|"cron or dispatch"| plumbing
-    plumbing["deterministic jobs<br/>no model runs in any of these"] --> pJobs
-    pJobs("bot-approve · audit-close<br/>cleanup-artifacts · validate<br/>reconcile-bot-pr-runs · merge-train · land-stack-child<br/>check-stack-branch · dispatch-implement")
+    work -.->|"merge-gate label, or a moved<br/>operation dispatched here"| fwd
+    fwd("forward-merge-train · forward-reconcile<br/>forward-housekeeping<br/>dispatch the file that owns the job")
+    fwd -.-> belt
+    fwd -.-> hk
+    evBelt("CI completed · merge · approval<br/>hourly cron") --> belt
+    belt["agentics-merge-belt.yml<br/>classify, then one job"] --> beltJobs
+    beltJobs("merge-train · merge-approved<br/>reconcile-bot-pr-runs<br/>agent-merge-gate, one lock for the repo")
+    evHk("crons: every 6 h, daily") --> hk
+    hk["agentics-housekeeping.yml"] --> hkJobs
+    hkJobs("housekeeping · audit-close<br/>cleanup-artifacts")
+    evPp("pull request opened, pushed,<br/>labeled, closed") --> pp
+    pp["agentics-pr-plumbing.yml"] --> ppJobs
+    ppJobs("bot-approve · land-stack-child<br/>stack-landed")
     idle(("Idle<br/>run ends, ~10s, every job skipped"))
 
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
     classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
     classDef decision fill:#fff8e8,stroke:#c75b00,stroke-width:2px,color:#172033
     classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
-    class ev start
-    class classify,triageOnly,plumbing,pJobs,wRefine,wImpl,wReview,wGate,wAudit,wRelease,wTriage action
+    class ev,evBelt,evHk,evPp start
+    class classify,triageOnly,fwd,belt,beltJobs,hk,hkJobs,pp,ppJobs,wRefine,wImpl,wReview,wAudit,wDocs,wRelease,wEvidence,wTriage action
     class authorize,work decision
     class idle idle
 ```
 
-A run still appears for every matching event even when the router decides nothing downstream
-happens; those cost about ten seconds with every job skipped. Reducing the count means generating
-fewer events, not adding more guards.
+A run still appears for every matching event even when nothing downstream happens; those cost
+about ten seconds with every job skipped. Splitting the files cut those runs where the event never
+needed the router: a push to a pull request, a CI completion and the hourly tick no longer open
+one. A merge now opens three runs, one per file that reacts to it.
+
+| Event | `work-router.yml` | `agentics-merge-belt.yml` | `agentics-pr-plumbing.yml` | `agentics-housekeeping.yml` |
+|---|---|---|---|---|
+| issue opened or labelled, comment, review comment | route | | | |
+| review submitted | apply-review | approval: merge-approved | | |
+| pull request opened, pushed, reopened | | | bot-approve | |
+| pull request labelled | merge-gate label: forwarded | | bot-approve | |
+| pull request closed | merged: evidence | merged: train tick | merged: stack jobs | |
+| CI completed | | train tick | | |
+| audit and docs-audit crons | audit, docs-audit | | | |
+| hourly cron | | reconcile, train tick | | |
+| six-hourly and daily crons | | | | housekeeping, audit-close, cleanup-artifacts |
+| `workflow_dispatch` | every operation; moved ones forwarded | merge-gate, merge-train, reconcile | | housekeeping, audit-close, cleanup-artifacts |
 
 ### How the routes chain
 
@@ -120,7 +148,7 @@ Audit creates work rather than consuming it, and files into `refine` rather than
 
 One pull request moves at a time, the lowest number first, whoever opened it. Everything else waits
 untouched, so a merge never invalidates work in flight. A pull request a person has to decide on is
-passed by, so it never blocks the line. The train ticks on every merge, every CI completion, after
+passed by, so it never blocks the line. It runs in `agentics-merge-belt.yml` and ticks on every merge, every CI completion, after
 every gate, and hourly as the fallback.
 
 ```mermaid
@@ -191,7 +219,7 @@ Once every child has landed and the feature branch is green, the gate decides it
 request and merges it, unless the blast radius, a protected path or a finding sends it to a person
 (`STACK_ROOT_AUTOMERGE: "false"` restores a human merge for every root).
 With `UNATTENDED: "true"` a feature blocked by another waits for that feature's root to merge;
-the router's `stack-landed` job then brings the default branch into its branch, releases its
+`stack-landed`, in `agentics-pr-plumbing.yml`, then brings the default branch into its branch, releases its
 children and opens an Unattended report issue.
 
 ---
@@ -379,7 +407,7 @@ overnight pull requests mean every merge moves the default branch under the rest
 
 ```mermaid
 flowchart TD
-    gateStart("Work Router<br/>merge-gate route<br/>the merge train dispatched it,<br/>oldest PR first") --> gateSubject
+    gateStart("Merge Belt<br/>merge-gate route<br/>the merge train dispatched it,<br/>oldest PR first") --> gateSubject
     gateSubject{"subject (rung 4)<br/>Open PR from this repo,<br/>by the bot or a writer?"}
     gateSubject -.->|no| gateIdle
     gateSubject -->|yes| gateBranch
@@ -433,7 +461,7 @@ unchanged: the risk assessment sees the same diff it always would, and auto-merg
 into the feature branch, closing exactly that child issue. The root pull request is the one
 exception in the whole system: it can be as clean as any merge that ever shipped and the gate
 still will not take it, because a feature is only done when the whole branch is done. AABB holds
-it with an App-token comment and a person takes it from there, after the router's stack-completion
+it with an App-token comment and a person takes it from there, after `land-stack-child`'s stack-completion
 check has announced that every child landed and the branch is green.
 
 A protected-path match holds the merge but does not stop the repair path: the agent may still fix
@@ -449,7 +477,7 @@ Size counts only code that ships: tests, docs, specs, translations and generated
 (`BLAST_IGNORE_PATHS`) are left out, and a new EF Core migration whose `Up()` only creates and adds
 is a medium change rather than an owner one. When the gate parks a pull request for a person it
 dispatches `operation=evidence`, so the screenshots arrive before the decision, and an approval
-from anyone with write access merges the approved commit (`merge-approved` in the router).
+from anyone with write access merges the approved commit (`merge-approved` in `agentics-merge-belt.yml`).
 
 ---
 
@@ -632,7 +660,7 @@ a file on disk, so a confused model cannot publish a release. The tag and the Re
 
 ## housekeeping
 
-Not a worker: a deterministic job in the router, on its own six-hourly cron, with no model. It is
+Not a worker: a deterministic job in `agentics-housekeeping.yml`, on its own six-hourly cron, with no model. It is
 the answer to a specific measured problem. Across the four consumers, 58 of 237 issues closed since
 1 August were closed by the bot; autonomy ran between 6% and 50%. The gap was not bad decisions, it
 was silence work that stopped and told nobody, and state that nothing ever cleaned up.

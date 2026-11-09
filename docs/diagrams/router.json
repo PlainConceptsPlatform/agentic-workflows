@@ -10,13 +10,14 @@
     {
       "id": "ev",
       "type": "external",
-      "label": "GitHub event",
+      "label": "Agent event",
+      "sublabel": "issue, label, review",
       "pos": [
         40,
-        250
+        200
       ],
       "size": [
-        120,
+        130,
         56
       ]
     },
@@ -27,7 +28,7 @@
       "sublabel": "rung 1, pure shell",
       "pos": [
         240,
-        250
+        200
       ],
       "size": [
         130,
@@ -41,7 +42,7 @@
       "sublabel": "write or read only?",
       "pos": [
         440,
-        250
+        200
       ],
       "size": [
         130,
@@ -52,10 +53,10 @@
       "id": "work",
       "type": "security",
       "label": "Route",
-      "sublabel": "dispatch one worker",
+      "sublabel": "one job per event",
       "pos": [
         640,
-        250
+        200
       ],
       "size": [
         130,
@@ -68,11 +69,11 @@
       "label": "agent-refine",
       "pos": [
         870,
-        70
+        20
       ],
       "size": [
-        130,
-        52
+        140,
+        48
       ]
     },
     {
@@ -81,11 +82,11 @@
       "label": "agent-implement",
       "pos": [
         870,
-        140
+        80
       ],
       "size": [
-        130,
-        52
+        140,
+        48
       ]
     },
     {
@@ -94,24 +95,11 @@
       "label": "agent-apply-review",
       "pos": [
         870,
-        210
+        140
       ],
       "size": [
-        130,
-        52
-      ]
-    },
-    {
-      "id": "wGate",
-      "type": "backend",
-      "label": "agent-merge-gate",
-      "pos": [
-        870,
-        280
-      ],
-      "size": [
-        130,
-        52
+        140,
+        48
       ]
     },
     {
@@ -120,11 +108,24 @@
       "label": "agent-audit",
       "pos": [
         870,
-        350
+        200
       ],
       "size": [
-        130,
-        52
+        140,
+        48
+      ]
+    },
+    {
+      "id": "wDocs",
+      "type": "backend",
+      "label": "agent-docs-audit",
+      "pos": [
+        870,
+        260
+      ],
+      "size": [
+        140,
+        48
       ]
     },
     {
@@ -133,11 +134,24 @@
       "label": "agent-release",
       "pos": [
         870,
-        420
+        320
       ],
       "size": [
-        130,
-        52
+        140,
+        48
+      ]
+    },
+    {
+      "id": "wEvidence",
+      "type": "backend",
+      "label": "evidence.yml",
+      "pos": [
+        870,
+        380
+      ],
+      "size": [
+        140,
+        48
       ]
     },
     {
@@ -145,26 +159,12 @@
       "type": "backend",
       "label": "agent-triage",
       "pos": [
-        870,
-        490
-      ],
-      "size": [
-        130,
-        52
-      ]
-    },
-    {
-      "id": "pJobs",
-      "type": "backend",
-      "label": "Deterministic jobs",
-      "sublabel": "no model runs",
-      "pos": [
         440,
-        420
+        360
       ],
       "size": [
         130,
-        56
+        48
       ]
     },
     {
@@ -174,22 +174,103 @@
       "sublabel": "~10s, all skipped",
       "pos": [
         240,
-        470
+        360
       ],
       "size": [
-        120,
+        130,
         52
+      ]
+    },
+    {
+      "id": "fwd",
+      "type": "messagebus",
+      "label": "Forwarders",
+      "sublabel": "moved operations",
+      "pos": [
+        640,
+        360
+      ],
+      "size": [
+        130,
+        56
+      ]
+    },
+    {
+      "id": "belt",
+      "type": "backend",
+      "label": "Merge belt",
+      "sublabel": "CI, merge, approval, hourly",
+      "pos": [
+        640,
+        480
+      ],
+      "size": [
+        130,
+        56
+      ]
+    },
+    {
+      "id": "wGate",
+      "type": "backend",
+      "label": "agent-merge-gate",
+      "sublabel": "one lock per repo",
+      "pos": [
+        870,
+        480
+      ],
+      "size": [
+        140,
+        56
+      ]
+    },
+    {
+      "id": "pp",
+      "type": "backend",
+      "label": "PR plumbing",
+      "sublabel": "open, push, label, close",
+      "pos": [
+        240,
+        480
+      ],
+      "size": [
+        130,
+        56
+      ]
+    },
+    {
+      "id": "hk",
+      "type": "backend",
+      "label": "Housekeeping",
+      "sublabel": "its own crons",
+      "pos": [
+        40,
+        480
+      ],
+      "size": [
+        130,
+        56
       ]
     }
   ],
   "boundaries": [
     {
       "kind": "region",
-      "label": "Router (rung 1)",
+      "label": "work-router.yml (rung 1)",
       "wraps": [
         "classify",
         "authorize",
         "work"
+      ],
+      "pad": 16
+    },
+    {
+      "kind": "region",
+      "label": "Split-out workflows, no agent but the gate",
+      "wraps": [
+        "hk",
+        "pp",
+        "belt",
+        "wGate"
       ],
       "pad": 16
     }
@@ -224,7 +305,11 @@
       "id": "authorize-triage",
       "from": "authorize",
       "to": "wTriage",
-      "label": "read only"
+      "label": "read only",
+      "labelAt": [
+        540,
+        300
+      ]
     },
     {
       "id": "work-refine",
@@ -236,39 +321,73 @@
     {
       "id": "work-impl",
       "from": "work",
-      "to": "wImpl",
-      "label": "implement"
+      "to": "wImpl"
     },
     {
       "id": "work-review",
       "from": "work",
-      "to": "wReview",
-      "label": "apply-review"
-    },
-    {
-      "id": "work-gate",
-      "from": "work",
-      "to": "wGate",
-      "label": "merge-gate"
+      "to": "wReview"
     },
     {
       "id": "work-audit",
       "from": "work",
-      "to": "wAudit",
-      "label": "audit"
+      "to": "wAudit"
+    },
+    {
+      "id": "work-docs",
+      "from": "work",
+      "to": "wDocs"
     },
     {
       "id": "work-release",
       "from": "work",
-      "to": "wRelease",
-      "label": "release"
+      "to": "wRelease"
     },
     {
-      "id": "classify-pjobs",
-      "from": "classify",
-      "to": "pJobs",
-      "label": "cron or dispatch",
+      "id": "work-evidence",
+      "from": "work",
+      "to": "wEvidence"
+    },
+    {
+      "id": "work-fwd",
+      "from": "work",
+      "to": "fwd",
+      "label": "forward",
+      "variant": "dashed",
+      "labelAt": [
+        740,
+        310
+      ]
+    },
+    {
+      "id": "belt-gate",
+      "from": "belt",
+      "to": "wGate",
+      "label": "calls"
+    },
+    {
+      "id": "fwd-belt",
+      "from": "fwd",
+      "to": "belt",
       "variant": "dashed"
+    },
+    {
+      "id": "fwd-hk",
+      "from": "fwd",
+      "to": "hk",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          705,
+          450
+        ],
+        [
+          105,
+          450
+        ]
+      ]
     }
   ],
   "cards": [
@@ -283,10 +402,11 @@
     },
     {
       "dot": "amber",
-      "title": "Cost of an idle run",
+      "title": "Split-out workflows",
       "items": [
-        "A run still appears for every matching event even when nothing downstream happens",
-        "Idle runs cost about ten seconds with every job skipped"
+        "Jobs that start no agent run on the events they need",
+        "A push, a CI result or the hourly tick opens no router run",
+        "Moved operations still dispatch to the router and are forwarded"
       ]
     }
   ]
