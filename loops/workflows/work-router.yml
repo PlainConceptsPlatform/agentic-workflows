@@ -405,9 +405,14 @@ jobs:
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true'
     runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 3
+    # actions: read for the run listings and issues: read for the implement-pr marker. Without them
+    # both lookups answered 403 and "Could not resolve to an issue", and the duplicate check never
+    # held anything back (Kitchen-Sink, router run 42700668556).
     permissions:
       contents: read
       pull-requests: read
+      issues: read
+      actions: read
     outputs:
       has-open-pr: ${{ steps.check.outputs.has-open-pr }}
     steps:
@@ -435,6 +440,7 @@ jobs:
                     ((.display_title | contains(\"implement label on #${ISSUE_NUMBER} by\")) and (.display_title | endswith(\"[bot]\")))
                   )
               ] | length" 2>/dev/null || echo 0)
+            case "${dupes:-0}" in ''|*[!0-9]*) echo "::warning::Could not list $st router runs; the duplicate check cannot see them."; dupes=0 ;; esac
             if [ "${dupes:-0}" -gt 0 ]; then
               echo "has-open-pr=true" >> "$GITHUB_OUTPUT"
               echo "::notice::An older router run is already implementing #$ISSUE_NUMBER; skipping the duplicate."
@@ -450,6 +456,7 @@ jobs:
           if [ "${ATTEMPTS:-0}" = 0 ]; then
             for st in in_progress queued pending waiting requested; do
               live=$(gh api "repos/$REPO/actions/workflows/agent-implement.lock.yml/runs?status=$st&per_page=100"               --jq "[.workflow_runs[] | select(.display_title == \"Agent: Implement - #${ISSUE_NUMBER}\")] | length" 2>/dev/null || echo 0)
+              case "${live:-0}" in ''|*[!0-9]*) echo "::warning::Could not list $st implement runs; the duplicate check cannot see them."; live=0 ;; esac
               if [ "${live:-0}" -gt 0 ]; then
                 echo "has-open-pr=true" >> "$GITHUB_OUTPUT"
                 echo "::notice::An implement run for #$ISSUE_NUMBER is already $st; skipping the duplicate."

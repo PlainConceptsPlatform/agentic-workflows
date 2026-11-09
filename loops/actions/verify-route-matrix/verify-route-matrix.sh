@@ -3752,6 +3752,30 @@ if worker_installed triage; then
   grep -qF "!(github.event_name == 'issues' && github.event.action == 'opened')" <<<"$dt" || wd_fail "dispatch-triage starts triage when a trusted actor opens an issue"
 fi
 
+# A step that lists runs or workflows with GITHUB_TOKEN needs `actions: read` on its job. Without it
+# the API answers 403 and a check that counts runs reads the error as no runs: check-implement-pr's
+# duplicate guard held nothing back for as long as it existed (Kitchen-Sink router run 42700668556).
+for wf in "$ROUTER_YML" "$BELT_WF_YML" "$HOUSEKEEPING_WF_YML" "$PLUMBING_WF_YML"; do
+  [ -f "$wf" ] || continue
+  while IFS= read -r miss; do
+    [ -n "$miss" ] && wd_fail "${wf##*/}: ${miss}"
+  done < <(awk '
+    function flush_step() { if (step_actions && step_github) bad = bad " " step }
+    function flush_job() { flush_step(); if (bad != "" && !perm) print "job " job " lists runs with GITHUB_TOKEN but has no actions permission (" substr(bad, 2) ")"; bad = "" }
+    /^jobs:/ { in_jobs = 1; next }
+    in_jobs && /^  [a-z][a-z0-9-]*:$/ { if (job != "") flush_job(); job = $1; sub(/:$/, "", job); perm = 0; step = ""; step_actions = 0; step_github = 0; next }
+    in_jobs && /^      actions: (read|write)$/ { perm = 1 }
+    in_jobs && /^      - (name|uses|id):/ { flush_step(); step = $0; sub(/^ *- (name|uses|id): */, "", step); step_actions = 0; step_github = 0 }
+    in_jobs && /repos\/[^ ]*\/actions\/(workflows|runs)|gh run (list|view)/ { step_actions = 1 }
+    in_jobs && /GH_TOKEN: \$\{\{ (github\.token|secrets\.GITHUB_TOKEN) \}\}/ { step_github = 1 }
+    END { if (job != "") flush_job() }
+  ' "$wf")
+done
+if worker_installed implement; then
+  cip_perm="$(router_job check-implement-pr | sed -n '/^    permissions:/,/^    [a-z]/p')"
+  grep -qE '^      issues: (read|write)$' <<<"$cip_perm" || wd_fail "check-implement-pr cannot read the issue's implement-pr marker without issues: read"
+fi
+
 if [ "$WD_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 echo "── Worker input wiring ───────────────────────────────────────────────────"

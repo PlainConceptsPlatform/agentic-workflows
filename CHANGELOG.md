@@ -11,6 +11,7 @@ Releases of `@plainconceptsplatform/workflows`. Earlier versions are described i
   - A flat implement and a stack child are one dispatch; only the ref differs. The implement queue travels as a new `queue` input.
   - Triage for a trusted actor and for an outside collaborator is one job. The outside collaborator's triage no longer re-enters the router.
   - `check-implement-pr` also treats a live `Agent: Implement - #N` run as a duplicate, except for the worker's own retry.
+  - **Fixed:** `check-implement-pr` had neither `actions: read` nor `issues: read`, so its run listings answered 403 and its `implement-pr` marker lookup failed, and the failures read as "nothing found". Its duplicate guard never held an implement back. It now has both reads, and a listing that fails logs a warning. The route matrix checks that every step listing runs with `GITHUB_TOKEN` sits in a job with `actions` permission.
   - The janitor looks for stuck pending runs in every worker's workflow.
   - `agent-audit`, `agent-docs-audit` and `agent-release` list the App in `GH_AW_ALLOWED_BOTS`, because the App is now their actor.
   - No secret travels with a dispatch. The worker reads the repository's secrets; its engine key already falls back to `FORGE_API_KEY`.
