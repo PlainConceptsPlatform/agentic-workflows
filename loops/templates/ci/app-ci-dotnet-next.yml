@@ -11,6 +11,10 @@
 # every push and through its own weekly schedule. The platform-conformance job runs the
 # platform-template guard where the app declares a platform contract.
 #
+# No mutation testing here, on purpose: a pull request's quality gate is the coverage floor, and
+# Stryker over even one changed page took longer than the rest of CI together. Mutation runs out of
+# band, weekly, in `Quality: Mutation testing (scheduled)` (`workflows add --template quality-mutation`).
+#
 # Everything that differs between apps is a top-level `env:` value below or a floor in
 # quality.config.json. Job names are required status checks on main: do not rename them.
 name: "App: CI"
@@ -279,51 +283,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  mutation-api:
-    name: Mutation (.NET, diff)
-    if: ${{ (github.event_name == 'pull_request') && needs.depth.outputs.full == 'true' }}
-    needs: [depth]
-    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
-    timeout-minutes: 25
-    defaults:
-      run:
-        working-directory: ${{ env.API_WORKING_DIRECTORY }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # Stryker --since diffs against the PR base; it needs history, not a shallow tip.
-          fetch-depth: 0
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-        env:
-          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
-      - name: Detect backend changes
-        id: scope
-        working-directory: ${{ github.workspace }}
-        run: |
-          git fetch origin "$GITHUB_BASE_REF" --depth=1
-          if git diff --name-only "origin/$GITHUB_BASE_REF" HEAD | grep -qE "^${API_WORKING_DIRECTORY}/"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "No ${API_WORKING_DIRECTORY} changes in this PR; skipping .NET mutation."
-          fi
-      - name: Restore tools and build
-        if: steps.scope.outputs.run == 'true'
-        run: |
-          dotnet tool restore
-          dotnet build "$DOTNET_SOLUTION" -c Release
-      # The project, test projects and thresholds come from the app's stryker-config.json.
-      - name: Stryker.NET (changed files only)
-        if: steps.scope.outputs.run == 'true'
-        run: |
-          export PATH="$PATH:$HOME/.dotnet/tools"
-          dotnet stryker \
-            --since:"origin/$GITHUB_BASE_REF" \
-            --concurrency 2 \
-            --reporter progress --reporter json
-
   web:
     name: Web (Next.js static export)
     needs: [depth, scope]
@@ -581,65 +540,6 @@ jobs:
           else
             node scripts/check-platform-conformance.mjs --compare | tee -a "$GITHUB_STEP_SUMMARY"
           fi
-
-  mutation-web:
-    name: Mutation (web, diff)
-    if: ${{ (github.event_name == 'pull_request') && needs.depth.outputs.full == 'true' }}
-    needs: [depth]
-    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - name: Detect web changes
-        id: scope
-        run: |
-          git fetch origin "$GITHUB_BASE_REF" --depth=1
-          if git diff --name-only "origin/$GITHUB_BASE_REF" HEAD | grep -qE "^apps/web/"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "No apps/web changes in this PR; skipping web mutation."
-          fi
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        if: steps.scope.outputs.run == 'true'
-        with:
-          run_install: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        if: steps.scope.outputs.run == 'true'
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-      - name: Configure optional private registry authentication
-        if: steps.scope.outputs.run == 'true'
-        env:
-          NPM_REGISTRY_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN }}
-        run: |
-          if [ -n "$NPM_REGISTRY_TOKEN" ]; then
-            echo "${NPM_REGISTRY_URL}:_authToken=$NPM_REGISTRY_TOKEN" >> .npmrc
-          fi
-      - name: Install and run StrykerJS (changed files only)
-        if: steps.scope.outputs.run == 'true'
-        run: |
-          pnpm install --frozen-lockfile
-          # StrykerJS v9 removed --since. Compute changed TS/TSX files and pass them to --mutate.
-          # The config already excludes test files; we only need to scope to changed source files.
-          changed_files=$(git diff --name-only "origin/$GITHUB_BASE_REF" HEAD -- 'apps/web/src/**/*.ts' 'apps/web/src/**/*.tsx' \
-            | sed 's|^apps/web/||' \
-            | grep -v '\.test\.' \
-            | grep -v '\.spec\.' \
-            | grep -v '/__mocks__/' \
-            | paste -sd, -)
-          if [ -z "$changed_files" ]; then
-            echo "No changed web source files to mutate; skipping."
-            exit 0
-          fi
-          echo "Mutating: $changed_files"
-          # StrykerJS v9 child worker cannot auto-discover @stryker-mutator/vitest-runner
-          # under pnpm hoisting. --appendPlugins forces the plugin import from the workspace.
-          cd apps/web && pnpm exec stryker run --mutate "$changed_files" --appendPlugins "@stryker-mutator/vitest-runner"
 
   secret-scan:
     name: Secret scan (TruffleHog, verified only)
@@ -956,7 +856,7 @@ jobs:
   # The merge train reads this job by its name to tell a full run from a light one: do not rename it.
   full-ci:
     name: Full CI
-    needs: [depth, api, web, e2e, mutation-api, mutation-web, engineering-excellence]
+    needs: [depth, api, web, e2e, engineering-excellence]
     if: ${{ always() && needs.depth.outputs.full == 'true' }}
     runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
     timeout-minutes: 5
@@ -986,7 +886,7 @@ jobs:
   # and the router's maintenance run merges Dependabot updates instead of the train.
   dispatch-merge-gate:
     name: Dispatch merge gate
-    needs: [api, mutation-api, web, mutation-web, secret-scan, deps-and-iac-scan, sast-scan, sbom, engineering-excellence, platform-conformance, full-ci]
+    needs: [api, web, secret-scan, deps-and-iac-scan, sast-scan, sbom, engineering-excellence, platform-conformance, full-ci]
     if: >
       always() &&
       vars.AGENTIC_WORKFLOWS_DISABLED == '' &&
@@ -1004,7 +904,7 @@ jobs:
       - name: Hand this run's verdict to the merge train after CI settles
         env:
           GH_TOKEN: ${{ github.token }}
-          # The jobs the apps judged before this template; the mutation runs are only waited for.
+          # The jobs the apps judged before this template.
           RESULTS: >-
             ${{ needs.api.result }} ${{ needs.web.result }} ${{ needs.secret-scan.result }}
             ${{ needs.deps-and-iac-scan.result }} ${{ needs.sast-scan.result }} ${{ needs.sbom.result }}

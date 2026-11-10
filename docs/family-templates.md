@@ -95,6 +95,27 @@ The job names are the ones the apps' required checks and the merge train read (`
 
 It stays a single-file template: once installed it is the app's, and `--force` replaces it with the package's, `env:` included.
 
+It runs no mutation testing. A pull request's per-change gate is the coverage floor; mutation testing is out of band, below.
+
+## The weekly mutation run: quality-mutation
+
+`.github/workflows/quality-mutation.yml`, the shape Atlas runs: a Saturday cron plus `workflow_dispatch` with a `scope` input, never `pull_request`. Stryker over a single changed React page took 15 minutes on a pull request (the dry run alone reruns the whole vitest suite) and then failed the run on Stryker's own `break` threshold, which is why `app-ci-dotnet-next` and `app-ci-node-monorepo` no longer carry `Mutation (.NET, diff)` or `Mutation (web, diff)`.
+
+| Job | Does |
+|---|---|
+| `Plan scopes` | Resolves the dispatch `scope` (`all`, `web`, or one .NET scope) into the matrix |
+| `Mutants (<scope>)` | One Stryker.NET job per `DOTNET_SCOPES` entry, run from the project's own directory with `stryker/<scope>.json`; warns when coverage analysis is no longer `perTest`; uploads the report and gates it with `check-mutation.mjs <scope>` |
+| `Mutants (web)` | StrykerJS with `WEB_STRYKER_CONFIG`, gated with `check-mutation.mjs web` |
+| `Engineering Excellence (mutation)` | Folds every report into the `engineering-excellence-mutation` facet, uploaded for a full run on main |
+
+| `env:` | Use |
+|---|---|
+| `API_WORKING_DIRECTORY`, `DOTNET_SOLUTION` | Where the .NET solution lives and its name |
+| `DOTNET_SCOPES` | Space-separated `scope=project-directory` pairs (`domain=src/Odyssey.Domain`); each needs `stryker/<scope>.json` under `API_WORKING_DIRECTORY` and a `mutation.<scope>` floor. Empty runs no .NET scope |
+| `WEB_DIRECTORY`, `WEB_STRYKER_CONFIG` | The web workspace and its StrykerJS config, whose `jsonReporter.fileName` must be `reports/mutation/mutation-report.json`. Empty `WEB_DIRECTORY` runs no web scope |
+
+Keep the Stryker configs the way Atlas does: `coverageAnalysis`/`coverage-analysis` set to `perTest`, `thresholds.break` null (StrykerJS) or 0 (Stryker.NET) so the covered-code floor in `quality.config.json` is the only gate, and the web `mutate` list limited to logic modules with a colocated test, with `ignoreStatic: true`. Install it with `workflows add --template quality-mutation`; it needs the `quality-gates` scripts. Like the CI template, it is the app's once installed.
+
 ## platform-template
 
 The family's apps carry a [platform contract](platform-contracts.md) that Kitchen-Sink delivers: `source.url` is Kitchen-Sink, `owned` its platform paths, and `sync` the Copier answers file and `copier update`. Apps adopted before the contract existed have `.copier-answers.yml` and `.platform/manifest`, which are read as the same contract. The template sync, the conformance guard and the exceptions file are described in [platform-contracts.md](platform-contracts.md).

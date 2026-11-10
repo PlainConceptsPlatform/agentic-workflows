@@ -85,6 +85,7 @@ export const templateNames = [
   "opencode.ci.json",
   "platform-template",
   "quality-gates",
+  "quality-mutation",
 ] as const;
 
 export type TemplateName = (typeof templateNames)[number];
@@ -115,6 +116,7 @@ export const catalogTemplates: readonly CatalogTemplate[] = [
   { name: "opencode.ci.json", file: "opencode.ci.json", description: "Standalone OpenCode CI config: plainconcepts provider, GLM model registration, ci-workflow-agent, and LSP defaults for consumer repositories." },
   { name: "platform-template", file: "scripts/check-platform-conformance.mjs", directory: "platform-template", bundle: true, description: "Template sync driven by the platform contract (.platform/contract.yml): a weekly workflow that runs its sync.update command and opens or updates one pull request, and a CI guard that keeps its owned paths equal to the template outside a sync. Does nothing without a contract." },
   { name: "quality-gates", file: "scripts/check-coverage.mjs", directory: "quality-gates", bundle: true, description: "Platform family quality gates: coverage, complexity, duplication and mutation gates, the Engineering Excellence facets, the Semgrep hygiene rules, jscpd and ZAP triage. Floors come from the app's quality.config.json; baselines stay app files." },
+  { name: "quality-mutation", file: "quality-mutation.yml", directory: "ci", description: "Weekly out-of-band mutation testing, the Atlas shape: one Stryker.NET job per .NET scope and one StrykerJS web job, each gated on its covered-code floor from quality.config.json, folded into the engineering-excellence-mutation facet. Never on pull requests; App: CI keeps the coverage floor as the per-change gate. Needs the quality-gates template." },
 ];
 
 /** Bundle templates: several package-managed files, refreshed by `update` where installed. */

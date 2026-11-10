@@ -1,0 +1,268 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/templates/ci/quality-mutation.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: "Quality: Mutation testing (scheduled)"
+
+# Out-of-band mutation run, the shape PlainConceptsPlatform/Atlas runs in
+# .github/workflows/quality-mutation.yml. Deliberately NOT on pull_request: the per-change quality
+# gate is the coverage floor in App: CI, which stays fast. This measures something different,
+# whether the covered lines are actually ASSERTED, and it only needs to move weekly. Stryker over
+# one changed React page took 15 minutes on a pull request (the dry run alone reruns the whole
+# suite), which is why App: CI no longer mutates anything.
+#
+# Each scope is its own job: the .NET scopes in a matrix (Stryker.NET, one project each), the web
+# scope on its own (StrykerJS needs Node, not .NET). Each is gated on its covered-code floor from
+# quality.config.json by scripts/check-mutation.mjs, and a full run on main publishes the
+# engineering-excellence-mutation facet. Both scripts come with the quality-gates template.
+#
+# Everything that differs between apps is a top-level `env:` value below, a floor in
+# quality.config.json, or the app's own Stryker config files.
+
+on:
+  schedule:
+    # Spread the apps over the shared fleet: give each repository its own minute.
+    - cron: "0 4 * * 6" # Sat 04:00 UTC
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "Which scope to run: all, web, or one of DOTNET_SCOPES"
+        required: false
+        default: all
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-mutation
+  cancel-in-progress: true
+
+env:
+  DOTNET_VERSION: "10.0.x"
+  NODE_VERSION: "22"
+  API_WORKING_DIRECTORY: apps/api
+  DOTNET_SOLUTION: App.slnx
+  # Space-separated scope=project-directory pairs, relative to API_WORKING_DIRECTORY. Each scope
+  # mutates one project with the config at stryker/<scope>.json. Empty runs no .NET scope.
+  DOTNET_SCOPES: "domain=src/App.Domain"
+  # The web scope's working directory and StrykerJS config. An empty WEB_DIRECTORY runs no web scope.
+  WEB_DIRECTORY: apps/web
+  WEB_STRYKER_CONFIG: stryker.config.json
+  NPM_REGISTRY_URL: "//npm.pkg.github.com/"
+
+jobs:
+  # A matrix context is not available to a job-level `if`, so the workflow_dispatch selection is
+  # resolved here and fed in via fromJSON.
+  plan:
+    name: Plan scopes
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    timeout-minutes: 5
+    outputs:
+      scopes: ${{ steps.pick.outputs.scopes }}
+      web: ${{ steps.pick.outputs.web }}
+    steps:
+      - id: pick
+        env:
+          SCOPE: ${{ inputs.scope || 'all' }}
+        run: |
+          set -euo pipefail
+          known=""
+          for pair in $DOTNET_SCOPES; do known="$known ${pair%%=*}"; done
+          to_json() { printf '%s\n' "$@" | sed '/^$/d' | jq -R . | jq -cs .; }
+          # `web` is a separate flag rather than a matrix entry: that job needs Node, not .NET, and
+          # shares none of the setup the backend scopes do.
+          # shellcheck disable=SC2086 # $known is a list of scope names.
+          case "$SCOPE" in
+            all) SCOPES=$(to_json $known); WEB=$([ -n "$WEB_DIRECTORY" ] && echo true || echo false) ;;
+            web) SCOPES='[]'; WEB=true ;;
+            *)
+              grep -qw -- "$SCOPE" <<<"$known" || { echo "unknown scope $SCOPE (known:$known web)" >&2; exit 1; }
+              SCOPES=$(to_json "$SCOPE"); WEB=false ;;
+          esac
+          echo "scopes=$SCOPES" >> "$GITHUB_OUTPUT"
+          echo "web=$WEB" >> "$GITHUB_OUTPUT"
+          echo "Scopes: $SCOPES, web: $WEB"
+
+  mutate:
+    name: Mutants (${{ matrix.scope }})
+    needs: plan
+    if: ${{ needs.plan.outputs.scopes != '[]' }}
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    # Atlas measured ~3.5 min per scope locally, but its application scope takes ~90 min on the
+    # runner and was cancelled at 90, which left the published report without it. 150 keeps
+    # headroom while still stopping a runaway job.
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        scope: ${{ fromJSON(needs.plan.outputs.scopes) }}
+    defaults:
+      run:
+        working-directory: ${{ env.API_WORKING_DIRECTORY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Without DOTNET_INSTALL_DIR setup-dotnet installs into /usr/share/dotnet, which the runner
+      # user does not own; GitHub-hosted runners keep the default.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.environment == 'self-hosted' && format('{0}/dotnet', runner.tool_cache) || '' }}
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # RESTORE-ONLY, and deliberately no build cache. Stryker does not sandbox: it swaps mutated
+      # assemblies straight into bin/Release. If this job ever saved a build cache App: CI restores,
+      # PR CI would test MUTATED binaries and still report green. Do not "optimise" this into one.
+      - name: Restore .NET tools
+        run: dotnet tool restore
+      - name: Restore solution
+        run: dotnet restore "$DOTNET_SOLUTION"
+
+      # Run from the mutated project's own directory, with no `solution` key in the config.
+      # Solution mode builds via --property:Platform="Any CPU"; the space splits the argument and
+      # MSBuild fails with MSB1008 before a single mutant is generated (Atlas#1531). Per-project
+      # mode uses Platform=AnyCPU and works.
+      - name: Run Stryker
+        env:
+          SCOPE: ${{ matrix.scope }}
+        run: |
+          set -euo pipefail
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          PROJECT_DIR=""
+          for pair in $DOTNET_SCOPES; do
+            [ "${pair%%=*}" = "$SCOPE" ] && PROJECT_DIR="${pair#*=}"
+          done
+          [ -n "$PROJECT_DIR" ] || { echo "unknown scope $SCOPE" >&2; exit 1; }
+          root="$GITHUB_WORKSPACE/$API_WORKING_DIRECTORY"
+          cd "$PROJECT_DIR"
+          dotnet stryker \
+            --config-file "$root/stryker/$SCOPE.json" \
+            --output "$root/StrykerOutput/$SCOPE" \
+            | tee "$root/stryker-$SCOPE.log"
+
+      # perTest is the difference between minutes and hours: without it every mutant reruns the
+      # whole suite. The timeout is what actually stops that from burning a runner, so this stays a
+      # warning; its job is to say WHY, in the run where it happened. Stryker prints the mode to
+      # stdout and writes no log file, hence the tee above.
+      - name: Assert coverage analysis stayed perTest
+        if: always()
+        env:
+          SCOPE: ${{ matrix.scope }}
+        run: |
+          if ! grep -q "CoverageBasedTest" "stryker-$SCOPE.log" 2>/dev/null; then
+            echo "::warning::coverage-analysis may have degraded from perTest for $SCOPE"
+          fi
+
+      # `--output <dir>` writes <dir>/reports/ directly, with no timestamped subdirectory.
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-${{ matrix.scope }}
+          path: ${{ env.API_WORKING_DIRECTORY }}/StrykerOutput/${{ matrix.scope }}/reports/
+          if-no-files-found: error
+          retention-days: 30
+
+      # A weekly cron nobody reads is how mutation testing dies everywhere, so the scores go into
+      # the run summary whether the gate passes or fails.
+      #
+      # `set -o pipefail` is what makes this a gate at all. The Actions default shell is `bash -e`,
+      # where the exit status of a pipeline is its LAST command, so `node … | tee` reports tee's
+      # success and the step passes however low the score is. Do not remove it, and do not drop the
+      # `tee`: without pipefail the two cancel out silently.
+      - name: Mutation score floor
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          SCOPE: ${{ matrix.scope }}
+        run: |
+          set -euo pipefail
+          node scripts/check-mutation.mjs "$SCOPE" \
+            "$API_WORKING_DIRECTORY/StrykerOutput/$SCOPE/reports/mutation-report.json" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+  mutate-web:
+    name: Mutants (web)
+    needs: plan
+    if: ${{ needs.plan.outputs.web == 'true' }}
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    # Atlas: 10 min locally over its allowlist but >45 on a 4-vCPU runner. jsdom rendering is the
+    # bottleneck and it does not shrink the way the .NET scopes do. Its first run was killed at 45.
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: ${{ env.WEB_DIRECTORY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Configure optional private registry authentication
+        working-directory: ${{ github.workspace }}
+        env:
+          NPM_REGISTRY_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN }}
+        run: |
+          if [ -n "$NPM_REGISTRY_TOKEN" ]; then
+            echo "${NPM_REGISTRY_URL}:_authToken=$NPM_REGISTRY_TOKEN" >> .npmrc
+          fi
+      - name: Install workspace
+        working-directory: ${{ github.workspace }}
+        run: pnpm install --frozen-lockfile
+      - name: Run Stryker
+        run: pnpm exec stryker run "$WEB_STRYKER_CONFIG"
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-web
+          path: ${{ env.WEB_DIRECTORY }}/reports/mutation
+          if-no-files-found: error
+          retention-days: 30
+      # See the note on the .NET floor step: without pipefail this reports tee's exit status and
+      # gates nothing.
+      - name: Mutation score floor
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          node scripts/check-mutation.mjs web "$WEB_DIRECTORY/reports/mutation/mutation-report.json" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Folds every scope's report into the `engineering-excellence-mutation` artifact Project-Health
+  # collects, with the per-module breakdown. Runs when a floor failed too: a drop is the week most
+  # worth recording. Uploads only for a full run on main: a single-scope dispatch would read as a
+  # partial week.
+  engineering-excellence:
+    name: Engineering Excellence (mutation)
+    needs: [mutate, mutate-web]
+    if: ${{ !cancelled() && (needs.mutate.result != 'skipped' || needs.mutate-web.result != 'skipped') }}
+    runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # One subdirectory per artifact: reports/mutation-<scope>/mutation-report.json.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: mutation-*
+          path: reports
+      - name: Build facet
+        run: |
+          set -euo pipefail
+          node scripts/engineering-excellence.mjs mutation --out mutation.json --reports reports \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload mutation facet
+        if: ${{ github.ref == 'refs/heads/main' && (inputs.scope || 'all') == 'all' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: engineering-excellence-mutation
+          path: mutation.json
+          if-no-files-found: error
+          retention-days: 90

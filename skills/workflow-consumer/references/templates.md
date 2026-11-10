@@ -14,6 +14,7 @@ installed as a mandatory file during catalog install; it is not optional.
 | `github-release` | Pushing a `v*` tag should publish a GitHub Release with generated notes |
 | `opencode.ci.json` | Always installed as mandatory during catalog install. Advanced: use `--template opencode.ci.json` to install in isolation |
 | `quality-gates` | A platform family app (Kitchen-Sink, Numa, Odyssey, Hermes) wants the shared gate scripts and rules; floors live in its `quality.config.json` |
+| `quality-mutation` | A platform family app wants the weekly Stryker run (the Atlas shape) instead of mutating on pull requests; needs `quality-gates` |
 | `platform-template` | The repository receives shared code from an upstream template and declares it in `.platform/contract.yml` (or the legacy `.copier-answers.yml` with `.platform/manifest`) |
 
 `quality-gates` and `platform-template` are bundles: package-managed after installation and refreshed by `update` where installed. See `docs/platform-contracts.md` and `docs/family-templates.md` in the package repository.
@@ -66,6 +67,17 @@ A full CI pipeline for a .NET + Next.js application. Includes:
 
 Read the template's `env:` block and job commands before enabling it. Tailor package names, paths,
 versions, artifacts, and scanners to the repository.
+
+Neither CI template runs mutation testing; that is the `quality-mutation` template, weekly.
+
+### `quality-mutation`
+
+The weekly out-of-band Stryker run Atlas uses: a Saturday cron and a `workflow_dispatch` with a
+`scope` input, never on pull requests. One Stryker.NET job per `DOTNET_SCOPES` entry, one StrykerJS
+web job, each gated by `scripts/check-mutation.mjs` on its covered-code floor from
+`quality.config.json`, then the `engineering-excellence-mutation` facet. Set `DOTNET_SCOPES`,
+`DOTNET_SOLUTION` and `WEB_STRYKER_CONFIG` for the repository, keep the Stryker configs on `perTest`
+with no `break` threshold, and pick a cron minute no other app on the shared fleet uses.
 
 ### `app-ci-node-monorepo`
 

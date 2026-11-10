@@ -165,9 +165,10 @@ the repository's:
    time (`gh pr view <n> --json labels`), not from the event payload, because the train asks for the
    full run by adding `ci-full` and re-running the same run, and a re-run keeps the old payload.
    People's pull requests, pushes to the default branch, tags and schedules always run in full.
-2. Every heavy job (build and tests, coverage, mutation, end-to-end) needs `depth` and adds
-   `needs.depth.outputs.full == 'true'` to its `if:`. The run stays a `pull_request` run, so scope,
-   mutation and coverage jobs keep their pull request context.
+2. Every heavy job (build and tests, coverage, end-to-end) needs `depth` and adds
+   `needs.depth.outputs.full == 'true'` to its `if:`. The run stays a `pull_request` run, so scope
+   and coverage jobs keep their pull request context. Mutation testing is not a pull request job:
+   it runs weekly from the `quality-mutation` template.
 3. A job named exactly `Full CI` that needs the heavy jobs, runs `if: always()` with that same
    condition, and fails when any of them failed or was cancelled. The train reads it to tell a full
    run from a light one.

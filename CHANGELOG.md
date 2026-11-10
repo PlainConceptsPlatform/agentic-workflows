@@ -2,6 +2,16 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.17.0
+
+### Changed
+
+- **Mutation testing no longer runs on pull requests.** `app-ci-dotnet-next` drops `Mutation (.NET, diff)` and `Mutation (web, diff)`, and `app-ci-node-monorepo` drops `Mutation (web, diff)` and `MUTATION_THRESHOLD`; `Full CI` and `Dispatch merge gate` no longer need them. Stryker over one changed React page took 15 minutes on an Odyssey pull request (the dry run alone reran the 710-test suite) and then failed the run on Stryker's own `break` threshold. The per-change gate is the coverage floor, as in Atlas. A repository that made either job a required status check must drop it from the ruleset.
+
+### Added
+
+- **`quality-mutation` template**: the weekly out-of-band mutation run Atlas uses, as `.github/workflows/quality-mutation.yml`. A Saturday cron plus `workflow_dispatch` with a `scope` input; one Stryker.NET job per `DOTNET_SCOPES` entry (run per project, `perTest` asserted), one StrykerJS web job, each gated by `check-mutation.mjs` on its `quality.config.json` floor, then the `engineering-excellence-mutation` facet for a full run on main. `workflows add --template quality-mutation`; needs `quality-gates`.
+
 ## 1.15.0
 
 ### Changed
