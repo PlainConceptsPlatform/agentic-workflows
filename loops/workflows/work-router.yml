@@ -658,8 +658,11 @@ jobs:
             # Open, but landed if a pull request that closes it has merged into the feature branch:
             # the release fires on that merge and the gate closes the issue a moment later, or not
             # at all when it fails. Reading the issue state alone would hold the child again with
-            # no later landing left to release it.
-            landed=$(gh pr list --repo "$REPO" --state merged --base "$STACK_BRANCH" --search "#$b in:body"               --json body --jq "[.[] | select(.body | test(\"(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?) #${b}([^0-9]|$)\"))] | length" 2>/dev/null || echo 0)
+            # no later landing left to release it. List the branch's merged pull requests rather than
+            # search them: the search index lags a merge by a minute or more, and the release's own
+            # label event reaches this check inside that window (Kitchen-Sink #71 was held again 95
+            # seconds after #74 landed #70, with nothing left to release it).
+            landed=$(gh pr list --repo "$REPO" --state merged --base "$STACK_BRANCH" --limit 200 --json body --jq "[.[] | select(.body | test(\"(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?) #${b}([^0-9]|$)\"))] | length" 2>/dev/null || echo 0)
             [ "${landed:-0}" -gt 0 ] && continue
             waiting="$waiting #$b"
           done

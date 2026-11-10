@@ -3748,6 +3748,13 @@ if worker_installed implement; then
   for st in queued pending waiting; do
     grep -qE "for status in [a-z_ ]*\b${st}\b" <<<"$csb" || wd_fail "check-stack-branch does not count a ${st} implement on the feature branch as in flight"
   done
+  # A released child reaches the blocker check seconds after its sibling's merge. Search lags
+  # that merge, so the check must list the feature branch's merged pull requests, not search them.
+  landed_q="$(grep -E 'landed=\$\(gh pr list' <<<"$csb" || true)"
+  [ -n "$landed_q" ] || wd_fail "check-stack-branch no longer checks whether a blocker merged into the feature branch"
+  if grep -qF -- '--search' <<<"$landed_q"; then
+    wd_fail "check-stack-branch searches for a blocker's merged pull request; the search index lags the merge that released the child"
+  fi
 fi
 
 if worker_installed triage; then
