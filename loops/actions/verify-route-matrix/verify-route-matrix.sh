@@ -3769,18 +3769,28 @@ fi
 # A step that lists runs or workflows with GITHUB_TOKEN needs `actions: read` on its job. Without it
 # the API answers 403 and a check that counts runs reads the error as no runs: check-implement-pr's
 # duplicate guard held nothing back for as long as it existed (Kitchen-Sink router run 42700668556).
+# Pull requests are the same: without `pull-requests: read`, `gh pr list` fails, and
+# check-stack-branch read the failure as "no blocker merged" and "no sibling PR open". It held a
+# released child again with nothing left to release it (Kitchen-Sink router run 42824977662).
 for wf in "$ROUTER_YML" "$BELT_WF_YML" "$HOUSEKEEPING_WF_YML" "$PLUMBING_WF_YML"; do
   [ -f "$wf" ] || continue
   while IFS= read -r miss; do
     [ -n "$miss" ] && wd_fail "${wf##*/}: ${miss}"
   done < <(awk '
-    function flush_step() { if (step_actions && step_github) bad = bad " " step }
-    function flush_job() { flush_step(); if (bad != "" && !perm) print "job " job " lists runs with GITHUB_TOKEN but has no actions permission (" substr(bad, 2) ")"; bad = "" }
+    function flush_step() { if (step_actions && step_github) bad = bad " " step; if (step_prs && step_github) badpr = badpr " " step }
+    function flush_job() {
+      flush_step()
+      if (bad != "" && !perm) print "job " job " lists runs with GITHUB_TOKEN but has no actions permission (" substr(bad, 2) ")"
+      if (badpr != "" && !permpr) print "job " job " reads pull requests with GITHUB_TOKEN but has no pull-requests permission (" substr(badpr, 2) ")"
+      bad = ""; badpr = ""
+    }
     /^jobs:/ { in_jobs = 1; next }
-    in_jobs && /^  [a-z][a-z0-9-]*:$/ { if (job != "") flush_job(); job = $1; sub(/:$/, "", job); perm = 0; step = ""; step_actions = 0; step_github = 0; next }
+    in_jobs && /^  [a-z][a-z0-9-]*:$/ { if (job != "") flush_job(); job = $1; sub(/:$/, "", job); perm = 0; permpr = 0; step = ""; step_actions = 0; step_prs = 0; step_github = 0; next }
     in_jobs && /^      actions: (read|write)$/ { perm = 1 }
-    in_jobs && /^      - (name|uses|id):/ { flush_step(); step = $0; sub(/^ *- (name|uses|id): */, "", step); step_actions = 0; step_github = 0 }
+    in_jobs && /^      pull-requests: (read|write)$/ { permpr = 1 }
+    in_jobs && /^      - (name|uses|id):/ { flush_step(); step = $0; sub(/^ *- (name|uses|id): */, "", step); step_actions = 0; step_prs = 0; step_github = 0 }
     in_jobs && /repos\/[^ ]*\/actions\/(workflows|runs)|gh run (list|view)/ { step_actions = 1 }
+    in_jobs && /gh pr (list|view|checks|diff)|repos\/[^ ]*\/pulls/ { step_prs = 1 }
     in_jobs && /GH_TOKEN: \$\{\{ (github\.token|secrets\.GITHUB_TOKEN) \}\}/ { step_github = 1 }
     END { if (job != "") flush_job() }
   ' "$wf")
