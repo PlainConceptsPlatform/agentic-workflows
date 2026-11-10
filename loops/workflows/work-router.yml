@@ -752,12 +752,14 @@ jobs:
         run: |
           set -euo pipefail
           echo "stack-in-flight=false" >> "$GITHUB_OUTPUT"
-          # Only dispatched stack implements run with head_branch = feat/N; a workflow_call
-          # (flat) implement run's head_branch is the default branch, so this filter never
-          # sees it. This closes the dupe-visibility gap left by fire-and-forget dispatch.
-          for status in in_progress queued; do
+          # Only stack implements run with head_branch = feat/N; a flat implement is dispatched
+          # on the default branch, so this filter never sees it. This closes the dupe-visibility
+          # gap left by fire-and-forget dispatch. A dispatched worker waiting its turn in its
+          # implement queue is pending, not queued, so every live status counts.
+          for status in in_progress queued pending waiting requested; do
             live=$(gh api "repos/$REPO/actions/workflows/agent-implement.lock.yml/runs?status=$status&per_page=100" \
               --jq "[.workflow_runs[] | select(.head_branch == \"${STACK_BRANCH}\")] | length" 2>/dev/null || echo 0)
+            case "${live:-0}" in ''|*[!0-9]*) echo "::warning::Could not list $status implement runs; the in-flight check cannot see them."; live=0 ;; esac
             if [ "${live:-0}" -gt 0 ]; then
               echo "::notice::An implement run is already in flight on $STACK_BRANCH; skipping dispatch."
               echo "stack-in-flight=true" >> "$GITHUB_OUTPUT"

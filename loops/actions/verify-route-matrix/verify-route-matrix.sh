@@ -3742,6 +3742,12 @@ if worker_installed implement; then
   for st in queued pending waiting; do
     grep -qE "for st in [a-z_ ]*\b${st}\b" <<<"$cip" || wd_fail "check-implement-pr does not count a ${st} implement as live"
   done
+  # A stack child's worker waits in its implement queue as pending. The in-flight check must see
+  # it, or a sibling dispatched meanwhile cuts from the same feature branch.
+  csb="$(router_job check-stack-branch)"
+  for st in queued pending waiting; do
+    grep -qE "for status in [a-z_ ]*\b${st}\b" <<<"$csb" || wd_fail "check-stack-branch does not count a ${st} implement on the feature branch as in flight"
+  done
 fi
 
 if worker_installed triage; then
