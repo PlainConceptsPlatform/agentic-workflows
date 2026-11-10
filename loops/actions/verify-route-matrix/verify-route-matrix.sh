@@ -3691,9 +3691,10 @@ while IFS=';' read -r route worker title group queue; do
   for input in $sent; do
     grep -qx "$input" <<<"$accepted" || wd_fail "dispatch-${route} sends '${input}', which ${src##*/} does not accept on workflow_dispatch"
   done
-  for input in $(awk '/^  workflow_dispatch:/ { d = 1; next } d && /^  [a-z]/ { d = 0 } d && /^      [a-z0-9_-]+:[[:space:]]*$/ { n = $1; sub(/:$/, "", n) } d && /^        required: true/ { print n }' "$src"); do
+  while IFS= read -r input; do
+    [ -n "$input" ] || continue
     grep -qx "$input" <<<"$sent" || wd_fail "dispatch-${route} never sends the required input '${input}'"
-  done
+  done < <(awk '/^  workflow_dispatch:/ { d = 1; next } d && /^  [a-z]/ { d = 0 } d && /^      [a-z0-9_-]+:[[:space:]]*$/ { n = $1; sub(/:$/, "", n) } d && /^        required: true/ { print n }' "$src")
   # The App starts the worker, so the run's actor is the bot, and gh-aw's membership check refuses a
   # bot the worker does not list. evidence.yml has no model and no such check.
   if [ "$route" != evidence ] &&
