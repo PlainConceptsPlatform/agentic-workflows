@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.17.1
+
+### Changed
+
+- **Implement keeps the end-to-end tests in step.** The implement worker still does not run end-to-end suites in its sandbox, but a change that moves, renames or removes something a person clicks or reads now updates every end-to-end test that uses it in the same pull request. This matters most where the suite runs only at night: there the pull request stays green and the next morning's run fails with no author attached (Pliny-Bot #1506, ten journeys). The worker also no longer claims that CI runs every suite on the pull request, which is not true in such a repository.
+
 ## 1.17.0
 
 ### Changed
