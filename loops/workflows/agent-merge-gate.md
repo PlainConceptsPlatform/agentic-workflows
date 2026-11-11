@@ -1182,6 +1182,10 @@ timeout-minutes: 120
    It is an attention list, not a verdict. Touching one of those areas is not a finding. A
    defect you can demonstrate in one of them is.
 
+   A UX mockup on the issue (its `## UX mockup` section) states intent, not a spec. A screen
+   that looks different from it is never a finding. Mockup markup copied into the code is one:
+   `data-mockup-section` or `data-component` attributes, or the mockup's inline styles.
+
    **5b. Have each candidate verified independently.** Do not be the one who checks your own
    work. Hand each candidate off for verification as a claim on its own: the file, the line,
    what you think is wrong, and what would settle it. Do not pass on the reasoning that produced
@@ -1201,7 +1205,9 @@ timeout-minutes: 120
    reassurance about their absence.
 
    **5c. Check the acceptance criteria.** The issue context at `${{ env.ISSUE_CONTEXT_PATH }}`
-   says what this change was supposed to do. Confirm the diff does it. The double-check the
+   says what this change was supposed to do. Confirm the diff does it. The acceptance criteria
+   are the test, never the mockup: a criterion is unmet by behaviour, not by a look that differs
+   from the picture. The double-check the
    rest of this step asks you to do is the gate's own: a defect an agent did not notice and CI
    did not catch is a more expensive rollback than a wrong auto-merge.
 

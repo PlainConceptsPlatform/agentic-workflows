@@ -25,6 +25,15 @@ env:
   # tools, so a repository built on anything else can never match it and always takes the long,
   # expensive path. Every condition must hold for a change to be trivial.
   TRIVIAL_CRITERIA: "It touches 1-3 files: stylesheets, style utility classes, text labels or markup only. No business logic: no services, controllers, domain models, calculations, validations. No data model: no entities, migrations, DTOs, API contracts. No security surface: no auth, authorization, secrets, tokens, permissions. No infrastructure: no deployment templates, containers, CI or deploy configuration. It does not touch shared libraries or multi-team contracts."
+  # A standard-path story whose work units change files matching these globs (space-separated)
+  # gets a UX mockup from the harness skill pc-plan-mockup before the story is written. Empty
+  # turns mockups off. The render and publish jobs put it on MOCKUP_BRANCH at issue-<n>/, and
+  # conclude stamps the picture, the link and the component table on the issue.
+  MOCKUP_PATHS: "apps/web/**"
+  MOCKUP_BRANCH: mockups
+  MOCKUP_DIR: /tmp/gh-aw/agent/mockup
+  MOCKUP_PLAYWRIGHT_VERSION: "1.62.1"
+  MOCKUP_INTENT_LINE: "UX mockup: intent, not a spec. Build with the components listed."
   REFINE_LABEL: refine
   REFINED_LABEL: refined
   WORKING_LABEL: bot-working
@@ -281,8 +290,130 @@ jobs:
           comment-prefix: ${{ env.SAFE_OUTPUT_COMMENT_PREFIX }}
           issue-number: ${{ inputs.issue-number }}
           questions-line: ${{ env.QUESTIONS_LINE }}
-  conclude:
+  # The mockup's two jobs, split like evidence's: the render reads what an agent wrote and runs a
+  # browser on it, so it holds no write permission and no secret; the publish job writes, so it
+  # checks nothing out and runs nothing from the repository. Neither can fail the refinement: a
+  # mockup that breaks its contract, or a push that is refused, leaves the story without a picture.
+  mockup_render:
     needs: [activation, agent, safe_outputs, validate_output]
+    if: >
+      always() &&
+      needs.validate_output.outputs.valid == 'true'
+    runs-on: agents-arc
+    timeout-minutes: 15
+    continue-on-error: true
+    permissions:
+      contents: read
+    outputs:
+      rendered: ${{ steps.capture.outputs.valid }}
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download agent output
+        uses: ./.github/actions/download-agent-output
+        with:
+          artifact-name: ${{ needs.activation.outputs.artifact_prefix }}agent
+      # A new mockup from this pass wins. An existing one is rendered only when it was published
+      # without screenshots, which is how /plan-mockup publishes when no browser was at hand.
+      - name: Pick the mockup to render
+        id: pick
+        env:
+          MOCKUP_DIR: ${{ env.MOCKUP_DIR }}
+        run: |
+          set -euo pipefail
+          rel="agent-artifact/${MOCKUP_DIR#/tmp/gh-aw/}"
+          dir=''
+          if [ -f "$rel/new/index.html" ]; then
+            dir="$rel/new"
+          elif [ -f "$rel/existing/index.html" ] && [ ! -f "$rel/existing/desktop.png" ]; then
+            dir="$rel/existing"
+          fi
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "Mockup to render: ${dir:-none}"
+      - name: Check and render the mockup
+        id: capture
+        if: steps.pick.outputs.dir != ''
+        uses: ./.github/actions/capture-mockup
+        with:
+          mockup-dir: ${{ steps.pick.outputs.dir }}
+          out-dir: ${{ runner.temp }}/mockup
+          playwright-version: ${{ env.MOCKUP_PLAYWRIGHT_VERSION }}
+      - name: Keep the rendered mockup
+        if: steps.capture.outputs.valid == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ needs.activation.outputs.artifact_prefix }}mockup
+          path: ${{ runner.temp }}/mockup
+          retention-days: 7
+          if-no-files-found: error
+  mockup_publish:
+    needs: [activation, mockup_render]
+    if: always() && needs.mockup_render.outputs.rendered == 'true'
+    runs-on: agents-arc
+    timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - name: Download the rendered mockup
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.activation.outputs.artifact_prefix }}mockup
+          path: ${{ runner.temp }}/mockup
+      # One orphan branch holds every mockup, a folder per issue, replaced on every publish.
+      # GITHUB_TOKEN and [skip ci] keep the push from starting any workflow.
+      - name: Push the mockup to its branch
+        env:
+          TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+          BRANCH: ${{ env.MOCKUP_BRANCH }}
+          ISSUE: ${{ inputs.issue-number }}
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/mockup"
+          folder="issue-${ISSUE}"
+          work="$RUNNER_TEMP/mockup-branch"
+          rm -rf "$work"
+          mkdir -p "$work"
+          cd "$work"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          git init -q
+          git config "http.${SERVER}/.extraheader" "$auth"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config core.sparseCheckout true
+          echo "/${folder}/" > .git/info/sparse-checkout
+          git remote add origin "${SERVER}/${REPO}.git"
+
+          for attempt in 1 2 3 4 5; do
+            if git fetch -q --depth=1 --filter=blob:none origin "refs/heads/$BRANCH" 2>/dev/null; then
+              git checkout -q -f -B "$BRANCH" FETCH_HEAD
+            else
+              git checkout -q --orphan "mockups-$attempt"
+              git rm -rq --cached . >/dev/null 2>&1 || true
+            fi
+            rm -rf "$folder"
+            mkdir -p "$folder"
+            cp -R "$src/." "$folder/"
+            git add -A "$folder"
+            if git diff --cached --quiet; then
+              echo "The mockup on $BRANCH is already current."
+              exit 0
+            fi
+            git commit -q -m "mockup: issue #${ISSUE} [skip ci]"
+            if git push -q origin "HEAD:refs/heads/$BRANCH"; then
+              echo "Published ${SERVER}/${REPO}/tree/$(git rev-parse HEAD)/${folder}"
+              exit 0
+            fi
+            echo "$BRANCH moved before the push (attempt $attempt); retrying on its new tip."
+            sleep $((attempt * 3))
+          done
+          echo "::warning::could not push the mockup to $BRANCH after 5 attempts"
+  conclude:
+    needs: [activation, agent, safe_outputs, validate_output, mockup_render, mockup_publish]
     # `always()` is load-bearing: without it GitHub prepends `success()`, which returns false
     # if any needed job was skipped. The historical trigger was the size gate's refuse_big_issue
     # skip-poisoning activation (Pliny-Bot #321) -- that gate is gone at 1.15.0, but a skip in
@@ -329,6 +460,106 @@ jobs:
           create-issues: 'true'
           fallback-issue-number: ${{ inputs.issue-number }}
           parent-issue: ${{ needs.validate_output.outputs.outcome == 'split' && inputs.issue-number || '' }}
+      # The mockup section, written by the workflow because gh-aw strips the HTML comments that
+      # delimit it from anything the agent writes, and re-written on every pass because the agent
+      # replaces the whole body. Read from the branch, so a mockup a person published with
+      # /plan-mockup is linked the same way as one this run rendered. A split child gets its
+      # parent's mockup and the sections its `Mockup sections:` line names. Best-effort: no
+      # mockup, or a failed read, leaves the bodies as the agent wrote them.
+      - name: Record the mockup on the issue
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ISSUE: ${{ inputs.issue-number }}
+          BRANCH: ${{ env.MOCKUP_BRANCH }}
+          OUTCOME: ${{ needs.validate_output.outputs.outcome }}
+          INTENT: ${{ env.MOCKUP_INTENT_LINE }}
+          SPLIT_PARENT_PREFIX: ${{ env.SPLIT_PARENT_PREFIX }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const START = '<!-- agent-mockup:start -->';
+            const END = '<!-- agent-mockup:end -->';
+            const parent = Number(process.env.ISSUE);
+            const folder = `issue-${parent}`;
+            const ref = process.env.BRANCH;
+            const site = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}`;
+
+            let sha;
+            let mockup;
+            let names;
+            try {
+              ({ data: { commit: { sha } } } = await github.rest.repos.getBranch({ ...context.repo, branch: ref }));
+              const { data: entries } = await github.rest.repos.getContent({ ...context.repo, path: folder, ref: sha });
+              names = new Set(entries.map((entry) => entry.name));
+              const { data: file } = await github.rest.repos.getContent({ ...context.repo, path: `${folder}/mockup.json`, ref: sha });
+              mockup = JSON.parse(Buffer.from(file.content, 'base64').toString('utf8'));
+            } catch (error) {
+              if (error.status === 404) {
+                core.info(`No mockup at ${ref}:${folder}.`);
+                return;
+              }
+              throw error;
+            }
+
+            const cell = (value) => String(value ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
+            const raw = (name) => `${site}/raw/${sha}/${folder}/${name}`;
+            const blob = (name) => `${site}/blob/${sha}/${folder}/${name}`;
+            const known = (mockup.sections ?? []).map((section) => section.id);
+
+            const section = (only) => {
+              const rows = (mockup.components ?? []).filter((entry) => !only || only.includes(entry.section));
+              const lines = [START, `<!-- agent-mockup: ${folder} -->`, '## UX mockup', '', `**${cell(mockup.title)}.** ${process.env.INTENT}`, ''];
+              if (only) lines.push(`This issue builds ${only.map((id) => `\`${id}\``).join(', ')}.`, '');
+              if (names.has('desktop.png')) lines.push(`![Mockup at desktop width](${raw('desktop.png')})`, '');
+              const links = [`[The HTML](${blob('index.html')})`];
+              if (names.has('mobile.png')) links.push(`[mobile width](${raw('mobile.png')})`);
+              links.push(`[mockup.json](${blob('mockup.json')})`);
+              lines.push(`${links.join(' · ')}: download the HTML and open it in a browser to see every state.`, '');
+              if (rows.length > 0) {
+                lines.push('| Section | Element | Build it with | Where |', '|---|---|---|---|');
+                for (const row of rows) {
+                  const where = row.path === 'new' ? 'new component' : `\`${cell(row.path)}\``;
+                  lines.push(`| ${cell(row.section)} | ${cell(row.element)} | ${cell(row.component)} | ${where} |`);
+                }
+                lines.push('');
+              }
+              lines.push(END);
+              return lines.join('\n');
+            };
+
+            const stamp = async (issue_number, block) => {
+              const { data: issue } = await github.rest.issues.get({ ...context.repo, issue_number });
+              const pattern = new RegExp(`${START}[\\s\\S]*?${END}\\n?`, 'g');
+              const cleaned = (issue.body ?? '').replace(pattern, '').replace(/\s+$/, '');
+              await github.rest.issues.update({ ...context.repo, issue_number, body: `${cleaned}\n\n${block}\n` });
+              core.info(`Mockup section written on #${issue_number}.`);
+            };
+
+            await stamp(parent, section(null));
+            if (process.env.OUTCOME !== 'split') return;
+
+            let children = [];
+            try {
+              children = (await github.paginate(github.rest.issues.listSubIssues ?? 'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+                { ...context.repo, issue_number: parent, per_page: 100 })).map((child) => child.number);
+            } catch (error) {
+              core.info(`Sub-issues unreadable (${error.message}); searching for the split marker.`);
+            }
+            if (children.length === 0) {
+              const { data } = await github.rest.search.issuesAndPullRequests({
+                q: `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open in:body "${process.env.SPLIT_PARENT_PREFIX}${parent} -->"`,
+              });
+              children = data.items.map((item) => item.number);
+            }
+            for (const child of children.filter((number) => number !== parent)) {
+              const { data: issue } = await github.rest.issues.get({ ...context.repo, issue_number: child });
+              const line = /^Mockup sections:\s*(.+)$/im.exec(issue.body ?? '');
+              const only = line
+                ? line[1].split(/[,\s]+/).map((id) => id.replace(/`/g, '').trim()).filter((id) => known.includes(id))
+                : [];
+              await stamp(child, section(only.length > 0 ? only : null));
+            }
       - name: Apply complete refinement labels
         if: needs.validate_output.outputs.outcome == 'complete'
         uses: ./.github/actions/add-issue-labels
@@ -768,6 +999,15 @@ steps:
       token: ${{ github.token }}
       issue-number: ${{ inputs.issue-number }}
       output-path: ${{ env.ISSUE_CONTEXT_PATH }}
+  # A mockup already published for this issue, by a person with /plan-mockup or by an earlier
+  # pass. The agent keeps it unless the author's answers changed the screen.
+  - name: Load the issue's mockup for the agent
+    uses: ./.github/actions/load-mockup
+    with:
+      token: ${{ github.token }}
+      issue-number: ${{ inputs.issue-number }}
+      branch: ${{ env.MOCKUP_BRANCH }}
+      out-dir: ${{ env.MOCKUP_DIR }}/existing
 
 safe-outputs:
   # A failed run is already a red run. An issue per failure buries the real backlog
@@ -873,8 +1113,18 @@ timeout-minutes: 90
    checklist of concrete steps. No "As a / I want / so that" form, no Given/When/Then, no Mermaid.
    Load `@humanizer` and prepare the body, then go directly to step 4 (estimate).
 
-   **Standard path.** Call `skill("pc-plan-story")` and pass it the work units and the exploration
-   findings. `pc-plan-story` owns the story's shape: drafting, coverage gate, repo-docs application,
+   **Standard path.** When `${{ env.MOCKUP_PATHS }}` is not empty and a work unit changes files
+   matching one of its space-separated globs, settle the UX mockup first. A mockup in
+   `${{ env.MOCKUP_DIR }}/existing/` was made by a person or an earlier pass: keep it, unless the
+   author's answers on this pass change what the screen shows. Otherwise call
+   `skill("pc-plan-mockup")` in autonomous mode with the work units and the exploration findings,
+   and have it write `index.html` and `mockup.json` to `${{ env.MOCKUP_DIR }}/new/`; to replace an
+   existing mockup, write the whole new one there. If that skill is not installed, carry on
+   without a mockup. Never put the HTML in a body or a comment: the workflow publishes it and
+   adds the picture, the link and the component table to the issue itself.
+
+   Then call `skill("pc-plan-story")` and pass it the work units and the exploration
+   findings, and tell it the workflow writes the UX section, so the story leaves it out. `pc-plan-story` owns the story's shape: drafting, coverage gate, repo-docs application,
    issue-form discovery and wrapping, humanizer pass, and the structured implementation plan. Do not
    repeat any of those steps yourself. Adhere to ${{ env.REPO_RULES }}.
 
@@ -918,6 +1168,9 @@ timeout-minutes: 90
      `#aw_<id>` to the real issue number once the children exist. Write dependencies only as these
      lines and never set the `blocked_by` field: it takes one reference, and a value naming two
      rejected the item and discarded the whole refinement (Lyceum #45).
+   - when the story has a mockup, a `Mockup sections: <ids>` line naming the `mockup.json`
+     section ids this child builds, comma-separated, so the workflow links the child to its part
+     of the mockup
    - a `Parent feature branch: feat/<parent issue number>` line (for parent #123,
      `Parent feature branch: feat/123`) naming the branch the whole split integrates on:
      each child's pull request targets that branch, never the default branch, the children

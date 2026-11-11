@@ -79,6 +79,10 @@ env:
   RETRY_UNDER_MINUTES: "6"
   INCOMPLETE_COMMENT: "Automated implementation ran and ended without an outcome. The issue is released and flagged for review: a run that got this far and still failed will fail the same way again."
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/implementation-context.json
+  # The UX mockup refine or a person published for this issue (a split child reads its parent's),
+  # copied here before the agent starts. Context only: the prompt says how it may be used.
+  MOCKUP_BRANCH: mockups
+  MOCKUP_DIR: /tmp/gh-aw/agent/mockup
   GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
 description: |
   Implements an issue and opens a pull request. Stops there: the merge decision belongs to
@@ -671,6 +675,14 @@ steps:
       issue-number: ${{ inputs.issue-number }}
       output-path: ${{ env.ISSUE_CONTEXT_PATH }}
 
+  - name: Load the issue's mockup for the agent
+    uses: ./.github/actions/load-mockup
+    with:
+      token: ${{ github.token }}
+      issue-number: ${{ inputs.issue-number }}
+      branch: ${{ env.MOCKUP_BRANCH }}
+      out-dir: ${{ env.MOCKUP_DIR }}
+
   # Done here, deterministically, because a branch is not a judgement. A local branch needs no
   # credentials, so this works in the sandbox; the agent only commits to it. A leftover local
   # branch of the same name (a retried job on a reused workspace) is switched to, never reset.
@@ -819,6 +831,16 @@ timeout-minutes: 180
        protect secrets, do not bypass checks, and do not modify generated files unless the issue requires it.
        Adhere to ${{ env.REPO_RULES }}, ${{ env.ARCHITECTURE_RULES }} and
        ${{ env.TESTING_RULES }}.
+
+   **The UX mockup is intent, not a spec**, on both paths. When `${{ env.MOCKUP_DIR }}/index.html`
+   exists, the issue was refined with a mockup: read `mockup.json` there, and the HTML or
+   `desktop.png` when the layout matters. It tells you the flow, the regions, the states and,
+   in its component table, which real component each part of the screen is built with (`new:`
+   marks one this change creates). Build with those components and the repository's own
+   `DESIGN.md`, styles and conventions. Never copy its markup, its CSS or its `data-mockup-section`
+   and `data-component` attributes into the code, and never add the mockup to the repository: a
+   gate fails the pull request that does. Where the mockup and an acceptance criterion
+   disagree, the criterion wins.
 
    **WORK IN FEW TURNS**, on both paths. Every turn is a model call of three to twenty
    seconds, and the turns, not the commands, are most of a run. Read a file whole, or in

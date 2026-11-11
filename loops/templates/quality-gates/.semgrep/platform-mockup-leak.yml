@@ -1,0 +1,45 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/templates/quality-gates/.semgrep/platform-mockup-leak.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+# A UX mockup (the harness skill pc-plan-mockup, published on the `mockups` branch) states intent,
+# not a spec. The code that implements it is built from the repository's own components, never
+# from the mockup's markup. Its markers are the tell that markup was copied instead: every region
+# carries `data-mockup-section`, and every component stand-in a `data-component` naming a source
+# path, a package export or `new:<Name>`. Run by the blocking Semgrep scan via `--config .semgrep/`.
+#
+# A `data-component` attribute an application uses for its own reasons is left alone: only the
+# mockup's reference forms are flagged. There is no exemption comment by design; rebuild the part
+# from the components the mockup's table names.
+rules:
+  - id: platform-mockup-markup-in-code
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      UX mockup markup in the code: a mockup states intent, not a spec. Build this part with the
+      real component the mockup's component table names, and remove the mockup's
+      `data-mockup-section` and `data-component` attributes and its styles.
+    metadata:
+      category: hygiene
+    paths:
+      include:
+        - "*.ts"
+        - "*.tsx"
+        - "*.js"
+        - "*.jsx"
+        - "*.mjs"
+        - "*.html"
+        - "*.cshtml"
+        - "*.razor"
+        - "*.vue"
+        - "*.svelte"
+        - "*.css"
+        - "*.scss"
+      exclude:
+        - ".mockups/"
+        - "node_modules/"
+        - ".agents/"
+        - ".opencode/"
+        - ".github/"
+        - "dist/"
+        - "out/"
+    pattern-either:
+      - pattern-regex: data-mockup-section\s*=
+      - pattern-regex: data-component\s*=\s*["'{`]?\s*(new:|@[\w.-]+/|[\w.-]+/[\w./-]+\.(tsx|ts|jsx|js|vue|svelte|cshtml|razor))

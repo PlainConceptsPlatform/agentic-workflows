@@ -100,6 +100,14 @@ repository. The CLI generates a base from stack detection (e.g., "Follow Clean A
 for .NET repos), but route-specific rules require domain knowledge the CLI does not have. See
 `references/customize.md` for what each route's `REPO_RULES` should focus on.
 
+UX mockups: `agent-refine.md`'s `MOCKUP_PATHS` names the frontend, as space-separated globs
+(default `apps/web/**`). A standard-path story whose work changes a matching file gets a UX mockup
+from the harness skill `pc-plan-mockup` (agent-harness 3.11.0 or later; without it refine carries
+on with no mockup), published on the `mockups` branch at `issue-<number>/` and linked from the issue.
+Set it to the web app's folder when it lives elsewhere, or empty to turn mockups off. Implement
+reads the mockup as intent, and the quality-gates Semgrep rule `platform-mockup-markup-in-code`
+fails a pull request that copies its markup.
+
 Values have concrete defaults, including `OPENAI_BASE_URL: https://forge.plainconcepts.com/v1`. Keep
 worker-specific configuration in worker frontmatter; do not create a shared repository configuration
 layer.

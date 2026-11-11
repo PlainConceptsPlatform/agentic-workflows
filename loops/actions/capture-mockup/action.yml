@@ -1,0 +1,91 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/capture-mockup/action.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: Capture mockup
+description: >
+  Checks a UX mockup folder (index.html and mockup.json, written by the harness skill
+  pc-plan-mockup) against its contract and, when it holds, renders it in headless Chromium at
+  desktop and mobile widths. Writes index.html, mockup.json, desktop.png and mobile.png to the
+  output folder. A mockup that breaks the contract is reported and not rendered. No model, and the
+  browser runs with no network.
+inputs:
+  mockup-dir:
+    description: Folder holding index.html and mockup.json.
+    required: true
+  out-dir:
+    description: Where the rendered folder is written.
+    required: true
+  playwright-version:
+    description: playwright-core version. Must match the mcr.microsoft.com/playwright image tag the render runs in.
+    required: false
+    default: '1.62.1'
+outputs:
+  valid:
+    description: true when the mockup met the contract and was rendered.
+    value: ${{ steps.render.outputs.valid }}
+  problems:
+    description: Why the mockup was refused, one reason per line. Empty when valid.
+    value: ${{ steps.check.outputs.problems }}
+  title:
+    description: The mockup's title from mockup.json.
+    value: ${{ steps.check.outputs.title }}
+runs:
+  using: composite
+  steps:
+    - name: Check the mockup against its contract
+      id: check
+      shell: bash
+      env:
+        MOCKUP_DIR: ${{ inputs.mockup-dir }}
+        ACTION_DIR: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        report="$(node "$ACTION_DIR/capture.mjs" validate "$MOCKUP_DIR")"
+        valid="$(jq -r '.valid' <<<"$report")"
+        echo "valid=$valid" >> "$GITHUB_OUTPUT"
+        echo "title=$(jq -r '.mockup.title // ""' <<<"$report" | tr -d '\n')" >> "$GITHUB_OUTPUT"
+        {
+          echo "problems<<MOCKUP_EOF"
+          jq -r '.problems[]' <<<"$report"
+          echo "MOCKUP_EOF"
+        } >> "$GITHUB_OUTPUT"
+        if [ "$valid" != "true" ]; then
+          jq -r '.problems[] | "::warning::mockup refused: " + .' <<<"$report"
+        fi
+
+    - name: Render the mockup
+      id: render
+      shell: bash
+      env:
+        VALID: ${{ steps.check.outputs.valid }}
+        MOCKUP_DIR: ${{ inputs.mockup-dir }}
+        OUT_DIR: ${{ inputs.out-dir }}
+        PLAYWRIGHT_VERSION: ${{ inputs.playwright-version }}
+        ACTION_DIR: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        if [ "$VALID" != "true" ]; then
+          echo "valid=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        runner="$RUNNER_TEMP/capture-mockup"
+        mkdir -p "$runner" "$OUT_DIR"
+        # A copy beside its node_modules: ESM resolves bare imports from the file's own directory.
+        cp "$ACTION_DIR/capture.mjs" "$runner/capture.mjs"
+        if [ ! -d "$runner/node_modules/playwright-core" ]; then
+          npm install --prefix "$runner" --no-save --no-package-lock --no-audit --no-fund \
+            "playwright-core@${PLAYWRIGHT_VERSION}"
+        fi
+        src="$(cd "$MOCKUP_DIR" && pwd)"
+        out="$(cd "$OUT_DIR" && pwd)"
+        if command -v docker > /dev/null 2>&1; then
+          # The Playwright image carries Chromium and its libraries; the runner has neither. No
+          # network at all: the HTML was written by an agent and has no reason to reach anything.
+          docker run --rm --network none --ipc host \
+            --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$runner:$runner:ro" -v "$src:$src:ro" -v "$out:$out" \
+            "mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-noble" \
+            node "$runner/capture.mjs" render "$src" "$out"
+        else
+          node "$runner/node_modules/playwright-core/cli.js" install --only-shell chromium
+          node "$runner/capture.mjs" render "$src" "$out"
+        fi
+        echo "valid=true" >> "$GITHUB_OUTPUT"

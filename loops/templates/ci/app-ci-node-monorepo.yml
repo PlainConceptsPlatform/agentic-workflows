@@ -170,7 +170,12 @@ jobs:
     runs-on: agents-arc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker run --rm -v "${{ github.workspace }}:/src" -w /src "$SEMGREP_IMAGE" semgrep scan --error --metrics=off --oss-only --disable-version-check --config p/default --config p/security-audit --config p/secrets --config p/typescript --config p/react --exclude-rule yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+      # `.semgrep/` holds the family rules (empty catch blocks, mockup markup in code) when the
+      # quality-gates template is installed; without it the scan runs the registry rules alone.
+      - run: |
+          local_rules=()
+          [ -d .semgrep ] && local_rules=(--config .semgrep/)
+          docker run --rm -v "${{ github.workspace }}:/src" -w /src "$SEMGREP_IMAGE" semgrep scan --error --metrics=off --oss-only --disable-version-check --config p/default --config p/security-audit --config p/secrets --config p/typescript --config p/react "${local_rules[@]}" --exclude-rule yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
 
   sbom:
     name: SBOM (CycloneDX)
