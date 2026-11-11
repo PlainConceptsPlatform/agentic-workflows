@@ -845,10 +845,19 @@ timeout-minutes: 180
      the code you changed (web: `pnpm exec vitest related --run <changed files>`; .NET:
      `dotnet test <the test project> --filter <the test classes>`). Do not run integration,
      end-to-end, mutation or coverage suites here, and do not run the whole test suite to be safe:
-     the repository's CI runs all of it on your pull request before anything merges, on a runner
-     that has the database and the browsers this sandbox lacks. The verification commands above are
-     the repository's quick check for that reason. A full suite in the agent is the slowest part of
-     a run and repeats what CI does anyway.
+     the repository's CI runs them, on a runner that has the database and the browsers this
+     sandbox lacks. The verification commands above are the repository's quick check for that
+     reason. A full suite in the agent is the slowest part of a run and repeats what CI does
+     anyway.
+
+     **Not running the end-to-end tests does not make them someone else's.** When your change
+     moves, renames or removes something a person clicks or reads (a button, a label, a heading, a
+     route, a table), or changes what happens after a click, search the end-to-end tests for it
+     (their selectors, the text they assert, the routes they open) and update every test that
+     uses it in this pull request. Do this even when the repository runs those tests only at night
+     or on a schedule: then nothing on the pull request fails, and the suite breaks the morning
+     after the merge with no author attached. Pliny-Bot #1506 was ten journeys broken that way by
+     Bot Studio changes that merged without their end-to-end tests.
 
      **Run them once, on the final tree.** They are slow: Pliny-Bot's `pnpm verify` is about
      twenty minutes of work on this runner. `pc-plan-apply` runs them in its verify step, and
