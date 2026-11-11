@@ -349,7 +349,7 @@ jobs:
           retention-days: 7
           if-no-files-found: error
   mockup_publish:
-    needs: [activation, mockup_render]
+    needs: [activation, agent, mockup_render]
     if: always() && needs.mockup_render.outputs.rendered == 'true'
     runs-on: agents-arc
     timeout-minutes: 10

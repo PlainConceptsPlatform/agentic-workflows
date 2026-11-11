@@ -2294,7 +2294,13 @@ if worker_installed refine; then
   mk 'Mockup sections: <ids>' "$REFINE_WORKER_MD" 'split children are not told to name their mockup sections'
   render_job="$(sed -n '/^  mockup_render:/,/^  mockup_publish:/p' "$REFINE_WORKER_MD")"
   publish_job="$(sed -n '/^  mockup_publish:/,/^  conclude:/p' "$REFINE_WORKER_MD")"
-  [ -n "$render_job" ] && [ -n "$publish_job" ] || { MK_OK=0; echo "FAIL: mockups: refine has no mockup_render and mockup_publish jobs" >&2; }
+  if [ -z "$render_job" ] || [ -z "$publish_job" ]; then
+    MK_OK=0; echo "FAIL: mockups: refine has no mockup_render and mockup_publish jobs" >&2
+  fi
+  # A custom job that does not need the agent is hoisted before it by gh-aw, and publish then
+  # closes a cycle through render: the compiler refuses the whole worker.
+  grep -qE '^    needs: \[activation, agent, mockup_render\]' <<<"$publish_job" ||
+    { MK_OK=0; echo "FAIL: mockups: mockup_publish must need agent, or gh-aw hoists it into a cycle" >&2; }
   if grep -qE 'secrets\.|contents: write|issues: write' <<<"$render_job"; then
     MK_OK=0; echo "FAIL: mockups: mockup_render runs agent-written HTML and must hold no secret and no write" >&2
   fi
