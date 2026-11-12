@@ -1,0 +1,72 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/load-mockup/action.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: Load mockup
+description: >
+  Copies an issue's published UX mockup from the mockups branch into a local folder for the agent
+  to read. The folder is the one the issue's mockup section names (a split child names its
+  parent's), else issue-<number>. Writes nothing and reports found=false when there is no mockup.
+inputs:
+  token:
+    description: Token with contents read on this repository.
+    required: true
+  issue-number:
+    description: Issue whose mockup to load.
+    required: true
+  branch:
+    description: Branch the mockups are published on.
+    required: false
+    default: mockups
+  out-dir:
+    description: Folder the mockup files are written to.
+    required: true
+outputs:
+  found:
+    description: true when a mockup was copied.
+    value: ${{ steps.load.outputs.found }}
+  folder:
+    description: The branch folder it came from, such as issue-42.
+    value: ${{ steps.load.outputs.folder }}
+runs:
+  using: composite
+  steps:
+    - name: Copy the mockup
+      id: load
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        BRANCH: ${{ inputs.branch }}
+        OUT_DIR: ${{ inputs.out-dir }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          const issue_number = Number(process.env.ISSUE_NUMBER);
+          const ref = process.env.BRANCH;
+          const { data: issue } = await github.rest.issues.get({ ...context.repo, issue_number });
+          const named = /<!-- agent-mockup: (issue-\d+) -->/.exec(issue.body || '');
+          const folder = named ? named[1] : `issue-${issue_number}`;
+          let entries;
+          try {
+            ({ data: entries } = await github.rest.repos.getContent({ ...context.repo, path: folder, ref }));
+          } catch (error) {
+            if (error.status !== 404) throw error;
+            core.info(`No mockup at ${ref}:${folder}.`);
+            core.setOutput('found', 'false');
+            return;
+          }
+          const files = (Array.isArray(entries) ? entries : []).filter((entry) => entry.type === 'file');
+          if (!files.some((entry) => entry.name === 'index.html')) {
+            core.info(`${ref}:${folder} has no index.html.`);
+            core.setOutput('found', 'false');
+            return;
+          }
+          fs.mkdirSync(process.env.OUT_DIR, { recursive: true });
+          // The blob API returns base64 for any size, where the contents API leaves files over
+          // 1 MB empty and a full-page screenshot can be larger than that.
+          for (const entry of files) {
+            const { data } = await github.rest.git.getBlob({ ...context.repo, file_sha: entry.sha });
+            fs.writeFileSync(path.join(process.env.OUT_DIR, entry.name), Buffer.from(data.content, 'base64'));
+          }
+          core.info(`Loaded ${files.length} file(s) from ${ref}:${folder}.`);
+          core.setOutput('found', 'true');
+          core.setOutput('folder', folder);

@@ -102,6 +102,34 @@
       ]
     },
     {
+      "id": "mockup",
+      "type": "backend",
+      "label": "Mockup (rung 5)",
+      "sublabel": "frontend only",
+      "pos": [
+        920,
+        250
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "publish",
+      "type": "backend",
+      "label": "Render, publish",
+      "sublabel": "no model",
+      "pos": [
+        700,
+        250
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
       "id": "wrap",
       "type": "backend",
       "label": "Wrap",
@@ -257,7 +285,11 @@
       "id": "classify-story",
       "from": "classify",
       "to": "story",
-      "label": "no"
+      "label": "no, backend",
+      "labelAt": [
+        1084,
+        126
+      ]
     },
     {
       "id": "trivial-estimate",
@@ -327,6 +359,28 @@
       "label": "cannot ground",
       "variant": "dashed",
       "labelDy": 30
+    },
+    {
+      "id": "classify-mockup",
+      "from": "classify",
+      "to": "mockup",
+      "label": "no, frontend",
+      "labelAt": [
+        990,
+        200
+      ]
+    },
+    {
+      "id": "mockup-story",
+      "from": "mockup",
+      "to": "story"
+    },
+    {
+      "id": "mockup-publish",
+      "from": "mockup",
+      "to": "publish",
+      "label": "after the agent",
+      "variant": "dashed"
     }
   ],
   "cards": [
@@ -337,6 +391,16 @@
         "Fibonacci estimate against ESTIMATE_BANDS",
         "8 or more splits into 2-6 children of 3 to 5 points",
         "Each child walks the pipeline alone"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "UX mockup",
+      "items": [
+        "Frontend stories only: a work unit matches MOCKUP_PATHS",
+        "pc-plan-mockup draws it, or the published one is kept",
+        "Rendered and pushed to the mockups branch with no model",
+        "Picture, link and component table stamped on the issue"
       ]
     }
   ]

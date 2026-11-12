@@ -792,6 +792,9 @@ for ci in "${WORKFLOWS_DIR}/ci.yml" "${WORKFLOWS_DIR}/app-ci.yml"; do
 done
 for template in "${HERE}/../../templates/ci/"*.yml; do
   [ -f "$template" ] || continue
+  # Only a template that runs on pull requests has a verdict to hand over. The weekly mutation
+  # run is deliberately never on a pull request (quality-mutation.yml), so it has none.
+  grep -qE '^  pull_request(_target)?:' "$template" || continue
   if grep -q 'operation=merge-train' "$template" && ! grep -q "pull_request.user.type == 'Bot'" "$template"; then
     PASS=$((PASS + 1))
   else
@@ -2265,6 +2268,70 @@ fi
 
 if [ "$EV_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+echo "── UX mockups ────────────────────────────────────────────────────────────"
+
+# Refine draws a mockup (harness skill pc-plan-mockup) for frontend stories; implement reads it as
+# intent. The mockup is agent-written HTML, so it is rendered where nothing can be written and
+# published where nothing from the repository runs, exactly like evidence's screenshots.
+MK_OK=1
+mk() {
+  grep -qE "$1" "$2" || { MK_OK=0; echo "FAIL: mockups: $3" >&2; }
+}
+for action in capture-mockup load-mockup; do
+  [ -f "${HERE}/../${action}/action.yml" ] || { MK_OK=0; echo "FAIL: mockups: the ${action} action is missing" >&2; }
+done
+[ -f "${HERE}/../capture-mockup/capture.mjs" ] || { MK_OK=0; echo "FAIL: mockups: capture-mockup has no capture.mjs" >&2; }
+grep -q -- '--network none' "${HERE}/../capture-mockup/action.yml" ||
+  { MK_OK=0; echo "FAIL: mockups: the render must run with no network; the HTML is agent-written" >&2; }
+
+if worker_installed refine; then
+  REFINE_WORKER_MD="${WORKFLOWS_DIR}/agent-refine.md"
+  for key in MOCKUP_PATHS MOCKUP_BRANCH MOCKUP_DIR MOCKUP_PLAYWRIGHT_VERSION MOCKUP_INTENT_LINE; do
+    mk "^  ${key}: " "$REFINE_WORKER_MD" "agent-refine.md env does not declare ${key}"
+  done
+  mk 'skill\("pc-plan-mockup"\)' "$REFINE_WORKER_MD" 'refine never calls pc-plan-mockup'
+  mk 'uses: \./\.github/actions/load-mockup' "$REFINE_WORKER_MD" 'refine does not load an existing mockup for the agent'
+  mk 'Mockup sections: <ids>' "$REFINE_WORKER_MD" 'split children are not told to name their mockup sections'
+  render_job="$(sed -n '/^  mockup_render:/,/^  mockup_publish:/p' "$REFINE_WORKER_MD")"
+  publish_job="$(sed -n '/^  mockup_publish:/,/^  conclude:/p' "$REFINE_WORKER_MD")"
+  if [ -z "$render_job" ] || [ -z "$publish_job" ]; then
+    MK_OK=0; echo "FAIL: mockups: refine has no mockup_render and mockup_publish jobs" >&2
+  fi
+  # A custom job that does not need the agent is hoisted before it by gh-aw, and publish then
+  # closes a cycle through render: the compiler refuses the whole worker.
+  grep -qE '^    needs: \[activation, agent, mockup_render\]' <<<"$publish_job" ||
+    { MK_OK=0; echo "FAIL: mockups: mockup_publish must need agent, or gh-aw hoists it into a cycle" >&2; }
+  if grep -qE 'secrets\.|contents: write|issues: write' <<<"$render_job"; then
+    MK_OK=0; echo "FAIL: mockups: mockup_render runs agent-written HTML and must hold no secret and no write" >&2
+  fi
+  if grep -qE 'actions/checkout|uses: \./' <<<"$publish_job"; then
+    MK_OK=0; echo "FAIL: mockups: mockup_publish holds a write token and must not check out or run repository code" >&2
+  fi
+  grep -qF 'git push -q origin "HEAD:refs/heads/$BRANCH"' <<<"$publish_job" ||
+    { MK_OK=0; echo "FAIL: mockups: the mockup must be pushed to MOCKUP_BRANCH and nowhere else" >&2; }
+  for job in "$render_job" "$publish_job"; do
+    grep -q 'continue-on-error: true' <<<"$job" ||
+      { MK_OK=0; echo "FAIL: mockups: a mockup job must never fail the refinement" >&2; }
+  done
+  conclude_needs="$(grep -E '^    needs: \[activation, agent, safe_outputs, validate_output' "$REFINE_WORKER_MD" | grep 'mockup_publish' || true)"
+  [ -n "$conclude_needs" ] || { MK_OK=0; echo "FAIL: mockups: conclude must wait for mockup_publish to stamp the section" >&2; }
+  mk 'name: Record the mockup on the issue' "$REFINE_WORKER_MD" 'conclude never records the mockup on the issue'
+fi
+
+if worker_installed implement; then
+  mk 'uses: \./\.github/actions/load-mockup' "$IMPLEMENT_WORKER_MD" 'implement does not load the mockup for the agent'
+  mk 'The UX mockup is intent, not a spec' "$IMPLEMENT_WORKER_MD" 'implement does not say the mockup is intent, not a spec'
+  mk 'Never copy its markup' "$IMPLEMENT_WORKER_MD" 'implement does not forbid copying the mockup markup'
+fi
+if worker_installed merge-gate; then
+  mk 'looks different from it is never a finding' "$MERGE_GATE_WORKER_MD" 'merge-gate may count a visual difference from the mockup as a finding'
+  mk 'never the mockup' "$MERGE_GATE_WORKER_MD" 'merge-gate may judge acceptance criteria against the mockup'
+fi
+[ -f "${HERE}/../../templates/quality-gates/.semgrep/platform-mockup-leak.yml" ] ||
+  { MK_OK=0; echo "FAIL: mockups: the Semgrep rule that catches copied mockup markup is missing" >&2; }
+
+if [ "$MK_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 echo "── Expression functions ──────────────────────────────────────────────────"
 
 # GitHub's expression language has eleven functions and no more. There is no `split()`, no
@@ -3671,7 +3738,9 @@ if worker_installed implement; then
     STACK_OK=0
     echo "FAIL: agent-implement.md declares allowed-base-branches more than once or not at all" >&2
   fi
-  if ! sed -n '/allowed-base-branches:/,/^  [a-z]/p' "$IMPLEMENT_WORKER_MD" | grep -q '"main"'; then
+  # `grep -q` would exit on the first match and SIGPIPE the sed still writing, which pipefail
+  # reports as a failure: the check passed or failed on timing. Read the whole block instead.
+  if ! sed -n '/allowed-base-branches:/,/^  [a-z]/p' "$IMPLEMENT_WORKER_MD" | grep '"main"' >/dev/null; then
     STACK_OK=0
     echo "FAIL: agent-implement.md allowed-base-branches dropped the default branch" >&2
   fi

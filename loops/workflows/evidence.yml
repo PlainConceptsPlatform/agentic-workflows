@@ -524,7 +524,33 @@ jobs:
               }
               return `<!-- agentic-evidence-manifest\n${JSON.stringify(data).replace(/-(?=-)/g, '\\u002d')}\n-->`;
             });
-            const body = source.split('__EVIDENCE_BASE__').join(base);
+            let body = source.split('__EVIDENCE_BASE__').join(base);
+
+            // The mockup the issue was refined with, beside what was built, so a reviewer judges
+            // the experience against the intent. Read from the mockup section refine stamps on the
+            // issue; a split child's section carries its parent's mockup. Best-effort: no mockup,
+            // or a failed lookup, leaves the comment as it was.
+            try {
+              const query = `query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) { closingIssuesReferences(first: 5) { nodes { number body } } }
+                }
+              }`;
+              const result = await github.graphql(query, { ...context.repo, number: issue_number });
+              for (const node of result.repository.pullRequest?.closingIssuesReferences?.nodes ?? []) {
+                const section = /<!-- agent-mockup:start -->([\s\S]*?)<!-- agent-mockup:end -->/.exec(node.body ?? '');
+                const image = section && /!\[[^\]]*\]\([^)\s]+\/desktop\.png\)/.exec(section[1]);
+                if (!image) continue;
+                const block = `### The mockup it was built from (#${node.number})\n\nUX intent, not a spec: a different look is expected, a different flow is worth a look.\n\n${image[0]}\n\n`;
+                body = body.includes('<!-- agentic-evidence-manifest')
+                  ? body.replace('<!-- agentic-evidence-manifest', `${block}<!-- agentic-evidence-manifest`)
+                  : `${body}\n\n${block}`;
+                break;
+              }
+            } catch (error) {
+              core.info(`No mockup added: ${error.message}`);
+            }
+
             const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number, per_page: 100 });
             const existing = comments.find((comment) => comment.user?.type === 'Bot' && (comment.body ?? '').includes(process.env.MARKER));
             if (existing) {

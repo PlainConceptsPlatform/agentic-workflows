@@ -5163,8 +5163,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <path data-edge-from="reserve" data-edge-to="facts" data-edge-key="1" data-edge-id="reserve-facts" data-composition-points="400,156;480,156" d="M 400 156 L 480 156" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="facts" data-edge-to="explore" data-edge-key="2" data-edge-id="facts-explore" data-composition-points="620,156;700,156" d="M 620 156 L 700 156" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="explore" data-edge-to="classify" data-edge-key="3" data-edge-id="explore-classify" data-composition-points="840,156;920,156" d="M 840 156 L 920 156" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="classify" data-edge-to="trivial" data-edge-label="yes" data-edge-key="4" data-edge-id="classify-trivial" data-composition-points="1060,149;1100,149;1100,66;1140,66" d="M 1060 149 L 1092 149 Q 1100 149 1100 141 L 1100 74 Q 1100 66 1108 66 L 1140 66" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="classify" data-edge-to="story" data-edge-label="no" data-edge-key="5" data-edge-id="classify-story" data-composition-points="1060,163;1140,163" d="M 1060 163 L 1140 163" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="classify" data-edge-to="trivial" data-edge-label="yes" data-edge-key="4" data-edge-id="classify-trivial" data-composition-points="1060,156;1100,156;1100,66;1140,66" d="M 1060 156 L 1092 156 Q 1100 156 1100 148 L 1100 74 Q 1100 66 1108 66 L 1140 66" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="classify" data-edge-to="story" data-edge-label="no, backend" data-edge-key="5" data-edge-id="classify-story" data-composition-points="1060,156;1140,156" d="M 1060 156 L 1140 156" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="trivial" data-edge-to="estimate" data-edge-key="6" data-edge-id="trivial-estimate" data-composition-points="1280,59;1800,59" d="M 1280 59 L 1800 59" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="story" data-edge-to="wrap" data-edge-key="7" data-edge-id="story-wrap" data-composition-points="1280,156;1360,156" d="M 1280 156 L 1360 156" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="wrap" data-edge-to="prose" data-edge-key="8" data-edge-id="wrap-prose" data-composition-points="1500,156;1580,156" d="M 1500 156 L 1580 156" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
@@ -5175,6 +5175,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <path data-edge-from="outcome" data-edge-to="done" data-edge-label="no" data-edge-key="13" data-edge-id="outcome-done" data-composition-points="1870,362;1870,400" d="M 1870 362 L 1870 400" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="outcome" data-edge-to="ask" data-edge-label="yes" data-edge-key="14" data-edge-id="outcome-ask" data-composition-points="1800,336;1500,336" d="M 1800 336 L 1500 336" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="story" data-edge-to="fail" data-edge-label="cannot ground" data-edge-key="15" data-edge-id="story-fail" data-composition-points="1210,182;1210,400" d="M 1210 182 L 1210 400" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="classify" data-edge-to="mockup" data-edge-label="no, frontend" data-edge-key="16" data-edge-id="classify-mockup" data-composition-points="990,182;990,250" d="M 990 182 L 990 250" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="mockup" data-edge-to="story" data-edge-key="17" data-edge-id="mockup-story" data-composition-points="1060,276;1100,276;1100,156;1140,156" d="M 1060 276 L 1092 276 Q 1100 276 1100 268 L 1100 164 Q 1100 156 1108 156 L 1140 156" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="mockup" data-edge-to="publish" data-edge-label="after the agent" data-edge-key="18" data-edge-id="mockup-publish" data-composition-points="920,276;840,276" d="M 920 276 L 840 276" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
         <g id="node-start" data-node-id="start" data-node-label="Router refine route" tabindex="0" role="button" aria-label="Focus Router refine route, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
@@ -5250,6 +5253,28 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           </g>
           <text data-node-label="" data-detail-anchor="" x="1210" y="154" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Story</text>
         <text data-detail="context" x="1210" y="170" class="t-muted" font-size="9" text-anchor="middle">Given/When/Then</text>
+        </g>
+
+        <g id="node-mockup" data-node-id="mockup" data-node-label="Mockup (rung 5)" tabindex="0" role="button" aria-label="Focus Mockup (rung 5), frontend only, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="frontend only" data-node-context="Architecture component">
+          <title>Mockup (rung 5) · frontend only · Architecture component</title>
+          <rect x="920" y="250" width="140" height="52" rx="6" class="c-mask"/>
+          <rect x="920" y="250" width="140" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(926 256) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="990" y="274" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Mockup (rung 5)</text>
+        <text data-detail="context" x="990" y="290" class="t-muted" font-size="9" text-anchor="middle">frontend only</text>
+        </g>
+
+        <g id="node-publish" data-node-id="publish" data-node-label="Render, publish" tabindex="0" role="button" aria-label="Focus Render, publish, no model, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="no model" data-node-context="Architecture component">
+          <title>Render, publish · no model · Architecture component</title>
+          <rect x="700" y="250" width="140" height="52" rx="6" class="c-mask"/>
+          <rect x="700" y="250" width="140" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(706 256) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="770" y="274" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Render, publish</text>
+        <text data-detail="context" x="770" y="290" class="t-muted" font-size="9" text-anchor="middle">no model</text>
         </g>
 
         <g id="node-wrap" data-node-id="wrap" data-node-label="Wrap" tabindex="0" role="button" aria-label="Focus Wrap, into issue form, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="into issue form" data-node-context="Architecture component">
@@ -5359,12 +5384,12 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
         <g data-detail="context" data-edge-from="classify" data-edge-to="trivial" data-edge-label="yes" data-edge-key="4" data-edge-id="classify-trivial">
-          <rect x="1085" y="87.5" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="1100" y="97.5" class="t-muted" font-size="8" text-anchor="middle">yes</text>
+          <rect x="1085" y="91" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="1100" y="101" class="t-muted" font-size="8" text-anchor="middle">yes</text>
         </g>
-        <g data-detail="context" data-edge-from="classify" data-edge-to="story" data-edge-label="no" data-edge-key="5" data-edge-id="classify-story">
-          <rect x="1085" y="143" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="1100" y="153" class="t-muted" font-size="8" text-anchor="middle">no</text>
+        <g data-detail="context" data-edge-from="classify" data-edge-to="story" data-edge-label="no, backend" data-edge-key="5" data-edge-id="classify-story">
+          <rect x="1052.6" y="116" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="1084" y="126" class="t-muted" font-size="8" text-anchor="middle">no, backend</text>
         </g>
 
 
@@ -5390,6 +5415,15 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <g data-detail="context" data-edge-from="story" data-edge-to="fail" data-edge-label="cannot ground" data-edge-key="15" data-edge-id="story-fail">
           <rect x="1173.8" y="192" width="72.4" height="14" rx="3" class="c-mask"/>
           <text x="1210" y="202" class="t-messagebus" font-size="8" text-anchor="middle">cannot ground</text>
+        </g>
+        <g data-detail="context" data-edge-from="classify" data-edge-to="mockup" data-edge-label="no, frontend" data-edge-key="16" data-edge-id="classify-mockup">
+          <rect x="956.2" y="190" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="990" y="200" class="t-muted" font-size="8" text-anchor="middle">no, frontend</text>
+        </g>
+
+        <g data-detail="context" data-edge-from="mockup" data-edge-to="publish" data-edge-label="after the agent" data-edge-key="18" data-edge-id="mockup-publish">
+          <rect x="839" y="256" width="82" height="14" rx="3" class="c-mask"/>
+          <text x="880" y="266" class="t-messagebus" font-size="8" text-anchor="middle">after the agent</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
@@ -5606,6 +5640,19 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <li>&bull; Fibonacci estimate against ESTIMATE_BANDS</li>
           <li>&bull; 8 or more splits into 2-6 children of 3 to 5 points</li>
           <li>&bull; Each child walks the pipeline alone</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot violet"></div>
+          <h3>UX mockup</h3>
+        </div>
+        <ul>
+          <li>&bull; Frontend stories only: a work unit matches MOCKUP_PATHS</li>
+          <li>&bull; pc-plan-mockup draws it, or the published one is kept</li>
+          <li>&bull; Rendered and pushed to the mockups branch with no model</li>
+          <li>&bull; Picture, link and component table stamped on the issue</li>
         </ul>
       </div>
     </div>

@@ -253,6 +253,10 @@ estimate of 8 or more is split into children of 3 to 5 points, and each child wa
 alone. A slice smaller than 3 points is a fragment and is folded into a sibling.
 The refined story is wrapped in the repository's own issue form, and when questions remain the
 worker leaves a temporal draft on the issue and asks everything in one batched comment.
+A frontend story gets a UX mockup first: the one a person published with `/plan-mockup`, or one the
+harness skill `pc-plan-mockup` draws from the repository's own tokens and components. Two jobs with
+no model render it and push it to the `mockups` branch, and conclude stamps the picture, the link
+and the component table on the issue, and each child's own sections on each child.
 
 ```mermaid
 flowchart TD
@@ -262,7 +266,13 @@ flowchart TD
     refExplore("Explore (rung 5)<br/>one work unit at a time,<br/>self-answer from the code,<br/>at most 5 questions each") --> refClassify
     refClassify{"Trivial?<br/>every TRIVIAL_CRITERIA<br/>condition holds"}
     refClassify -->|yes| refTrivial
-    refClassify -->|no| refStory
+    refClassify -->|no| refUi
+    refUi{"Frontend?<br/>a work unit matches MOCKUP_PATHS"}
+    refUi -->|yes| refMockup
+    refUi -->|no| refStory
+    refMockup("Mockup (rung 5)<br/>keep the published one,<br/>or pc-plan-mockup draws it") --> refStory
+    refMockup -.->|"after the agent"| refPublish
+    refPublish("Render and publish (no model)<br/>PNG at 1440 and 390 on mockups,<br/>section stamped on issue and children")
     refTrivial("Trivial plan<br/>marker, summary, checklist<br/>no Gherkin, no diagram") --> refEstimate
     refStory("Story<br/>Given/When/Then per work unit,<br/>grounded in the code") --> refWrap
     refStory -.->|"cannot ground it"| refFail
@@ -290,8 +300,8 @@ flowchart TD
     classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class refStart start
-    class refReserve,refFacts,refExplore,refTrivial,refStory,refWrap,refProse,refStack action
-    class refClassify,refEstimate,refSplit,refOutcome decision
+    class refReserve,refFacts,refExplore,refMockup,refPublish,refTrivial,refStory,refWrap,refProse,refStack action
+    class refClassify,refUi,refEstimate,refSplit,refOutcome decision
     class refFail failure
     class refDone,refAsk,refChildren success
 ```
@@ -302,6 +312,8 @@ flowchart TD
 
 Writes the code and opens one pull request. It stops there: the merge decision belongs to the gate,
 because waiting for CI inside this run would hold a fleet machine doing nothing.
+A UX mockup on the issue is read as intent: the agent builds with the components its table names
+and never copies its markup, which the Semgrep rule `platform-mockup-markup-in-code` would fail.
 
 ```mermaid
 flowchart TD
@@ -310,7 +322,7 @@ flowchart TD
     implEligible -.->|no| implIdle
     implEligible -->|yes| implReserve
     implReserve("Reserve (rung 4)<br/>bot-working") --> implFacts
-    implFacts("Facts (rung 3)<br/>Issue and comments to disk") --> implCheck
+    implFacts("Facts (rung 3)<br/>Issue, comments and its UX mockup,<br/>if refine made one, to disk") --> implCheck
     implCheck{"Trivial marker<br/>left by refine?"}
     implCheck -->|yes| implTodos
     implCheck -->|no| implCode

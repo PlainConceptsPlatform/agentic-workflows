@@ -2,6 +2,20 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.18.0
+
+### Added
+
+- **Refine draws a UX mockup for frontend work.** A standard-path story whose work units change files matching the new `MOCKUP_PATHS` (default `apps/web/**`) gets a mockup from the harness skill `pc-plan-mockup` (agent-harness 3.11.0): one self-contained HTML file built from the repository's own `DESIGN.md` tokens, with every region mapped to the real component to build it with. A mockup a person already published with `/plan-mockup` is kept instead. Two new jobs with no model, `mockup_render` and `mockup_publish`, check it against its contract, render it at 1440 and 390 pixels wide in the Playwright image with no network, and push it to the `mockups` branch at `issue-<number>/`. Conclude then stamps a `UX mockup` section on the issue with the picture, the link and the component table, re-stamped on every pass, and on each split child with the sections its `Mockup sections:` line names. Neither job can fail a refinement.
+- **Implement reads the mockup as intent.** A `load-mockup` step copies the issue's mockup (a split child's parent's) to `/tmp/gh-aw/agent/mockup/`, and the prompt says to build with the components its table names and never copy its markup. The merge gate never counts a visual difference from the mockup as a finding or an unmet criterion, and does count copied mockup markup.
+- **Evidence shows the mockup next to the result.** The evidence comment adds the mockup the closing issue was refined with, so a reviewer judges the experience against the intent.
+- **`platform-mockup-markup-in-code` Semgrep rule** in the quality-gates bundle: fails a pull request that carries a mockup's `data-mockup-section` or `data-component` references. `app-ci-node-monorepo` now passes `--config .semgrep/` when the folder exists, so the family rules run there too.
+- **`capture-mockup` and `load-mockup` composite actions.**
+
+### Fixed
+
+- **Route matrix.** The check that every CI template hands a pull request's verdict to the merge train skips templates that never run on a pull request; `quality-mutation.yml` made it fail on main since 1.17.0. The implement base-branch check no longer races SIGPIPE under `pipefail`.
+
 ## 1.17.1
 
 ### Changed
