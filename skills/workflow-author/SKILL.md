@@ -121,8 +121,17 @@ bot-working pattern ensures the bot is the actor while still involving human aut
 5. Classifier routes based on which work label is present
 6. Worker's `pre_activation` passes via `GH_AW_ALLOWED_BOTS` env var
 
-Workers must include `GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"`
+Workers must include `GH_AW_ALLOWED_BOTS: "${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }},github-actions[bot]"`
 in their `env:` block to authorize bot actors through `check_membership.cjs`.
+
+The App is the repository's, not the package's. Its login is the optional repository variable
+`BOT_LOGIN` (`<app-slug>[bot]`), and unset it is `platform-devbox[bot]`. The one expression
+`vars.BOT_LOGIN || 'platform-devbox[bot]'` sits in three places: the router's `env.TRUSTED_BOTS`
+(read by `authorize`, the merge train and the belt), `bot-approve`'s job-level `if:` (which cannot
+read `env`, but can read `vars`), and every worker's `GH_AW_ALLOWED_BOTS` (gh-aw compiles a
+`${{ vars.* }}` in a worker's top-level `env:` through to the lock's workflow `env:`). Never write
+the login as a literal: `verify-route-matrix.sh` fails a second spelling and runs `authorize` with
+the variable set and unset.
 
 Four things this buys:
 
@@ -220,7 +229,9 @@ cost a real debugging session.
 | The PR never closes its issue | `linkPullRequestToIssue` is not in GitHub's public schema |
 | Merge gate never fires after CI | `workflow_run` does not fire for runs that were pending approval and then approved, and does not fire for PR-triggered CI completions on feature branches |
 | Agent wrote a plausible body or comment, but the worker stopped incomplete | Outcome validation required model-authored label changes or did not classify the output |
-| Router classified a trusted App label event, but every worker job skipped | The called worker did not set `GH_AW_ALLOWED_BOTS` in `env:`, so `check_membership.cjs` rejected the bot's role `none`. Set `GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"` in the worker's env. `on.bots:` does not work for `workflow_call` workers. |
+| Router classified a trusted App label event, but every worker job skipped | The called worker did not set `GH_AW_ALLOWED_BOTS` in `env:`, so `check_membership.cjs` rejected the bot's role `none`. Set `GH_AW_ALLOWED_BOTS: "${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }},github-actions[bot]"` in the worker's env. `on.bots:` does not work for `workflow_call` workers. |
+| Issue sits at `refine,bot-working` (or `implement,bot-working`), every job after `authorize` skipped, no comment | The repository's App is not `platform-devbox`, so its `bot-working` label came from an actor the router does not trust and `authorize.outputs.trusted` was false. Set the repository variable `BOT_LOGIN` to the App's `<slug>[bot]` login; the router, `bot-approve` and every worker read it (#527) |
+| A worker failed in about a minute, was retried five times and every comment said "provider outage" | A preflight step in the agent job (`Sync harness agents and print model routing`, which runs `sync-agents.mjs --strict` and `harness-doctor.mjs --strict`) refused the repository's setup, typically no specialist `*-engineer.md`. `decide-agent-retry` now names the failed step `configuration`: no retry, no `stalled`, one comment with the step and the fix. A new preflight step that only fails on setup belongs in `classify-failure.sh`'s list |
 | Merge gate skips protected-file PRs even when CI failed | `protected_changes` blocks all agent runs, not just merge. The `review_required`, `agent`, and `incomplete` jobs must allow protected-file PRs through when `needs.subject.outputs.conclusion == 'failure'` so the agent can remediate. Auto-merge is still blocked by the `conclude` job's `requires_review != 'true'` guard on the `auto-merge` disposition. |
 | The merge train passes a PR by and never comes back to it | A standing `owner-review` or `human-review` verdict newer than the head commit parks it until a commit lands or a writer approves. `blocked` and a merge that did not happen expire when the base branch moves, `MERGE_TRAIN_MAX_RETRIES` times. The run summary of the `merge-train` job lists every open PR with its move and why. |
 | Several gates for one PR in an hour, all on the single-slot belt (before 1.6.0) | The belt skipped a PR whose gate was live by looking for runs titled `Working (Merge Gate): PR #N`, a title run-name no longer produced, so it saw none. The train looks for the title run-name gives, and the route matrix asserts the two agree. |

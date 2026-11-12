@@ -105,10 +105,12 @@ env:
   # one unusable report can keep every other bot pull request in the repository waiting.
   PARK_AT_UNUSABLE_OUTPUT: "2"
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
-  GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
+  # The bot actors pre_activation admits. BOT_LOGIN is the repository variable naming the App's
+  # `<slug>[bot]` login; unset, it is platform-devbox[bot]. The router trusts the same login.
+  GH_AW_ALLOWED_BOTS: "${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }},github-actions[bot]"
   # The bots whose pull requests the gate takes, in every spelling GitHub uses for one account.
   # Any other author needs write access to the repository, as they would to push the branch.
-  TRUSTED_BOTS: "github-actions[bot] app/github-actions platform-devbox[bot]"
+  TRUSTED_BOTS: "github-actions[bot] app/github-actions ${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }}"
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
   GIT_COMMITTER_NAME: "github-actions[bot]"

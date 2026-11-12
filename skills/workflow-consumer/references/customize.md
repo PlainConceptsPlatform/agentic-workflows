@@ -99,10 +99,29 @@ of `work-router.yml`, which `update` keeps the same way it keeps a worker's.
 | `CI_WORKFLOW_NAME` | The CI workflow the merge belt reads its verdict from. Must equal that workflow's `name:` exactly | No gate at all. The belt logs no completed CI run and the pull request waits, with no red run anywhere |
 | `REFINE_ANSWER_TIMEOUT_HOURS` | Working hours (Monday to Friday) refine's questions wait before the proposed answers are taken and the issue is labelled `assumed`. A thumbs-up from the author takes them at once; a question marked as needing a decision always waits. `"0"` turns it off | Too short and people never get to answer; `"0"` and an unanswered issue stays parked for good, which is where nine of the first twenty-one batches of questions ended |
 | `AUDIT_CRON` | This repository's audit slot. See "Scheduling across repositories" in the package README | The audit fires and classifies to no route, so nothing happens and nothing complains |
+| `TRUSTED_BOTS` | The bot logins whose labels and pull requests the router trusts. Its default ends with the repository's own App: `${{ vars.BOT_LOGIN \|\| 'platform-devbox[bot]' }}` | Leave the expression in place and set the variable instead; see "Your own GitHub App" below |
 
-Both are also needed where GitHub evaluates no expression, in the `workflow_run.workflows:` list
+`CI_WORKFLOW_NAME` and `AUDIT_CRON` are also needed where GitHub evaluates no expression, in the `workflow_run.workflows:` list
 and in a `cron:`. The installer copies them into those two literal lines, so change the value in
 `env:` and run `workflows update`. `verify-route-matrix.sh` asserts the copies agree.
+
+## Your own GitHub App
+
+The workers act through the App whose `BOT_APP_ID` / `BOT_PRIVATE_KEY` the repository holds. When
+that App is not `platform-devbox`, tell the workflows its login once, as a repository variable:
+
+```bash
+gh variable set BOT_LOGIN --body '<app-slug>[bot]'
+```
+
+The router's `TRUSTED_BOTS`, its `bot-approve` job and every worker's `GH_AW_ALLOWED_BOTS` read
+`vars.BOT_LOGIN`, falling back to `platform-devbox[bot]`, so a repository on the Platform App needs
+nothing. Without the variable a different App is silently untrusted: after a person adds `refine`,
+the App's `bot-working` label reaches the router from an actor it does not know, `authorize` says
+no, and the issue stays at `refine,bot-working` with no comment. A repository that worked around
+this by editing `TRUSTED_BOTS` or `GH_AW_ALLOWED_BOTS` keeps its values on `update`; it can put the
+package default back and set the variable instead. The variable is read at run time, so changing it
+needs no recompile.
 
 ## Keeping Forge aligned
 

@@ -124,7 +124,12 @@ env:
   # separated, and every login the same account can present: GitHub reports an App as
   # `name[bot]` on some endpoints and `app/name` on others, so both spellings belong here.
   # Adding a third bot used to mean finding four hand-written comparisons across this file.
-  TRUSTED_BOTS: "github-actions[bot] app/github-actions platform-devbox[bot]"
+  # The App the repository's BOT_APP_ID belongs to is the repository variable BOT_LOGIN, its
+  # `<slug>[bot]` login; unset, it is platform-devbox[bot]. The same expression sits in
+  # bot-approve's `if:` (agentics-pr-plumbing.yml), the merge belt's TRUSTED_BOTS and every worker's GH_AW_ALLOWED_BOTS, so one variable moves all three.
+  # Without it a repository with its own App was silently untrusted: the App's bot-working label
+  # left `authorize` false and the worker never ran, with no comment and no error (#527).
+  TRUSTED_BOTS: "github-actions[bot] app/github-actions ${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }}"
   # The housekeeping settings (HOUSEKEEPING_*, DEPENDABOT_*, AUDIT_STALE_AFTER_DAYS) live in
   # agentics-housekeeping.yml, and the merge train's (MAX_GATE_ATTEMPTS, MERGE_TRAIN_* except
   # the hold label, REFINE_ANSWER_TIMEOUT_HOURS) in agentics-merge-belt.yml, next to the jobs

@@ -3,7 +3,7 @@
 env:
   # The router dispatches this worker with the App token, so the run's actor is the bot, which the
   # pre-activation membership check refuses unless it is listed here.
-  GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
+  GH_AW_ALLOWED_BOTS: "${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }},github-actions[bot]"
   # The model this worker's own session runs on. See agent-audit.md for why it names one.
   AGENT_LEAD_MODEL: "forge/glm-5-2"
   # Every harness tier on one model the CI's Forge account is granted; see agent-audit.md.

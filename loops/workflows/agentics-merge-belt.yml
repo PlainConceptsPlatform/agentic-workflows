@@ -45,7 +45,7 @@ env:
   # into the workflow_run trigger below by the installer.
   CI_WORKFLOW_NAME: "App: CI"
   # The bot identities the belt trusts. Copied from work-router.yml.
-  TRUSTED_BOTS: "github-actions[bot] app/github-actions platform-devbox[bot]"
+  TRUSTED_BOTS: "github-actions[bot] app/github-actions ${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }}"
   # How many failed merge-gate attempts one pull request head may consume before the belt
   # parks it for a person. The route matrix asserts it agrees with the merge-gate worker's
   # MAX_ATTEMPTS, because a belt that gives up later than the worker says burns whole runs.

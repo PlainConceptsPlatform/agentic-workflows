@@ -373,10 +373,12 @@ flowchart TD
     implRetry{"Died under 6 minutes<br/>with no answer?"}
     implRetry -->|"yes: provider outage"| implAgain(("Retry<br/>attempt N of 5, label kept"))
     implRetry -.->|"no: it answered, wrongly"| implFail
+    implRetry -.->|"no: a preflight step refused<br/>the repository's setup"| implConfig
     implAgain -->|"re-enters via the router"| implStart
     implHandoff(("Handed off<br/>PR open, bot-working removed,<br/>the gate decides next"))
     implIdle(("Idle<br/>closed, or held by future"))
     implFail(("Parked<br/>review added, a rerun<br/>would fail the same way"))
+    implConfig(("Parked as configuration<br/>review, no stalled, one comment<br/>naming the step and the fix"))
 
     implStackStart("check-stack-branch<br/>(router job, rung 1)<br/>the issue carries<br/>stack-root-branch?") -.->|"no: flat mode,<br/>nothing happens"| implIdle
     implStackStart -->|"yes: the workflow dispatches<br/>this worker with ref: feat/N<br/>so the agent never fetches"| implStart
@@ -391,14 +393,16 @@ flowchart TD
     class implReserve,implFacts,implTodos,implCode,implPr,implStackStart action
     class implEligible,implCheck,implVerify,implRetry decision
     class implIdle idle
-    class implFail failure
+    class implFail,implConfig failure
     class implHandoff,implAgain success
 ```
 
 The retry belt exists because a provider outage kills a run in a couple of minutes with no answer,
 and that used to burn the issue and hand it to a human. A run that worked for half an hour and then
 failed produced an answer that was wrong; repeating it costs the whole fleet the same half hour to
-be wrong again, so only the short deaths are retried.
+be wrong again, so only the short deaths are retried. A short death in a preflight step (the harness
+sync and doctor, the CI provider merge) is the exception: it is the repository's setup, not the
+provider, so it is reported as a configuration failure with the step and the fix and never retried.
 
 A stacked child enters the same worker through a different door: the router's `check-stack-branch`
 job reads the issue's markers before anything runs, and dispatches the compiled workflow with

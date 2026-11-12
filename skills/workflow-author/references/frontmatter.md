@@ -176,8 +176,14 @@ through to the `activation` job's condition.
 
 ```yaml
 env:
-  GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
+  GH_AW_ALLOWED_BOTS: "${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }},github-actions[bot]"
 ```
+
+`BOT_LOGIN` is an optional repository variable holding the App's `<slug>[bot]` login. gh-aw
+(verified against v0.87.5, `--strict`) carries a `${{ vars.* }}` expression in a worker's top-level
+`env:` into the lock's workflow-level `env:`, which `pre_activation` inherits, so a repository with
+its own App sets one variable rather than editing every worker. The router's `TRUSTED_BOTS` and
+`bot-approve`'s `if:` read the same expression.
 
 This is paired with the **bot-working label pattern**: a human adds `implement`/`refine`/`direct`,
 `authorize-bot-work.yml` validates the human's permission and the bot adds `bot-working`, which

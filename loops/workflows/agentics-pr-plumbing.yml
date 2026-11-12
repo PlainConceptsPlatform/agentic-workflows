@@ -69,7 +69,7 @@ jobs:
     needs: classify
     if: >
       needs.classify.outputs.route == 'bot-approve' &&
-        (github.actor == 'app/github-actions' || github.actor == 'platform-devbox[bot]')
+        (github.actor == 'app/github-actions' || github.actor == (vars.BOT_LOGIN || 'platform-devbox[bot]'))
     runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 5
     permissions:

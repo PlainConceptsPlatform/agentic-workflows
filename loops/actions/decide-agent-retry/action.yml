@@ -1,6 +1,6 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/actions/decide-agent-retry/action.yml. Update with `workflows update --force`; consumer edits may be overwritten.
 name: Decide agent retry
-description: Say whether an agent job that failed is worth running again, from how long it ran and how many attempts have been made.
+description: Say whether an agent job that failed is worth running again, from how long it ran, how many attempts have been made, and which step it stopped in.
 inputs:
   token:
     description: GitHub token with actions read access, used to read this run's own jobs.
@@ -26,8 +26,14 @@ outputs:
     description: How long the agent job ran, or -1 when that could not be read.
     value: ${{ steps.decide.outputs.minutes }}
   cause:
-    description: 'Why a retry was chosen: short-run, runner-shutdown or cut-off. "none" when there is none.'
+    description: 'Why a retry was chosen: short-run, runner-shutdown or cut-off. "configuration" when a preflight step failed and nothing is retried; "cancelled" for a cancelled job; "none" when there is none.'
     value: ${{ steps.decide.outputs.cause }}
+  failed-step:
+    description: The name of the first step the agent job failed in, or empty.
+    value: ${{ steps.decide.outputs.failed-step }}
+  reason:
+    description: For a configuration failure, one paragraph for the issue naming the step and the fix. Empty otherwise.
+    value: ${{ steps.decide.outputs.reason }}
 runs:
   using: composite
   steps:
@@ -47,6 +53,12 @@ runs:
     # apply-review parked instead -- an Odyssey refine died in three minutes on
     # `Model 'glm-5-2' not found`, a gateway fault that clears in seconds, and waited on the
     # janitor's six-hourly sweep. Five copies of sixty lines is how one rule becomes five.
+    #
+    # And one failure is never repeated, however short: a preflight step (the harness sync and
+    # doctor, the CI provider merge) that refused the repository's own setup. It ended a consumer's
+    # refine in a minute, which read as a short run, and five attempts were spent and commented as
+    # a provider outage when the fix was one missing file (#527). classify-failure.sh names it
+    # `configuration` from the failed step's name, and that verdict wins over the duration.
     - name: Decide whether this failure is worth repeating
       id: decide
       shell: bash
@@ -72,24 +84,39 @@ runs:
         [ -n "$attempts" ] || attempts=0
         retry=false
         cause=none
-        # An unknown duration is treated as a long run: never retry on a guess.
-        if [ "$minutes" -ge 0 ] && [ "$minutes" -lt "$UNDER_MINUTES" ] && [ "$attempts" -lt "$PARK_AT" ]; then
-          retry=true
-          cause=short-run
+        failed_step=""
+        reason=""
+        work="$(mktemp -d)"
+        # The reads are best effort: a step list, a log or an annotation list that cannot be
+        # fetched leaves the decision to the duration, exactly as before these checks existed.
+        if [ -n "${job_id:-}" ]; then
+          gh api "repos/$REPO/actions/jobs/$job_id" --jq '.steps[]? | select(.conclusion == "failure") | .name' >"$work/failed-steps" 2>/dev/null || true
+          failed_step="$(head -1 "$work/failed-steps" 2>/dev/null || true)"
         fi
-        # A long run is repeated only when it was killed, not when it was wrong. The reads are best
-        # effort: a log or an annotation list that cannot be fetched leaves the run parked, exactly
-        # as before this check existed.
-        if [ "$retry" != true ] && [ "$attempts" -lt "$PARK_AT" ] && [ -n "${job_id:-}" ]; then
-          work="$(mktemp -d)"
+        kind=none
+        if [ -n "${job_id:-}" ] && [ "${conclusion:-}" != cancelled ]; then
           gh api "repos/$REPO/check-runs/$job_id/annotations" --paginate --jq '.[].message' >"$work/annotations" 2>/dev/null || true
           gh api "repos/$REPO/actions/jobs/$job_id/logs" >"$work/log" 2>/dev/null || true
-          kind="$(bash "$ACTION_PATH/classify-failure.sh" "$work/log" "$work/annotations" || echo none)"
-          if [ "$kind" != none ]; then
+          kind="$(bash "$ACTION_PATH/classify-failure.sh" "$work/log" "$work/annotations" "$work/failed-steps" || echo none)"
+        fi
+        rm -rf "$work"
+        if [ "$kind" = configuration ]; then
+          # Not a provider outage and not the agent's verdict: the model never started. The next
+          # attempt would fail the same way in the same minute, so no attempt is spent on it.
+          cause=configuration
+          fix="$(bash "$ACTION_PATH/classify-failure.sh" --fix "$failed_step")"
+          reason="The agent job stopped in its preflight step **${failed_step}** before the model started. That is this repository's configuration, not a provider outage, so it was not retried. ${fix} Once that is fixed, start the work again."
+        else
+          # An unknown duration is treated as a long run: never retry on a guess.
+          if [ "$minutes" -ge 0 ] && [ "$minutes" -lt "$UNDER_MINUTES" ] && [ "$attempts" -lt "$PARK_AT" ]; then
+            retry=true
+            cause=short-run
+          fi
+          # A long run is repeated only when it was killed, not when it was wrong.
+          if [ "$retry" != true ] && [ "$attempts" -lt "$PARK_AT" ] && [ "$kind" != none ]; then
             retry=true
             cause="$kind"
           fi
-          rm -rf "$work"
         fi
         # A cancelled agent job is a person or a newer run taking the work back, not an outage.
         # Pliny-Bot #816: refine was cancelled by hand and its label removed, then this step read
@@ -104,5 +131,7 @@ runs:
           echo "next=$((attempts + 1))"
           echo "minutes=$minutes"
           echo "cause=$cause"
+          echo "failed-step=$failed_step"
+          echo "reason=$reason"
         } >> "$GITHUB_OUTPUT"
-        echo "agent job ran for ${minutes}m; attempts so far ${attempts}; retry=${retry}; cause=${cause}"
+        echo "agent job ran for ${minutes}m; attempts so far ${attempts}; failed step '${failed_step}'; retry=${retry}; cause=${cause}"

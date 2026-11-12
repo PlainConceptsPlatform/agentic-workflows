@@ -484,6 +484,19 @@ The router (`work-router.yml`) is a derived file: its content is a function of w
 
 For a project-local development dependency, install `@plainconceptsplatform/workflows` and run `pnpm exec workflows` with no arguments to launch the TUI, or `pnpm exec workflows <init|add|update>` for non-interactive use.
 
+## Using your own GitHub App
+
+The workers act through the App whose `BOT_APP_ID` and `BOT_PRIVATE_KEY` the repository holds. If
+that App is not `platform-devbox`, set its login as a repository variable, or its labels and pull
+requests are not trusted and refine, implement and the merge belt never start:
+
+```bash
+gh variable set BOT_LOGIN --body '<app-slug>[bot]'
+```
+
+The router's `TRUSTED_BOTS`, `bot-approve` and every worker's `GH_AW_ALLOWED_BOTS` read it, and
+fall back to `platform-devbox[bot]` when it is unset.
+
 ## Turning the automation off
 
 A repository variable `AGENTIC_WORKFLOWS_DISABLED`, with any value, turns every installed workflow

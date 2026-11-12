@@ -3,7 +3,7 @@
 env:
   # The router dispatches this worker with the App token, so the run's actor is the bot, which the
   # pre-activation membership check refuses unless it is listed here.
-  GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
+  GH_AW_ALLOWED_BOTS: "${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }},github-actions[bot]"
   # The model this worker's own session runs on. opencode.ci.json's `model` is the cheap default
   # every agent without its own model falls back to; the lead is where a wrong call costs a run,
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
