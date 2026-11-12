@@ -25,8 +25,13 @@ export const VIEWPORTS = [
 const SECTION_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const STATES = new Set(["default", "empty", "loading", "error", "success", "disabled", "mobile"]);
 
-const attributeValues = (html, name) =>
-  [...html.matchAll(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "gi"))].map((match) => match[1].trim());
+// Literal patterns only: a RegExp built from a variable is a blocking Semgrep finding
+// (detect-non-literal-regexp) in every consumer that runs the family scan.
+const ATTRIBUTE_PATTERNS = {
+  "data-mockup-section": /\bdata-mockup-section\s*=\s*["']([^"']*)["']/gi,
+  "data-component": /\bdata-component\s*=\s*["']([^"']*)["']/gi,
+};
+const attributeValues = (html, name) => [...html.matchAll(ATTRIBUTE_PATTERNS[name])].map((match) => match[1].trim());
 
 // What the contract forbids, as the reasons a person reading the run would want.
 export function htmlProblems(html) {
