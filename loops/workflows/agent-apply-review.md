@@ -37,7 +37,9 @@ env:
   RETRY_COMMENT: "That is what a provider outage looks like -- the run ended before it could produce an answer -- so this is being tried again from the start. It is a fresh run rather than a continuation: nothing is carried over from the attempt that failed."
   INCOMPLETE_COMMENT: "Applying the review feedback ended without an outcome. This worker has no retry of its own: it runs again when somebody reviews or comments on the pull request, and the issue is flagged so it is not lost until then."
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
-  GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
+  # The bot actors pre_activation admits. BOT_LOGIN is the repository variable naming the App's
+  # `<slug>[bot]` login; unset, it is platform-devbox[bot]. The router trusts the same login.
+  GH_AW_ALLOWED_BOTS: "${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }},github-actions[bot]"
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
   GIT_COMMITTER_NAME: "github-actions[bot]"
@@ -383,6 +385,9 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: ${{ env.WORKING_LABEL }}
+      # A configuration failure is parked for a person without `stalled`: the janitor retries
+      # stalled work, and a preflight step that refused the repository's setup fails the same way
+      # on every retry until somebody changes the repository (#527).
       - name: Flag for human review
         if: steps.decide.outputs.retry != 'true' && steps.decide.outputs.cause != 'cancelled'
         uses: ./.github/actions/add-issue-labels
@@ -391,9 +396,19 @@ jobs:
           issue-number: ${{ needs.subject.outputs.issue }}
           labels: |-
             ${{ env.REVIEW_LABEL }}
-            ${{ env.STALLED_LABEL }}
+            ${{ steps.decide.outputs.cause != 'configuration' && env.STALLED_LABEL || '' }}
+      - name: Report the configuration failure
+        if: steps.decide.outputs.cause == 'configuration'
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ needs.subject.outputs.issue }}
+          body: |
+            ${{ env.REVIEW_MARKER }}
+            ${{ steps.decide.outputs.reason }}
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Report missing review feedback outcome
-        if: steps.decide.outputs.retry != 'true' && steps.decide.outputs.cause != 'cancelled'
+        if: steps.decide.outputs.retry != 'true' && steps.decide.outputs.cause != 'cancelled' && steps.decide.outputs.cause != 'configuration'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}

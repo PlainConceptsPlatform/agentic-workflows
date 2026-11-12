@@ -2,6 +2,16 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.19.0
+
+### Added
+
+- **`BOT_LOGIN` repository variable: the workflows trust the repository's own GitHub App.** The bot login was hard-coded as `platform-devbox[bot]` in the router's `TRUSTED_BOTS`, in every worker's `GH_AW_ALLOWED_BOTS` and in `bot-approve`'s `if:`, which is package code a consumer cannot override. A repository whose `BOT_APP_ID` is another App was silently untrusted: after a person added `refine`, the App's `bot-working` label left `authorize.outputs.trusted` false, `call-refine` skipped, and the issue stayed at `refine,bot-working` with no comment and no error (#527). All three now read `vars.BOT_LOGIN || 'platform-devbox[bot]'`; set it with `gh variable set BOT_LOGIN --body '<app-slug>[bot]'`. A repository on the Platform App needs no change. The route matrix runs the router's `authorize` step with the variable set and unset, checks `bot-approve` and every worker resolve it, and fails a second spelling or a bare literal.
+
+### Fixed
+
+- **A failed harness preflight is reported as configuration, not as a provider outage.** When the agent job stopped in `Sync harness agents and print model routing` (`sync-agents.mjs --strict` exits 1 with no specialist `*-engineer.md`) or in the CI provider merge, the run ended in a minute, read as a short run, was commented as "what a provider outage looks like" and retried five times, each failing the same way (#527). `decide-agent-retry` now reads the failed step's name from the jobs API; `classify-failure.sh` names those steps `configuration`, which is never retried, whatever the duration. Refine, implement, triage and apply-review park it with `review` but not `stalled` (the janitor would retry it) and post one comment naming the step and the fix (`/make-engineer` for the missing templates). The action gains `failed-step` and `reason` outputs.
+
 ## 1.18.1
 
 ### Fixed

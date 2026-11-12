@@ -138,7 +138,12 @@ env:
   # separated, and every login the same account can present: GitHub reports an App as
   # `name[bot]` on some endpoints and `app/name` on others, so both spellings belong here.
   # Adding a third bot used to mean finding four hand-written comparisons across this file.
-  TRUSTED_BOTS: "github-actions[bot] app/github-actions platform-devbox[bot]"
+  # The App the repository's BOT_APP_ID belongs to is the repository variable BOT_LOGIN, its
+  # `<slug>[bot]` login; unset, it is platform-devbox[bot]. The same expression sits in
+  # bot-approve's `if:` and in every worker's GH_AW_ALLOWED_BOTS, so one variable moves all three.
+  # Without it a repository with its own App was silently untrusted: the App's bot-working label
+  # left `authorize` false and the worker never ran, with no comment and no error (#527).
+  TRUSTED_BOTS: "github-actions[bot] app/github-actions ${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }}"
   # How long an issue may sit parked with `stalled` before the janitor retries it, and how many
   # times it tries before leaving the issue to a person. Only machine failures are retried; a
   # verdict the agent reached on purpose is reported and never re-run, because re-running a
@@ -1215,7 +1220,7 @@ jobs:
     needs: classify
     if: >
       needs.classify.outputs.route == 'bot-approve' &&
-        (github.actor == 'app/github-actions' || github.actor == 'platform-devbox[bot]')
+        (github.actor == 'app/github-actions' || github.actor == (vars.BOT_LOGIN || 'platform-devbox[bot]'))
     runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 5
     permissions:

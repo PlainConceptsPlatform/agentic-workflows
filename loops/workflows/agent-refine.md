@@ -92,7 +92,9 @@ env:
   INCOMPLETE_COMMENT: "Automated refinement ended without an outcome. The refine label remains for a retry."
   SAFE_OUTPUT_COMMENT_PREFIX: "Refinement update"
   ISSUE_CONTEXT_PATH: /tmp/gh-aw/agent/issue-context.json
-  GH_AW_ALLOWED_BOTS: "platform-devbox[bot],github-actions[bot]"
+  # The bot actors pre_activation admits. BOT_LOGIN is the repository variable naming the App's
+  # `<slug>[bot]` login; unset, it is platform-devbox[bot]. The router trusts the same login.
+  GH_AW_ALLOWED_BOTS: "${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }},github-actions[bot]"
   REFINE_ISSUE_PATH: /tmp/gh-aw/refine-issue.json
   REFINE_COMMENTS_PATH: /tmp/gh-aw/refine-comments.json
   GIT_AUTHOR_NAME: "github-actions[bot]"
@@ -939,6 +941,9 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           issue-number: ${{ inputs.issue-number }}
           labels: ${{ env.WORKING_LABEL }}
+      # A configuration failure is parked for a person without `stalled`: the janitor retries
+      # stalled work, and a preflight step that refused the repository's setup fails the same way
+      # on every retry until somebody changes the repository (#527).
       - name: Flag for human review
         if: steps.decide.outputs.retry != 'true' && steps.decide.outputs.cause != 'cancelled'
         uses: ./.github/actions/add-issue-labels
@@ -947,9 +952,19 @@ jobs:
           issue-number: ${{ inputs.issue-number }}
           labels: |-
             ${{ env.REVIEW_LABEL }}
-            ${{ env.STALLED_LABEL }}
+            ${{ steps.decide.outputs.cause != 'configuration' && env.STALLED_LABEL || '' }}
+      - name: Report the configuration failure
+        if: steps.decide.outputs.cause == 'configuration'
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            ${{ env.REFINE_MARKER }}
+            ${{ steps.decide.outputs.reason }}
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Report missing refinement outcome
-        if: steps.decide.outputs.retry != 'true' && steps.decide.outputs.cause != 'cancelled'
+        if: steps.decide.outputs.retry != 'true' && steps.decide.outputs.cause != 'cancelled' && steps.decide.outputs.cause != 'configuration'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
