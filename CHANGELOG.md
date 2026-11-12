@@ -2,6 +2,21 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.19.0
+
+### Changed
+
+- **The router keeps only the events that may start an agent.** The jobs that never start one move, unchanged, to three plain workflows that hear only the events they need. Every workflow runs the same classifier, checks `AGENTIC_WORKFLOWS_DISABLED`, and keeps its concurrency groups and run titles. A push to a pull request, a CI completion and the hourly tick no longer open a router run.
+  - `agentics-housekeeping.yml`: `housekeeping`, `audit-close` and `cleanup-artifacts`, on their crons (`23 */6 * * *`, `43 3 * * *`, `0 6 * * *`), with the `HOUSEKEEPING_*`, `DEPENDABOT_*` and `AUDIT_STALE_AFTER_DAYS` settings.
+  - `agentics-merge-belt.yml`: the merge train, `merge-approved`, `reconcile-bot-pr-runs` and the call to the merge gate. It hears CI completions (`workflow_run`), merges, approvals and the hourly cron (`17 * * * *`), and carries `MAX_GATE_ATTEMPTS`, `MERGE_TRAIN_*` (except the hold label) and `REFINE_ANSWER_TIMEOUT_HOURS`.
+  - `agentics-pr-plumbing.yml`: `bot-approve`, `land-stack-child` and `stack-landed`. It hears pull requests opened, pushed, reopened, labelled and closed. The router now hears only `labeled` (for the `merge-gate` label) and `closed` (for evidence).
+- **Old entry points still work.** The router still accepts `operation=housekeeping`, `audit-close`, `cleanup-artifacts`, `merge-gate`, `merge-train` and `reconcile-bot-pr-runs`, and a person adding the `merge-gate` label, and forwards each to the file that owns it. The `merge-gate` forward uses the App token: the classifier turns a `merge-gate` dispatched by `github-actions[bot]` into a merge train tick, so a forward sent with `GITHUB_TOKEN` would never reach the gate.
+- `merge-train.sh` dispatches the gate in `agentics-merge-belt.yml` and looks for live gates in both files, so a gate run queued before the update still counts. The housekeeping sweep reads stuck runs from both files and ticks the train in the belt.
+- **`workflows update` installs and fills the new files.** On the first install each file takes the values the repository had set in its router, and the moved keys are removed from the router. `CI_WORKFLOW_NAME`, `TRUSTED_BOTS`, `MERGE_TRAIN_HOLD_LABEL` and `UNATTENDED` stay in the router and are copied into the new files on every update, so the router is still the place to change them. `CI_WORKFLOW_NAME` is also written into the belt's `workflow_run` trigger. A repository without the merge gate gets a belt without the gate's jobs and a router without the forwarder.
+- `verify-route-matrix.sh` reads each moved job from its new file and has a section per file that asserts both halves of the move: the job exists in exactly one file, the triggers and run titles moved with it, the shared values agree, and the forwards exist.
+
+Downgrading below 1.19.0 needs care: an older CLI does not know the new files and leaves them in place, so their jobs would run twice. Delete `agentics-housekeeping.yml`, `agentics-merge-belt.yml` and `agentics-pr-plumbing.yml` from `.github/workflows/` after the downgrade.
+
 ## 1.18.1
 
 ### Fixed
