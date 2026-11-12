@@ -25,6 +25,18 @@ MERGE_GATE_WORKER_MD="${WORKFLOWS_DIR}/agent-merge-gate.md"
 router_env() {
   sed -n "s/^  $1: *//p" "$ROUTER_YML" | head -1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
 }
+# The App's login is the repository variable BOT_LOGIN with the package default, written as the
+# one expression `vars.BOT_LOGIN || 'platform-devbox[bot]'` wherever it is needed: the router's
+# TRUSTED_BOTS, bot-approve's `if:` and every worker's GH_AW_ALLOWED_BOTS. Resolve it the way
+# GitHub does, for a repository that sets the variable (pass the login) and one that does not
+# (pass nothing). A `${{ }}` copy resolves to the login, a bare one in an `if:` to a quoted string.
+resolve_bot_login() {
+  local login="${1:-}" with='\1'
+  [ -z "$login" ] || with="$login"
+  sed -E \
+    -e "s/\\\$\\{\\{ vars\\.BOT_LOGIN \\|\\| '([^']*)' \\}\\}/${with}/g" \
+    -e "s/vars\\.BOT_LOGIN \\|\\| '([^']*)'/'${with}'/g"
+}
 AUDIT_CRON="$(router_env AUDIT_CRON)"
 DOCS_AUDIT_CRON="$(router_env DOCS_AUDIT_CRON)"
 export AUDIT_CRON DOCS_AUDIT_CRON
@@ -396,7 +408,7 @@ fi
 # Bot logins are the same shape of problem. Most sites read env.TRUSTED_BOTS, but a job-level
 # `if:` cannot: GitHub does not expose the env context there, so bot-approve keeps literals and
 # they have to agree. Assert every bot login written anywhere in the router is in the list.
-trusted="$(router_env TRUSTED_BOTS)"
+trusted="$(router_env TRUSTED_BOTS | resolve_bot_login)"
 if [ -z "$trusted" ]; then
   MIRROR_OK=0; echo "FAIL: work-router.yml defines no TRUSTED_BOTS in its env: block" >&2
 else
@@ -2807,6 +2819,188 @@ assert "the hourly sweep's assume pass reaches refine in assume mode" assume \
   "$(route_field refine-mode EVENT=workflow_dispatch OPERATION=refine INPUT_ISSUE_NUMBER=42 INPUT_MODE=assume)"
 
 if [ "$RETRY_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+echo "── Bot login ─────────────────────────────────────────────────────────────"
+
+# A repository with its own GitHub App was silently untrusted (#527): the App's bot-working label
+# reached the router from an actor the router did not know, `authorize` said false, call-refine
+# skipped, and the issue sat at `refine,bot-working` with no comment and no error. The login is
+# the repository variable BOT_LOGIN now, defaulting to platform-devbox[bot]. Each assertion here
+# runs the real router and worker text with the variable resolved both ways.
+BOT_OK=1
+CUSTOM_BOT='custom-app[bot]'
+
+# One expression, one default. A second spelling is a second thing to keep in step, and a bare
+# literal is the hard-coded login coming back.
+bot_files=("$ROUTER_YML")
+for route in "${ALL_WORKER_ROUTES[@]}"; do
+  if worker_installed "$route"; then bot_files+=("${WORKFLOWS_DIR}/agent-${route}.md"); fi
+done
+bot_exprs=$(cat "${bot_files[@]}" | grep -v '^ *#' | { grep -oE "vars\.BOT_LOGIN[^}')]*('[^']*')?" || true; } | sort -u)
+if [ -n "$bot_exprs" ] && [ "$bot_exprs" != "vars.BOT_LOGIN || 'platform-devbox[bot]'" ]; then
+  BOT_OK=0
+  echo "FAIL: BOT_LOGIN is spelled more than one way: $(printf '%s' "$bot_exprs" | tr '\n' ';')" >&2
+fi
+stray=$(grep -n 'platform-devbox\[bot\]' "${bot_files[@]}" | grep -vE ':[0-9]+: *#' |
+  grep -vF "vars.BOT_LOGIN || 'platform-devbox[bot]'" || true)
+if [ -n "$stray" ]; then
+  BOT_OK=0
+  echo "FAIL: platform-devbox[bot] is hard-coded outside the BOT_LOGIN expression:" >&2
+  printf '%s\n' "$stray" >&2
+fi
+
+# The router's authorize step, executed. `gh` answers nothing, as it does for an App, which has
+# no collaborator permission, so only TRUSTED_BOTS can make it trusted.
+authorize_script=$(awk '
+  /- name: Check the actor can start an agent/ { found = 1 }
+  found && /^ +run: \|$/ { body = 1; next }
+  body && /^ {0,9}[^ ]/ { exit }
+  body { print substr($0, 11) }' "$ROUTER_YML")
+fake_bin="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nexit 1\n' > "${fake_bin}/gh"
+chmod +x "${fake_bin}/gh"
+authorize_as() {
+  local actor="$1" login="$2" out
+  out="$(mktemp)"
+  if ! PATH="${fake_bin}:$PATH" GITHUB_OUTPUT="$out" GITHUB_REPOSITORY=o/r EVENT=issues ACTOR="$actor" \
+    TRUSTED_BOTS="$(router_env TRUSTED_BOTS | resolve_bot_login "$login")" \
+    bash -c "$authorize_script" >/dev/null 2>&1; then
+    echo error
+  else
+    sed -n 's/^trusted=//p' "$out"
+  fi
+  rm -f "$out"
+}
+if [ -z "$authorize_script" ]; then
+  BOT_OK=0
+  echo "FAIL: could not extract the authorize step from work-router.yml" >&2
+else
+  assert "default config still trusts platform-devbox[bot]" true "$(authorize_as 'platform-devbox[bot]' '')"
+  assert "default config does not trust an unknown App" false "$(authorize_as "$CUSTOM_BOT" '')"
+  assert "BOT_LOGIN makes the router trust that App" true "$(authorize_as "$CUSTOM_BOT" "$CUSTOM_BOT")"
+fi
+rm -rf "$fake_bin"
+# And the trusted App's hand-off reaches refine: the classifier routes it, the caller requires the
+# trust asserted above, and the worker's pre_activation admits the same login.
+assert_route "a trusted custom App's bot-working label routes refine" refine \
+  EVENT=issues ACTION=labeled LABEL=bot-working ACTOR="$CUSTOM_BOT" \
+  'ISSUE_LABELS=["refine","bot-working"]' EVENT_ISSUE_NUMBER=42
+if ! grep -qE "^    if: needs\.classify\.outputs\.route == 'refine' && needs\.authorize\.outputs\.trusted == 'true'" "$ROUTER_YML"; then
+  BOT_OK=0
+  echo "FAIL: call-refine no longer gates on authorize.outputs.trusted" >&2
+fi
+for route in "${ALL_WORKER_ROUTES[@]}"; do
+  worker_md="${WORKFLOWS_DIR}/agent-${route}.md"
+  [ -f "$worker_md" ] || continue
+  allowed=$(sed -n 's/^  GH_AW_ALLOWED_BOTS: *//p' "$worker_md" | head -1)
+  [ -n "$allowed" ] || continue
+  case ",$(printf '%s' "$allowed" | resolve_bot_login | tr -d '"')," in
+    *",platform-devbox[bot],"*) ;;
+    *) BOT_OK=0; echo "FAIL: agent-${route} no longer admits platform-devbox[bot] by default" >&2 ;;
+  esac
+  case ",$(printf '%s' "$allowed" | resolve_bot_login "$CUSTOM_BOT" | tr -d '"')," in
+    *",${CUSTOM_BOT},"*) ;;
+    *) BOT_OK=0; echo "FAIL: agent-${route} GH_AW_ALLOWED_BOTS ignores BOT_LOGIN, so pre_activation rejects that App" >&2 ;;
+  esac
+done
+
+# bot-approve's `if:` cannot read env, so it reads the variable itself.
+approve_if=$(awk '/^  bot-approve:$/{found=1} found && /^    if: >$/{body=1; next} body && /^    [a-z-]+:/{exit} body{print}' "$ROUTER_YML")
+if ! printf '%s' "$approve_if" | resolve_bot_login | grep -qF "github.actor == ('platform-devbox[bot]')"; then
+  BOT_OK=0
+  echo "FAIL: bot-approve no longer accepts platform-devbox[bot] by default" >&2
+fi
+if ! printf '%s' "$approve_if" | resolve_bot_login "$CUSTOM_BOT" | grep -qF "github.actor == ('${CUSTOM_BOT}')"; then
+  BOT_OK=0
+  echo "FAIL: bot-approve does not accept the App named by BOT_LOGIN" >&2
+fi
+
+if [ "$BOT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+echo "── Preflight failures are configuration ──────────────────────────────────"
+
+# A preflight step that refused the repository's setup ended a consumer's refine in a minute; the
+# retry rule read a short run, commented "That is what a provider outage looks like" and spent all
+# five attempts (#527). It is classified from the failed step's name, never retried, and reported
+# with the step and the fix.
+PREFLIGHT_OK=1
+RETRY_DIR="${HERE}/../decide-agent-retry"
+classify_steps() {
+  local steps annotations
+  steps="$(mktemp)"; annotations="$(mktemp)"
+  printf '%s\n' "$1" > "$steps"
+  printf '%s\n' "${2:-}" > "$annotations"
+  bash "${RETRY_DIR}/classify-failure.sh" "" "$annotations" "$steps"
+  rm -f "$steps" "$annotations"
+}
+assert "a failed harness sync is a configuration failure" configuration \
+  "$(classify_steps 'Sync harness agents and print model routing')"
+assert "a failed CI provider merge is a configuration failure" configuration \
+  "$(classify_steps 'Merge the CI-only OpenCode provider into opencode.jsonc')"
+assert "a failed agent step is not a configuration failure" none \
+  "$(classify_steps 'Execute OpenCode CLI')"
+assert "a runner shutdown still wins over the step it interrupted" runner-shutdown \
+  "$(classify_steps 'Sync harness agents and print model routing' 'Process completed with exit code 143.')"
+if ! bash "${RETRY_DIR}/classify-failure.sh" --fix 'Sync harness agents and print model routing' | grep -qF '/make-engineer'; then
+  PREFLIGHT_OK=0
+  echo "FAIL: the harness sync fix no longer names /make-engineer" >&2
+fi
+# The names are matched exactly, so a renamed step in the shared setup disables the rule silently.
+while IFS= read -r step; do
+  [ -n "$step" ] || continue
+  if ! grep -qF -- "- name: ${step}" "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
+    PREFLIGHT_OK=0
+    echo "FAIL: classify-failure.sh names preflight step '${step}', which shared/opencode-ci.md no longer has" >&2
+  fi
+done < <(sed -n 's/^    "\(.*\)")$/\1/p' "${RETRY_DIR}/classify-failure.sh")
+
+# The decision itself, executed with a fake `gh`: a one-minute run that died in the harness sync
+# is not retried even with every attempt left, and the same minute dying in the agent step is.
+decide_script=$(awk '/^      run: \|$/{body=1; next} body{print substr($0, 9)}' "${RETRY_DIR}/action.yml")
+decide_with_failed_step() {
+  local step="$1" bin out
+  bin="$(mktemp -d)"; out="$(mktemp)"
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'case "$*" in'
+    echo '  *"/runs/"*"/jobs"*) echo "7 2026-01-01T00:00:00Z 2026-01-01T00:01:00Z failure" ;;'
+    echo "  *\"/actions/jobs/7 \"*) echo \"${step}\" ;;"
+    echo '  *) exit 0 ;;'
+    echo 'esac'
+  } > "${bin}/gh"
+  chmod +x "${bin}/gh"
+  PATH="${bin}:$PATH" GITHUB_OUTPUT="$out" REPO=o/r RUN_ID=1 ACTION_PATH="$RETRY_DIR" \
+    ATTEMPTS=0 PARK_AT=5 UNDER_MINUTES=10 bash -c "$decide_script" >/dev/null 2>&1 || echo "error=true" >> "$out"
+  tr '\n' ' ' < "$out"
+  rm -rf "$bin" "$out"
+}
+config_decision=$(decide_with_failed_step 'Sync harness agents and print model routing')
+case "$config_decision" in
+  *"retry=false "*"cause=configuration "*"failed-step=Sync harness agents and print model routing "*"reason=The agent job stopped in its preflight step"*) PASS=$((PASS + 1)) ;;
+  *) FAIL=$((FAIL + 1)); echo "FAIL: a failed harness sync is not reported as configuration without a retry: ${config_decision}" >&2 ;;
+esac
+outage_decision=$(decide_with_failed_step 'Execute OpenCode CLI')
+case "$outage_decision" in
+  *"retry=true "*"cause=short-run "*) PASS=$((PASS + 1)) ;;
+  *) FAIL=$((FAIL + 1)); echo "FAIL: a short run that died in the agent step is no longer retried: ${outage_decision}" >&2 ;;
+esac
+
+# Every worker that uses the rule reports the configuration failure, keeps the outage wording off
+# it, and parks it without `stalled`, which the janitor would retry into the same failure.
+for route in refine implement triage apply-review; do
+  worker_md="${WORKFLOWS_DIR}/agent-${route}.md"
+  [ -f "$worker_md" ] || continue
+  if ! grep -qF "steps.decide.outputs.cause == 'configuration'" "$worker_md" ||
+     ! grep -qF '${{ steps.decide.outputs.reason }}' "$worker_md"; then
+    PREFLIGHT_OK=0
+    echo "FAIL: agent-${route} does not report a configuration failure with its step and fix" >&2
+  fi
+  if ! grep -qF "steps.decide.outputs.cause != 'configuration' && env.STALLED_LABEL" "$worker_md"; then
+    PREFLIGHT_OK=0
+    echo "FAIL: agent-${route} flags a configuration failure as stalled, so the janitor retries it" >&2
+  fi
+done
+if [ "$PREFLIGHT_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 echo "── Ways a run ends with nothing ──────────────────────────────────────────"
 
