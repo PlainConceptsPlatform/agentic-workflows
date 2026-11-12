@@ -40,6 +40,10 @@ string Req(string name) => Environment.GetEnvironmentVariable(name)
 
 var ghPat         = Req("GH_PAT");
 var ghOrg         = Req("GH_ORG");
+// Repo-level mode: set GH_REPO (bare repo name) to manage runners on that one repository instead of the
+// organisation. Needs no org admin and no runner group; use RUNNER_GROUP_ID=1 (the repository default group).
+var ghRepo        = Environment.GetEnvironmentVariable("GH_REPO");
+var ghRunnerScope = string.IsNullOrWhiteSpace(ghRepo) ? $"orgs/{ghOrg}" : $"repos/{ghOrg}/{ghRepo}";
 var webhookSecret = Req("WEBHOOK_SECRET");
 var vmToken       = Req("VM_TOKEN");
 var subscription  = Req("AZ_SUBSCRIPTION");
@@ -295,7 +299,7 @@ async Task DeleteInstance(string id)
 async Task<string?> MintJit(string name, IReadOnlyCollection<string> labels)
 {
     using var req = new HttpRequestMessage(HttpMethod.Post,
-        $"https://api.github.com/orgs/{ghOrg}/actions/runners/generate-jitconfig");
+        $"https://api.github.com/{ghRunnerScope}/actions/runners/generate-jitconfig");
     req.Headers.Authorization = new("Bearer", ghPat);
     req.Headers.Accept.ParseAdd("application/vnd.github+json");
     req.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
@@ -325,7 +329,7 @@ async Task DeleteGhostRunner(string instanceId)
     try
     {
         var prefix = $"i{instanceId}-";
-        var url = $"https://api.github.com/orgs/{ghOrg}/actions/runners?per_page=100";
+        var url = $"https://api.github.com/{ghRunnerScope}/actions/runners?per_page=100";
         while (url is not null)
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
@@ -342,7 +346,7 @@ async Task DeleteGhostRunner(string instanceId)
                 if (name is not null && name.StartsWith(prefix) && id is int rid)
                 {
                     using var del = new HttpRequestMessage(HttpMethod.Delete,
-                        $"https://api.github.com/orgs/{ghOrg}/actions/runners/{rid}");
+                        $"https://api.github.com/{ghRunnerScope}/actions/runners/{rid}");
                     del.Headers.Authorization = new("Bearer", ghPat);
                     del.Headers.Accept.ParseAdd("application/vnd.github+json");
                     del.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
@@ -366,7 +370,7 @@ async Task<int> GitHubRunnerCount()
     try
     {
         var total = 0;
-        var url = $"https://api.github.com/orgs/{ghOrg}/actions/runners?per_page=100";
+        var url = $"https://api.github.com/{ghRunnerScope}/actions/runners?per_page=100";
         while (url is not null)
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
@@ -399,7 +403,7 @@ async Task<int> GitHubRunnerCount()
 async Task<Dictionary<string, bool>?> OnlineRunners()
 {
     var runners = new Dictionary<string, bool>();
-    var url = $"https://api.github.com/orgs/{ghOrg}/actions/runners?per_page=100";
+    var url = $"https://api.github.com/{ghRunnerScope}/actions/runners?per_page=100";
     for (var page = 1; ; page++)
     {
         var node = await GetJson($"{url}&page={page}");
@@ -1239,7 +1243,7 @@ _ = Task.Run(async () =>
                         var runnerNames = new HashSet<string>();
                         try
                         {
-                            var url = $"https://api.github.com/orgs/{ghOrg}/actions/runners?per_page=100";
+                            var url = $"https://api.github.com/{ghRunnerScope}/actions/runners?per_page=100";
                             while (url is not null)
                             {
                                 using var req = new HttpRequestMessage(HttpMethod.Get, url);
