@@ -906,6 +906,7 @@ describe("route lifecycle", () => {
       "workflows/agent-refine.md": "# Refine\n",
       "workflows/agent-release.md": "# Release\n",
       "workflows/release-tag.yml": "name: Release Tag\n",
+      "workflows/release-to-production.yml": "name: Release to production\n",
       "workflows/work-router.yml": "name: Router\n",
       "scripts/compile-agent-workflows.mjs": "compile\n",
       "templates/opencode/opencode.ci.json": "{}\n",
@@ -916,6 +917,9 @@ describe("route lifecycle", () => {
 
     expect(withRelease.installed).toContain(".github/workflows/release-tag.yml");
     expect(withoutRelease.installed).not.toContain(".github/workflows/release-tag.yml");
+    // The one-click production release goes and comes with the release route it dispatches.
+    expect(withRelease.installed).toContain(".github/workflows/release-to-production.yml");
+    expect(withoutRelease.installed).not.toContain(".github/workflows/release-to-production.yml");
     expect(withoutRelease.installed).toContain(".github/workflows/agent-refine.md");
   });
 

@@ -12,6 +12,12 @@ Releases of `@plainconceptsplatform/workflows`. Earlier versions are described i
 
 - **A failed harness preflight is reported as configuration, not as a provider outage.** When the agent job stopped in `Sync harness agents and print model routing` (`sync-agents.mjs --strict` exits 1 with no specialist `*-engineer.md`) or in the CI provider merge, the run ended in a minute, read as a short run, was commented as "what a provider outage looks like" and retried five times, each failing the same way (#527). `decide-agent-retry` now reads the failed step's name from the jobs API; `classify-failure.sh` names those steps `configuration`, which is never retried, whatever the duration. Refine, implement, triage and apply-review park it with `review` but not `stalled` (the janitor would retry it) and post one comment naming the step and the fix (`/make-engineer` for the missing templates). The action gains `failed-step` and `reason` outputs.
 
+## 1.19.0
+
+### Added
+
+- **Release to production, one button.** The `release` route now installs `release-to-production.yml`: Actions, Release to production, Run workflow, with a `bump` input that defaults to `minor`. It runs the release worker directly with `deploy=true`, as the router's call-release job does, because the router's `workflow_dispatch` is already at GitHub's ten-input limit; the release worker then writes a `<!-- release-deploy -->` marker and a visible notice into the release pull request, which auto-merges as before. `release-tag.yml` tags it and, finding the marker, starts `DEPLOY_WORKFLOW` (default `app-deploy.yml`) on the new tag with `GITHUB_TOKEN`; a missing deploy workflow is a warning, not a failure. The marker and the notice stay out of the published release notes. A `pro` environment with required reviewers still asks a person before production. A release started from the router alone still tags without deploying.
+
 ## 1.18.1
 
 ### Fixed

@@ -40,6 +40,11 @@ on:
         required: false
         type: string
         default: "auto"
+      deploy:
+        description: "true when release-to-production.yml asked for a deploy: the release PR then carries the deploy marker"
+        required: false
+        type: string
+        default: "false"
 
 runs-on: agents-arc
 runs-on-slim: agents-arc
@@ -233,10 +238,18 @@ jobs:
           BASE: ${{ steps.branch.outputs.base }}
           BRANCH: ${{ steps.branch.outputs.branch }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          DEPLOY: ${{ inputs.deploy }}
         run: |
           set -euo pipefail
+          # The deploy marker is what makes release-tag.yml start the production deploy on the
+          # new tag. Only release-to-production.yml asks for it; a plain release route never does.
           {
             echo "<!-- release:v${NEW_VERSION} -->"
+            if [ "$DEPLOY" = "true" ]; then
+              echo "<!-- release-deploy -->"
+              echo "> Deploys to production once this merges and v${NEW_VERSION} is tagged."
+              echo
+            fi
             cat /tmp/release-notes.md
           } > /tmp/release-pr-body.md
           url=$(gh pr create \

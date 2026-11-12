@@ -12,6 +12,20 @@ Source repository for Platform GitHub agentic workflows and the `@plainconceptsp
 
 Consumer repositories generate and commit their own `*.lock.yml` files. This repository does not store generated workflow locks.
 
+## Release to production
+
+Installed with the `release` route, `release-to-production.yml` is the one button for shipping:
+Actions, **Release to production**, Run workflow (the bump defaults to `minor`). It runs the
+release worker with a deploy: the release pull request merges by itself, `release-tag.yml` tags it,
+and then starts `DEPLOY_WORKFLOW` (default `app-deploy.yml`) on the new tag. A `pro` environment
+with required reviewers still asks a person before production. Put the button in the app's README:
+
+```markdown
+[![Release to production](https://github.com/OWNER/REPO/actions/workflows/release-to-production.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/release-to-production.yml)
+```
+
+A release started from the router (`operation=release`) still tags and publishes without deploying.
+
 ## Runner host
 
 The agent workers target `runs-on: agents-arc`. [`runners/`](runners/) builds that fleet,
@@ -41,7 +55,7 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | `apply-review` | `agent-apply-review.md` | someone comments on a bot pull request or requests changes | the requested changes pushed to that pull request. An approval is not feedback: `merge-approved` merges the approved commit when the gate had parked it for a person |
 | `audit` | `agent-audit.md` | Mondays, or on demand | a tracking report of every finding, labelled `audit`, and one story issue per top finding, labelled `refine` and linked under the report; every body is sized under refine's limit before it is filed |
 | `docs-audit` | `agent-docs-audit.md` | days 1 and 15 of the month, or on demand. Optional: `workflows add docs-audit` | only when something is stale: a tracking report of every finding, labelled `docs-audit`, and one story issue per top finding, labelled `documentation` + `refine` and linked under the report; every body is sized under refine's limit before it is filed |
-| `release` | `agent-release.md` | on demand (`operation=release`) | a `chore(release): vX.Y.Z` pull request with auto-merge; `release-tag.yml` tags it and publishes the GitHub Release once it merges |
+| `release` | `agent-release.md` | on demand (`operation=release`), or the **Release to production** button (`release-to-production.yml`) | a `chore(release): vX.Y.Z` pull request with auto-merge; `release-tag.yml` tags it and publishes the GitHub Release once it merges, and deploys the tag to production when the button started it |
 
 Plus the plumbing, which has no agent in it: `work-router.yml` (the router itself),
 `authorize-bot-work.yml` (a human's label is checked, then the bot re-labels so the workers see
