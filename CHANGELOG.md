@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.18.1
+
+### Fixed
+
+- **`capture-mockup.mjs` uses literal regular expressions.** It built one from a variable, which the family's blocking Semgrep scan reports as `detect-non-literal-regexp`, so every consumer that installed 1.18.0 failed SAST on the vendored action.
+
 ## 1.18.0
 
 ### Added
