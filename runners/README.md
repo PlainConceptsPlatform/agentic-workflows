@@ -93,6 +93,7 @@ App settings:
 | `MAX_VMS` | hard fleet ceiling (default 6; live 10) |
 | `WATCH_REPOS` | Repos polled each sweep as a safety net for a missed queued webhook. Empty discovers every private repo of the org with a push in the last 14 days, newest first, cached 30 minutes; a comma-separated list overrides it. |
 | `RUNNER_GROUP_ID` | GitHub runner group for minted runners |
+| `GH_REPO` | Optional. A bare repository name switches the scaler to repo-level runners on `GH_ORG/GH_REPO` (no org admin or runner group needed; set `RUNNER_GROUP_ID=1`). Empty keeps org-level |
 
 Azure access uses the app's system-assigned managed identity (Virtual Machine
 Contributor on the RG).
