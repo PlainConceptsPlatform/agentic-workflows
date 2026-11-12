@@ -3672,18 +3672,20 @@ fi
 
 echo "── Release to production ──────────────────────────────────────────────────"
 
-# One button ships a release: release-to-production.yml dispatches the release route with a deploy,
-# the release pull request carries a marker, and release-tag.yml deploys the tag only when it finds
-# it. A release without the marker must keep not deploying.
+# One button ships a release: release-to-production.yml runs the release worker with deploy=true
+# (the router's workflow_dispatch is at GitHub's ten-input limit), the release pull request carries
+# a marker, and release-tag.yml deploys the tag only when it finds it. A release without the marker
+# must keep not deploying.
 RTP_YML="${WORKFLOWS_DIR}/release-to-production.yml"
 RT_YML="${WORKFLOWS_DIR}/release-tag.yml"
 if [ -f "$RTP_YML" ] && worker_installed release; then
   RTP_OK=1
   rtp() { grep -qE "$1" "$2" || { RTP_OK=0; echo "FAIL: release to production: $3" >&2; }; }
-  rtp 'operation=release -f version-bump="\$BUMP" -f deploy=true' "$RTP_YML" 'the button must dispatch the release route with deploy=true'
+  rtp 'uses: \./\.github/workflows/agent-release\.lock\.yml' "$RTP_YML" 'the button must run the release worker'
+  rtp '^      deploy: "true"$' "$RTP_YML" 'the button must ask the release worker for a deploy'
   rtp 'default: minor' "$RTP_YML" 'the button must default to a minor bump'
-  rtp '^      deploy:$' "$ROUTER_YML" 'the router has no deploy dispatch input'
-  rtp "deploy: \\$\\{\\{ github.event.inputs.deploy == 'true'" "$ROUTER_YML" 'the router does not pass deploy to the release worker'
+  rtp '^    permissions: write-all$' "$RTP_YML" 'the button must grant the worker write-all, or the run never starts'
+  if grep -qE '^      deploy:' "$ROUTER_YML"; then RTP_OK=0; echo "FAIL: release to production: the router's workflow_dispatch is at the ten-input limit; deploy belongs to the button" >&2; fi
   rtp '<!-- release-deploy -->' "${WORKFLOWS_DIR}/agent-release.md" 'the release worker never writes the deploy marker'
   rtp 'if \[ "\$DEPLOY" = "true" \]' "${WORKFLOWS_DIR}/agent-release.md" 'the deploy marker must depend on the deploy input'
   rtp "if: steps.release.outputs.deploy == 'true'" "$RT_YML" 'release-tag.yml must deploy only when the release asked for it'

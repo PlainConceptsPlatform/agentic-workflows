@@ -599,7 +599,7 @@ nothing reaches `main` except through a pull request.
 ```mermaid
 flowchart TD
     relStart("Work Router<br/>release route<br/>operation=release") --> relFacts
-    relButton("Release to production button<br/>bump (default minor), deploy=true") --> relStart
+    relButton("Release to production button<br/>bump (default minor), deploy=true") --> relFacts
     relFacts("Facts (rung 3)<br/>Commit log since the last tag<br/>and the current version, to disk") --> relAgent
     relAgent("Agent (rung 5)<br/>Categorise by conventional-commit<br/>prefix, write release-notes.md.<br/>The only judgement in this route") --> relNoop
     relNoop("noop<br/>the agent writes a file,<br/>not a GitHub object") --> relConclude
@@ -636,7 +636,8 @@ The version bump, the tag and the Release are deterministic on purpose. The agen
 a file on disk, so a confused model cannot publish a release. The tag and the Release use
 `GITHUB_TOKEN` so that a consumer deploying on `v*` tags does not deploy because a release was cut.
 The **Release to production** button (`release-to-production.yml`) is the one way a release deploys:
-it starts the route with `deploy=true`, the release pull request carries `<!-- release-deploy -->`,
+it runs the worker directly with `deploy=true` (the router's dispatch is at GitHub's ten-input
+limit), the release pull request carries `<!-- release-deploy -->`,
 and only then does `release-tag.yml` start `DEPLOY_WORKFLOW` on the tag, explicitly.
 
 

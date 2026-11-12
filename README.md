@@ -15,8 +15,8 @@ Consumer repositories generate and commit their own `*.lock.yml` files. This rep
 ## Release to production
 
 Installed with the `release` route, `release-to-production.yml` is the one button for shipping:
-Actions, **Release to production**, Run workflow (the bump defaults to `minor`). It starts the
-release route with a deploy: the release pull request merges by itself, `release-tag.yml` tags it,
+Actions, **Release to production**, Run workflow (the bump defaults to `minor`). It runs the
+release worker with a deploy: the release pull request merges by itself, `release-tag.yml` tags it,
 and then starts `DEPLOY_WORKFLOW` (default `app-deploy.yml`) on the new tag. A `pro` environment
 with required reviewers still asks a person before production. Put the button in the app's README:
 
