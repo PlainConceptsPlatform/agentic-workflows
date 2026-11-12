@@ -3356,7 +3356,7 @@ for job in authorize classify; do
   sed -n "/^  ${job}:\$/,/^    runs-on:/p" "${WORKFLOWS_DIR}/work-router.yml" | grep -qF "if: vars.AGENTIC_WORKFLOWS_DISABLED == ''" ||
     { OFF_OK=0; echo "FAIL: the router's ${job} job ignores AGENTIC_WORKFLOWS_DISABLED" >&2; }
 done
-for f in "${WORKFLOWS_DIR}/authorize-bot-work.yml" "${WORKFLOWS_DIR}/release-tag.yml"; do
+for f in "${WORKFLOWS_DIR}/authorize-bot-work.yml" "${WORKFLOWS_DIR}/release-tag.yml" "${WORKFLOWS_DIR}/release-to-production.yml"; do
   [ -f "$f" ] || continue
   grep -qF "vars.AGENTIC_WORKFLOWS_DISABLED == ''" "$f" ||
     { OFF_OK=0; echo "FAIL: $(basename "$f") ignores AGENTIC_WORKFLOWS_DISABLED" >&2; }
@@ -3668,6 +3668,28 @@ if worker_installed merge-gate; then
 fi
 
   if [ "$GATE_RUN_ID_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
+echo "── Release to production ──────────────────────────────────────────────────"
+
+# One button ships a release: release-to-production.yml dispatches the release route with a deploy,
+# the release pull request carries a marker, and release-tag.yml deploys the tag only when it finds
+# it. A release without the marker must keep not deploying.
+RTP_YML="${WORKFLOWS_DIR}/release-to-production.yml"
+RT_YML="${WORKFLOWS_DIR}/release-tag.yml"
+if [ -f "$RTP_YML" ] && worker_installed release; then
+  RTP_OK=1
+  rtp() { grep -qE "$1" "$2" || { RTP_OK=0; echo "FAIL: release to production: $3" >&2; }; }
+  rtp 'operation=release -f version-bump="\$BUMP" -f deploy=true' "$RTP_YML" 'the button must dispatch the release route with deploy=true'
+  rtp 'default: minor' "$RTP_YML" 'the button must default to a minor bump'
+  rtp '^      deploy:$' "$ROUTER_YML" 'the router has no deploy dispatch input'
+  rtp "deploy: \\$\\{\\{ github.event.inputs.deploy == 'true'" "$ROUTER_YML" 'the router does not pass deploy to the release worker'
+  rtp '<!-- release-deploy -->' "${WORKFLOWS_DIR}/agent-release.md" 'the release worker never writes the deploy marker'
+  rtp 'if \[ "\$DEPLOY" = "true" \]' "${WORKFLOWS_DIR}/agent-release.md" 'the deploy marker must depend on the deploy input'
+  rtp "if: steps.release.outputs.deploy == 'true'" "$RT_YML" 'release-tag.yml must deploy only when the release asked for it'
+  rtp 'gh workflow run "\$DEPLOY_WORKFLOW" --repo "\$REPO" --ref "\$TAG"' "$RT_YML" 'release-tag.yml must start the deploy on the tag'
+  rtp '^  DEPLOY_WORKFLOW: ' "$RT_YML" 'release-tag.yml does not declare DEPLOY_WORKFLOW'
+  if [ "$RTP_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
 echo "── App error privacy ─────────────────────────────────────────────────────"

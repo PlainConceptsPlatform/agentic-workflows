@@ -331,6 +331,11 @@ on:
           - patch
           - minor
           - major
+      deploy:
+        description: "Release only: deploy the new tag to production once the release merges"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -1210,6 +1215,9 @@ jobs:
     permissions: write-all
     with:
       version-bump: ${{ github.event.inputs.version-bump || 'auto' }}
+      # Set by release-to-production.yml. The release pull request carries a marker, and
+      # release-tag.yml deploys the tag only when it finds one.
+      deploy: ${{ github.event.inputs.deploy == 'true' && 'true' || 'false' }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
       # The release PR is pushed and opened with the App token so its CI runs; see conclude.

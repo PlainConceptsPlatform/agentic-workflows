@@ -256,6 +256,6 @@ describe("excludedWorkerFiles", () => {
   it("returns all worker and companion files when no routes are selected", () => {
     const excluded = excludedWorkerFiles([]);
     expect([...excluded].filter((file) => file.startsWith("agent-")).length).toBe(routeNames.length);
-    expect([...excluded].filter((file) => !file.startsWith("agent-"))).toEqual(["release-tag.yml"]);
+    expect([...excluded].filter((file) => !file.startsWith("agent-"))).toEqual(["release-tag.yml", "release-to-production.yml"]);
   });
 });

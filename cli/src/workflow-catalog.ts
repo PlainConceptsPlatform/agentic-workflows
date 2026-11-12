@@ -28,7 +28,7 @@ export const workflowRoutes: readonly WorkflowRoute[] = [
   { name: "merge-gate", worker: "agent-merge-gate.md", description: "Decides what happens to the pull request the merge train hands it, the bot's or a person's: repair it, merge it, or hand it to a human.", defaultEnabled: true },
   { name: "audit", worker: "agent-audit.md", description: "Read-only repository audit. Finds 5-7 problems, scores each 1-10, and files a tracking report plus one story issue per top finding, each sized for Refine.", defaultEnabled: true },
   { name: "docs-audit", worker: "agent-docs-audit.md", description: "Read-only documentation audit, every fortnight. Checks the documentation against the code and the Platform standard, and files one issue that Refine then sizes and splits, only when something is stale.", defaultEnabled: false },
-  { name: "release", worker: "agent-release.md", description: "Writes release notes from the commit log, then a deterministic job opens a version-bump pull request with auto-merge; once it merges, release-tag.yml tags the commit and publishes the GitHub Release. Manual dispatch only (operation=release).", defaultEnabled: true, companions: ["release-tag.yml"] },
+  { name: "release", worker: "agent-release.md", description: "Writes release notes from the commit log, then a deterministic job opens a version-bump pull request with auto-merge; once it merges, release-tag.yml tags the commit and publishes the GitHub Release. Manual dispatch only (operation=release), or release-to-production.yml, which also deploys the new tag to production.", defaultEnabled: true, companions: ["release-tag.yml", "release-to-production.yml"] },
 ];
 
 /** What an install with no explicit selection gets. An optional worker is added by name. */
