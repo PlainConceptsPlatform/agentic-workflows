@@ -39,6 +39,9 @@ param webhookSecret string
 @secure()
 param vmToken string
 
+@description('Bare repository name: manage runners on that repository instead of the organisation (repo-level mode). Empty keeps org-level.')
+param ghRepo string = ''
+
 param location string = resourceGroup().location
 param vmSku string = 'Standard_D4ads_v5'
 param agentMemoryVersion string = '0.9.28'
@@ -184,6 +187,7 @@ resource scaler 'Microsoft.Web/sites@2023-12-01' = {
       appSettings: [
         { name: 'GH_PAT', value: ghPat }
         { name: 'GH_ORG', value: 'PlainConceptsPlatform' }
+        { name: 'GH_REPO', value: ghRepo }
         { name: 'WEBHOOK_SECRET', value: webhookSecret }
         { name: 'VM_TOKEN', value: vmToken }
         { name: 'AZ_SUBSCRIPTION', value: subscription().subscriptionId }

@@ -24,7 +24,9 @@ echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://package
 
 # Node.js ${NODE_MAJOR} LTS from NodeSource
 # Needed for pnpm, opencode, agentmemory, codegraph and openspec
-curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash -
+# NodeSource apt repository with its signing key, instead of piping their setup script into bash.
+curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
 
 apt-get update -qq
 apt-get install -y -qq \
