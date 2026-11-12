@@ -215,6 +215,19 @@
     footer a { color: var(--muted-foreground); text-decoration: none; }
     footer a:hover { color: var(--foreground); }
     footer nav { display: flex; gap: 16px; flex-wrap: wrap; }
+    .cookie-banner { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 50; max-width: 42rem; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--background); color: var(--foreground); box-shadow: 0 10px 25px rgba(0,0,0,.15); font-size: 14px; }
+    .cookie-banner[hidden] { display: none; }
+    .cookie-banner p { margin: 0; }
+    .cookie-banner .cookie-text { flex: 1 1 260px; }
+    .cookie-banner .cookie-title { font-weight: 600; }
+    .cookie-banner .cookie-body { margin-top: 4px; color: var(--muted-foreground); }
+    .cookie-banner .cookie-actions { display: flex; gap: 8px; }
+    .cookie-banner button { height: 36px; padding: 0 16px; border-radius: var(--radius); font: inherit; font-weight: 500; cursor: pointer; border: 1px solid var(--border); background: var(--background); color: var(--foreground); }
+    .cookie-banner button:hover { background: var(--muted); }
+    .cookie-banner button.cookie-accept { border-color: var(--primary); background: var(--primary); color: #fff; }
+    .cookie-banner button.cookie-accept:hover { background: var(--primary-hover); }
+    footer button.cookie-settings { padding: 0; border: 0; background: none; font: inherit; color: var(--muted-foreground); cursor: pointer; }
+    footer button.cookie-settings:hover { color: var(--foreground); }
 
     @media (max-width: 900px) {
       .grid, .grid--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -240,15 +253,24 @@
       *, *::before, *::after { transition-duration: .01ms !important; }
     }
   </style>
-<!-- Google Tag Manager container for the public Platform sites. -->
-<script async src="https://www.googletagmanager.com/gtm.js?id=GTM-T2QXWRBW"></script>
+<!-- Google Tag Manager with Consent Mode v2: storage stays denied until the visitor accepts in the
+     banner. Same behaviour and storage key as @plainconceptsplatform/ui-components/cookie-consent. -->
 <script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
+  gtag('consent', 'default', { ad_storage: 'denied', ad_user_data: 'denied', ad_personalization: 'denied', analytics_storage: 'denied', wait_for_update: 500 });
+  try {
+    if (localStorage.getItem('pc-cookie-consent') === 'granted') {
+      gtag('consent', 'update', { ad_storage: 'granted', ad_user_data: 'granted', ad_personalization: 'granted', analytics_storage: 'granted' });
+    }
+  } catch (_) {}
   gtag('js', new Date());
+  dataLayer.push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' });
 </script>
+<script async src="https://www.googletagmanager.com/gtm.js?id=GTM-T2QXWRBW"></script>
 </head>
 <body>
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T2QXWRBW" height="0" width="0" style="display:none;visibility:hidden" title="Google Tag Manager"></iframe></noscript>
   <header>
     <div class="container bar">
       <nav class="brand" aria-label="Breadcrumb">
@@ -465,6 +487,7 @@
         <a href="https://harness.platform.plainconcepts.dev">Agent Harness</a>
         <a href="https://health.platform.plainconcepts.dev">Project Health</a>
         <a href="https://github.com/PlainConceptsPlatform/agentic-workflows">GitHub</a>
+        <button type="button" class="cookie-settings" data-cookie-settings>Cookie settings</button>
       </nav>
     </div>
   </footer>
@@ -551,5 +574,36 @@
       });
     })();
   </script>
+  <section class="cookie-banner" aria-label="Cookies" hidden>
+    <div class="cookie-text">
+      <p class="cookie-title">Cookies</p>
+      <p class="cookie-body">We use analytics cookies to understand how this site is used. They are only set if you accept.</p>
+    </div>
+    <div class="cookie-actions">
+      <button type="button" data-consent="denied">Reject</button>
+      <button type="button" class="cookie-accept" data-consent="granted">Accept</button>
+    </div>
+  </section>
+  <script>
+    (function () {
+      var KEY = 'pc-cookie-consent';
+      var banner = document.querySelector('.cookie-banner');
+      var stored = null;
+      try { stored = localStorage.getItem(KEY); } catch (_) {}
+      if (stored !== 'granted' && stored !== 'denied') banner.hidden = false;
+      banner.querySelectorAll('[data-consent]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var choice = b.getAttribute('data-consent');
+          try { localStorage.setItem(KEY, choice); } catch (_) {}
+          gtag('consent', 'update', { ad_storage: choice, ad_user_data: choice, ad_personalization: choice, analytics_storage: choice });
+          banner.hidden = true;
+        });
+      });
+      document.querySelectorAll('[data-cookie-settings]').forEach(function (b) {
+        b.addEventListener('click', function () { banner.hidden = false; });
+      });
+    })();
+  </script>
+
 </body>
 </html>
