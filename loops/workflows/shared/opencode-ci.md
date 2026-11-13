@@ -254,6 +254,20 @@ pre-agent-steps:
       if [ -f .opencode/scripts/sync-agents.mjs ] && [ -f .opencode/plugins/pc-subagent-tiers-core.js ]; then
         node .opencode/scripts/sync-agents.mjs --strict
       fi
+      # agent-harness before 3.11.3 writes `resource: *` into plan.md, planner.md and planner-sub.md. A bare `*` is
+      # a YAML alias, so the frontmatter does not parse, opencode drops the agents' `mode`, treats them as primary
+      # and refuses to spawn them ("Agent planner-sub cannot run as a subagent"). These files are generated here on
+      # every run and never committed, so quote the value before opencode reads them; a no-op once the harness does.
+      if [ -d .opencode/agents ]; then
+        for agent_file in .opencode/agents/*.md; do
+          [ -e "$agent_file" ] || continue
+          sed -i -E 's/resource:[[:space:]]+[*][[:space:]]*$/resource: "*"/' "$agent_file"
+        done
+        if grep -nE '^[[:space:]]+resource:[[:space:]]+[*]' .opencode/agents/*.md; then
+          echo "::error::A generated agent file still has an unquoted permission resource; opencode cannot parse it." >&2
+          exit 1
+        fi
+      fi
       if [ -f .opencode/scripts/harness-doctor.mjs ]; then
         node .opencode/scripts/harness-doctor.mjs --strict
       fi

@@ -802,8 +802,11 @@ timeout-minutes: 180
    (`pc-plan-propose` or `pc-plan-archive`), the issue context path above, the branch, and that it
    runs in autonomous mode with no one to ask. `planner-sub` runs on the repository's plan model,
    which these two steps decide the whole change on. Wait for it in the same turn, then continue
-   with the next phase yourself. If `planner-sub` is not in the task tool's enum, call
-   `report_incomplete` naming it; do not load `pc-plan-propose` here. Only when the harness is
+   with the next phase yourself. If `planner-sub` is not in the task tool's enum, or the task tool
+   returns an error when you spawn it (`Agent planner-sub cannot run as a subagent`, `Unknown agent`),
+   call `report_incomplete` once with that exact error text and stop: do not retry with `planner` or
+   any other agent, and do not load `pc-plan-propose` here. Another attempt fails the same way and
+   only spends the run; the cause is the repository's generated agent files, not the issue. Only when the harness is
    older than 3.4.0 and has neither `planner` nor `planner-sub` may you load the skill here.
 
    2. `pc-plan-propose`, even when the issue is refined. It is what turns the issue into

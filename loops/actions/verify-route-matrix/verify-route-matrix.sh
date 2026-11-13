@@ -1934,6 +1934,15 @@ fi
 if worker_installed implement && ! grep -qF 'subagent_type: planner-sub' "$IMPLEMENT_WORKER_MD"; then
   LEAD_OK=0; echo "FAIL: the implement prompt must run propose and archive in the planner-sub agent" >&2
 fi
+# agent-harness before 3.11.3 writes `resource: *`, a YAML alias that does not parse: opencode drops the agent's
+# mode and refuses to spawn planner and planner-sub ("cannot run as a subagent"). The CI setup repairs the
+# generated files before opencode reads them, and the implement prompt stops at the first spawn error.
+if ! grep -qF 'resource: "*"' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
+  LEAD_OK=0; echo "FAIL: the CI setup must quote the generated agents' permission resource (a bare * is a YAML alias)" >&2
+fi
+if worker_installed implement && ! grep -qF 'cannot run as a subagent' "$IMPLEMENT_WORKER_MD"; then
+  LEAD_OK=0; echo "FAIL: the implement prompt must stop at a planner-sub spawn error instead of retrying other agents" >&2
+fi
 if [ "$LEAD_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # The harness plugins only load with .opencode/node_modules installed; without it every CI run
 # spawned untiered workers on the session's model. And the tier model a worker pins has to be one
