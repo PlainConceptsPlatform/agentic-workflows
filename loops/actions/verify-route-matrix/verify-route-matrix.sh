@@ -3731,6 +3731,12 @@ rc 'side-checks\.sh' "${HERE}/../merge-agent-pr/action.yml" 'merge-agent-pr must
 rc 'land-pull-request/side-checks\.sh' "${HERE}/../merge-train/merge-train.sh" 'the merge train must hold a pull request whose side workflow is red'
 rc 'test-timings\.mjs' "$CI_DOTNET" 'the .NET template must summarise the test timings'
 [ "$(grep -c -- '--logger trx' "$CI_DOTNET")" -ge 5 ] || { RC_OK=0; echo "FAIL: required checks: every .NET test step must write a trx report" >&2; }
+# The template sync installs copier on a runner whose Python cannot make a venv: the pinned uv it
+# falls back to must stay checked against its SHA-256, or the sync never runs (it never had).
+SYNC_YML="${HERE}/../../templates/platform-template/.github/workflows/platform-template-sync.yml"
+rc '^  UV_SHA256: [0-9a-f]{64}$' "$SYNC_YML" 'the template sync must pin uv by SHA-256'
+rc 'sha256sum --check --strict' "$SYNC_YML" 'the template sync must check the uv download'
+rc "python3 -c 'import ensurepip'" "$SYNC_YML" 'the template sync must not try a venv where ensurepip is missing'
 if [ "$RC_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 echo "── App error privacy ─────────────────────────────────────────────────────"
