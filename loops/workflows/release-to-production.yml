@@ -7,7 +7,7 @@ name: Release to production
 # DEPLOY_WORKFLOW on the new tag, which ships to production. A `pro` environment with required
 # reviewers still asks a person before the production stage runs.
 #
-# It calls the worker directly, as the router's call-release job does, because the router's
+# It calls the worker directly rather than through the router's dispatch-release job, because the router's
 # workflow_dispatch is at GitHub's limit of ten inputs and has no room for a deploy flag. Running a
 # workflow by hand already requires write access to the repository, which is what the router's
 # authorize job checks. The release route on its own (Main Work Router, operation=release) is

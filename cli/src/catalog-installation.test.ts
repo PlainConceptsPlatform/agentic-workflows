@@ -343,6 +343,170 @@ describe("catalog installation", () => {
     expect(written).not.toContain("hand-edited");
   });
 
+  // agentics-housekeeping.yml took the janitor jobs and their settings out of the router. A
+  // repository that tuned those settings in its router must find them in the new file.
+  describe("split-out housekeeping workflow", () => {
+    const routerWith = (env: string, version?: string) =>
+      `${header("loops/workflows/work-router.yml", version)}name: "# Main Work Router"\n\nenv:\n${env}\non:\n  workflow_dispatch:\n\njobs:\n  classify:\n    runs-on: x\n`;
+    const housekeepingWith = (env: string, version?: string) =>
+      `${header("loops/workflows/agentics-housekeeping.yml", version)}name: "Agentics: Housekeeping"\n\nenv:\n${env}\non:\n  workflow_dispatch:\n\njobs:\n  housekeeping:\n    runs-on: x\n`;
+    const packageRouter = routerWith('  TRUSTED_BOTS: "bot"\n  MERGE_TRAIN_HOLD_LABEL: "hold"\n');
+    const packageHousekeeping = housekeepingWith('  HOUSEKEEPING_RETRY_AFTER_HOURS: "1"\n  MERGE_TRAIN_HOLD_LABEL: "hold"\n');
+    const packageSource = () => createDirectory({
+      "workflows/work-router.yml": packageRouter,
+      "workflows/agentics-housekeeping.yml": packageHousekeeping,
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+
+    it("takes a setting the consumer tuned in its router into the new file, and drops it from the router", async () => {
+      const sourcePath = await packageSource();
+      const repositoryPath = await createDirectory({
+        ".github/workflows/work-router.yml": routerWith(
+          '  TRUSTED_BOTS: "bot"\n  HOUSEKEEPING_RETRY_AFTER_HOURS: "12"\n  MERGE_TRAIN_HOLD_LABEL: "parked"\n', "0.6.0"),
+      });
+
+      const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", baseline: offline });
+
+      expect(result.changes.find((change) => change.target === ".github/workflows/agentics-housekeeping.yml"))
+        .toMatchObject({ status: "added", keptEnv: ["HOUSEKEEPING_RETRY_AFTER_HOURS", "MERGE_TRAIN_HOLD_LABEL"] });
+      const housekeeping = await readFile(join(repositoryPath, ".github/workflows/agentics-housekeeping.yml"), "utf8");
+      expect(housekeeping).toContain('  HOUSEKEEPING_RETRY_AFTER_HOURS: "12"\n');
+      expect(housekeeping).toContain('  MERGE_TRAIN_HOLD_LABEL: "parked"\n');
+      const router = await readFile(join(repositoryPath, ".github/workflows/work-router.yml"), "utf8");
+      expect(router).not.toContain("HOUSEKEEPING_RETRY_AFTER_HOURS");
+      expect(router).toContain('  MERGE_TRAIN_HOLD_LABEL: "parked"\n');
+      expect(result.changes.find((change) => change.target === ".github/workflows/work-router.yml")?.consumerOnlyEnv)
+        .toBeUndefined();
+    });
+
+    it("lets an untouched old router default follow the package", async () => {
+      const sourcePath = await packageSource();
+      const baselineLoops = await createDirectory({
+        "workflows/work-router.yml": routerWith('  TRUSTED_BOTS: "bot"\n  HOUSEKEEPING_RETRY_AFTER_HOURS: "6"\n  MERGE_TRAIN_HOLD_LABEL: "hold"\n'),
+      });
+      const repositoryPath = await createDirectory({
+        ".github/workflows/work-router.yml": routerWith(
+          '  TRUSTED_BOTS: "bot"\n  HOUSEKEEPING_RETRY_AFTER_HOURS: "6"\n  MERGE_TRAIN_HOLD_LABEL: "hold"\n', "0.6.0"),
+      });
+
+      await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", baseline: async () => baselineLoops });
+
+      const housekeeping = await readFile(join(repositoryPath, ".github/workflows/agentics-housekeeping.yml"), "utf8");
+      expect(housekeeping).toContain('  HOUSEKEEPING_RETRY_AFTER_HOURS: "1"\n');
+    });
+
+    it("keeps the file's own values on later updates and copies the router's shared ones", async () => {
+      const sourcePath = await packageSource();
+      const repositoryPath = await createDirectory({
+        ".github/workflows/work-router.yml": routerWith('  TRUSTED_BOTS: "bot"\n  MERGE_TRAIN_HOLD_LABEL: "frozen"\n', "0.7.0"),
+        ".github/workflows/agentics-housekeeping.yml": housekeepingWith(
+          '  HOUSEKEEPING_RETRY_AFTER_HOURS: "24"\n  MERGE_TRAIN_HOLD_LABEL: "hold"\n', "0.7.0"),
+      });
+
+      const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.8.0", baseline: offline });
+
+      expect(result.changes.find((change) => change.target === ".github/workflows/agentics-housekeeping.yml"))
+        .toMatchObject({ status: "updated", keptEnv: ["HOUSEKEEPING_RETRY_AFTER_HOURS"] });
+      const housekeeping = await readFile(join(repositoryPath, ".github/workflows/agentics-housekeeping.yml"), "utf8");
+      expect(housekeeping).toContain('  HOUSEKEEPING_RETRY_AFTER_HOURS: "24"\n');
+      expect(housekeeping).toContain('  MERGE_TRAIN_HOLD_LABEL: "frozen"\n');
+    });
+  });
+
+  // The second split-out file. It owns the workflow_run trigger now, so the CI workflow name the
+  // consumer set in its router has to reach that literal line too.
+  describe("split-out merge belt workflow", () => {
+    const routerWith = (env: string, version?: string) =>
+      `${header("loops/workflows/work-router.yml", version)}name: "# Main Work Router"\n\nenv:\n${env}\non:\n  workflow_dispatch:\n\njobs:\n  classify:\n    runs-on: x\n`;
+    const beltWith = (env: string, ci = "App: CI", version?: string) =>
+      `${header("loops/workflows/agentics-merge-belt.yml", version)}name: "Agentics: Merge Belt"\n\nenv:\n${env}\non:\n  workflow_run:\n    workflows: ["${ci}"]\n    types: [completed]\n\njobs:\n  merge-train:\n    runs-on: x\n`;
+    const packageSource = () => createDirectory({
+      "workflows/work-router.yml": routerWith('  CI_WORKFLOW_NAME: "App: CI"\n  TRUSTED_BOTS: "bot"\n'),
+      "workflows/agentics-merge-belt.yml": beltWith('  CI_WORKFLOW_NAME: "App: CI"\n  TRUSTED_BOTS: "bot"\n  MERGE_TRAIN_REPAIRS: "1"\n'),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+
+    it("takes the train's settings from the router, drops them there, and mirrors the CI name into its trigger", async () => {
+      const sourcePath = await packageSource();
+      const repositoryPath = await createDirectory({
+        ".github/workflows/work-router.yml": routerWith(
+          '  CI_WORKFLOW_NAME: "Build"\n  TRUSTED_BOTS: "bot"\n  MERGE_TRAIN_REPAIRS: "3"\n', "0.6.0"),
+      });
+
+      const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", baseline: offline });
+
+      expect(result.changes.find((change) => change.target === ".github/workflows/agentics-merge-belt.yml"))
+        .toMatchObject({ status: "added" });
+      const belt = await readFile(join(repositoryPath, ".github/workflows/agentics-merge-belt.yml"), "utf8");
+      expect(belt).toContain('  MERGE_TRAIN_REPAIRS: "3"\n');
+      expect(belt).toContain('  CI_WORKFLOW_NAME: "Build"\n');
+      expect(belt).toContain('    workflows: ["Build"]\n');
+      const router = await readFile(join(repositoryPath, ".github/workflows/work-router.yml"), "utf8");
+      expect(router).not.toContain("MERGE_TRAIN_REPAIRS");
+      expect(router).toContain('  CI_WORKFLOW_NAME: "Build"\n');
+    });
+
+    it("follows a CI name changed in the router on a later update", async () => {
+      const sourcePath = await packageSource();
+      const repositoryPath = await createDirectory({
+        ".github/workflows/work-router.yml": routerWith('  CI_WORKFLOW_NAME: "Pipeline"\n  TRUSTED_BOTS: "bot"\n', "0.7.0"),
+        ".github/workflows/agentics-merge-belt.yml": beltWith(
+          '  CI_WORKFLOW_NAME: "Build"\n  TRUSTED_BOTS: "bot"\n  MERGE_TRAIN_REPAIRS: "2"\n', "Build", "0.7.0"),
+      });
+
+      await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.8.0", baseline: offline });
+
+      const belt = await readFile(join(repositoryPath, ".github/workflows/agentics-merge-belt.yml"), "utf8");
+      expect(belt).toContain('  CI_WORKFLOW_NAME: "Pipeline"\n');
+      expect(belt).toContain('    workflows: ["Pipeline"]\n');
+      expect(belt).toContain('  MERGE_TRAIN_REPAIRS: "2"\n');
+    });
+  });
+
+  describe("split-out pull request plumbing workflow", () => {
+    const routerWith = (env: string, version?: string) =>
+      `${header("loops/workflows/work-router.yml", version)}name: "# Main Work Router"\n\nenv:\n${env}\non:\n  pull_request_target:\n    types: [labeled, closed]\n\njobs:\n  classify:\n    runs-on: x\n`;
+    const plumbingWith = (env: string, version?: string) =>
+      `${header("loops/workflows/agentics-pr-plumbing.yml", version)}name: "Agentics: PR Plumbing"\n\nenv:\n${env}\non:\n  pull_request_target:\n    types: [opened, synchronize, reopened, labeled, closed]\n\njobs:\n  stack-landed:\n    runs-on: x\n`;
+    const packageSource = () => createDirectory({
+      "workflows/work-router.yml": routerWith('  UNATTENDED: "false"\n'),
+      "workflows/agentics-pr-plumbing.yml": plumbingWith('  UNATTENDED: "false"\n'),
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+
+    it("is added with the router's UNATTENDED, which stays in the router", async () => {
+      const sourcePath = await packageSource();
+      const repositoryPath = await createDirectory({
+        ".github/workflows/work-router.yml": routerWith('  UNATTENDED: "true"\n', "0.6.0"),
+      });
+
+      const result = await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.7.0", baseline: offline });
+
+      expect(result.changes.find((change) => change.target === ".github/workflows/agentics-pr-plumbing.yml"))
+        .toMatchObject({ status: "added" });
+      const plumbing = await readFile(join(repositoryPath, ".github/workflows/agentics-pr-plumbing.yml"), "utf8");
+      expect(plumbing).toContain('  UNATTENDED: "true"\n');
+      const router = await readFile(join(repositoryPath, ".github/workflows/work-router.yml"), "utf8");
+      expect(router).toContain('  UNATTENDED: "true"\n');
+    });
+
+    it("follows UNATTENDED changed in the router on a later update, over an edit of its own copy", async () => {
+      const sourcePath = await packageSource();
+      const repositoryPath = await createDirectory({
+        ".github/workflows/work-router.yml": routerWith('  UNATTENDED: "false"\n', "0.7.0"),
+        ".github/workflows/agentics-pr-plumbing.yml": plumbingWith('  UNATTENDED: "true"\n', "0.7.0"),
+      });
+
+      await installCatalog(repositoryPath, { sourcePath, packageVersion: "0.8.0", baseline: offline });
+
+      const plumbing = await readFile(join(repositoryPath, ".github/workflows/agentics-pr-plumbing.yml"), "utf8");
+      expect(plumbing).toContain('  UNATTENDED: "false"\n');
+    });
+  });
+
   it("dry-run computes the plan and writes nothing", async () => {
     const sourcePath = await createDirectory({
       "actions/check/action.yml": header("loops/actions/check/action.yml") + "name: Check\n",

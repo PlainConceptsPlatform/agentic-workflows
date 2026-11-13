@@ -1,8 +1,10 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/workflows/work-router.yml. Update with `workflows update --force`; consumer edits may be overwritten.
 name: "# Main Work Router"
 
-# Owns every repository automation trigger. Classifies each event into exactly one route,
-# then calls at most one worker or runs one deterministic job. No model runs here.
+# Owns the triggers that may start an agent. Classifies each event into exactly one route,
+# then calls at most one worker or runs one deterministic job. No model runs here. The cleanup
+# jobs live in agentics-housekeeping.yml, the merge train in agentics-merge-belt.yml, and the pull
+# request and stack plumbing in agentics-pr-plumbing.yml.
 
 # GitHub titles an issue-triggered run with the issue title, so every run on one issue reads
 # the same. Name it after the event instead. This is evaluated before any job, so it can
@@ -52,8 +54,6 @@ run-name: >-
   && format('Event: Review comment on PR #{0} by {1}', github.event.pull_request.number, github.actor)
   || github.event_name == 'pull_request_target'
   && format('Event: PR #{0} {1} by {2}', github.event.pull_request.number, github.event.action, github.actor)
-  || github.event_name == 'workflow_run'
-  && format('Event: CI {0} on {1}', github.event.workflow_run.conclusion, github.event.workflow_run.head_branch)
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'triage'
   && format('Agent: Triage - #{0}', inputs.issue-number)
@@ -64,15 +64,8 @@ run-name: >-
   && inputs.operation == 'implement'
   && format('Agent: Implement - #{0}', inputs.issue-number)
   || github.event_name == 'workflow_dispatch'
-  && inputs.operation == 'merge-gate'
-  && github.actor == 'github-actions[bot]'
-  && format('Agentics: Merge Train - CI on PR #{0}', inputs.pr-number)
-  || github.event_name == 'workflow_dispatch'
-  && inputs.operation == 'merge-gate'
-  && format('Agent: Merge Gate - PR #{0}{1}', inputs.pr-number, inputs.ci-conclusion == 'failure' && ' (repair)' || '')
-  || github.event_name == 'workflow_dispatch'
-  && inputs.operation == 'merge-train'
-  && format('Agentics: Merge Train{0}', '')
+  && (inputs.operation == 'merge-gate' || inputs.operation == 'merge-train' || inputs.operation == 'reconcile-bot-pr-runs')
+  && format('Event: {0}{1} forwarded to Agentics: Merge Belt', inputs.operation, inputs.pr-number != '' && format(' on PR #{0}', inputs.pr-number) || '')
   || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'evidence'
   && format('Agentics: Evidence - PR #{0}', inputs.pr-number)
@@ -89,6 +82,9 @@ run-name: >-
   && inputs.operation == 'release'
   && format('Agent: Release{0}', '')
   || github.event_name == 'workflow_dispatch'
+  && (inputs.operation == 'housekeeping' || inputs.operation == 'audit-close' || inputs.operation == 'cleanup-artifacts')
+  && format('Event: {0} forwarded to Agentics: Housekeeping', inputs.operation)
+  || github.event_name == 'workflow_dispatch'
   && format('dispatch: {0}', inputs.operation)
   || github.event_name == 'schedule'
   && github.event.schedule == '17 1 * * 1'
@@ -96,18 +92,6 @@ run-name: >-
   || github.event_name == 'schedule'
   && github.event.schedule == '47 2 1,15 * *'
   && format('Agent: Docs Audit - fortnightly{0}', '')
-  || github.event_name == 'schedule'
-  && github.event.schedule == '43 3 * * *'
-  && format('Agentics: Audit Close - daily{0}', '')
-  || github.event_name == 'schedule'
-  && github.event.schedule == '0 6 * * *'
-  && format('Agentics: Cleanup - daily{0}', '')
-  || github.event_name == 'schedule'
-  && github.event.schedule == '17 * * * *'
-  && format('Agentics: Reconcile - hourly{0}', '')
-  || github.event_name == 'schedule'
-  && github.event.schedule == '23 */6 * * *'
-  && format('Agentics: Maintenance - 6h{0}', '')
   || github.event_name == 'schedule'
   && format('schedule {0}', github.event.schedule)
   || github.event_name }}
@@ -118,13 +102,15 @@ run-name: >-
 #
 # Neither can be read where it is also needed: GitHub evaluates no expression in a
 # `workflow_run.workflows:` list or in a `cron:`. The installer therefore mirrors both values
-# into those two literal lines below, and the route matrix asserts the copies still agree.
-# Everything that runs inside a job reads them from here, including the classifier, which
-# takes AUDIT_CRON from this environment.
+# into the literal lines that need them (the audit slot below, the workflow_run trigger of
+# agentics-merge-belt.yml), and the route matrix asserts the copies still agree. Everything
+# that runs inside a job reads them from an env: block, including the classifier, which takes
+# AUDIT_CRON from this environment.
 env:
   # The CI workflow the merge belt reads its verdict from. A repository whose CI has another
   # name gets no gate at all: the belt logs "no completed CI run" and the pull request waits
-  # forever, which is a silent failure rather than a red run.
+  # forever, which is a silent failure rather than a red run. No job here reads it any more;
+  # `workflows update` copies it into agentics-merge-belt.yml, so this stays the place to set it.
   CI_WORKFLOW_NAME: "App: CI"
   # Slot 0. Every consumer installs this same router, and the agent fleet is one shared,
   # two-VM scale set, so a second repository left on slot 0 audits at the same minute as the
@@ -140,63 +126,28 @@ env:
   # Adding a third bot used to mean finding four hand-written comparisons across this file.
   # The App the repository's BOT_APP_ID belongs to is the repository variable BOT_LOGIN, its
   # `<slug>[bot]` login; unset, it is platform-devbox[bot]. The same expression sits in
-  # bot-approve's `if:` and in every worker's GH_AW_ALLOWED_BOTS, so one variable moves all three.
+  # bot-approve's `if:` (agentics-pr-plumbing.yml), the merge belt's TRUSTED_BOTS and every worker's GH_AW_ALLOWED_BOTS, so one variable moves all three.
   # Without it a repository with its own App was silently untrusted: the App's bot-working label
   # left `authorize` false and the worker never ran, with no comment and no error (#527).
   TRUSTED_BOTS: "github-actions[bot] app/github-actions ${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }}"
-  # How long an issue may sit parked with `stalled` before the janitor retries it, and how many
-  # times it tries before leaving the issue to a person. Only machine failures are retried; a
-  # verdict the agent reached on purpose is reported and never re-run, because re-running a
-  # decision reproduces it.
-  HOUSEKEEPING_RETRY_AFTER_HOURS: "1"
-  HOUSEKEEPING_MAX_RETRIES: "3"
-  # A bot pull request older than this with no merge-gate verdict at all is reported, never
-  # closed: the janitor deletes branches and labels, never someone's work.
-  HOUSEKEEPING_STALE_PR_DAYS: "3"
-  # The single issue that lists what genuinely needs a person. Set it empty to turn the digest
-  # off and keep the rest of the janitor.
-  HOUSEKEEPING_DIGEST_TITLE: "Needs a human"
-  # Which Dependabot pull requests the six-hourly maintenance squash-merges once every check is
-  # green: "all", "minor" (minor and patch), "patch", or "off". CI is the gate; only pull requests
-  # Dependabot opened, with every commit Dependabot's, are touched. A repository variable of the
-  # same name overrides this without a commit.
-  DEPENDABOT_MERGE: "all"
-  # "true" also merges a Dependabot pull request in a repository with no checks at all, once its
-  # head is an hour old. "false" leaves those for a person.
-  DEPENDABOT_MERGE_WITHOUT_CHECKS: "true"
-  # How long an audit report may sit open before it is labelled `stale-audit`. The audit's own
-  # backpressure ignores a stale report, so three abandoned reports can no longer disable the
-  # weekly audit for good; the digest lists them instead. Two missed weekly cycles.
-  AUDIT_STALE_AFTER_DAYS: "14"
-  # How many failed merge-gate attempts one pull request head may consume before the belt
-  # parks it for a person. It was written as the literal 6 in four places here while the
-  # merge-gate worker carried its own MAX_ATTEMPTS; the route matrix now asserts the two
-  # agree, because a belt that gives up later than the worker says burns whole runs.
-  MAX_GATE_ATTEMPTS: "6"
+  # The housekeeping settings (HOUSEKEEPING_*, DEPENDABOT_*, AUDIT_STALE_AFTER_DAYS) live in
+  # agentics-housekeeping.yml, and the merge train's (MAX_GATE_ATTEMPTS, MERGE_TRAIN_* except
+  # the hold label, REFINE_ANSWER_TIMEOUT_HOURS) in agentics-merge-belt.yml, next to the jobs
+  # that read them.
   # The merge train takes the oldest open pull request, bot or person, and moves it one step at a
   # time until it merges or a person has to decide. A pull request with this label stays off it.
+  # `workflows update` copies this value into agentics-merge-belt.yml and
+  # agentics-housekeeping.yml, whose Dependabot merge skips the same label.
   MERGE_TRAIN_HOLD_LABEL: "hold"
-  # How many times a `blocked` verdict, or a merge that did not happen, is retried once the base
-  # branch has moved. After that the pull request waits for a person or a new commit.
-  MERGE_TRAIN_MAX_RETRIES: "3"
-  # "true" lets a stack root merge itself once every child has landed and CI is green, through the
-  # same gate as any pull request: a change over the blast radius limit, a protected path or an
-  # unresolved finding still goes to a person. "false" keeps every root for a human.
-  MERGE_TRAIN_STACK_ROOT_AUTOMERGE: "true"
   # "true" lets a chain of features run without a person between them. A feature whose issue is
   # blocked by another (GitHub's "blocked by" relation, or a `Blocked by #N` line in its body) keeps
   # its children held until that feature's stack root merges; the merge brings the default branch
   # into the waiting feature's branch, releases its children, and leaves an "Unattended report"
   # issue naming every pull request that merged on a judgement call. Set the merge gate's own
   # UNATTENDED to the same value. "false" leaves features to be started and read by a person.
+  # check-stack-branch reads it here; `workflows update` copies it into agentics-pr-plumbing.yml,
+  # whose stack-landed starts the next feature.
   UNATTENDED: "false"
-  # "true" logs the move the train would make and makes none. For trying the train on a
-  # repository before letting it act.
-  MERGE_TRAIN_DRY_RUN: "false"
-  # How many pull requests the merge train may have in repair at once. A repair moves nothing on
-  # the default branch, so repairs of different pull requests do not race; only merges are serial.
-  # 1 repairs one pull request at a time.
-  MERGE_TRAIN_REPAIRS: "1"
   # How many implement runs may work at once. Each queue is FIFO and serial. An issue joins the
   # queue of its split parent when it has one, so the children of one refine never run side by
   # side on the code they share; independent issues spread across the queues. 1 is one queue
@@ -207,12 +158,6 @@ env:
   # `pnpm run dev`, and a pull request with no plan costs one API call. Set it to "false" for a
   # repository whose app cannot start on a runner; operation=evidence still works by hand.
   EVIDENCE_ENABLED: "true"
-  # Working hours, Monday to Friday, that refine's questions wait for an answer. Every question
-  # carries the answer the bot would take; once this passes with no reply, or as soon as the
-  # author reacts with a thumbs-up, refine carries on with those answers and labels the issue
-  # `assumed`. A question marked as needing a decision is never assumed. "0" turns this off, and
-  # questions wait for a person however long that takes.
-  REFINE_ANSWER_TIMEOUT_HOURS: "24"
 
 on:
   issues:
@@ -225,35 +170,20 @@ on:
     types: [submitted]
 
   pull_request_target:
-    # opened / reopened / synchronize feed bot-approve. closed feeds the merge train: a merge
-    # moved the base branch, so the next pull request in line can move. A merge into a feature
-    # branch also lands a stack child (land-stack-child), and every merge routes to evidence,
-    # which replays the pull request's verification plan.
-    types: [opened, synchronize, reopened, labeled, closed]
+    # labeled with merge-gate is forwarded to agentics-merge-belt.yml, and every merge routes to
+    # evidence, which replays the pull request's verification plan. The same merge moves the merge
+    # train in agentics-merge-belt.yml and lands a stack child or root in agentics-pr-plumbing.yml,
+    # which also hears opened / synchronize / reopened to approve a bot's CI (bot-approve).
+    types: [labeled, closed]
 
-  # CI completion on a pull request moves the merge train, green or red: the train decides
-  # whether that pull request is the one in front, and what it needs.
-  #
-  # Delivery (verified 2026-09-06 in Pliny-Bot): GitHub delivers workflow_run only for CI runs
-  # whose actor is a human. A pull request opened or updated with a bot token has the bot as the
-  # actor of every CI run that follows, and no workflow_run arrives for any of them. For those
-  # the consumer CI's dispatch job (templates/ci) and the hourly schedule are the paths.
-  # Security: workflow_run runs from the default branch with secrets, but the train only ever
-  # moves pull requests from this repository opened by a trusted bot or someone with write
-  # access, and the gate's subject job checks the same again.
-  workflow_run:
-    # Mirrored from env.CI_WORKFLOW_NAME by the installer. A trigger evaluates no expression.
-    workflows: ["App: CI"]
-    types: [completed]
+  # CI completions (workflow_run) move the merge train in agentics-merge-belt.yml.
 
   # Cron to route mapping lives in .github/actions/classify-route/classify-route.sh.
   schedule:
     - cron: "17 1 * * 1" # audit slot, mirrored from env.AUDIT_CRON by the installer
     - cron: "47 2 1,15 * *" # docs-audit slot, mirrored from env.DOCS_AUDIT_CRON by the installer
-    - cron: "43 3 * * *"
-    - cron: "0 6 * * *"
-    - cron: "17 * * * *"
-    - cron: "23 */6 * * *" # housekeeping: retry what stalled, tidy what it stranded
+    # The hourly reconcile is in agentics-merge-belt.yml; the housekeeping, audit-close and
+    # cleanup-artifacts crons are in agentics-housekeeping.yml.
 
   workflow_dispatch:
     inputs:
@@ -436,29 +366,41 @@ jobs:
         with:
           token: ${{ github.token }}
 
-  call-refine:
+  # Every worker is started the same way: this run classifies and authorizes, then dispatches
+  # the worker with `gh workflow run` on the default branch and ends. The worker is a run of its
+  # own in the Actions tab, under its own name, and holds its own concurrency group (declared in
+  # the worker, keyed on its inputs). The dispatch carries no secret: the worker reads the
+  # repository's, and its engine key falls back to FORGE_API_KEY. The App token starts it, so the
+  # worker's actor is the bot, the same actor every retry and release has.
+  dispatch-refine:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'refine' && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-refine.lock.yml
-    concurrency:
-      group: refine-${{ needs.classify.outputs.issue-number }}
-      cancel-in-progress: false
-    # write-all, not a narrower map: every worker's agent job declares `permissions: read-all`,
-    # which requests read on every scope. A caller granting less cannot satisfy it, and GitHub
-    # rejects the call with a startup failure before any job is created. The real boundary is the
-    # worker's own read-all plus safe-outputs, not this grant.
-    permissions: write-all
-    with:
-      issue-number: ${{ needs.classify.outputs.issue-number }}
-      mode: ${{ needs.classify.outputs.refine-mode }}
-      attempts_so_far: ${{ needs.classify.outputs.attempts }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch agent-refine.lock.yml
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
+          ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
+          MODE: ${{ needs.classify.outputs.refine-mode }}
+          ATTEMPTS: ${{ needs.classify.outputs.attempts }}
+        run: |
+          set -euo pipefail
+          gh workflow run agent-refine.lock.yml --repo "$REPO" --ref "$REF" \
+            -f issue-number="$ISSUE_NUMBER" \
+            -f mode="$MODE" \
+            -f attempts_so_far="$ATTEMPTS"
 
   # Checks whether an open bot PR already exists for the issue. If it does, implement is
   # skipped - the merge-gate will handle fixing the existing PR. This prevents duplicate
@@ -468,9 +410,14 @@ jobs:
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true'
     runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 3
+    # actions: read for the run listings and issues: read for the implement-pr marker. Without them
+    # both lookups answered 403 and "Could not resolve to an issue", and the duplicate check never
+    # held anything back (Kitchen-Sink, router run 42700668556).
     permissions:
       contents: read
       pull-requests: read
+      issues: read
+      actions: read
     outputs:
       has-open-pr: ${{ steps.check.outputs.has-open-pr }}
     steps:
@@ -480,6 +427,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
+          ATTEMPTS: ${{ needs.classify.outputs.attempts }}
         run: |
           set -euo pipefail
           # A refine-to-implement transition emits two label events (the implement label,
@@ -497,12 +445,30 @@ jobs:
                     ((.display_title | contains(\"implement label on #${ISSUE_NUMBER} by\")) and (.display_title | endswith(\"[bot]\")))
                   )
               ] | length" 2>/dev/null || echo 0)
+            case "${dupes:-0}" in ''|*[!0-9]*) echo "::warning::Could not list $st router runs; the duplicate check cannot see them."; dupes=0 ;; esac
             if [ "${dupes:-0}" -gt 0 ]; then
               echo "has-open-pr=true" >> "$GITHUB_OUTPUT"
               echo "::notice::An older router run is already implementing #$ISSUE_NUMBER; skipping the duplicate."
               exit 0
             fi
           done
+
+          # The worker runs on its own, so the router run that dispatched it has already ended:
+          # a live implement for this issue is a run of agent-implement.lock.yml, titled
+          # "Agent: Implement - #N". One waiting in its FIFO queue counts as live too. A retry is
+          # exempt: the worker dispatches it (attempts_so_far 1 or more) from its own run, which is
+          # still in progress at that moment and would otherwise block its own retry.
+          if [ "${ATTEMPTS:-0}" = 0 ]; then
+            for st in in_progress queued pending waiting requested; do
+              live=$(gh api "repos/$REPO/actions/workflows/agent-implement.lock.yml/runs?status=$st&per_page=100"               --jq "[.workflow_runs[] | select(.display_title == \"Agent: Implement - #${ISSUE_NUMBER}\")] | length" 2>/dev/null || echo 0)
+              case "${live:-0}" in ''|*[!0-9]*) echo "::warning::Could not list $st implement runs; the duplicate check cannot see them."; live=0 ;; esac
+              if [ "${live:-0}" -gt 0 ]; then
+                echo "has-open-pr=true" >> "$GITHUB_OUTPUT"
+                echo "::notice::An implement run for #$ISSUE_NUMBER is already $st; skipping the duplicate."
+                exit 0
+              fi
+            done
+          fi
 
           # Marker-first: implement stamps <!-- implement-pr: N --> on the issue when its
           # pull request is created, so the duplicate check is an exact lookup. Only an
@@ -554,17 +520,13 @@ jobs:
   # feature issue and on every child body at hand-over, so the child is self-describing for
   # the implement prompt, which reads only the child's context. The split-parent chain is the
   # fallback when a child predates the stamp (retries of issues split by an earlier refine).
-  # Missing, empty or garbled markers fail closed: the child takes the flat call-implement
-  # path and lands on the default branch, exactly what a repo without stacks does today.
-  # The in-flight check exists because a dispatched agent-implement run is invisible to
-  # check-implement-pr's older-run dupe check: this router run completes as soon as
-  # `gh workflow run` returns (fire-and-forget), while a workflow_call caller stays
-  # in_progress -- and the dispatch run's title "Working (Implement)" and the App-token
-  # label events' actor "app/..." both miss the title conditions that check matches.
-  # head_branch is the discriminator: a dispatched implement's run records the dispatch ref,
-  # feat/N, while a workflow_call run's head_branch is the default branch. Filtering
-  # in_progress/queued agent-implement.lock.yml runs by head_branch therefore isolates stack
-  # implements with zero effect on flat runs.
+  # Missing, empty or garbled markers fail closed: the child takes the flat path and lands on
+  # the default branch, exactly what a repo without stacks does.
+  # The in-flight check holds one implement per feature branch at a time. head_branch is the
+  # discriminator: every implement is dispatched, and its run records the dispatch ref, feat/N
+  # for a stack child and the default branch for a flat one. Filtering in_progress/queued
+  # agent-implement.lock.yml runs by head_branch therefore isolates stack implements with zero
+  # effect on flat runs.
   check-stack-branch:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true'
@@ -574,6 +536,9 @@ jobs:
       contents: read
       issues: write
       actions: read
+      # The blocker and sibling checks list pull requests. Without this they got 403, read it as
+      # "nothing merged, nothing open", and held a released child for good.
+      pull-requests: read
     outputs:
       is-stack: ${{ steps.stack.outputs.is-stack }}
       stack-branch: ${{ steps.stack.outputs.stack-branch }}
@@ -634,14 +599,14 @@ jobs:
           echo "is-stack=false" >> "$GITHUB_OUTPUT"
           echo "stack-branch=" >> "$GITHUB_OUTPUT"
 
-          # Read failures degrade to the flat path, never to a failed job: call-implement
+          # Read failures degrade to the flat path, never to a failed job: dispatch-implement
           # names this job in its needs, so a failure here would block a perfectly ordinary
           # flat implement run. A repo without stack markers must behave exactly as before.
           body=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')
           # Marker-first: the child may carry its own resolved marker from an earlier hop.
           # `|| true` on both pipelines: under `set -o pipefail`, grep's exit 1 on no match
           # (the common flat case) or head's SIGPIPE on a multi-marker body must not fail
-          # the job -- call-implement needs this job, so a failure here would block flat
+          # the job -- dispatch-implement needs this job, so a failure here would block flat
           # implements too.
           branch=$(printf '%s' "$body" | grep -oE '<!-- stack-root-branch: [^ ]+ -->' | head -1 | sed -E 's/<!-- stack-root-branch: ([^ ]+) -->/\1/' || true)
 
@@ -679,7 +644,8 @@ jobs:
       # blocked by #111, modules) was dispatched alongside #111 and would have built units on a
       # feat/45 with no modules. The in-flight check below cannot catch that: both routers ran
       # before either dispatch existed, and serialising runs would still start #112 before #111's
-      # pull request merged. The landing of the blocker releases the child (land-stack-child).
+      # pull request merged. The landing of the blocker releases the child (land-stack-child, in
+      # agentics-pr-plumbing.yml).
       # Held, it keeps `implement` and loses `bot-working`, so it reads as
       # waiting rather than stuck.
       - name: Hold a child whose blockers have not landed
@@ -700,14 +666,17 @@ jobs:
             # Open, but landed if a pull request that closes it has merged into the feature branch:
             # the release fires on that merge and the gate closes the issue a moment later, or not
             # at all when it fails. Reading the issue state alone would hold the child again with
-            # no later landing left to release it.
-            landed=$(gh pr list --repo "$REPO" --state merged --base "$STACK_BRANCH" --search "#$b in:body"               --json body --jq "[.[] | select(.body | test(\"(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?) #${b}([^0-9]|$)\"))] | length" 2>/dev/null || echo 0)
+            # no later landing left to release it. The branch's merged pull requests are listed, not
+            # searched: the release's own label event arrives seconds after the merge, sooner than
+            # the search index catches up.
+            landed=$(gh pr list --repo "$REPO" --state merged --base "$STACK_BRANCH" --limit 200 --json body --jq "[.[] | select(.body | test(\"(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?) #${b}([^0-9]|$)\"))] | length" 2>/dev/null || echo 0)
             [ "${landed:-0}" -gt 0 ] && continue
             waiting="$waiting #$b"
           done
           # Unattended, a whole feature can wait on another one: its issue is blocked by a feature
           # whose stack root has not merged into the default branch. Every child of it waits, whatever
-          # its own siblings say, and stack-landed releases them when that root merges.
+          # its own siblings say, and stack-landed (agentics-pr-plumbing.yml) releases them when
+          # that root merges.
           if [ "${UNATTENDED:-false}" = true ]; then
             feature=$(printf '%s' "$body" | grep -oE '<!-- split-parent: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
             if [ -n "$feature" ]; then
@@ -751,7 +720,8 @@ jobs:
 
       # Unattended, a feature refine did not split takes the flat path, which has no stack to wait
       # in. Blocked by a feature that has not landed, it would build on a default branch without
-      # that feature. It is held the same way a child is, and stack-landed releases it.
+      # that feature. It is held the same way a child is, and stack-landed
+      # (agentics-pr-plumbing.yml) releases it.
       - name: Hold an unsplit feature whose blockers have not landed
         id: flatblocked
         if: steps.stack.outputs.is-stack != 'true'
@@ -792,12 +762,14 @@ jobs:
         run: |
           set -euo pipefail
           echo "stack-in-flight=false" >> "$GITHUB_OUTPUT"
-          # Only dispatched stack implements run with head_branch = feat/N; a workflow_call
-          # (flat) implement run's head_branch is the default branch, so this filter never
-          # sees it. This closes the dupe-visibility gap left by fire-and-forget dispatch.
-          for status in in_progress queued; do
+          # Only stack implements run with head_branch = feat/N; a flat implement is dispatched
+          # on the default branch, so this filter never sees it. This closes the dupe-visibility
+          # gap left by fire-and-forget dispatch. A dispatched worker waiting its turn in its
+          # implement queue is pending, not queued, so every live status counts.
+          for status in in_progress queued pending waiting requested; do
             live=$(gh api "repos/$REPO/actions/workflows/agent-implement.lock.yml/runs?status=$status&per_page=100" \
               --jq "[.workflow_runs[] | select(.head_branch == \"${STACK_BRANCH}\")] | length" 2>/dev/null || echo 0)
+            case "${live:-0}" in ''|*[!0-9]*) echo "::warning::Could not list $status implement runs; the in-flight check cannot see them."; live=0 ;; esac
             if [ "${live:-0}" -gt 0 ]; then
               echo "::notice::An implement run is already in flight on $STACK_BRANCH; skipping dispatch."
               echo "stack-in-flight=true" >> "$GITHUB_OUTPUT"
@@ -805,49 +777,23 @@ jobs:
             fi
           done
 
-  call-implement:
-    needs: [classify, authorize, check-implement-pr, check-stack-branch]
-    if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true' && needs.check-implement-pr.outputs.has-open-pr != 'true' && needs.check-stack-branch.outputs.is-stack != 'true' && needs.check-stack-branch.outputs.flat-blocked != 'true'
-    uses: ./.github/workflows/agent-implement.lock.yml
-    # One FIFO queue per IMPLEMENT_PARALLELISM slot, chosen by check-stack-branch: the children of
-    # one refine always share a queue, independent issues spread across them.
-    concurrency:
-      group: implement-queue-${{ needs.check-stack-branch.outputs.implement-queue || '0' }}
-      cancel-in-progress: false
-      # FIFO, up to 100 waiting. Without this the default `queue: single` cancels whatever
-      # was pending, so labelling six issues at once implements one and drops the rest.
-      queue: max
-    permissions: write-all
-    with:
-      issue-number: ${{ needs.classify.outputs.issue-number }}
-      attempts_so_far: ${{ needs.classify.outputs.attempts }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-
-  # Stack children dispatch agent-implement by `gh workflow run --ref feat/N` instead of calling
-  # it: a workflow_call would pin the callee to THIS event's SHA, which for a label event is
-  # the default branch, not the feature branch. Dispatch on the feature ref makes the callee's
-  # GITHUB_SHA the feature tip, so the agent patches exactly the tree its PR will target, and
-  # the compile-time checkout ternary keys off `workflow_dispatch` to checkout github.ref_name.
-  # The dispatch itself carries no secrets (gh workflow run cannot forward them); the
-  # dispatched run reads REPO-LEVEL OPENAI_API_KEY / CODEX_API_KEY / COPILOT_GITHUB_TOKEN, the
-  # stack-activation prerequisite documented alongside the markers. BOT_APP_ID / BOT_PRIVATE_KEY
-  # are already repo-level. dispatch-triage proves the pattern: same app-token mint, same
-  # `actions: write` scope needed for `gh workflow run`.
+  # Every implement is dispatched, flat or stacked; only the ref differs. A flat implement runs on
+  # the default branch. A stack child runs on the feature branch its parent names: a dispatch on
+  # that ref makes the worker's GITHUB_SHA the feature tip, so the agent patches exactly the tree
+  # its pull request targets, and the checkout ternary keys off workflow_dispatch to check out
+  # github.ref_name. The queue check-stack-branch picked travels as an input, and the worker holds
+  # implement-queue-<queue> itself, FIFO, so labelling six issues at once still implements all six.
   dispatch-implement:
     needs: [classify, authorize, check-implement-pr, check-stack-branch]
     if: >
       needs.classify.outputs.route == 'implement' &&
       needs.authorize.outputs.trusted == 'true' &&
       needs.check-implement-pr.outputs.has-open-pr != 'true' &&
-      needs.check-stack-branch.outputs.is-stack == 'true' &&
-      needs.check-stack-branch.outputs.stack-in-flight != 'true' &&
-      needs.check-stack-branch.outputs.stack-blocked != 'true'
+      ((needs.check-stack-branch.outputs.is-stack == 'true' &&
+        needs.check-stack-branch.outputs.stack-in-flight != 'true' &&
+        needs.check-stack-branch.outputs.stack-blocked != 'true') ||
+       (needs.check-stack-branch.outputs.is-stack != 'true' &&
+        needs.check-stack-branch.outputs.flat-blocked != 'true'))
     runs-on: agents-arc
     timeout-minutes: 5
     permissions:
@@ -860,30 +806,43 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - name: Dispatch stack implement on the feature branch
+      - name: Dispatch agent-implement
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
+          IS_STACK: ${{ needs.check-stack-branch.outputs.is-stack }}
           STACK_BRANCH: ${{ needs.check-stack-branch.outputs.stack-branch }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || github.ref_name }}
           ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
           ATTEMPTS: ${{ needs.classify.outputs.attempts }}
+          QUEUE: ${{ needs.check-stack-branch.outputs.implement-queue || '0' }}
         run: |
           set -euo pipefail
-          # A dispatch on the feature ref runs the feature branch's own copy of the workflows, so a
-          # branch cut before a workflow fix keeps running the old one: Pliny-Bot #774 ran every
-          # tier on glm-5-2 from feat/767 after main had dropped the pin. Bring the default branch
-          # in first. A conflict (409) leaves the branch as it is; the run still goes ahead.
-          code=$(gh api -X POST "repos/$REPO/merges" -f base="$STACK_BRANCH" -f head="$DEFAULT_BRANCH"             -f commit_message="chore: bring $DEFAULT_BRANCH into $STACK_BRANCH before a child runs"             --silent -i 2>/dev/null | head -1 | awk '{print $2}' || true)
-          echo "Merged $DEFAULT_BRANCH into $STACK_BRANCH: HTTP ${code:-unknown} (201 merged, 204 up to date, 409 conflict)"
-          gh workflow run agent-implement.lock.yml --repo "$REPO" --ref "$STACK_BRANCH" \
+          ref="$DEFAULT_BRANCH"
+          if [ "$IS_STACK" = true ]; then
+            ref="$STACK_BRANCH"
+            # A dispatch on the feature ref runs the feature branch's own copy of the workflows, so a
+            # branch cut before a workflow fix keeps running the old one: Pliny-Bot #774 ran every
+            # tier on glm-5-2 from feat/767 after main had dropped the pin. Bring the default branch
+            # in first. A conflict (409) leaves the branch as it is; the run still goes ahead.
+            code=$(gh api -X POST "repos/$REPO/merges" -f base="$STACK_BRANCH" -f head="$DEFAULT_BRANCH" \
+              -f commit_message="chore: bring $DEFAULT_BRANCH into $STACK_BRANCH before a child runs" \
+              --silent -i 2>/dev/null | head -1 | awk '{print $2}' || true)
+            echo "Merged $DEFAULT_BRANCH into $STACK_BRANCH: HTTP ${code:-unknown} (201 merged, 204 up to date, 409 conflict)"
+          fi
+          gh workflow run agent-implement.lock.yml --repo "$REPO" --ref "$ref" \
             -f issue-number="$ISSUE_NUMBER" \
-            -f attempts_so_far="$ATTEMPTS"
+            -f attempts_so_far="$ATTEMPTS" \
+            -f queue="$QUEUE"
 
+  # Triage on issue open is for read-only outside collaborators only. A trusted actor who opens
+  # an issue should not start triage: they can add refine/implement/direct labels or dispatch
+  # triage by hand. Every other triage route (labeled, comment, dispatch) is trusted. An outside
+  # collaborator's triage is started by the App like any other, so the worker sees a trusted actor.
   dispatch-triage:
     needs: [classify, authorize]
-    if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.is_outside_collaborator == 'true'
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    if: needs.classify.outputs.route == 'triage' && ((needs.authorize.outputs.trusted == 'true' && !(github.event_name == 'issues' && github.event.action == 'opened')) || needs.authorize.outputs.is_outside_collaborator == 'true')
+    runs-on: agents-arc
     timeout-minutes: 5
     permissions:
       actions: write
@@ -895,991 +854,259 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - name: Dispatch trusted triage run
+      - name: Dispatch agent-triage.lock.yml
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
+          ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
+          MODE: ${{ needs.classify.outputs.triage-mode }}
+          ATTEMPTS: ${{ needs.classify.outputs.attempts }}
+        run: |
+          set -euo pipefail
+          gh workflow run agent-triage.lock.yml --repo "$REPO" --ref "$REF" \
+            -f issue-number="$ISSUE_NUMBER" \
+            -f mode="$MODE" \
+            -f attempts_so_far="$ATTEMPTS"
+
+  dispatch-apply-review:
+    needs: [classify, authorize]
+    if: needs.classify.outputs.route == 'apply-review' && needs.authorize.outputs.trusted == 'true'
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch agent-apply-review.lock.yml
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
+          PR_NUMBER: ${{ needs.classify.outputs.pr-number }}
+          LINKED_ISSUE: ${{ needs.classify.outputs.linked-issue }}
+          ATTEMPTS: ${{ needs.classify.outputs.attempts }}
+        run: |
+          set -euo pipefail
+          gh workflow run agent-apply-review.lock.yml --repo "$REPO" --ref "$REF" \
+            -f pr-number="$PR_NUMBER" \
+            -f linked-issue="$LINKED_ISSUE" \
+            -f attempts_so_far="$ATTEMPTS"
+
+  # Screenshots of a merged pull request, replayed from the verification plan its implementation
+  # wrote and archived beside that plan. evidence.yml holds its own grants: its capture job runs the
+  # pull request's code with read-only access, and only publish writes, running no repository code.
+  dispatch-evidence:
+    needs: classify
+    if: needs.classify.outputs.route == 'evidence'
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch evidence.yml
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
+          PR_NUMBER: ${{ needs.classify.outputs.pr-number }}
+        run: |
+          set -euo pipefail
+          gh workflow run evidence.yml --repo "$REPO" --ref "$REF" \
+            -f pr-number="$PR_NUMBER"
+
+  dispatch-audit:
+    needs: classify
+    if: needs.classify.outputs.route == 'audit'
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch agent-audit.lock.yml
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
+          TRIGGER_KIND: ${{ needs.classify.outputs.trigger-kind }}
+        run: |
+          set -euo pipefail
+          gh workflow run agent-audit.lock.yml --repo "$REPO" --ref "$REF" \
+            -f trigger-kind="$TRIGGER_KIND"
+
+  dispatch-docs-audit:
+    needs: classify
+    if: needs.classify.outputs.route == 'docs-audit'
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch agent-docs-audit.lock.yml
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
+          TRIGGER_KIND: ${{ needs.classify.outputs.trigger-kind }}
+        run: |
+          set -euo pipefail
+          gh workflow run agent-docs-audit.lock.yml --repo "$REPO" --ref "$REF" \
+            -f trigger-kind="$TRIGGER_KIND"
+
+  dispatch-release:
+    needs: [classify, authorize]
+    if: needs.classify.outputs.route == 'release' && needs.authorize.outputs.trusted == 'true'
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Dispatch agent-release.lock.yml
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch || github.ref_name }}
+          VERSION_BUMP: ${{ github.event.inputs.version-bump || 'auto' }}
+        run: |
+          set -euo pipefail
+          gh workflow run agent-release.lock.yml --repo "$REPO" --ref "$REF" \
+            -f version-bump="$VERSION_BUMP"
+
+  # bot-approve, land-stack-child and stack-landed live in agentics-pr-plumbing.yml, which hears
+  # the pull request events they need. No dispatch operation reaches them, so nothing is forwarded.
+  # A bot-approve route classified here, from a label other than merge-gate or a pull request
+  # closed unmerged, runs no job in this file; agentics-pr-plumbing.yml answers the same event.
+
+  # The merge gate, the merge train and the merge of an approved pull request live in
+  # agentics-merge-belt.yml, which hears CI completions, merges and approvals itself. A person
+  # adding the merge-gate label, and a dispatch of merge-gate or merge-train to this router, are
+  # passed on to that file, so the old entry points keep working.
+  #
+  # The route, not the operation, is forwarded: a consumer CI that still dispatches merge-gate
+  # with GITHUB_TOKEN has already been classified as a merge train tick here. The App token, not
+  # GITHUB_TOKEN, carries the forward, because a merge-gate dispatched by github-actions[bot]
+  # classifies as that same CI handover and would never reach the gate.
+  forward-merge-train:
+    needs: classify
+    if: >-
+      needs.classify.outputs.route == 'merge-gate' ||
+      needs.classify.outputs.route == 'merge-train'
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Forward the route to agentics-merge-belt.yml
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           REF: ${{ github.event.repository.default_branch }}
-          ISSUE_NUMBER: ${{ needs.classify.outputs.issue-number }}
-          MODE: ${{ needs.classify.outputs.triage-mode }}
+          ROUTE: ${{ needs.classify.outputs.route }}
+          PR_NUMBER: ${{ needs.classify.outputs.pr-number }}
+          CI_CONCLUSION: ${{ needs.classify.outputs.ci-conclusion }}
+          CI_RUN_ID: ${{ needs.classify.outputs.ci-run-id }}
+          ATTEMPTS: ${{ needs.classify.outputs.merge-gate-attempts }}
         run: |
           set -euo pipefail
-          gh workflow run work-router.yml --repo "$REPO" --ref "$REF" \
-            -f operation=triage \
-            -f issue-number="$ISSUE_NUMBER" \
-            -f mode="$MODE"
+          # Only the inputs that have a value: ci-conclusion is a choice, and an empty one is refused.
+          args=(-f operation="$ROUTE")
+          [ -z "$PR_NUMBER" ] || args+=(-f pr-number="$PR_NUMBER")
+          [ -z "$CI_CONCLUSION" ] || args+=(-f ci-conclusion="$CI_CONCLUSION")
+          [ -z "$CI_RUN_ID" ] || args+=(-f ci-run-id="$CI_RUN_ID")
+          [ "$ROUTE" != merge-gate ] || args+=(-f attempts_so_far="${ATTEMPTS:-0}")
+          gh workflow run agentics-merge-belt.yml --repo "$REPO" --ref "$REF" "${args[@]}"
+          echo "::notice::Forwarded ${ROUTE}${PR_NUMBER:+ for #$PR_NUMBER} to agentics-merge-belt.yml"
 
-  call-triage:
-    needs: [classify, authorize]
-    # Triage on issue open is for read-only outside collaborators only (handled by dispatch-triage).
-    # A trusted actor who opens an issue should not start triage - they can add refine/implement/direct
-    # labels or manually dispatch triage. All other triage routes (labeled, comment, dispatch) are trusted.
-    if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.trusted == 'true' && !(github.event_name == 'issues' && github.event.action == 'opened')
-    uses: ./.github/workflows/agent-triage.lock.yml
-    concurrency:
-      group: triage-${{ needs.classify.outputs.issue-number }}
-      cancel-in-progress: false
-    permissions: write-all
-    with:
-      issue-number: ${{ needs.classify.outputs.issue-number }}
-      mode: ${{ needs.classify.outputs.triage-mode }}
-      attempts_so_far: ${{ needs.classify.outputs.attempts }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-
-  call-apply-review:
-    needs: [classify, authorize]
-    if: needs.classify.outputs.route == 'apply-review' && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-apply-review.lock.yml
-    concurrency:
-      group: pr-feedback-${{ needs.classify.outputs.pr-number }}
-      cancel-in-progress: false
-    permissions: write-all
-    with:
-      pr-number: ${{ needs.classify.outputs.pr-number }}
-      linked-issue: ${{ needs.classify.outputs.linked-issue }}
-      attempts_so_far: ${{ needs.classify.outputs.attempts }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-
-  # The merge belt is one lock for the whole repository, not one group per pull request.
-  # A batch of six overnight pull requests means every merge moves the default branch
-  # under the other five; gates running at once would each rebase onto a base another
-  # gate is about to invalidate. The merge train dispatches one gate at a time, oldest pull
-  # request first; the lock is what still holds when a person or a consumer CI dispatches one
-  # beside it.
-  #
-  # `queue: max` keeps up to 100 gates waiting in order. Without it GitHub keeps one pending run
-  # per group and silently cancels the previous one: in one week Numa cancelled 12 gates and
-  # finished 6, and those pull requests were merged by hand without a verdict.
-  call-merge-gate:
-    needs: classify
-    if: needs.classify.outputs.route == 'merge-gate'
-    uses: ./.github/workflows/agent-merge-gate.lock.yml
-    # A gate that was handed red CI repairs and pushes: it can never merge (the validator blocks a
-    # non-success conclusion), so it moves nothing on the default branch and cannot race another
-    # gate. Those run in a group of their own per pull request, in parallel, while everything that
-    # may merge still waits its turn on the one belt.
-    concurrency:
-      group: ${{ needs.classify.outputs.ci-conclusion == 'failure' && format('merge-repair-{0}', needs.classify.outputs.pr-number) || (vars.MERGE_QUEUE == 'true' && format('merge-gate-{0}', needs.classify.outputs.pr-number) || 'merge-belt') }}
-      cancel-in-progress: false
-      queue: max
-    permissions: write-all
-    with:
-      pr-number: ${{ needs.classify.outputs.pr-number }}
-      linked-issue: ${{ needs.classify.outputs.linked-issue }}
-      ci-conclusion: ${{ needs.classify.outputs.ci-conclusion }}
-      ci-run-id: ${{ needs.classify.outputs.ci-run-id }}
-      attempts_so_far: ${{ needs.classify.outputs.merge-gate-attempts }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-
-  # The merge train: one step for the oldest open pull request that can move, bot or person.
-  # It merges the base branch into a green pull request that fell behind, hands a red,
-  # conflicting or green-and-current one to the gate, and skips one a person has to decide on,
-  # so a parked pull request never blocks the line. One gate in flight at a time; everything
-  # else waits untouched. It ticks on every merge, every CI completion, after every gate (this
-  # job waits for call-merge-gate in the same run), and hourly as the fallback. Deterministic:
-  # it reads GitHub and dispatches, and never checks out or runs pull request code.
-  #
-  # One tick at a time. A pending tick replaced by a newer one loses nothing: each reads the
-  # whole repository afresh.
-  merge-train:
-    needs: [classify, call-merge-gate]
-    if: >
-      always() &&
-      needs.classify.result == 'success' &&
-      !github.event.repository.fork &&
-      (
-        needs.classify.outputs.route == 'merge-train' ||
-        needs.classify.outputs.route == 'merge-gate' ||
-        needs.classify.outputs.route == 'reconcile-bot-pr-runs' ||
-        (github.event_name == 'pull_request_target' &&
-         github.event.action == 'closed' &&
-         github.event.pull_request.merged == true)
-      )
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
-    timeout-minutes: 15
-    concurrency:
-      group: merge-train
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - name: Checkout workflow actions
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # The App token, not GITHUB_TOKEN: a gate dispatch and a branch update made with
-      # GITHUB_TOKEN start no workflow, so the gate would never run and CI never rerun.
-      - name: Generate App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - uses: ./.github/actions/merge-train
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          ci-workflow-name: ${{ env.CI_WORKFLOW_NAME }}
-          trusted-bots: ${{ env.TRUSTED_BOTS }}
-          hold-label: ${{ env.MERGE_TRAIN_HOLD_LABEL }}
-          max-gate-attempts: ${{ env.MAX_GATE_ATTEMPTS }}
-          max-retries: ${{ env.MERGE_TRAIN_MAX_RETRIES }}
-          stack-root-automerge: ${{ env.MERGE_TRAIN_STACK_ROOT_AUTOMERGE }}
-          max-repairs: ${{ env.MERGE_TRAIN_REPAIRS }}
-          dry-run: ${{ env.MERGE_TRAIN_DRY_RUN }}
-          ci-run-id: ${{ needs.classify.outputs.ci-run-id }}
-          ci-conclusion: ${{ needs.classify.outputs.ci-conclusion }}
-          # Repository variable, read by the repository's CI as well: one switch for both sides.
-          ci-depth-tiered: ${{ vars.CI_DEPTH_TIERED || 'false' }}
-          merge-queue: ${{ vars.MERGE_QUEUE || 'false' }}
-
-  # The decision the gate parked for: a person with write access approves a pull request the
-  # gate handed to them (human-review or owner-review), and the bot merges the commit they
-  # approved. Re-running the gate would only reproduce the same parked verdict.
-  merge-approved:
-    needs: classify
-    if: needs.classify.outputs.route == 'merge-approved'
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
-    timeout-minutes: 5
-    concurrency:
-      group: merge-approved-${{ needs.classify.outputs.pr-number }}
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Checkout for App token action
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Generate App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - name: Merge the approved commit
-        id: merge
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ needs.classify.outputs.pr-number }}
-          ISSUE: ${{ needs.classify.outputs.linked-issue }}
-          REVIEWER: ${{ github.event.review.user.login }}
-          REVIEW_COMMIT: ${{ github.event.review.commit_id }}
-        run: |
-          set -euo pipefail
-          skip() { echo "::notice::Not merging #$PR: $1"; exit 0; }
-
-          permission=$(gh api "repos/$REPO/collaborators/$REVIEWER/permission" --jq '.permission' 2>/dev/null || echo none)
-          case "$permission" in admin|maintain|write) ;; *) skip "$REVIEWER has $permission access" ;; esac
-
-          read -r state author head_sha < <(gh api "repos/$REPO/pulls/$PR" --jq '[.state, .user.login, .head.sha] | @tsv')
-          [ "$state" = open ] || skip "it is $state"
-          # The gate parks pull requests by people too. Its author needs write access, like
-          # everyone the merge train carries; a bot needs to be one this router trusts.
-          case " $TRUSTED_BOTS " in
-            *" $author "*) ;;
-            *)
-              author_permission=$(gh api "repos/$REPO/collaborators/$author/permission" --jq '.permission' 2>/dev/null || echo none)
-              case "$author_permission" in admin|maintain|write) ;; *) skip "it was opened by $author, who has $author_permission access" ;; esac
-              ;;
-          esac
-          [ "$head_sha" = "$REVIEW_COMMIT" ] || skip "$REVIEWER approved ${REVIEW_COMMIT:0:7}, the head is now ${head_sha:0:7}"
-
-          # Another reviewer's change request still stands.
-          decision=$(gh pr view "$PR" --repo "$REPO" --json reviewDecision --jq '.reviewDecision // ""')
-          [ "$decision" = APPROVED ] || skip "the review decision is '${decision:-none}'"
-
-          # The gate parked it for a person. A protected-path hold comments on the issue rather
-          # than the pull request, so the issue's labels speak for it.
-          verdict=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
-            --jq '.[] | select((.body | contains("<!-- agent-merge-gate -->")) and (.body | contains("**Verdict:**"))) | .body' |
-            grep -oE '\*\*Verdict:\*\* [a-z-]+' | tail -1 | sed 's/.* //' || true)
-          if [ -z "$verdict" ] && [ -n "$ISSUE" ]; then
-            labels=$(gh api "repos/$REPO/issues/$ISSUE/labels" --jq '[.[].name] | join(" ")')
-            case " $labels " in *" blocked "*) ;; *" owner-review "*) verdict=owner-review ;; esac
-          fi
-          case "$verdict" in human-review|owner-review) ;; *) skip "the gate's verdict is '${verdict:-none}', not a hand-over" ;; esac
-
-          ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
-            --jq '[.workflow_runs[] | select(.name == env.CI_WORKFLOW_NAME)] | sort_by(.created_at) | last | .conclusion // ""')
-          [ "$ci" = success ] || skip "$CI_WORKFLOW_NAME on ${head_sha:0:7} is '${ci:-not run}'"
-
-          # Into the merge queue where the base branch has one, merged otherwise.
-          landed=$(HEAD_SHA="$head_sha" GITHUB_OUTPUT=/dev/stdout bash ./.github/actions/land-pull-request/land-pull-request.sh | sed -n 's/^landed=//p' | tail -1)
-          if [ -n "$landed" ]; then echo "merged=true" >> "$GITHUB_OUTPUT"; fi
-      - name: Clear the issue's labels
-        if: steps.merge.outputs.merged == 'true' && needs.classify.outputs.linked-issue != ''
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPO: ${{ github.repository }}
-          ISSUE: ${{ needs.classify.outputs.linked-issue }}
-        run: |
-          for label in implement bot-working review owner-review blocked pr-pending; do
-            gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/$label" >/dev/null 2>&1 || true
-          done
-      # GITHUB_TOKEN: its comment raises no event for the router to read.
-      - name: Say whose approval merged it
-        if: steps.merge.outputs.merged == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ needs.classify.outputs.pr-number }}
-          REVIEWER: ${{ github.event.review.user.login }}
-          REVIEW_COMMIT: ${{ github.event.review.commit_id }}
-        run: gh pr comment "$PR" --repo "$REPO" --body "Merged on @$REVIEWER's approval of \`${REVIEW_COMMIT:0:7}\`."
-
-  # Screenshots of a merged pull request, replayed from the verification plan its implementation
-  # wrote and archived beside that plan. Plain YAML with no model, so no secret is passed and the
-  # grant is exactly what the publish job writes: one commit of evidence/ folders and one comment. Its capture
-  # job runs the pull request's code with read-only access; only publish holds these writes, and it
-  # runs no repository code.
-  call-evidence:
-    needs: classify
-    if: needs.classify.outputs.route == 'evidence'
-    uses: ./.github/workflows/evidence.yml
-    concurrency:
-      group: evidence-${{ needs.classify.outputs.pr-number }}
-      cancel-in-progress: false
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-    with:
-      pr-number: ${{ needs.classify.outputs.pr-number }}
-
-  call-audit:
-    needs: classify
-    if: needs.classify.outputs.route == 'audit'
-    uses: ./.github/workflows/agent-audit.lock.yml
-    concurrency:
-      group: audit
-      cancel-in-progress: false
-    permissions: write-all
-    with:
-      trigger-kind: ${{ needs.classify.outputs.trigger-kind }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-
-  call-docs-audit:
-    needs: classify
-    if: needs.classify.outputs.route == 'docs-audit'
-    uses: ./.github/workflows/agent-docs-audit.lock.yml
-    concurrency:
-      group: docs-audit
-      cancel-in-progress: false
-    permissions: write-all
-    with:
-      trigger-kind: ${{ needs.classify.outputs.trigger-kind }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.FORGE_API_KEY }}
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-      AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}
-
-  call-release:
-    needs: [classify, authorize]
-    if: needs.classify.outputs.route == 'release' && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-release.lock.yml
-    permissions: write-all
-    with:
-      version-bump: ${{ github.event.inputs.version-bump || 'auto' }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
-      # The release PR is pushed and opened with the App token so its CI runs; see conclude.
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-
-  bot-approve:
-    needs: classify
-    if: >
-      needs.classify.outputs.route == 'bot-approve' &&
-        (github.actor == 'app/github-actions' || github.actor == (vars.BOT_LOGIN || 'platform-devbox[bot]'))
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
-    timeout-minutes: 5
-    permissions:
-      actions: write
-    steps:
-      - name: Approve pending workflow runs
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          BRANCH: ${{ github.head_ref }}
-        run: |
-          set -euo pipefail
-
-          mapfile -t run_ids < <(
-            gh api "repos/$REPO/actions/runs?status=action_required&branch=$BRANCH" \
-              --jq '.workflow_runs[].id'
-          )
-
-          if [ "${#run_ids[@]}" -eq 0 ]; then
-            echo "No runs awaiting approval on branch $BRANCH"
-            exit 0
-          fi
-
-          for run_id in "${run_ids[@]}"; do
-            echo "Approving run $run_id"
-            gh api "repos/$REPO/actions/runs/$run_id/approve" --method POST
-          done
-
-  # A stack child landing. A pull request merged into a feature branch rather than the default
-  # branch is one child of a stack: it may unblock siblings that waited on it, and it may be the
-  # last one, which makes the root pull request ready for a person. Event-gated rather than a
-  # route because a merge already routes to evidence. It NEVER checks out or runs pull request
-  # code; it reads issues and pull requests through the API and writes labels and one comment.
-  land-stack-child:
-    needs: classify
-    if: >
-      github.event_name == 'pull_request_target' &&
-      github.event.action == 'closed' &&
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref != github.event.repository.default_branch
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - name: Checkout for App token action
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Generate App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - name: Release unblocked children and announce a complete stack
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPO: ${{ github.repository }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          EVENT_PR: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-
-          # Stacked delivery: the merged pull request merged into a feature branch, not the
-          # default branch, so this is a child landing. If the feature branch has no open
-          # children left and its root pull request is green, the stack is complete and a
-          # comment on the root pull request tells the human it is ready for the root merge.
-          # Repos without stack markers never reach the interesting part: the event PR's base
-          # was the default branch, so the guard below fails immediately. Fully idempotent:
-          # the completion comment carries its own marker, and a run that finds it already
-          # present exits without writing anything.
-          event_base=$(gh api "repos/$REPO/pulls/$EVENT_PR" --jq '.base.ref // empty' 2>/dev/null || echo '')
-          if [ -n "$event_base" ] && [ "$event_base" != "$DEFAULT_BRANCH" ]; then
-            echo "PR #$EVENT_PR merged into a feature branch; checking the stack."
-            # The implement worker's pull request closes exactly its own child issue, so
-            # the closed issue comes from the linked closing references (the resolved form
-            # GitHub computes whatever keyword the agent wrote), with the body text as
-            # fallback for a PR created before that guarantee.
-            closed_issue=$(gh pr view "$EVENT_PR" --repo "$REPO" --json closingIssuesReferences \
-              --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)
-            [ -n "$closed_issue" ] || closed_issue=$(gh api "repos/$REPO/pulls/$EVENT_PR" --jq '.body // ""' \
-              | grep -oiE '(closes?|fixes?|resolves?) #[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
-            if [ -z "$closed_issue" ]; then
-              echo "PR #$EVENT_PR closes no issue; not a stack child. Nothing to do."
-            else
-              # Refine stamps the split-parent marker on every child body it hands over, so
-              # the child's own body names the feature issue. The reverse sub-issues
-              # listing has no equivalent per-child lookup: the sub-issues API only walks
-              # downward from the parent.
-              parent=$(printf '%s' "$(gh issue view "$closed_issue" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')" \
-                | grep -oE '<!-- split-parent: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
-              if [ -z "$parent" ]; then
-                echo "#$closed_issue is not a stack child issue (no parent found); nothing stack-related to do."
-              else
-                root_pr=$(printf '%s' "$(gh issue view "$parent" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')" \
-                  | grep -oE '<!-- stack-root-pr: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
-                # Case-insensitive on purpose, here and in the child count below: `gh pr view` and
-                # `gh issue view` read GraphQL and answer OPEN, where the REST API answers open. An
-                # exact `open` never matched, so no root was ever open and no child was ever counted
-                # open, and the stack-complete announcement could not fire (Lyceum #44, router run
-                # 38752856518: "Stack #44 has no open root pull request" with #70 open).
-                root_open=false
-                [ -n "$root_pr" ] && root_open=$(gh pr view "$root_pr" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open && echo true || echo false)
-                if [ "$root_open" != true ]; then
-                  echo "Stack #$parent has no open root pull request; nothing to announce."
-                else
-                  # The same child listing refine uses to hand work out: the sub-issues
-                  # link safe_outputs writes, with the body-marker search as fallback. A
-                  # stack parent always has children, so a listing that finds none means
-                  # the lookups failed, and announcing completion of a stack we cannot
-                  # see would be wrong -- stay silent and let a rerun decide.
-                  children=$(gh api "repos/$REPO/issues/$parent/sub_issues" --jq '.[].number' 2>/dev/null || true)
-                  if [ -z "$children" ]; then
-                    children=$(gh issue list --repo "$REPO" --state open --limit 50 \
-                      --search "\"<!-- split-parent: ${parent} -->\" in:body" --json number --jq '.[].number' || true)
-                  fi
-                  if [ -z "$children" ]; then
-                    echo "Cannot list any child of stack #$parent; leaving completion undetected for a rerun."
-                  else
-                  # Release the children this landing unblocks. check-stack-branch holds a child
-                  # whose `Blocked by #N` sibling is still open, and nothing else re-dispatches it,
-                  # so the landing does: re-adding `implement` with the App token is a bot label
-                  # event, which the router routes straight to implement. The child that just
-                  # landed counts as done even before the gate closes its issue a moment later.
-                  #
-                  # One child per landing, the lowest-numbered one that is free. Releasing every free
-                  # sibling at once started three implements on Odyssey's feat/323 within a second;
-                  # each cut from the same branch, and every landing left the others conflicting. The
-                  # next landing releases the next child. A held child with no `Blocked by` of its
-                  # own (held because a sibling was in flight) is free once it carries the hold marker.
-                  # shellcheck disable=SC2086
-                  for child in $(printf '%s\n' $children | sort -n); do
-                    [ "$child" = "$closed_issue" ] && continue
-                    meta=$(gh issue view "$child" --repo "$REPO" --json state,labels,body 2>/dev/null || echo '{}')
-                    printf '%s' "$meta" | jq -e '(.state // "" | ascii_downcase) == "open"' >/dev/null || continue
-                    printf '%s' "$meta" | jq -e '[.labels[]?.name] | (index("implement") != null) and (index("bot-working") == null) and (index("pr-pending") == null)' >/dev/null || continue
-                    blockers=$(printf '%s' "$meta" | jq -r '.body // ""' | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
-                    if [ -z "$blockers" ]; then
-                      gh api "repos/$REPO/issues/$child/comments?per_page=100" --jq '.[].body' 2>/dev/null | grep -qF '<!-- stack-held -->' || continue
-                    fi
-                    waiting=""
-                    for b in $blockers; do
-                      [ "$b" = "$closed_issue" ] && continue
-                      if gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open; then
-                        waiting="$waiting #$b"
-                      fi
-                    done
-                    if [ -n "$waiting" ]; then
-                      echo "#$child still waits on$waiting."
-                      continue
-                    fi
-                    gh issue edit "$child" --repo "$REPO" --remove-label implement >/dev/null 2>&1 || true
-                    gh issue edit "$child" --repo "$REPO" --add-label implement >/dev/null
-                    echo "Released #$child: everything it was blocked by has landed. The next landing releases the next one."
-                    break
-                  done
-                  open_children=0
-                  for child in $children; do
-                    # Landed, though the gate may not have closed its issue yet.
-                    [ "$child" = "$closed_issue" ] && continue
-                    if gh issue view "$child" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open; then
-                      open_children=$((open_children + 1))
-                    fi
-                  done
-                  if [ "$open_children" -gt 0 ]; then
-                    echo "$open_children child issue(s) still open on stack #$parent; the stack continues."
-                  else
-                    # Announce as soon as the last child lands, whatever the root's CI is doing at
-                    # this instant. The landing itself pushes to the feature branch, so the root's CI
-                    # is usually still running here; waiting for green left the announcement unposted
-                    # with nothing to post it later but the six-hourly housekeeping (Odyssey #332 sat
-                    # with an auto-merge verdict, held, from 00:09 until a person announced it). The
-                    # gate still reads CI and mergeability itself before it merges the root.
-                    completion_marker='<!-- stack-complete -->'
-                    # The announcement is a pull request comment, and pull request
-                    # comments live at the issue endpoint for the pull request number,
-                    # so the marker is looked for where the comment was posted.
-                    already=$(gh api "repos/$REPO/issues/$root_pr/comments?per_page=100" \
-                      --jq "[.[] | select(.body | contains(\"$completion_marker\"))] | length" 2>/dev/null || echo 0)
-                    if [ "${already:-0}" -gt 0 ]; then
-                      echo "Stack #$parent already has a completion announcement; staying silent."
-                    else
-                      gh pr comment "$root_pr" --repo "$REPO" --body "Stack complete: all children have merged into the feature branch. This root pull request is ready to merge into $DEFAULT_BRANCH once its CI is green: the merge gate decides it next, and a person is asked only when its blast radius or a finding says so. $completion_marker"
-                      echo "Stack #$parent complete: announced root PR #$root_pr."
-                    fi
-                  fi
-                  fi
-                fi
-              fi
-            fi
-          fi
-
-  # A stack root merged into the default branch: the feature is in. When the repository works
-  # unattended two things follow: the next feature in a chain starts, and a report is left for the
-  # person who comes back. Event-gated, like land-stack-child, because a merge already routes to
-  # evidence. It NEVER checks out or runs pull request code; it reads and writes through the API.
-  stack-landed:
-    needs: classify
-    if: >
-      github.event_name == 'pull_request_target' &&
-      github.event.action == 'closed' &&
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == github.event.repository.default_branch
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - name: Checkout for App token action
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Generate App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - name: Start the next feature in the chain and write the report
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPO: ${{ github.repository }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          EVENT_PR: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          if [ "${UNATTENDED:-false}" != true ]; then
-            echo "UNATTENDED is not true: features are chained and reported by a person."
-            exit 0
-          fi
-
-          # The feature this root delivered: a closed issue that names this pull request as its
-          # stack root. A merge that is not a stack root (every ordinary pull request) ends here.
-          parent=""
-          for issue in $(gh pr view "$EVENT_PR" --repo "$REPO" --json closingIssuesReferences \
-                           --jq '.closingIssuesReferences[].number' 2>/dev/null || true); do
-            root=$(gh issue view "$issue" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
-              | grep -oE '<!-- stack-root-pr: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
-            if [ "$root" = "$EVENT_PR" ]; then parent="$issue"; break; fi
-          done
-          if [ -z "$parent" ]; then
-            echo "PR #$EVENT_PR is not a stack root; nothing to do."
-            exit 0
-          fi
-          root_branch=$(gh pr view "$EVENT_PR" --repo "$REPO" --json headRefName --jq '.headRefName')
-          echo "Stack #$parent landed on $DEFAULT_BRANCH through #$EVENT_PR ($root_branch)."
-
-          # What a feature waits on is read from the issue's native "blocked by" relation and from
-          # `Blocked by #N` lines in its body, because refine rewrites a body and the relation
-          # survives that. Open ones only; the feature that just landed counts as done even before
-          # GitHub has closed its issue.
-          blockers_of() {
-            {
-              gh api "repos/$REPO/issues/$1/dependencies/blocked_by" --jq '.[] | select(.state == "open") | .number' 2>/dev/null || true
-              for b in $(gh issue view "$1" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
-                           | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true); do
-                # The feature's own children, listed in its tracker with their own "Blocked by", are not blockers.
-                info=$(gh issue view "$b" --repo "$REPO" --json state,body 2>/dev/null) || continue
-                printf '%s' "$info" | jq -e '(.state // "" | ascii_downcase) == "open"' >/dev/null || continue
-                printf '%s' "$info" | jq -r '.body // ""' | grep -qF "<!-- split-parent: $1 -->" && continue
-                echo "$b"
-              done
-            } | grep -vx "$parent" | sort -u || true
-          }
-          depends_on_parent() {
-            { gh api "repos/$REPO/issues/$1/dependencies/blocked_by" --jq '.[].number' 2>/dev/null || true
-              gh issue view "$1" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
-                | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' || true
-            } | grep -qx "$parent"
-          }
-
-          # The held children of every feature that was waiting on this one.
-          declare -A next_branch
-          declare -A next_children
-          candidates=$(gh issue list --repo "$REPO" --state open --label implement --limit 200 \
-            --json number,labels,body \
-            --jq '.[] | select([.labels[].name] | index("bot-working") | not)
-                      | select(.body | test("<!-- split-parent: [0-9]+ -->"))
-                      | [.number, (.body | capture("<!-- split-parent: (?<p>[0-9]+) -->").p)] | @tsv')
-          while IFS=$'\t' read -r child feature; do
-            [ -n "${child:-}" ] || continue
-            depends_on_parent "$feature" || continue
-            [ -z "$(blockers_of "$feature")" ] || { echo "Feature #$feature still waits on other work; leaving #$child held."; continue; }
-            if [ -z "${next_branch[$feature]:-}" ]; then
-              next_branch[$feature]=$(gh issue view "$feature" --repo "$REPO" --json body --jq '.body // ""' \
-                | grep -oE '<!-- stack-root-branch: [^ ]+ -->' | head -1 | sed -E 's/<!-- stack-root-branch: ([^ ]+) -->/\1/' || true)
-            fi
-            next_children[$feature]="${next_children[$feature]:-} $child"
-          done <<< "$candidates"
-
-          for feature in "${!next_children[@]}"; do
-            branch="${next_branch[$feature]:-}"
-            if ! printf '%s' "$branch" | grep -qE '^[A-Za-z0-9._/-]+$'; then
-              echo "Feature #$feature has no readable stack branch; its children stay held."
-              continue
-            fi
-            # The feature branch was cut from a default branch that did not have the feature that
-            # just landed, and its children build on it. Bring the default branch in first. A
-            # conflict is a person's.
-            # 201 merged, 204 already up to date; both exit 0. A conflict (409) or a missing branch
-            # exits non-zero with the reason on stderr.
-            if ! answer=$(gh api -X POST "repos/$REPO/merges" -f base="$branch" -f head="$DEFAULT_BRANCH" \
-                   -f commit_message="Merge $DEFAULT_BRANCH into $branch: #$parent landed" 2>&1 >/dev/null); then
-              answer=$(printf '%s' "$answer" | tr '\n' ' ' | cut -c1-200)
-              echo "::warning::Merging $DEFAULT_BRANCH into $branch failed ($answer); feature #$feature stays held."
-              gh label create needs-human --repo "$REPO" --color B60205 --description "A person has to look" >/dev/null 2>&1 || true
-              gh issue edit "$feature" --repo "$REPO" --add-label needs-human >/dev/null 2>&1 || true
-              gh issue comment "$feature" --repo "$REPO" --body "Feature #$parent landed on $DEFAULT_BRANCH, but \`$DEFAULT_BRANCH\` could not be merged into \`$branch\` ($answer). The children of this feature stay held until a person resolves the branch and re-adds \`implement\` to the first one." >/dev/null || true
-              continue
-            fi
-            # One child per feature, the lowest-numbered free one; each landing on the feature branch
-            # releases the next (land-stack-child), so siblings never build side by side.
-            # shellcheck disable=SC2086
-            for child in $(printf '%s\n' ${next_children[$feature]} | sort -n); do
-              own=$(gh issue view "$child" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
-                | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
-              waiting=""
-              for b in $own; do
-                gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open && waiting="$waiting #$b" || true
-              done
-              if [ -n "$waiting" ]; then
-                echo "#$child still waits on$waiting inside its feature."
-                continue
-              fi
-              gh issue edit "$child" --repo "$REPO" --remove-label implement >/dev/null 2>&1 || true
-              gh issue edit "$child" --repo "$REPO" --add-label implement >/dev/null
-              echo "Released #$child of feature #$feature."
-              break
-            done
-          done
-
-          # A feature refine did not split waits on the issue itself, held by check-stack-branch with
-          # `implement` kept. It cuts from the default branch, which now has what it waited on.
-          flat=$(gh issue list --repo "$REPO" --state open --label implement --limit 200 \
-            --json number,labels,body \
-            --jq '.[] | select([.labels[].name] | index("bot-working") | not)
-                      | select(.body | test("<!-- split-parent: [0-9]+ -->") | not) | .number')
-          for issue in $flat; do
-            depends_on_parent "$issue" || continue
-            [ -z "$(blockers_of "$issue")" ] || { echo "#$issue still waits on other work."; continue; }
-            gh issue edit "$issue" --repo "$REPO" --remove-label implement >/dev/null 2>&1 || true
-            gh issue edit "$issue" --repo "$REPO" --add-label implement >/dev/null
-            echo "Released unsplit feature #$issue."
-          done
-
-          # The report: what merged without a person, and what the gate noted on the way. One issue
-          # per feature, written once; its marker makes a rerun a no-op.
-          marker="<!-- unattended-report: $parent -->"
-          if [ -n "$(gh issue list --repo "$REPO" --state all --search "\"$marker\" in:body" --json number --jq '.[].number')" ]; then
-            echo "Report for #$parent already exists."
-            exit 0
-          fi
-          title=$(gh issue view "$parent" --repo "$REPO" --json title --jq '.title')
-          {
-            echo "$marker"
-            echo "Feature #$parent was delivered without a person: root pull request #$EVENT_PR is in \`$DEFAULT_BRANCH\`."
-            echo
-            echo "## Merged pull requests"
-            echo
-          } > /tmp/report.md
-          flagged=0
-          for pr in $(gh pr list --repo "$REPO" --state merged --base "$root_branch" --limit 100 --json number --jq '.[].number') "$EVENT_PR"; do
-            line=$(gh pr view "$pr" --repo "$REPO" --json title,url --jq '"- [#\(.url | split("/") | last)](\(.url)) \(.title)"')
-            notes=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" --paginate \
-              --jq '.[].body | select(contains("Accepted unattended")) | capture("Accepted unattended \\| (?<f>[^|]+) \\|").f' 2>/dev/null | tail -1 || true)
-            if [ -n "$notes" ]; then
-              flagged=$((flagged + 1))
-              printf '%s: **%s**\n' "$line" "$notes" >> /tmp/report.md
-            else
-              printf '%s\n' "$line" >> /tmp/report.md
-            fi
-          done
-          {
-            echo
-            if [ "$flagged" -gt 0 ]; then
-              echo "## Look at these"
-              echo
-              echo "$flagged pull request(s) above merged on a judgement call, not on a measured fact. Each was bold above with what the gate accepted. Nothing here was a verified critical or high finding, a protected path, a failing check or a high blast radius, because those still stop a merge. Read them when you can, and revert any you would not have merged."
-            else
-              echo "Nothing was merged on a judgement call. Every pull request passed the gate on measured facts."
-            fi
-          } >> /tmp/report.md
-          label=unattended-report
-          [ "$flagged" -gt 0 ] && label=needs-human
-          gh label create needs-human --repo "$REPO" --color B60205 --description "A person has to look" >/dev/null 2>&1 || true
-          gh label create unattended-report --repo "$REPO" --color 0E8A16 --description "What an unattended feature delivered" >/dev/null 2>&1 || true
-          gh issue create --repo "$REPO" --title "Unattended report: $title" --label "$label" --body-file /tmp/report.md
-
-  reconcile-bot-pr-runs:
+  # reconcile-bot-pr-runs runs hourly in agentics-merge-belt.yml. A dispatch of it to this router
+  # is passed on to that file. GitHub lets GITHUB_TOKEN start a workflow_dispatch run.
+  forward-reconcile:
     needs: classify
     if: needs.classify.outputs.route == 'reconcile-bot-pr-runs'
     runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
     timeout-minutes: 5
     permissions:
-      contents: read
       actions: write
-      pull-requests: read
-      # the stale reservation sweep clears bot-working from parked issues
-      issues: write
-    env:
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      contents: read
     steps:
-      - name: Checkout for App token action
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Generate App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      # Runs only the default-branch workflow and never checks out pull-request code.
-      # External users cannot impersonate github-actions[bot].
-      # Moving pull requests towards a merge is the merge train's, which this schedule also ticks.
-      - name: Approve trusted bot CI and clear stale reservations
+      - name: Forward the operation to agentics-merge-belt.yml
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          gh workflow run agentics-merge-belt.yml --repo "$REPO" --ref "$REF" -f operation=reconcile-bot-pr-runs
+          echo "::notice::Forwarded operation=reconcile-bot-pr-runs to agentics-merge-belt.yml"
 
-          # Stale reservation sweep. Labelling ten issues at once labels all ten immediately,
-          # because authorize-bot-work is keyed per issue, while each implement queue lets exactly
-          # one run at a time. A queued run that is cancelled therefore leaves its issue
-          # carrying bot-working with no run and no pull request: parked, invisible, and not
-          # re-triggerable, because classify refuses an issue that is already reserved.
-          #
-          # The live runs are read by status, not as the repository's latest hundred runs. Every
-          # comment and label is a router run, so a busy repository pushes an implement that has
-          # waited two hours in the queue out of the latest hundred, and the sweep then cleared
-          # bot-working from issues whose runs were alive and about to start (Pliny-Bot #693 and
-          # #707, both still queued from 07:32). Runs that are not finished are few, whatever
-          # their age.
-          active_runs=$(for status in queued in_progress pending waiting requested; do
-              gh api "repos/$REPO/actions/runs?status=$status&per_page=100" --jq '.workflow_runs[]' 2>/dev/null || true
-            done | jq -s '{workflow_runs: .}')
-          gh issue list --repo "$REPO" --label bot-working --state open --limit 100 \
-            --json number --jq '.[].number' |
-            while IFS= read -r issue; do
-              [ -n "$issue" ] || continue
-
-              live=$(jq "[.workflow_runs[]
-                  | select(.status == \"queued\" or .status == \"in_progress\" or .status == \"pending\" or .status == \"waiting\")
-                  | select((.display_title + \" \") | test(\"#${issue}[^0-9]\"))] | length" <<<"$active_runs")
-              [ "${live:-0}" -eq 0 ] || continue
-
-              has_pr=$(gh pr list --repo "$REPO" --state open --json body \
-                --jq "[.[] | select(((.body // \"\") + \" \") | ascii_downcase | test(\"clos(e|es|ed) #${issue}[^0-9]|fix(es|ed)? #${issue}[^0-9]|resolves? #${issue}[^0-9]\"))] | length")
-              [ "${has_pr:-0}" -eq 0 ] || continue
-
-              echo "Clearing a stale bot-working reservation on #$issue: no run, no pull request."
-              gh issue edit "$issue" --repo "$REPO" --remove-label bot-working
-            done
-
-          gh api "repos/$REPO/pulls?state=open&per_page=100" |
-            jq -r --arg repo "$REPO" '
-              .[]
-              | select(
-                    # Bind the login first. Inside index(...) the input is the array, so a bare
-                    # .user.login there indexes the array and jq dies with "Cannot index array
-                    # with string \"user\"", taking the whole hourly belt with it.
-                    ((.user.login) as $login | (env.TRUSTED_BOTS | split(" ")) | index($login) != null)
-                    and .draft == false
-                    and .head.repo.full_name == $repo
-                 )
-              | [.number, .head.ref, .head.sha] | @tsv
-            ' |
-            while IFS=$'\t' read -r _ branch _; do
-              gh api "repos/$REPO/actions/runs?status=action_required&branch=$branch" \
-                --jq '.workflow_runs[]
-                  | select(
-                      .event == "pull_request"
-                      and .name == env.CI_WORKFLOW_NAME
-                    )
-                  | .id' |
-                while IFS= read -r run_id; do
-                  echo "Approving trusted bot run $run_id"
-                  gh api "repos/$REPO/actions/runs/$run_id/approve" --method POST
-                done
-            done
-      # Refine's questions do not wait forever. Nine of the 21 batches that were really asked in
-      # Odyssey, Numa, Bots and DeliveryMetrics up to November 2026 never got a reply, and those
-      # issues stayed parked. Each question now carries the answer the bot would take, and once
-      # the working hours pass, or the author or an assignee reacts with a thumbs-up, refine runs
-      # again in assume mode and takes them. Batches written before the proposals existed, and any
-      # batch holding a question that needs a decision, still wait for a person.
-      - name: Take refine's proposed answers once nobody replied in time
-        if: env.REFINE_ANSWER_TIMEOUT_HOURS != '0'
+  # The housekeeping, audit-close and cleanup-artifacts jobs live in agentics-housekeeping.yml,
+  # which runs them on its own crons. A dispatch of one of their operations to this router is
+  # passed on to that file, so the old entry point keeps working. GitHub lets GITHUB_TOKEN start a
+  # workflow_dispatch run, so no App token is needed here.
+  forward-housekeeping:
+    needs: classify
+    if: >-
+      needs.classify.outputs.route == 'housekeeping' ||
+      needs.classify.outputs.route == 'audit-close' ||
+      needs.classify.outputs.route == 'cleanup-artifacts'
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Forward the operation to agentics-housekeeping.yml
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          REFINE_MARKER: "<!-- agent-refine -->"
-          QUESTIONS_LINE: "I have some questions about this issue"
-          PROPOSED_TAG: "**Proposed:**"
-          DECISION_TAG: "**Your decision needed:**"
+          REF: ${{ github.event.repository.default_branch }}
+          OPERATION: ${{ needs.classify.outputs.route }}
+          DRY_RUN: ${{ github.event.inputs.dry-run || 'false' }}
         run: |
           set -euo pipefail
-          timeout_hours="${REFINE_ANSWER_TIMEOUT_HOURS:-24}"
-
-          # Hours since $1 that fall on a weekday, in UTC, counted up to the timeout and no further.
-          working_hours_since() {
-            local t now h=0
-            t=$(date -u -d "$1" +%s)
-            now=$(date -u +%s)
-            while [ "$t" -lt "$now" ] && [ "$h" -lt "$timeout_hours" ]; do
-              [ "$(date -u -d "@$t" +%u)" -le 5 ] && h=$((h + 1))
-              t=$((t + 3600))
-            done
-            echo "$h"
-          }
-
-          gh issue list --repo "$REPO" --state open --label refine --label review --limit 100 \
-            --json number,author,assignees,labels \
-            --jq '.[] | select([.labels[].name] | (index("bot-working") or index("assumed")) | not)
-                  | [.number, ([.author.login] + [.assignees[].login] | join(" "))] | @tsv' |
-            while IFS=$'\t' read -r issue people; do
-              [ -n "$issue" ] || continue
-              comments=$(gh api --paginate "repos/$REPO/issues/$issue/comments?per_page=100" | jq -s 'add // []')
-              asked=$(jq -c --arg marker "$REFINE_MARKER" --arg line "$QUESTIONS_LINE" '
-                [.[] | select(.user.type == "Bot" and (.body | contains($marker)) and (.body | contains($line)))]
-                | last // empty | {id, created_at, body}' <<<"$comments")
-              [ -n "$asked" ] || continue
-              asked_at=$(jq -r '.created_at' <<<"$asked")
-              body=$(jq -r '.body' <<<"$asked")
-
-              # A person spoke after the questions: that reply is refine's to read, not a silence.
-              replied=$(jq --arg at "$asked_at" '[.[] | select(.user.type != "Bot" and .created_at > $at)] | length' <<<"$comments")
-              [ "$replied" -eq 0 ] || continue
-              case "$body" in *"$DECISION_TAG"*) echo "#$issue waits for a decision; not assuming."; continue ;; esac
-              case "$body" in *"$PROPOSED_TAG"*) ;; *) continue ;; esac
-
-              accepted=false
-              thumbs=$(gh api "repos/$REPO/issues/comments/$(jq -r '.id' <<<"$asked")/reactions" \
-                --jq '[.[] | select(.content == "+1") | .user.login] | join(" ")' 2>/dev/null || true)
-              for login in $thumbs; do
-                case " $people " in *" $login "*) accepted=true ;; esac
-              done
-              hours=$(working_hours_since "$asked_at")
-              if [ "$accepted" = true ]; then
-                echo "#$issue: the proposed answers were accepted with a thumbs-up; refining with them."
-              elif [ "$hours" -ge "$timeout_hours" ]; then
-                echo "#$issue: no reply in ${timeout_hours} working hours; refining with the proposed answers."
-              else
-                continue
-              fi
-              gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
-                -f ref="$(gh api "repos/$REPO" --jq .default_branch)" \
-                -f "inputs[operation]=refine" -f "inputs[issue-number]=$issue" -f "inputs[mode]=assume"
-            done
-
-  audit-close:
-    needs: classify
-    if: needs.classify.outputs.route == 'audit-close'
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
-    timeout-minutes: 15
-    concurrency:
-      group: audit-close
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      issues: write
-      # It reads the open pull requests before closing a report, so a report whose
-      # implement workers are still in review is left alone. Without this the list
-      # call answers 403 and the nightly job fails having closed nothing.
-      pull-requests: read
-    steps:
-      - name: Checkout workflow actions
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/audit-close
-        with:
-          token: ${{ github.token }}
-          stale-after-days: ${{ env.AUDIT_STALE_AFTER_DAYS }}
-
-  cleanup-artifacts:
-    needs: classify
-    if: needs.classify.outputs.route == 'cleanup-artifacts' && !github.event.repository.fork
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
-    timeout-minutes: 15
-    concurrency:
-      group: cleanup-artifacts
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - name: Checkout workflow actions
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/cleanup-artifacts
-        with:
-          token: ${{ github.token }}
-          artifact-retention-days: ${{ vars.ARTIFACT_RETENTION_DAYS }}
-
-  # The janitor. Deterministic, no model: it retries work the machine stalled on, clears the state
-  # a dead run stranded, deletes branches whose pull request is finished, and keeps one issue
-  # listing what genuinely needs a person.
-  housekeeping:
-    needs: classify
-    if: needs.classify.outputs.route == 'housekeeping' && !github.event.repository.fork
-    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
-    timeout-minutes: 15
-    concurrency:
-      group: housekeeping
-      cancel-in-progress: false
-    permissions:
-      # contents: write deletes branches whose pull request is closed or merged.
-      contents: write
-      issues: write
-      pull-requests: read
-      # actions: write cancels workflow runs stuck pending in the fleet queue.
-      actions: write
-      # The Dependabot merge reads check runs and statuses with this token, not the App's.
-      checks: read
-      statuses: read
-    env:
-      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
-      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-    steps:
-      - name: Checkout workflow actions
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # A retry is a workflow_dispatch, and GitHub refuses to start a workflow run from an event
-      # raised with GITHUB_TOKEN. With the default token every retry would report success and do
-      # nothing, which is the exact failure mode this job exists to remove.
-      - name: Generate App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-      - uses: ./.github/actions/housekeeping
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          retry-after-hours: ${{ env.HOUSEKEEPING_RETRY_AFTER_HOURS }}
-          max-retries: ${{ env.HOUSEKEEPING_MAX_RETRIES }}
-          stale-pr-days: ${{ env.HOUSEKEEPING_STALE_PR_DAYS }}
-          digest-title: ${{ env.HOUSEKEEPING_DIGEST_TITLE }}
-          dry-run: ${{ github.event.inputs.dry-run || 'false' }}
-      # Dependabot updates merge here rather than on a cron of their own. API calls only: no pull
-      # request code is checked out. It runs even when the sweep above failed.
-      - name: Merge Dependabot pull requests
-        if: ${{ !cancelled() && steps.app-token.outcome == 'success' }}
-        uses: ./.github/actions/merge-dependabot
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          read-token: ${{ github.token }}
-          scope: ${{ vars.DEPENDABOT_MERGE || env.DEPENDABOT_MERGE }}
-          merge-without-checks: ${{ env.DEPENDABOT_MERGE_WITHOUT_CHECKS }}
-          skip-labels: do-not-merge blocked human-review ${{ env.MERGE_TRAIN_HOLD_LABEL }}
-          dry-run: ${{ github.event.inputs.dry-run || 'false' }}
+          gh workflow run agentics-housekeeping.yml --repo "$REPO" --ref "$REF" \
+            -f operation="$OPERATION" \
+            -f dry-run="$DRY_RUN"
+          echo "::notice::Forwarded operation=${OPERATION} to agentics-housekeeping.yml"
 
   validate:
     needs: classify

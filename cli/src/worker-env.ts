@@ -223,6 +223,68 @@ export function mergeRouter(
   return { content: mirrorRouterLiterals(content), report };
 }
 
+/**
+ * A plain workflow split out of the router (`agentics-*.yml`), merged like the router: the
+ * package's file with the consumer's `env:` values put back. Two rules more.
+ *
+ * - The first time it is installed the consumer has no copy, but the settings it holds used to
+ *   live in the router's `env:` block. Its values are taken from the consumer's router then, so a
+ *   setting that moved out of the router keeps the value the consumer gave it. The baseline is
+ *   the router of the release the consumer installed, so an untouched old default still follows
+ *   the package.
+ * - A key the router also declares is copied from the router's final content, so the router
+ *   stays the one place to change it and the two copies cannot drift.
+ */
+export function mergePlumbing(
+  packageContent: string,
+  consumerContent: string | undefined,
+  baselineContent: string | undefined,
+  consumerRouter: string | undefined,
+  finalRouter: string | undefined,
+): { content: string; report: WorkerMergeReport } {
+  const pkg = parseYamlEnv(packageContent);
+  let source = consumerContent;
+  if (source === undefined && consumerRouter !== undefined && pkg.present) {
+    const routerByKey = new Map(parseYamlEnv(consumerRouter).entries.map((entry) => [entry.key, entry]));
+    source = serializeWorkerEnv({
+      ...pkg,
+      entries: pkg.entries.map((entry) => {
+        const fromRouter = routerByKey.get(entry.key);
+        return fromRouter === undefined ? entry : { key: entry.key, leading: entry.leading, lines: fromRouter.lines };
+      }),
+    });
+  }
+
+  const merged = source === undefined
+    ? { content: packageContent, report: { keptEnv: [], updatedDefaults: [], consumerOnlyEnv: [], droppedEnv: [] } }
+    : mergeWorkerEnv(packageContent, source, baselineContent, parseYamlEnv);
+
+  // A plumbing file with a workflow_run trigger (agentics-merge-belt.yml) needs CI_WORKFLOW_NAME
+  // in that literal line too, exactly as the router did when it owned the trigger.
+  const mirrored = (content: string) => ({ content: mirrorRouterLiterals(content), report: merged.report });
+  if (finalRouter === undefined) return mirrored(merged.content);
+  const routerByKey = new Map(parseYamlEnv(finalRouter).entries.map((entry) => [entry.key, entry]));
+  const env = parseYamlEnv(merged.content);
+  if (!env.present) return mirrored(merged.content);
+  const synced = env.entries.map((entry) => {
+    const fromRouter = routerByKey.get(entry.key);
+    return fromRouter === undefined ? entry : { key: entry.key, leading: entry.leading, lines: fromRouter.lines };
+  });
+  return mirrored(serializeWorkerEnv({ ...env, entries: synced }));
+}
+
+/**
+ * Drop from the router's `env:` block the keys that moved to a split-out workflow. A consumer who
+ * changed one would otherwise keep a dead copy in the router for ever, since the three-way merge
+ * keeps every changed key the package no longer ships.
+ */
+export function dropMovedRouterEnv(router: string, movedKeys: ReadonlySet<string>): string {
+  if (movedKeys.size === 0) return router;
+  const env = parseYamlEnv(router);
+  if (!env.present) return router;
+  return serializeWorkerEnv({ ...env, entries: env.entries.filter((entry) => !movedKeys.has(entry.key)) });
+}
+
 /** The package's worker with the consumer's customisable values put back. */
 export function mergeWorker(
   packageContent: string,

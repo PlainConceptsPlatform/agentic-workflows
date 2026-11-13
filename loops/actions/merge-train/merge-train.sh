@@ -158,6 +158,11 @@ STUCK_HOURS="${STUCK_HOURS:-3}"
 DRY_RUN="${DRY_RUN:-false}"
 SELF_RUN_ID="${GITHUB_RUN_ID:-0}"
 GATE_TITLE_PREFIX="Agent: Merge Gate - PR #"
+# The gate runs in agentics-merge-belt.yml. Runs started before the split ran in work-router.yml and
+# may still be queued there after an update, so every lookup reads both; a dispatch goes to the
+# belt alone.
+GATE_WORKFLOW="agentics-merge-belt.yml"
+GATE_WORKFLOWS="agentics-merge-belt.yml work-router.yml"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 now_epoch=$(date -u +%s)
@@ -271,13 +276,13 @@ can_ride() {
 # every other gate may merge, and there is one of those at a time across the repository. The run
 # this tick belongs to is excluded: the tick after a gate runs inside the gate's own router run.
 live_gates() {
-  local status
-  for status in queued in_progress waiting pending requested; do
-    gh api "repos/$REPO/actions/workflows/work-router.yml/runs?status=$status&per_page=100"       --jq ".workflow_runs[]
+  local status workflow
+  for workflow in $GATE_WORKFLOWS; do for status in queued in_progress waiting pending requested; do
+    gh api "repos/$REPO/actions/workflows/$workflow/runs?status=$status&per_page=100"       --jq ".workflow_runs[]
         | select(.id != $SELF_RUN_ID)
         | select(.display_title | startswith(\"$GATE_TITLE_PREFIX\"))
         | .display_title" 2>/dev/null
-  done | sort -u
+  done; done | sort -u
 }
 
 # GitHub works mergeability out on demand: the first read of a pull request nobody has opened
@@ -322,8 +327,10 @@ update_branch() {
 # run is titled by the router's run-name; this is the one count that does not depend on the gate
 # having written anything.
 gate_run_count() {
-  local pr="$1" since="$2"
-  gh api --paginate "repos/$REPO/actions/workflows/work-router.yml/runs?event=workflow_dispatch&per_page=100"     --jq "[.workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\") | select(.created_at > \"$since\")] | length"     2>/dev/null | awk '{ n += $1 } END { print n + 0 }'
+  local pr="$1" since="$2" workflow
+  for workflow in $GATE_WORKFLOWS; do
+    gh api --paginate "repos/$REPO/actions/workflows/$workflow/runs?event=workflow_dispatch&per_page=100"     --jq "[.workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\") | select(.created_at > \"$since\")] | length"     2>/dev/null
+  done | awk '{ n += $1 } END { print n + 0 }'
 }
 
 attempt_count() {
@@ -337,7 +344,7 @@ attempt_count() {
 dispatch_gate() {
   local pr="$1" conclusion="$2" run_id="$3" attempts="$4" since
   since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
+  gh api "repos/$REPO/actions/workflows/$GATE_WORKFLOW/dispatches" --method POST \
     -f ref="$DEFAULT_BRANCH" \
     -f "inputs[operation]=merge-gate" \
     -f "inputs[pr-number]=$pr" \
@@ -346,7 +353,7 @@ dispatch_gate() {
     -f "inputs[attempts_so_far]=$attempts" >/dev/null
   # The next tick waits behind this one and must see the gate it started, or it starts a second.
   for _ in $(seq 1 12); do
-    if gh api "repos/$REPO/actions/workflows/work-router.yml/runs?event=workflow_dispatch&created=>=$since&per_page=20" \
+    if gh api "repos/$REPO/actions/workflows/$GATE_WORKFLOW/runs?event=workflow_dispatch&created=>=$since&per_page=20" \
       --jq ".workflow_runs[] | select(.display_title | startswith(\"$GATE_TITLE_PREFIX$pr\")) | .id" 2>/dev/null | grep -q .; then
       return 0
     fi
@@ -593,8 +600,8 @@ for line in "${candidates[@]}"; do
   # by hand. Cancel it and let the pull request move.
   if { [ "$move" = gate ] || [ "$move" = update ]; } && [ "$ci_status" = completed ] && [ "$ci_conclusion" = success ] &&
     printf '%s\n' "$live_titles" | grep -qE "PR #${pr} \(repair\)$"; then
-    for run_id in $(gh api "repos/$REPO/actions/workflows/work-router.yml/runs?per_page=100" \
-      --jq ".workflow_runs[] | select(.status != \"completed\" and (.display_title | endswith(\"PR #${pr} (repair)\"))) | .id" 2>/dev/null); do
+    for run_id in $(for workflow in $GATE_WORKFLOWS; do gh api "repos/$REPO/actions/workflows/$workflow/runs?per_page=100" \
+      --jq ".workflow_runs[] | select(.status != \"completed\" and (.display_title | endswith(\"PR #${pr} (repair)\"))) | .id" 2>/dev/null; done); do
       act "Cancelling the repair gate $run_id on #$pr: its CI is green." \
         gh api -X POST "repos/$REPO/actions/runs/$run_id/cancel" --silent
     done

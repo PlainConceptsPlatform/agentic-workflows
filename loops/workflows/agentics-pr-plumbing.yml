@@ -1,0 +1,462 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agentics-pr-plumbing.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: "Agentics: PR Plumbing"
+
+# Pull request and stack plumbing: approving the CI of a bot's pull request, and moving a stack on
+# when a child or a root merges. No model runs here. These jobs used to run in work-router.yml, so
+# every push to a bot's pull request opened a router run with all of its jobs. They now run here,
+# on the pull request events they need. No dispatch operation ever reached them, so the router
+# forwards nothing.
+
+# The title the router gave these events.
+run-name: >-
+  ${{ github.event_name == 'pull_request_target'
+  && format('Event: PR #{0} {1} by {2}', github.event.pull_request.number, github.event.action, github.actor)
+  || github.event_name }}
+
+# The part of this file a repository may change. `workflows update` keeps these values. A key that
+# also lives in work-router.yml (UNATTENDED) is copied from the router on every update, so the
+# router stays the one place to change it.
+env:
+  # "true" lets a chain of features run without a person between them: stack-landed starts the
+  # next feature and writes the "Unattended report" issue. Copied from work-router.yml.
+  UNATTENDED: "false"
+
+on:
+  pull_request_target:
+    # opened / synchronize / reopened / labeled / closed unmerged feed bot-approve, exactly as they
+    # did in the router; a merge into a feature branch lands a stack child (land-stack-child), and
+    # a merge into the default branch may land a stack root (stack-landed). work-router.yml hears
+    # labeled and closed too, for the merge-gate label and evidence, and agentics-merge-belt.yml
+    # hears closed to move the merge train.
+    types: [opened, synchronize, reopened, labeled, closed]
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    # The same off switch as authorize; jobs that need only classify stop here.
+    if: vars.AGENTIC_WORKFLOWS_DISABLED == ''
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      route: ${{ steps.route.outputs.route }}
+      issue-number: ${{ steps.route.outputs.issue-number }}
+      pr-number: ${{ steps.route.outputs.pr-number }}
+      linked-issue: ${{ steps.route.outputs.linked-issue }}
+      ci-conclusion: ${{ steps.route.outputs.ci-conclusion }}
+      ci-run-id: ${{ steps.route.outputs.ci-run-id }}
+      merge-gate-attempts: ${{ steps.route.outputs.merge-gate-attempts }}
+      attempts: ${{ steps.route.outputs.attempts }}
+      refine-mode: ${{ steps.route.outputs.refine-mode }}
+      triage-mode: ${{ steps.route.outputs.triage-mode }}
+      trigger-kind: ${{ steps.route.outputs.trigger-kind }}
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Classify event into a single route
+        id: route
+        uses: ./.github/actions/classify-route
+        with:
+          token: ${{ github.token }}
+
+  bot-approve:
+    needs: classify
+    if: >
+      needs.classify.outputs.route == 'bot-approve' &&
+        (github.actor == 'app/github-actions' || github.actor == (vars.BOT_LOGIN || 'platform-devbox[bot]'))
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Approve pending workflow runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t run_ids < <(
+            gh api "repos/$REPO/actions/runs?status=action_required&branch=$BRANCH" \
+              --jq '.workflow_runs[].id'
+          )
+
+          if [ "${#run_ids[@]}" -eq 0 ]; then
+            echo "No runs awaiting approval on branch $BRANCH"
+            exit 0
+          fi
+
+          for run_id in "${run_ids[@]}"; do
+            echo "Approving run $run_id"
+            gh api "repos/$REPO/actions/runs/$run_id/approve" --method POST
+          done
+
+  # A stack child landing. A pull request merged into a feature branch rather than the default
+  # branch is one child of a stack: it may unblock siblings that waited on it, and it may be the
+  # last one, which makes the root pull request ready for a person. Event-gated rather than a
+  # route because a merge already routes to evidence. It NEVER checks out or runs pull request
+  # code; it reads issues and pull requests through the API and writes labels and one comment.
+  land-stack-child:
+    needs: classify
+    if: >
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref != github.event.repository.default_branch
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout for App token action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Release unblocked children and announce a complete stack
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # Stacked delivery: the merged pull request merged into a feature branch, not the
+          # default branch, so this is a child landing. If the feature branch has no open
+          # children left and its root pull request is green, the stack is complete and a
+          # comment on the root pull request tells the human it is ready for the root merge.
+          # Repos without stack markers never reach the interesting part: the event PR's base
+          # was the default branch, so the guard below fails immediately. Fully idempotent:
+          # the completion comment carries its own marker, and a run that finds it already
+          # present exits without writing anything.
+          event_base=$(gh api "repos/$REPO/pulls/$EVENT_PR" --jq '.base.ref // empty' 2>/dev/null || echo '')
+          if [ -n "$event_base" ] && [ "$event_base" != "$DEFAULT_BRANCH" ]; then
+            echo "PR #$EVENT_PR merged into a feature branch; checking the stack."
+            # The implement worker's pull request closes exactly its own child issue, so
+            # the closed issue comes from the linked closing references (the resolved form
+            # GitHub computes whatever keyword the agent wrote), with the body text as
+            # fallback for a PR created before that guarantee.
+            closed_issue=$(gh pr view "$EVENT_PR" --repo "$REPO" --json closingIssuesReferences \
+              --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)
+            [ -n "$closed_issue" ] || closed_issue=$(gh api "repos/$REPO/pulls/$EVENT_PR" --jq '.body // ""' \
+              | grep -oiE '(closes?|fixes?|resolves?) #[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+            if [ -z "$closed_issue" ]; then
+              echo "PR #$EVENT_PR closes no issue; not a stack child. Nothing to do."
+            else
+              # Refine stamps the split-parent marker on every child body it hands over, so
+              # the child's own body names the feature issue. The reverse sub-issues
+              # listing has no equivalent per-child lookup: the sub-issues API only walks
+              # downward from the parent.
+              parent=$(printf '%s' "$(gh issue view "$closed_issue" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')" \
+                | grep -oE '<!-- split-parent: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
+              if [ -z "$parent" ]; then
+                echo "#$closed_issue is not a stack child issue (no parent found); nothing stack-related to do."
+              else
+                root_pr=$(printf '%s' "$(gh issue view "$parent" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null || echo '')" \
+                  | grep -oE '<!-- stack-root-pr: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
+                # Case-insensitive on purpose, here and in the child count below: `gh pr view` and
+                # `gh issue view` read GraphQL and answer OPEN, where the REST API answers open. An
+                # exact `open` never matched, so no root was ever open and no child was ever counted
+                # open, and the stack-complete announcement could not fire (Lyceum #44, router run
+                # 38752856518: "Stack #44 has no open root pull request" with #70 open).
+                root_open=false
+                [ -n "$root_pr" ] && root_open=$(gh pr view "$root_pr" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open && echo true || echo false)
+                if [ "$root_open" != true ]; then
+                  echo "Stack #$parent has no open root pull request; nothing to announce."
+                else
+                  # The same child listing refine uses to hand work out: the sub-issues
+                  # link safe_outputs writes, with the body-marker search as fallback. A
+                  # stack parent always has children, so a listing that finds none means
+                  # the lookups failed, and announcing completion of a stack we cannot
+                  # see would be wrong -- stay silent and let a rerun decide.
+                  children=$(gh api "repos/$REPO/issues/$parent/sub_issues" --jq '.[].number' 2>/dev/null || true)
+                  if [ -z "$children" ]; then
+                    children=$(gh issue list --repo "$REPO" --state open --limit 50 \
+                      --search "\"<!-- split-parent: ${parent} -->\" in:body" --json number --jq '.[].number' || true)
+                  fi
+                  if [ -z "$children" ]; then
+                    echo "Cannot list any child of stack #$parent; leaving completion undetected for a rerun."
+                  else
+                  # Release the children this landing unblocks. check-stack-branch holds a child
+                  # whose `Blocked by #N` sibling is still open, and nothing else re-dispatches it,
+                  # so the landing does: re-adding `implement` with the App token is a bot label
+                  # event, which the router routes straight to implement. The child that just
+                  # landed counts as done even before the gate closes its issue a moment later.
+                  #
+                  # One child per landing, the lowest-numbered one that is free. Releasing every free
+                  # sibling at once started three implements on Odyssey's feat/323 within a second;
+                  # each cut from the same branch, and every landing left the others conflicting. The
+                  # next landing releases the next child. A held child with no `Blocked by` of its
+                  # own (held because a sibling was in flight) is free once it carries the hold marker.
+                  # shellcheck disable=SC2086
+                  for child in $(printf '%s\n' $children | sort -n); do
+                    [ "$child" = "$closed_issue" ] && continue
+                    meta=$(gh issue view "$child" --repo "$REPO" --json state,labels,body 2>/dev/null || echo '{}')
+                    printf '%s' "$meta" | jq -e '(.state // "" | ascii_downcase) == "open"' >/dev/null || continue
+                    printf '%s' "$meta" | jq -e '[.labels[]?.name] | (index("implement") != null) and (index("bot-working") == null) and (index("pr-pending") == null)' >/dev/null || continue
+                    blockers=$(printf '%s' "$meta" | jq -r '.body // ""' | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
+                    if [ -z "$blockers" ]; then
+                      gh api "repos/$REPO/issues/$child/comments?per_page=100" --jq '.[].body' 2>/dev/null | grep -qF '<!-- stack-held -->' || continue
+                    fi
+                    waiting=""
+                    for b in $blockers; do
+                      [ "$b" = "$closed_issue" ] && continue
+                      if gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open; then
+                        waiting="$waiting #$b"
+                      fi
+                    done
+                    if [ -n "$waiting" ]; then
+                      echo "#$child still waits on$waiting."
+                      continue
+                    fi
+                    gh issue edit "$child" --repo "$REPO" --remove-label implement >/dev/null 2>&1 || true
+                    gh issue edit "$child" --repo "$REPO" --add-label implement >/dev/null
+                    echo "Released #$child: everything it was blocked by has landed. The next landing releases the next one."
+                    break
+                  done
+                  open_children=0
+                  for child in $children; do
+                    # Landed, though the gate may not have closed its issue yet.
+                    [ "$child" = "$closed_issue" ] && continue
+                    if gh issue view "$child" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open; then
+                      open_children=$((open_children + 1))
+                    fi
+                  done
+                  if [ "$open_children" -gt 0 ]; then
+                    echo "$open_children child issue(s) still open on stack #$parent; the stack continues."
+                  else
+                    # Announce as soon as the last child lands, whatever the root's CI is doing at
+                    # this instant. The landing itself pushes to the feature branch, so the root's CI
+                    # is usually still running here; waiting for green left the announcement unposted
+                    # with nothing to post it later but the six-hourly housekeeping (Odyssey #332 sat
+                    # with an auto-merge verdict, held, from 00:09 until a person announced it). The
+                    # gate still reads CI and mergeability itself before it merges the root.
+                    completion_marker='<!-- stack-complete -->'
+                    # The announcement is a pull request comment, and pull request
+                    # comments live at the issue endpoint for the pull request number,
+                    # so the marker is looked for where the comment was posted.
+                    already=$(gh api "repos/$REPO/issues/$root_pr/comments?per_page=100" \
+                      --jq "[.[] | select(.body | contains(\"$completion_marker\"))] | length" 2>/dev/null || echo 0)
+                    if [ "${already:-0}" -gt 0 ]; then
+                      echo "Stack #$parent already has a completion announcement; staying silent."
+                    else
+                      gh pr comment "$root_pr" --repo "$REPO" --body "Stack complete: all children have merged into the feature branch. This root pull request is ready to merge into $DEFAULT_BRANCH once its CI is green: the merge gate decides it next, and a person is asked only when its blast radius or a finding says so. $completion_marker"
+                      echo "Stack #$parent complete: announced root PR #$root_pr."
+                    fi
+                  fi
+                  fi
+                fi
+              fi
+            fi
+          fi
+
+  # A stack root merged into the default branch: the feature is in. When the repository works
+  # unattended two things follow: the next feature in a chain starts, and a report is left for the
+  # person who comes back. Event-gated, like land-stack-child, because a merge already routes to
+  # evidence. It NEVER checks out or runs pull request code; it reads and writes through the API.
+  stack-landed:
+    needs: classify
+    if: >
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout for App token action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - name: Start the next feature in the chain and write the report
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ "${UNATTENDED:-false}" != true ]; then
+            echo "UNATTENDED is not true: features are chained and reported by a person."
+            exit 0
+          fi
+
+          # The feature this root delivered: a closed issue that names this pull request as its
+          # stack root. A merge that is not a stack root (every ordinary pull request) ends here.
+          parent=""
+          for issue in $(gh pr view "$EVENT_PR" --repo "$REPO" --json closingIssuesReferences \
+                           --jq '.closingIssuesReferences[].number' 2>/dev/null || true); do
+            root=$(gh issue view "$issue" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
+              | grep -oE '<!-- stack-root-pr: [0-9]+ -->' | head -1 | grep -oE '[0-9]+' || true)
+            if [ "$root" = "$EVENT_PR" ]; then parent="$issue"; break; fi
+          done
+          if [ -z "$parent" ]; then
+            echo "PR #$EVENT_PR is not a stack root; nothing to do."
+            exit 0
+          fi
+          root_branch=$(gh pr view "$EVENT_PR" --repo "$REPO" --json headRefName --jq '.headRefName')
+          echo "Stack #$parent landed on $DEFAULT_BRANCH through #$EVENT_PR ($root_branch)."
+
+          # What a feature waits on is read from the issue's native "blocked by" relation and from
+          # `Blocked by #N` lines in its body, because refine rewrites a body and the relation
+          # survives that. Open ones only; the feature that just landed counts as done even before
+          # GitHub has closed its issue.
+          blockers_of() {
+            {
+              gh api "repos/$REPO/issues/$1/dependencies/blocked_by" --jq '.[] | select(.state == "open") | .number' 2>/dev/null || true
+              for b in $(gh issue view "$1" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
+                           | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true); do
+                # The feature's own children, listed in its tracker with their own "Blocked by", are not blockers.
+                info=$(gh issue view "$b" --repo "$REPO" --json state,body 2>/dev/null) || continue
+                printf '%s' "$info" | jq -e '(.state // "" | ascii_downcase) == "open"' >/dev/null || continue
+                printf '%s' "$info" | jq -r '.body // ""' | grep -qF "<!-- split-parent: $1 -->" && continue
+                echo "$b"
+              done
+            } | grep -vx "$parent" | sort -u || true
+          }
+          depends_on_parent() {
+            { gh api "repos/$REPO/issues/$1/dependencies/blocked_by" --jq '.[].number' 2>/dev/null || true
+              gh issue view "$1" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
+                | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' || true
+            } | grep -qx "$parent"
+          }
+
+          # The held children of every feature that was waiting on this one.
+          declare -A next_branch
+          declare -A next_children
+          candidates=$(gh issue list --repo "$REPO" --state open --label implement --limit 200 \
+            --json number,labels,body \
+            --jq '.[] | select([.labels[].name] | index("bot-working") | not)
+                      | select(.body | test("<!-- split-parent: [0-9]+ -->"))
+                      | [.number, (.body | capture("<!-- split-parent: (?<p>[0-9]+) -->").p)] | @tsv')
+          while IFS=$'\t' read -r child feature; do
+            [ -n "${child:-}" ] || continue
+            depends_on_parent "$feature" || continue
+            [ -z "$(blockers_of "$feature")" ] || { echo "Feature #$feature still waits on other work; leaving #$child held."; continue; }
+            if [ -z "${next_branch[$feature]:-}" ]; then
+              next_branch[$feature]=$(gh issue view "$feature" --repo "$REPO" --json body --jq '.body // ""' \
+                | grep -oE '<!-- stack-root-branch: [^ ]+ -->' | head -1 | sed -E 's/<!-- stack-root-branch: ([^ ]+) -->/\1/' || true)
+            fi
+            next_children[$feature]="${next_children[$feature]:-} $child"
+          done <<< "$candidates"
+
+          for feature in "${!next_children[@]}"; do
+            branch="${next_branch[$feature]:-}"
+            if ! printf '%s' "$branch" | grep -qE '^[A-Za-z0-9._/-]+$'; then
+              echo "Feature #$feature has no readable stack branch; its children stay held."
+              continue
+            fi
+            # The feature branch was cut from a default branch that did not have the feature that
+            # just landed, and its children build on it. Bring the default branch in first. A
+            # conflict is a person's.
+            # 201 merged, 204 already up to date; both exit 0. A conflict (409) or a missing branch
+            # exits non-zero with the reason on stderr.
+            if ! answer=$(gh api -X POST "repos/$REPO/merges" -f base="$branch" -f head="$DEFAULT_BRANCH" \
+                   -f commit_message="Merge $DEFAULT_BRANCH into $branch: #$parent landed" 2>&1 >/dev/null); then
+              answer=$(printf '%s' "$answer" | tr '\n' ' ' | cut -c1-200)
+              echo "::warning::Merging $DEFAULT_BRANCH into $branch failed ($answer); feature #$feature stays held."
+              gh label create needs-human --repo "$REPO" --color B60205 --description "A person has to look" >/dev/null 2>&1 || true
+              gh issue edit "$feature" --repo "$REPO" --add-label needs-human >/dev/null 2>&1 || true
+              gh issue comment "$feature" --repo "$REPO" --body "Feature #$parent landed on $DEFAULT_BRANCH, but \`$DEFAULT_BRANCH\` could not be merged into \`$branch\` ($answer). The children of this feature stay held until a person resolves the branch and re-adds \`implement\` to the first one." >/dev/null || true
+              continue
+            fi
+            # One child per feature, the lowest-numbered free one; each landing on the feature branch
+            # releases the next (land-stack-child), so siblings never build side by side.
+            # shellcheck disable=SC2086
+            for child in $(printf '%s\n' ${next_children[$feature]} | sort -n); do
+              own=$(gh issue view "$child" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null \
+                | grep -oiE 'blocked by #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
+              waiting=""
+              for b in $own; do
+                gh issue view "$b" --repo "$REPO" --json state --jq '.state' 2>/dev/null | grep -qix open && waiting="$waiting #$b" || true
+              done
+              if [ -n "$waiting" ]; then
+                echo "#$child still waits on$waiting inside its feature."
+                continue
+              fi
+              gh issue edit "$child" --repo "$REPO" --remove-label implement >/dev/null 2>&1 || true
+              gh issue edit "$child" --repo "$REPO" --add-label implement >/dev/null
+              echo "Released #$child of feature #$feature."
+              break
+            done
+          done
+
+          # A feature refine did not split waits on the issue itself, held by check-stack-branch with
+          # `implement` kept. It cuts from the default branch, which now has what it waited on.
+          flat=$(gh issue list --repo "$REPO" --state open --label implement --limit 200 \
+            --json number,labels,body \
+            --jq '.[] | select([.labels[].name] | index("bot-working") | not)
+                      | select(.body | test("<!-- split-parent: [0-9]+ -->") | not) | .number')
+          for issue in $flat; do
+            depends_on_parent "$issue" || continue
+            [ -z "$(blockers_of "$issue")" ] || { echo "#$issue still waits on other work."; continue; }
+            gh issue edit "$issue" --repo "$REPO" --remove-label implement >/dev/null 2>&1 || true
+            gh issue edit "$issue" --repo "$REPO" --add-label implement >/dev/null
+            echo "Released unsplit feature #$issue."
+          done
+
+          # The report: what merged without a person, and what the gate noted on the way. One issue
+          # per feature, written once; its marker makes a rerun a no-op.
+          marker="<!-- unattended-report: $parent -->"
+          if [ -n "$(gh issue list --repo "$REPO" --state all --search "\"$marker\" in:body" --json number --jq '.[].number')" ]; then
+            echo "Report for #$parent already exists."
+            exit 0
+          fi
+          title=$(gh issue view "$parent" --repo "$REPO" --json title --jq '.title')
+          {
+            echo "$marker"
+            echo "Feature #$parent was delivered without a person: root pull request #$EVENT_PR is in \`$DEFAULT_BRANCH\`."
+            echo
+            echo "## Merged pull requests"
+            echo
+          } > /tmp/report.md
+          flagged=0
+          for pr in $(gh pr list --repo "$REPO" --state merged --base "$root_branch" --limit 100 --json number --jq '.[].number') "$EVENT_PR"; do
+            line=$(gh pr view "$pr" --repo "$REPO" --json title,url --jq '"- [#\(.url | split("/") | last)](\(.url)) \(.title)"')
+            notes=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" --paginate \
+              --jq '.[].body | select(contains("Accepted unattended")) | capture("Accepted unattended \\| (?<f>[^|]+) \\|").f' 2>/dev/null | tail -1 || true)
+            if [ -n "$notes" ]; then
+              flagged=$((flagged + 1))
+              printf '%s: **%s**\n' "$line" "$notes" >> /tmp/report.md
+            else
+              printf '%s\n' "$line" >> /tmp/report.md
+            fi
+          done
+          {
+            echo
+            if [ "$flagged" -gt 0 ]; then
+              echo "## Look at these"
+              echo
+              echo "$flagged pull request(s) above merged on a judgement call, not on a measured fact. Each was bold above with what the gate accepted. Nothing here was a verified critical or high finding, a protected path, a failing check or a high blast radius, because those still stop a merge. Read them when you can, and revert any you would not have merged."
+            else
+              echo "Nothing was merged on a judgement call. Every pull request passed the gate on measured facts."
+            fi
+          } >> /tmp/report.md
+          label=unattended-report
+          [ "$flagged" -gt 0 ] && label=needs-human
+          gh label create needs-human --repo "$REPO" --color B60205 --description "A person has to look" >/dev/null 2>&1 || true
+          gh label create unattended-report --repo "$REPO" --color 0E8A16 --description "What an unattended feature delivered" >/dev/null 2>&1 || true
+          gh issue create --repo "$REPO" --title "Unattended report: $title" --label "$label" --body-file /tmp/report.md

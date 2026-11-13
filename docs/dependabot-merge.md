@@ -6,7 +6,7 @@ Dependabot opens the pull requests and CI judges them. Nobody should have to pre
 
 | Repository | How | Token |
 |---|---|---|
-| Runs the work router | A step of the router's `housekeeping` job, the `Agentics: Maintenance - 6h` run (`23 */6 * * *`). No cron or route of its own. It runs after the sweep, even when the sweep failed. | The Platform App token writes; `GITHUB_TOKEN` reads |
+| Runs the work router | A step of the `housekeeping` job in `agentics-housekeeping.yml`, the `Agentics: Maintenance - 6h` run (`23 */6 * * *`). No cron of its own. It runs after the sweep, even when the sweep failed. | The Platform App token writes; `GITHUB_TOKEN` reads |
 | No router (the pillar repositories) | The `dependabot-merge` bundle template: `.github/workflows/dependabot-merge.yml`, every six hours at minute 41 and on `workflow_dispatch`, calling the same action, which the template installs as `.github/actions/merge-dependabot/`. | The App token writes when `BOT_APP_ID` and `BOT_PRIVATE_KEY` exist, `GITHUB_TOKEN` otherwise; `GITHUB_TOKEN` reads |
 
 Two tokens, split by what they do. The writes (approve, merge, the rebase comment, the branch delete) use the `token` input, the App token where there is one, so the merge starts the push workflows. The reads (pull requests, commits, comments, check runs, commit statuses) use `read-token`, which defaults to `GITHUB_TOKEN`: the job grants it `checks: read` and `statuses: read`, which the App installation may not hold. Where the App installation grants no Checks permission, as in Project-Health-Platform, 1.13.0 read with the App token and every run failed with `403 Resource not accessible by integration`.

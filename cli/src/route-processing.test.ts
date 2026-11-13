@@ -41,10 +41,10 @@ jobs:
   classify:
     runs-on: ubuntu-latest
 
-  call-refine:
+  dispatch-refine:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'refine' && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-refine.lock.yml
+    runs-on: ubuntu-latest
 
   # Checks whether an open bot PR already exists for the issue. If it does, implement is
   # skipped.
@@ -53,25 +53,26 @@ jobs:
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true'
     runs-on: ubuntu-latest
 
-  call-implement:
-    needs: [classify, authorize, check-implement-pr]
+  # A stack child implements on the feature branch its parent issue names.
+  check-stack-branch:
+    needs: [classify, authorize]
     if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-implement.lock.yml
+    runs-on: ubuntu-latest
+
+  dispatch-implement:
+    needs: [classify, authorize, check-implement-pr, check-stack-branch]
+    if: needs.classify.outputs.route == 'implement' && needs.authorize.outputs.trusted == 'true'
+    runs-on: ubuntu-latest
 
   dispatch-triage:
     needs: [classify, authorize]
-    if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.is_outside_collaborator == 'true'
+    if: needs.classify.outputs.route == 'triage' && (needs.authorize.outputs.trusted == 'true' || needs.authorize.outputs.is_outside_collaborator == 'true')
     runs-on: ubuntu-latest
 
-  call-triage:
-    needs: [classify, authorize]
-    if: needs.classify.outputs.route == 'triage' && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-triage.lock.yml
-
-  call-apply-review:
+  dispatch-apply-review:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'apply-review' && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-apply-review.lock.yml
+    runs-on: ubuntu-latest
 
   # The merge belt is one lock for the whole repository.
   call-merge-gate:
@@ -92,17 +93,17 @@ jobs:
     if: needs.classify.outputs.route == 'merge-approved'
     runs-on: ubuntu-latest
 
-  call-audit:
+  dispatch-audit:
     needs: classify
     if: needs.classify.outputs.route == 'audit'
-    uses: ./.github/workflows/agent-audit.lock.yml
+    runs-on: ubuntu-latest
 
-  call-release:
+  dispatch-release:
     needs: [classify, authorize]
     if: needs.classify.outputs.route == 'release' && needs.authorize.outputs.trusted == 'true'
-    uses: ./.github/workflows/agent-release.lock.yml
-    with:
-      version-bump: \${{ github.event.inputs.version-bump || 'auto' }}
+    runs-on: ubuntu-latest
+    env:
+      VERSION_BUMP: \${{ github.event.inputs.version-bump || 'auto' }}
 
   bot-approve:
     needs: classify
@@ -132,7 +133,7 @@ describe("stripRouteFromRouter", () => {
 
     expect(result).not.toContain('- cron: "17 1 * * 1"');
     expect(result).toContain('- cron: "43 3 * * *"');
-    expect(jobs(result)).not.toContain("call-audit");
+    expect(jobs(result)).not.toContain("dispatch-audit");
     expect(jobs(result)).toContain("audit-close");
     expect(options(result)).not.toContain("audit");
     expect(options(result)).toContain("audit-close");
@@ -153,7 +154,7 @@ describe("stripRouteFromRouter", () => {
   it("removes the release job and dispatch option", () => {
     const result = stripRouteFromRouter(ROUTER_YAML, "release");
 
-    expect(jobs(result)).not.toContain("call-release");
+    expect(jobs(result)).not.toContain("dispatch-release");
     expect(options(result)).not.toContain("release");
     expect(result).not.toContain("route == 'release'");
     expect(jobs(result)).toContain("bot-approve");
@@ -161,15 +162,16 @@ describe("stripRouteFromRouter", () => {
 
   it("removes a route's helper job together with the route", () => {
     const withoutImplement = stripRouteFromRouter(ROUTER_YAML, "implement");
-    expect(jobs(withoutImplement)).not.toContain("call-implement");
+    expect(jobs(withoutImplement)).not.toContain("dispatch-implement");
     expect(jobs(withoutImplement)).not.toContain("check-implement-pr");
+    expect(jobs(withoutImplement)).not.toContain("check-stack-branch");
     expect(withoutImplement).not.toContain("route == 'implement'");
     // The comment that introduced the helper job goes with it.
     expect(withoutImplement).not.toContain("Checks whether an open bot PR");
-    expect(jobs(withoutImplement)).toContain("call-refine");
+    expect(jobs(withoutImplement)).toContain("dispatch-refine");
 
     const withoutTriage = stripRouteFromRouter(ROUTER_YAML, "triage");
-    expect(jobs(withoutTriage)).not.toContain("call-triage");
+    expect(jobs(withoutTriage)).not.toContain("dispatch-triage");
     expect(jobs(withoutTriage)).not.toContain("dispatch-triage");
     expect(withoutTriage).not.toContain("route == 'triage'");
  
@@ -187,13 +189,13 @@ describe("stripRouteFromRouter", () => {
     const result = stripRouteFromRouter(ROUTER_YAML, "merge-gate");
 
     expect(result).not.toContain("The merge belt is one lock");
-    expect(result).toContain("uses: ./.github/workflows/agent-apply-review.lock.yml\n\n  call-audit:");
+    expect(result).toContain("runs-on: ubuntu-latest\n\n  dispatch-audit:");
   });
 
   it("does not modify the yaml when stripping a route that has no cron and no helper", () => {
     const result = stripRouteFromRouter(ROUTER_YAML, "apply-review");
     expect(result).toContain('- cron: "17 1 * * 1"');
-    expect(jobs(result)).toEqual(jobs(ROUTER_YAML).filter((job) => job !== "call-apply-review"));
+    expect(jobs(result)).toEqual(jobs(ROUTER_YAML).filter((job) => job !== "dispatch-apply-review"));
   });
 });
 
@@ -222,8 +224,46 @@ describe("processRoutes", () => {
     const selected: RouteName[] = ["refine", "implement", "release"];
     const router = processRoutes(files(), selected).get(".github/workflows/work-router.yml")!;
 
-    expect(jobs(router)).toEqual(["classify", "call-refine", "check-implement-pr", "call-implement", "call-release", "bot-approve", "audit-close", "validate"]);
+    expect(jobs(router)).toEqual(["classify", "dispatch-refine", "check-implement-pr", "check-stack-branch", "dispatch-implement", "dispatch-release", "bot-approve", "audit-close", "validate"]);
     expect(options(router)).toEqual(["refine", "implement", "audit-close", "cleanup-artifacts", "reconcile-bot-pr-runs", "validate", "release"]);
+  });
+
+  // The merge gate's helpers live in agentics-merge-belt.yml and leave it with the gate; the router
+  // loses the forwarder that would hand the belt an operation it no longer offers.
+  it("strips the merge gate from the merge belt and its forwarder from the router", () => {
+    const belt = [
+      "on:",
+      "  workflow_dispatch:",
+      "    inputs:",
+      "      operation:",
+      "        options:",
+      "          - merge-gate",
+      "          - merge-train",
+      "          - reconcile-bot-pr-runs",
+      "jobs:",
+      "  classify:",
+      "    runs-on: x",
+      "  # The gate.",
+      "  call-merge-gate:",
+      "    uses: ./.github/workflows/agent-merge-gate.lock.yml",
+      "  merge-train:",
+      "    runs-on: x",
+      "  merge-approved:",
+      "    runs-on: x",
+      "  reconcile-bot-pr-runs:",
+      "    runs-on: x",
+      "",
+    ].join("\n");
+    const router = ROUTER_YAML.replace("  validate:", "  forward-merge-train:\n    runs-on: x\n  validate:");
+    const input = new Map([...files(), [".github/workflows/work-router.yml", router], [".github/workflows/agentics-merge-belt.yml", belt]]);
+
+    const result = processRoutes(input, routeNames.filter((route) => route !== "merge-gate"));
+
+    expect(jobs(result.get(".github/workflows/agentics-merge-belt.yml")!)).toEqual(["classify", "reconcile-bot-pr-runs"]);
+    expect(options(result.get(".github/workflows/agentics-merge-belt.yml")!)).toEqual(["reconcile-bot-pr-runs"]);
+    expect(result.get(".github/workflows/agentics-merge-belt.yml")).not.toContain("# The gate.");
+    expect(jobs(result.get(".github/workflows/work-router.yml")!)).not.toContain("forward-merge-train");
+    expect(processRoutes(input, [...routeNames]).get(".github/workflows/agentics-merge-belt.yml")).toBe(belt);
   });
 
   it("never rewrites the classifier or the route matrix", () => {

@@ -310,7 +310,7 @@
     <section id="router" aria-labelledby="router-title">
       <div class="section-head">
         <h2 id="router-title">The router</h2>
-        <p>Every trigger the repository has arrives at one router, and exactly one thing happens per event. Pick an event to follow it, or open the <a href="diagrams/router.html">Work Router diagram</a>.</p>
+        <p>Every event that may start an agent arrives at one router, and exactly one thing happens per event. The router dispatches the agent and ends, so every agent runs as its own workflow run, titled with the issue or pull request it works on. The jobs that start no agent run in three workflows of their own, on the events they need. Pick an event to follow it, or open the <a href="diagrams/router.html">Work Router diagram</a>.</p>
       </div>
       <div class="panel router">
         <fieldset class="events">
@@ -402,7 +402,7 @@
       </div>
       <div class="split">
         <div class="embed">
-          <iframe data-diagram src="diagrams/router.html?embed=1" style="--ratio: 1040 / 610" title="Work Router diagram" loading="lazy"></iframe>
+          <iframe data-diagram src="diagrams/router.html?embed=1" style="--ratio: 1066 / 624" title="Work Router diagram" loading="lazy"></iframe>
         </div>
         <div class="grid grid--2">
           <a class="card" href="diagrams/route-chain.html">
@@ -517,13 +517,13 @@
 
       // Router: each event's path through the router diagram.
       var routes = {
-        reader:   { authorize: 'Read only', route: 'dispatch-triage, re-enters as the App', worker: 'agent-triage', note: 'The front door for read-only openers.', link: 'agent-triage', label: 'Triage diagram' },
-        writer:   { authorize: 'Human, trusted (write)', route: 'refine', worker: 'agent-refine', note: 'Write users skip triage and self-label into the pipeline.', link: 'agent-refine', label: 'Refine diagram' },
-        review:   { authorize: 'Human, trusted', route: 'apply-review', worker: 'agent-apply-review', note: 'Feedback is applied and pushed to the same branch.', link: 'agent-apply-review', label: 'Apply review diagram' },
-        ci:       { authorize: 'Trusted', route: 'merge-gate, one lock for the repo', worker: 'agent-merge-gate', note: 'The only worker that merges, one at a time.', link: 'agent-merge-gate', label: 'Merge gate diagram' },
-        weekly:   { authorize: 'Trusted', route: 'audit', worker: 'agent-audit', note: 'Read-only. Files a tracking report and one story per top finding into refine, and changes nothing else.', link: 'agent-audit', label: 'Audit diagram' },
-        release:  { authorize: 'Human, trusted', route: 'release', worker: 'agent-release', note: 'The agent writes prose; deterministic jobs do everything irreversible.', link: 'agent-release', label: 'Release diagram' },
-        cron:     { authorize: 'Cron or dispatch', route: 'Deterministic jobs', worker: 'housekeeping and friends, no model', note: 'Retry a failure, report a decision.', link: 'housekeeping', label: 'Housekeeping diagram' },
+        reader:   { authorize: 'Read only', route: 'dispatch-triage, started by the App', worker: 'agent-triage', note: 'The front door for read-only openers.', link: 'agent-triage', label: 'Triage diagram' },
+        writer:   { authorize: 'Human, trusted (write)', route: 'dispatch-refine', worker: 'Agent: Refine - #N, its own run', note: 'Write users skip triage and self-label into the pipeline.', link: 'agent-refine', label: 'Refine diagram' },
+        review:   { authorize: 'Human, trusted', route: 'dispatch-apply-review', worker: 'Agent: Apply Review - PR #N, its own run', note: 'Feedback is applied and pushed to the same branch.', link: 'agent-apply-review', label: 'Apply review diagram' },
+        ci:       { authorize: 'No actor to check: the merge belt hears it', route: 'merge-train takes the oldest PR, then merge-gate', worker: 'agent-merge-gate', note: 'CI results go to agentics-merge-belt.yml, not the router. The gate is the only worker that merges, one at a time.', link: 'agent-merge-gate', label: 'Merge gate diagram' },
+        weekly:   { authorize: 'Trusted', route: 'dispatch-audit', worker: 'Agent: Audit, its own run', note: 'Read-only. Files a tracking report and one story per top finding into refine, and changes nothing else.', link: 'agent-audit', label: 'Audit diagram' },
+        release:  { authorize: 'Human, trusted', route: 'dispatch-release', worker: 'Agent: Release, its own run', note: 'The agent writes prose; deterministic jobs do everything irreversible.', link: 'agent-release', label: 'Release diagram' },
+        cron:     { authorize: 'No actor to check: agentics-housekeeping.yml', route: 'housekeeping', worker: 'housekeeping, no model', note: 'The janitor crons run outside the router. Retry a failure, report a decision.', link: 'housekeeping', label: 'Housekeeping diagram' },
         stranger: { authorize: 'No permission', route: 'Nothing routed', worker: 'Idle, about ten seconds, every job skipped', note: 'Fewer runs means fewer events, not more guards.', link: 'router', label: 'Router diagram', idle: true }
       };
       var steps = {};

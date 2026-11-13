@@ -20,8 +20,21 @@ name: "Agentics: Evidence"
 # what implement had already planned, and published through `gh --attach`, which refuses the
 # installation tokens a workflow has.
 
+# The router dispatches this workflow (gh workflow run) when a pull request merges, so it is a run
+# of its own in the Actions tab, titled with the pull request it replays.
+run-name: "Agentics: Evidence - PR #${{ inputs.pr-number }}"
+concurrency:
+  group: evidence-${{ inputs.pr-number }}
+  cancel-in-progress: false
+
 on:
   workflow_call:
+    inputs:
+      pr-number:
+        description: Pull request whose verification plans are replayed.
+        required: true
+        type: string
+  workflow_dispatch:
     inputs:
       pr-number:
         description: Pull request whose verification plans are replayed.

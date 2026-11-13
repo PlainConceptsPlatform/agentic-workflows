@@ -2,6 +2,34 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.21.0
+
+### Changed
+
+- **Every agent runs as its own workflow run.** The router classifies and authorizes the event, dispatches the worker with `gh workflow run` and the App token, and ends. In the Actions tab each agent has its own entry and its own run, titled with its issue or pull request (`Agent: Implement - #42`), instead of eight called workflows drawn inside every router run. The router's `call-*` jobs are now `dispatch-refine`, `dispatch-implement`, `dispatch-triage`, `dispatch-apply-review`, `dispatch-audit`, `dispatch-docs-audit`, `dispatch-release` and `dispatch-evidence`. The merge gate is still called from the merge belt, which waits for its verdict.
+  - Each worker accepts `workflow_dispatch` with the same inputs as `workflow_call`, and declares the concurrency group the router's call job held: `refine-<issue>`, `implement-queue-<queue>` (FIFO), `triage-<issue>`, `pr-feedback-<pr>`, `evidence-<pr>`, `audit`, `docs-audit`.
+  - A flat implement and a stack child are one dispatch; only the ref differs. The implement queue travels as a new `queue` input.
+  - Triage for a trusted actor and for an outside collaborator is one job. The outside collaborator's triage no longer re-enters the router.
+  - `check-implement-pr` also treats a live `Agent: Implement - #N` run as a duplicate, except for the worker's own retry.
+  - The stack in-flight check in `check-stack-branch` counts pending, waiting and requested implement runs as well as queued and running ones. A dispatched child waits its turn in its implement queue as `pending`, and a sibling labelled meanwhile would otherwise have been dispatched onto the same feature branch.
+  - `check-stack-branch` has `pull-requests: read`. Without it, both of its pull request lookups got 403 and read the error as "nothing found": a blocker merged into the feature branch never counted as landed, so a child released by `land-stack-child` was held again with nothing left to release it, and an open sibling pull request never held a child back. The blocker lookup also lists the branch's merged pull requests instead of searching them, since the release arrives seconds after the merge, before the search index catches up. The route matrix now fails any job that reads pull requests with `GITHUB_TOKEN` without that permission.
+  - **Fixed:** `check-implement-pr` had neither `actions: read` nor `issues: read`, so its run listings answered 403 and its `implement-pr` marker lookup failed, and the failures read as "nothing found". Its duplicate guard never held an implement back. It now has both reads, and a listing that fails logs a warning. The route matrix checks that every step listing runs with `GITHUB_TOKEN` sits in a job with `actions` permission.
+  - The janitor looks for stuck pending runs in every worker's workflow.
+  - `agent-audit`, `agent-docs-audit` and `agent-release` list the App in `GH_AW_ALLOWED_BOTS`, because the App is now their actor.
+  - No secret travels with a dispatch. The worker reads the repository's secrets; its engine key already falls back to `FORGE_API_KEY`.
+  - The route matrix has a worker dispatch section that checks, for every worker, the inputs sent against the inputs accepted, the run title, the concurrency group and queue, the App token and allowed bot, and the janitor's list.
+- **The router keeps only the events that may start an agent.** The jobs that never start one move, unchanged, to three plain workflows that hear only the events they need. Every workflow runs the same classifier, checks `AGENTIC_WORKFLOWS_DISABLED`, and keeps its concurrency groups and run titles. A push to a pull request, a CI completion and the hourly tick no longer open a router run.
+  - `agentics-housekeeping.yml`: `housekeeping`, `audit-close` and `cleanup-artifacts`, on their crons (`23 */6 * * *`, `43 3 * * *`, `0 6 * * *`), with the `HOUSEKEEPING_*`, `DEPENDABOT_*` and `AUDIT_STALE_AFTER_DAYS` settings.
+  - `agentics-merge-belt.yml`: the merge train, `merge-approved`, `reconcile-bot-pr-runs` and the call to the merge gate. It hears CI completions (`workflow_run`), merges, approvals and the hourly cron (`17 * * * *`), and carries `MAX_GATE_ATTEMPTS`, `MERGE_TRAIN_*` (except the hold label) and `REFINE_ANSWER_TIMEOUT_HOURS`.
+  - `agentics-pr-plumbing.yml`: `bot-approve`, `land-stack-child` and `stack-landed`. It hears pull requests opened, pushed, reopened, labelled and closed. The router now hears only `labeled` (for the `merge-gate` label) and `closed` (for evidence).
+- **Old entry points still work.** The router still accepts `operation=housekeeping`, `audit-close`, `cleanup-artifacts`, `merge-gate`, `merge-train` and `reconcile-bot-pr-runs`, and a person adding the `merge-gate` label, and forwards each to the file that owns it. The `merge-gate` forward uses the App token: the classifier turns a `merge-gate` dispatched by `github-actions[bot]` into a merge train tick, so a forward sent with `GITHUB_TOKEN` would never reach the gate.
+- `merge-train.sh` dispatches the gate in `agentics-merge-belt.yml` and looks for live gates in both files, so a gate run queued before the update still counts. The housekeeping sweep reads stuck runs from both files and ticks the train in the belt.
+- **`workflows update` installs and fills the new files.** On the first install each file takes the values the repository had set in its router, and the moved keys are removed from the router. `CI_WORKFLOW_NAME`, `TRUSTED_BOTS`, `MERGE_TRAIN_HOLD_LABEL` and `UNATTENDED` stay in the router and are copied into the new files on every update, so the router is still the place to change them. `CI_WORKFLOW_NAME` is also written into the belt's `workflow_run` trigger. A repository without the merge gate gets a belt without the gate's jobs and a router without the forwarder.
+- `verify-route-matrix.sh` reads each moved job from its new file and has a section per file that asserts both halves of the move: the job exists in exactly one file, the triggers and run titles moved with it, the shared values agree, and the forwards exist.
+- **The bot login reaches the split-out files too.** `agentics-merge-belt.yml`'s `TRUSTED_BOTS`, `bot-approve`'s `if:` in `agentics-pr-plumbing.yml`, and `GH_AW_ALLOWED_BOTS` in `agent-audit`, `agent-docs-audit` and `agent-release` read `vars.BOT_LOGIN` with the same default as the router and the other workers.
+
+Downgrading below 1.21.0 needs care: an older CLI does not know the new files and leaves them in place, so their jobs would run twice. Delete `agentics-housekeeping.yml`, `agentics-merge-belt.yml` and `agentics-pr-plumbing.yml` from `.github/workflows/` after the downgrade.
+
 ## 1.20.1
 
 ### Fixed
