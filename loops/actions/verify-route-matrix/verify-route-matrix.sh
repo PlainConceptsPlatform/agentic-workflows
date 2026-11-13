@@ -1934,9 +1934,12 @@ fi
 if worker_installed implement && ! grep -qF 'subagent_type: planner-sub' "$IMPLEMENT_WORKER_MD"; then
   LEAD_OK=0; echo "FAIL: the implement prompt must run propose and archive in the planner-sub agent" >&2
 fi
-# agent-harness before 3.11.3 writes `resource: *`, a YAML alias that does not parse: opencode drops the agent's
+# agent-harness before 3.12.1 writes `resource: *`, a YAML alias that does not parse: opencode drops the agent's
 # mode and refuses to spawn planner and planner-sub ("cannot run as a subagent"). The CI setup repairs the
 # generated files before opencode reads them, and the implement prompt stops at the first spawn error.
+if ! grep -qF 'resource: ${JSON.stringify(p.resource)}' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
+  LEAD_OK=0; echo "FAIL: the CI setup must quote the permission resource in the harness generator, which rewrites the agents at startup" >&2
+fi
 if ! grep -qF 'resource: "*"' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   LEAD_OK=0; echo "FAIL: the CI setup must quote the generated agents' permission resource (a bare * is a YAML alias)" >&2
 fi

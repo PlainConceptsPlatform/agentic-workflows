@@ -251,10 +251,21 @@ pre-agent-steps:
     # variants visible from the first turn; the doctor is the audit line.
     run: |
       set -euo pipefail
-      if [ -f .opencode/scripts/sync-agents.mjs ] && [ -f .opencode/plugins/pc-subagent-tiers-core.js ]; then
+      # agent-harness before 3.12.1 generates `resource: *` (see below). Quoting the generated files alone is not
+      # enough: the plugin rewrites them when opencode starts, so the generator itself is patched first. A no-op
+      # once the harness quotes the value.
+      tiers_core=.opencode/plugins/pc-subagent-tiers-core.js
+      if [ -f "$tiers_core" ]; then
+        sed -i 's/resource: ${p\.resource}`/resource: ${JSON.stringify(p.resource)}`/' "$tiers_core"
+        if grep -qF 'resource: ${p.resource}`' "$tiers_core"; then
+          echo "::error::Could not quote the permission resource in $tiers_core; opencode would refuse to spawn planner-sub." >&2
+          exit 1
+        fi
+      fi
+      if [ -f .opencode/scripts/sync-agents.mjs ] && [ -f "$tiers_core" ]; then
         node .opencode/scripts/sync-agents.mjs --strict
       fi
-      # agent-harness before 3.11.3 writes `resource: *` into plan.md, planner.md and planner-sub.md. A bare `*` is
+      # agent-harness before 3.12.1 writes `resource: *` into plan.md, planner.md and planner-sub.md. A bare `*` is
       # a YAML alias, so the frontmatter does not parse, opencode drops the agents' `mode`, treats them as primary
       # and refuses to spawn them ("Agent planner-sub cannot run as a subagent"). These files are generated here on
       # every run and never committed, so quote the value before opencode reads them; a no-op once the harness does.

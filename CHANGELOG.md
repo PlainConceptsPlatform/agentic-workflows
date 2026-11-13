@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.21.3
+
+### Fixed
+
+- **Implement can spawn `planner-sub` again.** agent-harness before 3.12.1 generates `resource: *` in the planner agents; a bare `*` is a YAML alias, so opencode dropped their `mode` and refused to spawn them ("Agent planner-sub cannot run as a subagent"). 1.20.2 quoted the generated files, but the harness plugin rewrites them when opencode starts, so the fix never reached the agent. The CI setup now quotes the value in the plugin's generator (`pc-subagent-tiers-core.js`) before the sync, and fails the step if it cannot. Verified in a consumer: the same patch took the implement run from the spawn error to a planner-sub and backend-engineer run and an opened pull request. The route matrix asserts it.
+
 ## 1.21.2
 
 ### Fixed
