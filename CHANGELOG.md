@@ -2,6 +2,13 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.21.1
+
+### Fixed
+
+- **The test timings parser passes the consumers' SAST.** `scripts/lib/test-timings.mjs` built a `RegExp` from a variable to read a `.trx` attribute, and Semgrep's `detect-non-literal-regexp` (a blocking rule in every consumer's SAST job) failed the first app that installed 1.21.0. It now reads every attribute of a tag with one literal pattern.
+- **This repository runs the consumers' SAST on what it ships.** A new CI job scans `loops/actions` and the quality-gates and platform-template scripts with the same blocking rule sets and exclusions the consumers use, so such a finding fails here before it reaches an app.
+
 ## 1.21.0
 
 ### Added

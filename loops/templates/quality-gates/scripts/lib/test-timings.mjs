@@ -3,7 +3,8 @@
 // Reads VSTest .trx reports and says where a test run's time goes: by test class, since a class is
 // what xUnit runs in parallel and where a fixture's setup is paid once.
 
-const attr = (tag, name) => tag.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1];
+// One literal pattern reads every attribute of a tag: Semgrep blocks a RegExp built from a variable.
+const attr = (tag, name) => Object.fromEntries([...tag.matchAll(/([\w:]+)="([^"]*)"/g)].map(([, key, value]) => [key, value]))[name];
 
 function seconds(duration) {
   const [h, m, s] = (duration ?? '0:0:0').split(':');
