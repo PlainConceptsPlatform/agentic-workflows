@@ -120,7 +120,10 @@ jobs:
       # The tag above was created with GITHUB_TOKEN, so its push starts no workflow: a release does
       # not ship by itself. A workflow_dispatch is the exception GitHub allows that token, so a
       # release that asked for a deploy starts DEPLOY_WORKFLOW on the tag explicitly. The deploy
-      # workflow's own `pro` environment rules (required reviewers) still apply.
+      # workflow's own `pro` environment rules (required reviewers) still apply. The tagged commit is
+      # the one the release pull request just merged, so its main run is usually still building PRE:
+      # the platform template's deploy waits for that run, skips the CI it passed and promotes its
+      # image, rather than test the same commit again.
       - name: Deploy the release to production
         if: steps.release.outputs.deploy == 'true'
         env:

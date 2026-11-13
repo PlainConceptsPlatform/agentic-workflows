@@ -103,7 +103,9 @@ for .NET repos), but route-specific rules require domain knowledge the CLI does 
 Release to production: the `release` route installs `release-to-production.yml`, a one-click
 release that also deploys. Its `bump` input defaults to `minor`. `release-tag.yml` starts
 `DEPLOY_WORKFLOW` (default `app-deploy.yml`) on the new tag only for a release the button started;
-set it to the repository's own deploy workflow if it is named differently. Add the button to the
+set it to the repository's own deploy workflow if it is named differently. The platform template's
+deploy does not run the CI again on the tag: it waits for the tagged commit's run on main, and when
+that run passed the full CI and deployed to PRE it promotes PRE's image by digest. Add the button to the
 README with
 `[![Release to production](https://github.com/OWNER/REPO/actions/workflows/release-to-production.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/release-to-production.yml)`.
 
