@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.21.4
+
+### Fixed
+
+- **Refine's proposed answers are taken again, by thumbs-up or after the timeout.** The router's step looked for the `<!-- agent-refine -->` marker in refine's questions, but gh-aw strips HTML comments from safe-output comments, so it never found any: issues with accepted or timed-out questions stayed parked (seen in Bots, Odyssey and a Labs repository). It now also matches refine's visible `Refinement update` prefix. The route matrix asserts it.
+
 ## 1.21.3
 
 ### Fixed

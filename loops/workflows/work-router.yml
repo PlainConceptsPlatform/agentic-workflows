@@ -1718,6 +1718,10 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           REFINE_MARKER: "<!-- agent-refine -->"
+          # gh-aw strips HTML comments from safe-output comments, so the marker above never reaches
+          # GitHub and this step found no questions in any repository. The visible prefix refine
+          # puts first (agent-refine's SAFE_OUTPUT_COMMENT_PREFIX) identifies them instead.
+          REFINE_PREFIX: "Refinement update"
           QUESTIONS_LINE: "I have some questions about this issue"
           PROPOSED_TAG: "**Proposed:**"
           DECISION_TAG: "**Your decision needed:**"
@@ -1744,8 +1748,10 @@ jobs:
             while IFS=$'\t' read -r issue people; do
               [ -n "$issue" ] || continue
               comments=$(gh api --paginate "repos/$REPO/issues/$issue/comments?per_page=100" | jq -s 'add // []')
-              asked=$(jq -c --arg marker "$REFINE_MARKER" --arg line "$QUESTIONS_LINE" '
-                [.[] | select(.user.type == "Bot" and (.body | contains($marker)) and (.body | contains($line)))]
+              asked=$(jq -c --arg marker "$REFINE_MARKER" --arg prefix "$REFINE_PREFIX" --arg line "$QUESTIONS_LINE" '
+                [.[] | select(.user.type == "Bot"
+                  and ((.body | contains($marker)) or (.body | contains($prefix)))
+                  and (.body | contains($line)))]
                 | last // empty | {id, created_at, body}' <<<"$comments")
               [ -n "$asked" ] || continue
               asked_at=$(jq -r '.created_at' <<<"$asked")

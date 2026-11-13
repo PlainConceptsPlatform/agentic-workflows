@@ -1946,6 +1946,11 @@ fi
 if worker_installed implement && ! grep -qF 'cannot run as a subagent' "$IMPLEMENT_WORKER_MD"; then
   LEAD_OK=0; echo "FAIL: the implement prompt must stop at a planner-sub spawn error instead of retrying other agents" >&2
 fi
+# gh-aw strips HTML comments from safe-output comments, so the refine marker never reaches GitHub: the
+# router's auto-accept found no questions anywhere until it matched refine's visible prefix as well.
+if ! grep -qF 'contains($prefix)' "$ROUTER_YML" || ! grep -qF 'REFINE_PREFIX: "Refinement update"' "$ROUTER_YML"; then
+  LEAD_OK=0; echo "FAIL: the refine auto-accept must find the questions by refine's visible prefix, not only the stripped marker" >&2
+fi
 if [ "$LEAD_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # The harness plugins only load with .opencode/node_modules installed; without it every CI run
 # spawned untiered workers on the session's model. And the tier model a worker pins has to be one
