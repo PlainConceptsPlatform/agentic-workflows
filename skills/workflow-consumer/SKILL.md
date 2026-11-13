@@ -100,6 +100,13 @@ repository. The CLI generates a base from stack detection (e.g., "Follow Clean A
 for .NET repos), but route-specific rules require domain knowledge the CLI does not have. See
 `references/customize.md` for what each route's `REPO_RULES` should focus on.
 
+Release to production: the `release` route installs `release-to-production.yml`, a one-click
+release that also deploys. Its `bump` input defaults to `minor`. `release-tag.yml` starts
+`DEPLOY_WORKFLOW` (default `app-deploy.yml`) on the new tag only for a release the button started;
+set it to the repository's own deploy workflow if it is named differently. Add the button to the
+README with
+`[![Release to production](https://github.com/OWNER/REPO/actions/workflows/release-to-production.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/release-to-production.yml)`.
+
 UX mockups: `agent-refine.md`'s `MOCKUP_PATHS` names the frontend, as space-separated globs
 (default `apps/web/**`). A standard-path story whose work changes a matching file gets a UX mockup
 from the harness skill `pc-plan-mockup` (agent-harness 3.11.0 or later; without it refine carries

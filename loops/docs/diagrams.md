@@ -636,6 +636,7 @@ nothing reaches `main` except through a pull request.
 ```mermaid
 flowchart TD
     relStart("Work Router<br/>release route<br/>operation=release") --> relFacts
+    relButton("Release to production button<br/>bump (default minor), deploy=true") --> relFacts
     relFacts("Facts (rung 3)<br/>Commit log since the last tag<br/>and the current version, to disk") --> relAgent
     relAgent("Agent (rung 5)<br/>Categorise by conventional-commit<br/>prefix, write release-notes.md.<br/>The only judgement in this route") --> relNoop
     relNoop("noop<br/>the agent writes a file,<br/>not a GitHub object") --> relConclude
@@ -644,7 +645,11 @@ flowchart TD
     relMerge{"CI green and<br/>auto-merge allowed?"}
     relMerge -->|yes| relTag
     relMerge -.->|auto-merge disabled| relOpen
-    relTag("release-tag.yml on push to main<br/>GITHUB_TOKEN: tag vX.Y.Z,<br/>Release with the PR body as notes") --> relDone
+    relTag("release-tag.yml on push to main<br/>GITHUB_TOKEN: tag vX.Y.Z,<br/>Release with the PR body as notes") --> relDeployQ
+    relDeployQ{"Deploy marker<br/>on the release PR?"}
+    relDeployQ -->|no| relDone
+    relDeployQ -->|yes| relDeploy
+    relDeploy(("Deploying<br/>DEPLOY_WORKFLOW started on the tag,<br/>pro reviewers still apply"))
     relConclude -.->|fails| relFail
     relOpen(("PR left open<br/>warning names the fix"))
     relDone(("Released<br/>tag and Release published,<br/>no tag-triggered workflow fired"))
@@ -657,16 +662,20 @@ flowchart TD
     classDef failure fill:#fff0f0,stroke:#ef2929,stroke-width:2px,color:#8b1a1a
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class relStart start
-    class relFacts,relAgent,relNoop,relPr,relTag action
-    class relConclude,relMerge decision
+    class relButton,relFacts,relAgent,relNoop,relPr,relTag action
+    class relConclude,relMerge,relDeployQ decision
     class relFail failure
     class relOpen idle
-    class relDone success
+    class relDone,relDeploy success
 ```
 
 The version bump, the tag and the Release are deterministic on purpose. The agent's only output is
 a file on disk, so a confused model cannot publish a release. The tag and the Release use
 `GITHUB_TOKEN` so that a consumer deploying on `v*` tags does not deploy because a release was cut.
+The **Release to production** button (`release-to-production.yml`) is the one way a release deploys:
+it runs the worker directly with `deploy=true` (the router's dispatch is at GitHub's ten-input
+limit), the release pull request carries `<!-- release-deploy -->`,
+and only then does `release-tag.yml` start `DEPLOY_WORKFLOW` on the tag, explicitly.
 
 
 ---

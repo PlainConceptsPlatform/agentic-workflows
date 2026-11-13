@@ -2,7 +2,7 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
-## 1.20.0
+## 1.21.0
 
 ### Changed
 
@@ -28,7 +28,13 @@ Releases of `@plainconceptsplatform/workflows`. Earlier versions are described i
 - `verify-route-matrix.sh` reads each moved job from its new file and has a section per file that asserts both halves of the move: the job exists in exactly one file, the triggers and run titles moved with it, the shared values agree, and the forwards exist.
 - **The bot login reaches the split-out files too.** `agentics-merge-belt.yml`'s `TRUSTED_BOTS`, `bot-approve`'s `if:` in `agentics-pr-plumbing.yml`, and `GH_AW_ALLOWED_BOTS` in `agent-audit`, `agent-docs-audit` and `agent-release` read `vars.BOT_LOGIN` with the same default as the router and the other workers.
 
-Downgrading below 1.20.0 needs care: an older CLI does not know the new files and leaves them in place, so their jobs would run twice. Delete `agentics-housekeeping.yml`, `agentics-merge-belt.yml` and `agentics-pr-plumbing.yml` from `.github/workflows/` after the downgrade.
+Downgrading below 1.21.0 needs care: an older CLI does not know the new files and leaves them in place, so their jobs would run twice. Delete `agentics-housekeeping.yml`, `agentics-merge-belt.yml` and `agentics-pr-plumbing.yml` from `.github/workflows/` after the downgrade.
+
+## 1.20.0
+
+### Added
+
+- **Release to production, one button.** The `release` route now installs `release-to-production.yml`: Actions, Release to production, Run workflow, with a `bump` input that defaults to `minor`. It runs the release worker directly with `deploy=true`, as the router's call-release job does, because the router's `workflow_dispatch` is already at GitHub's ten-input limit; the release worker then writes a `<!-- release-deploy -->` marker and a visible notice into the release pull request, which auto-merges as before. `release-tag.yml` tags it and, finding the marker, starts `DEPLOY_WORKFLOW` (default `app-deploy.yml`) on the new tag with `GITHUB_TOKEN`; a missing deploy workflow is a warning, not a failure. The marker and the notice stay out of the published release notes. A `pro` environment with required reviewers still asks a person before production. A release started from the router alone still tags without deploying.
 
 ## 1.19.0
 

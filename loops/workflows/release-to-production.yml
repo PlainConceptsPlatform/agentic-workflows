@@ -1,0 +1,50 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/release-to-production.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: Release to production
+# The one button for a production release, run from the repository's Actions tab (or the badge in
+# its README): Run workflow, then Run workflow again. It runs the release worker with the bump
+# chosen here and deploy=true: the worker opens the `chore(release): vX.Y.Z` pull request carrying a
+# deploy marker, it auto-merges, release-tag.yml tags it, and because of the marker starts
+# DEPLOY_WORKFLOW on the new tag, which ships to production. A `pro` environment with required
+# reviewers still asks a person before the production stage runs.
+#
+# It calls the worker directly rather than through the router's dispatch-release job, because the router's
+# workflow_dispatch is at GitHub's limit of ten inputs and has no room for a deploy flag. Running a
+# workflow by hand already requires write access to the repository, which is what the router's
+# authorize job checks. The release route on its own (Main Work Router, operation=release) is
+# unchanged: it tags and publishes a release without deploying anything.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        required: true
+        type: choice
+        default: minor
+        options:
+          - minor
+          - patch
+          - major
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-to-production
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release with a deploy
+    # AGENTIC_WORKFLOWS_DISABLED, a repository variable with any value, turns the automation off.
+    if: vars.AGENTIC_WORKFLOWS_DISABLED == ''
+    uses: ./.github/workflows/agent-release.lock.yml
+    # The caller grants what the worker requests; narrower grants make the whole run fail to start.
+    permissions: write-all
+    with:
+      version-bump: ${{ inputs.bump }}
+      deploy: "true"
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
+      # The release PR is pushed and opened with the App token so its CI runs; see the worker's conclude.
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}

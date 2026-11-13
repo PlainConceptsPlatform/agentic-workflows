@@ -19,6 +19,14 @@ on:
 permissions:
   contents: write
   pull-requests: read
+  # Starting DEPLOY_WORKFLOW on the tag when the release pull request asked for a deploy.
+  actions: write
+
+env:
+  # The workflow that deploys a `v*` tag to production. Started on the new tag, with GITHUB_TOKEN,
+  # only when the release pull request carries the deploy marker (release-to-production.yml).
+  DEPLOY_WORKFLOW: app-deploy.yml
+  DEPLOY_MARKER: "<!-- release-deploy -->"
 
 concurrency:
   group: release-tag
@@ -38,6 +46,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Tag the release commit and publish the GitHub Release
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -80,12 +89,19 @@ jobs:
           marker="<!-- release:${tag} -->"
           gh api "repos/$REPO/commits/$SHA/pulls" > /tmp/pulls.json
           MARKER="$marker" node -e '
-            const pulls = JSON.parse(require("fs").readFileSync("/tmp/pulls.json", "utf8"));
+            const fs = require("fs");
+            const pulls = JSON.parse(fs.readFileSync("/tmp/pulls.json", "utf8"));
             const pr = pulls.find((p) => p.merged_at && (p.body || "").includes(process.env.MARKER));
             if (!pr) process.exit(3);
-            const notes = pr.body.split(/\r?\n/).filter((line) => line.trim() !== process.env.MARKER).join("\n").trim();
-            require("fs").writeFileSync("/tmp/release-notes.md", notes + "\n");
-            console.log(`Notes from #${pr.number}`);
+            const deploy = pr.body.includes(process.env.DEPLOY_MARKER);
+            // Neither marker nor the deploy notice belongs in the published release notes.
+            const notes = pr.body.split(/\r?\n/)
+              .filter((line) => line.trim() !== process.env.MARKER && line.trim() !== process.env.DEPLOY_MARKER)
+              .filter((line) => !line.startsWith("> Deploys to production once this merges"))
+              .join("\n").trim();
+            fs.writeFileSync("/tmp/release-notes.md", notes + "\n");
+            fs.writeFileSync("/tmp/release-deploy", deploy ? "true" : "false");
+            console.log(`Notes from #${pr.number}${deploy ? ", deploy requested" : ""}`);
           ' || status=$?
 
           if [ "${status:-0}" -eq 3 ]; then
@@ -98,3 +114,30 @@ jobs:
             gh release create "$tag" --repo "$REPO" --target "$SHA" --title "$tag" --notes-file /tmp/release-notes.md
           fi
           echo "Tagged $SHA as $tag and published the GitHub Release."
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "deploy=$(cat /tmp/release-deploy 2>/dev/null || echo false)" >> "$GITHUB_OUTPUT"
+
+      # The tag above was created with GITHUB_TOKEN, so its push starts no workflow: a release does
+      # not ship by itself. A workflow_dispatch is the exception GitHub allows that token, so a
+      # release that asked for a deploy starts DEPLOY_WORKFLOW on the tag explicitly. The deploy
+      # workflow's own `pro` environment rules (required reviewers) still apply.
+      - name: Deploy the release to production
+        if: steps.release.outputs.deploy == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f ".github/workflows/${DEPLOY_WORKFLOW}" ]; then
+            echo "::warning::The release asked for a deploy, but .github/workflows/${DEPLOY_WORKFLOW} does not exist; $TAG was tagged and not deployed."
+            exit 0
+          fi
+          gh workflow run "$DEPLOY_WORKFLOW" --repo "$REPO" --ref "$TAG"
+          echo "Started $DEPLOY_WORKFLOW on $TAG."
+          {
+            echo "### $TAG is deploying to production"
+            echo
+            echo "Follow it in [${DEPLOY_WORKFLOW}](${GITHUB_SERVER_URL}/${REPO}/actions/workflows/${DEPLOY_WORKFLOW})."
+          } >> "$GITHUB_STEP_SUMMARY"
