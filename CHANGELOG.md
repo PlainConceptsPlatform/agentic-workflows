@@ -30,6 +30,12 @@ Releases of `@plainconceptsplatform/workflows`. Earlier versions are described i
 
 Downgrading below 1.21.0 needs care: an older CLI does not know the new files and leaves them in place, so their jobs would run twice. Delete `agentics-housekeeping.yml`, `agentics-merge-belt.yml` and `agentics-pr-plumbing.yml` from `.github/workflows/` after the downgrade.
 
+## 1.20.1
+
+### Fixed
+
+- **The Release to production button passes actionlint.** The release worker's `deploy` input is now a `boolean`, and `release-to-production.yml` passes `deploy: true`. Before, it passed the string `"true"`, which actionlint reads as a bool and refuses for a `string` input, so every consumer's workflow lint failed on the installed button. The route matrix asserts that both sides are boolean, since this repository's own actionlint pass cannot see the consumer's compiled lock.
+
 ## 1.20.0
 
 ### Added

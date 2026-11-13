@@ -50,8 +50,8 @@ on:
       deploy:
         description: "true when release-to-production.yml asked for a deploy: the release PR then carries the deploy marker"
         required: false
-        type: string
-        default: "false"
+        type: boolean
+        default: false
   # The router starts this worker with gh workflow run; the inputs match workflow_call's.
   workflow_dispatch:
     inputs:
@@ -63,8 +63,8 @@ on:
       deploy:
         description: "true when release-to-production.yml asked for a deploy: the release PR then carries the deploy marker"
         required: false
-        type: string
-        default: "false"
+        type: boolean
+        default: false
 
 runs-on: agents-arc
 runs-on-slim: agents-arc

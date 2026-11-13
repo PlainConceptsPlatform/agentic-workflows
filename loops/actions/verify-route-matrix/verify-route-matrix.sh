@@ -4133,7 +4133,12 @@ if [ -f "$RTP_YML" ] && worker_installed release; then
   RTP_OK=1
   rtp() { grep -qE "$1" "$2" || { RTP_OK=0; echo "FAIL: release to production: $3" >&2; }; }
   rtp 'uses: \./\.github/workflows/agent-release\.lock\.yml' "$RTP_YML" 'the button must run the release worker'
-  rtp '^      deploy: "true"$' "$RTP_YML" 'the button must ask the release worker for a deploy'
+  rtp '^      deploy: true$' "$RTP_YML" 'the button must ask the release worker for a deploy'
+  # A boolean on both sides: a quoted "true" passed to a string input is a bool to actionlint, and
+  # every consumer's workflow lint failed on it, a check this repository cannot run without the lock.
+  if ! awk '/^      deploy:$/{f=1;next} f&&/^      [a-z-]+:$/{exit} f&&/type: boolean/{ok=1} END{exit !ok}' "${WORKFLOWS_DIR}/agent-release.md"; then
+    RTP_OK=0; echo "FAIL: release to production: the release worker's deploy input must be a boolean, as the button passes it" >&2
+  fi
   rtp 'default: minor' "$RTP_YML" 'the button must default to a minor bump'
   rtp '^    permissions: write-all$' "$RTP_YML" 'the button must grant the worker write-all, or the run never starts'
   if grep -qE '^      deploy:' "$ROUTER_YML"; then RTP_OK=0; echo "FAIL: release to production: the router's workflow_dispatch is at the ten-input limit; deploy belongs to the button" >&2; fi

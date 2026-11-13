@@ -42,7 +42,7 @@ jobs:
     permissions: write-all
     with:
       version-bump: ${{ inputs.bump }}
-      deploy: "true"
+      deploy: true
     secrets:
       OPENAI_API_KEY: ${{ secrets.FORGE_API_KEY }}
       # The release PR is pushed and opened with the App token so its CI runs; see the worker's conclude.
