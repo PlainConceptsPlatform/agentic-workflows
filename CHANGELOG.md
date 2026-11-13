@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.21.6
+
+### Fixed
+
+- **A stack child whose merge gate failed once is retried again.** GitHub links `Closes #N` only on pull requests into the default branch, so a stack child (into `feat/N`) has no linked issue. The merge train looked for the gate's attempt notes only there, missed the one the failed gate left on the issue, and read the run as a gate that did nothing: the child was skipped on every tick ("its gate already ran on this head and left no verdict or attempt") and never merged. The train now reads `Closes #N` from the body, as the gate already does. The route matrix asserts it.
+
 ## 1.21.5
 
 ### Fixed

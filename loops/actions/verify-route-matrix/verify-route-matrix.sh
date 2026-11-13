@@ -1951,6 +1951,11 @@ fi
 if ! grep -qF 'contains($prefix)' "$ROUTER_YML" || ! grep -qF 'REFINE_PREFIX: "Refinement update"' "$ROUTER_YML"; then
   LEAD_OK=0; echo "FAIL: the refine auto-accept must find the questions by refine's visible prefix, not only the stripped marker" >&2
 fi
+# A stack child (into feat/N) has no closingIssuesReferences; the train must read `Closes #N` from the body like the
+# gate does, or a failed gate's attempt on the issue is invisible and the child is parked as a silent gate forever.
+if [ -f "${HERE}/../merge-train/merge-train.sh" ] && ! grep -qF "(close[sd]?|fixe?[sd]?|resolve[sd]?) +#[0-9]+" "${HERE}/../merge-train/merge-train.sh"; then
+  LEAD_OK=0; echo "FAIL: the merge train must find a stack child's issue from 'Closes #N' in the body" >&2
+fi
 if [ "$LEAD_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # The harness plugins only load with .opencode/node_modules installed; without it every CI run
 # spawned untiered workers on the session's model. And the tier model a worker pins has to be one

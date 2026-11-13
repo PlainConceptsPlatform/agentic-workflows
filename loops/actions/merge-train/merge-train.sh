@@ -410,10 +410,18 @@ for line in "${candidates[@]}"; do
     continue
   fi
 
-  meta=$(gh pr view "$pr" --repo "$REPO" --json reviewDecision,commits,closingIssuesReferences 2>/dev/null || echo '{}')
+  meta=$(gh pr view "$pr" --repo "$REPO" --json reviewDecision,commits,closingIssuesReferences,body 2>/dev/null || echo '{}')
   review_decision=$(jq -r '.reviewDecision // ""' <<<"$meta")
   head_committed=$(jq -r '[.commits[]?.committedDate] | max // ""' <<<"$meta")
   linked_issue=$(jq -r '.closingIssuesReferences[0].number // ""' <<<"$meta")
+  # GitHub links closing keywords only on pull requests into the default branch, so a stack
+  # child (into feat/N) has none. The gate reads `Closes #N` from the body instead
+  # (identify-gate-subject); the train must find the same issue, or it misses the attempt the
+  # gate recorded there, counts a failed gate as a silent one and never retries it.
+  if [ -z "$linked_issue" ]; then
+    linked_issue=$(jq -r '.body // ""' <<<"$meta" |
+      grep -oiE '(close[sd]?|fixe?[sd]?|resolve[sd]?) +#[0-9]+' | grep -oE '[0-9]+' | head -n 1 || true)
+  fi
 
   # The latest verdict on the pull request or its issue, and how many retries it has had.
   verdicts=$(
