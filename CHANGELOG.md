@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.21.2
+
+### Fixed
+
+- **The platform template sync installs copier on the self-hosted runners.** Their Python has no `python3-venv`, so the sync's last fallback, `python3 -m venv`, failed: no app had ever synced a template version through the workflow. Where neither `uvx` nor `pipx` is present and `ensurepip` is missing, `platform-template-sync.yml` now downloads uv `UV_VERSION` (0.13.5), checks it against `UV_SHA256` and runs copier through `uvx`. The route matrix asserts the pin, the check and the guard.
+
 ## 1.21.1
 
 ### Fixed
