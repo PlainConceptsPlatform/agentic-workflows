@@ -226,6 +226,14 @@ To turn it on in a repository:
 4. The repository variable `MERGE_QUEUE=true`: the router passes it to the train, and gates run one
    per pull request instead of on the single merge belt.
 
+## Required checks
+
+Apply `loops/templates/rulesets/main-required-checks.json` once per repository (`gh api -X POST
+repos/OWNER/REPO/rulesets --input ...`): `Full CI` required on the default branch, admins may
+bypass. `Full CI` needs every blocking job. Workflows that run only on their paths (`Agentics
+checks`) cannot be required; the merge points check them through `SIDE_CHECK_WORKFLOWS` instead
+(`land-pull-request/side-checks.sh`). See `docs/family-templates.md`.
+
 ## Compile and verify
 
 Compile in the consumer repository:

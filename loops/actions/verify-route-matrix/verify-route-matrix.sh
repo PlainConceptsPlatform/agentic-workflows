@@ -3708,6 +3708,31 @@ if [ -f "$RTP_YML" ] && worker_installed release; then
   if [ "$RTP_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+echo "── Required checks and side workflows ────────────────────────────────────"
+
+# The main ruleset requires one check, Full CI, so Full CI must need every blocking job, and the
+# side workflows no ruleset can require (Agentics checks runs only on its paths) must be checked
+# by both merge points and held by the train. Dropping any one of these lets a red job merge.
+RC_OK=1
+rc() { grep -qE "$1" "$2" || { RC_OK=0; echo "FAIL: required checks: $3" >&2; }; }
+CI_DOTNET="${HERE}/../../templates/ci/app-ci-dotnet-next.yml"
+CI_NODE="${HERE}/../../templates/ci/app-ci-node-monorepo.yml"
+RULESET="${HERE}/../../templates/rulesets/main-required-checks.json"
+for job in sast-scan secret-scan deps-and-iac-scan platform-conformance engineering-excellence api web; do
+  awk '/^  full-ci:$/{f=1} f&&/needs:/{print; exit}' "$CI_DOTNET" | grep -qE "[[ ]${job}[],]" || { RC_OK=0; echo "FAIL: required checks: the .NET template's Full CI does not need ${job}" >&2; }
+done
+for job in lint sast-scan secret-scan deps-and-iac-scan web; do
+  awk '/^  full-ci:$/{f=1} f&&/needs:/{print; exit}' "$CI_NODE" | grep -qE "[[ ]${job}[],]" || { RC_OK=0; echo "FAIL: required checks: the node template's Full CI does not need ${job}" >&2; }
+done
+rc '"context": "Full CI"' "$RULESET" 'the ruleset must require Full CI'
+rc '"include": \["~DEFAULT_BRANCH"\]' "$RULESET" 'the ruleset must target the default branch'
+rc 'side-checks\.sh' "${HERE}/../land-pull-request/land-pull-request.sh" 'land-pull-request must check the side workflows'
+rc 'side-checks\.sh' "${HERE}/../merge-agent-pr/action.yml" 'merge-agent-pr must check the side workflows'
+rc 'land-pull-request/side-checks\.sh' "${HERE}/../merge-train/merge-train.sh" 'the merge train must hold a pull request whose side workflow is red'
+rc 'test-timings\.mjs' "$CI_DOTNET" 'the .NET template must summarise the test timings'
+[ "$(grep -c -- '--logger trx' "$CI_DOTNET")" -ge 5 ] || { RC_OK=0; echo "FAIL: required checks: every .NET test step must write a trx report" >&2; }
+if [ "$RC_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 echo "── App error privacy ─────────────────────────────────────────────────────"
 
 # The application error report files into the private repository rather than out of it, so

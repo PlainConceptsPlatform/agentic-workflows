@@ -27,11 +27,14 @@ app rides on for free.
 |---|---|
 | 0 | 0 |
 | 1–4 | at most 1 |
-| 5+ | at most 2 |
+| 5–8 | at most 2 |
+| … one more per 4 | at most 6 |
 
-- `MAX_VMS = 2` is a compile-time constant in the app, clamped at every capacity
+- `MAX_VMS` (app setting, default 6) is the hard ceiling, clamped at every capacity
   write and re-verified after each one; a watchdog forces capacity back down if it
-  ever reads more than 2. A third VM is never created automatically.
+  ever reads more.
+- Queued CI/Deploy jobs get one VM per `CI_JOBS_PER_VM` (app setting, default 4), at
+  most 6 VMs for CI. Lowering it shortens CI queues at the cost of more VMs.
 - Jobs beyond capacity wait in the GitHub queue on purpose.
 - The scaler never deletes a VM whose runner GitHub reports busy, and deletes nothing
   while the runner list cannot be read. Scale-down deletes chosen VMs the scaler last
@@ -91,6 +94,7 @@ App settings:
 | `AGENT_RUNNER_LABEL` | agent base label (default `agents-aw`) |
 | `RESERVED_CI_VMS` | VMs held back for CI while CI is queued (default 0; live 2) |
 | `MAX_VMS` | hard fleet ceiling (default 6; live 10) |
+| `CI_JOBS_PER_VM` | queued CI/Deploy jobs per VM (default 4) |
 | `WATCH_REPOS` | Repos polled each sweep as a safety net for a missed queued webhook. Empty discovers every private repo of the org with a push in the last 14 days, newest first, cached 30 minutes; a comma-separated list overrides it. |
 | `RUNNER_GROUP_ID` | GitHub runner group for minted runners |
 | `GH_REPO` | Optional. A bare repository name switches the scaler to repo-level runners on `GH_ORG/GH_REPO` (no org admin or runner group needed; set `RUNNER_GROUP_ID=1`). Empty keeps org-level |
