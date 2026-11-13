@@ -2,6 +2,13 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.20.2
+
+### Fixed
+
+- **`planner-sub` can be spawned again.** `agent-harness` before 3.11.3 wrote `resource: *` into the generated `plan.md`, `planner.md` and `planner-sub.md`. A bare `*` is a YAML alias, so the frontmatter did not parse, opencode dropped each agent's `mode`, treated it as primary and refused to spawn it (`Agent planner-sub cannot run as a subagent`). The implement worker mandates `planner-sub` for propose and archive, so a run either recovered by luck or ended with nothing and a stalled issue. The shared CI setup (`opencode-ci.md`) now quotes the value in the generated agent files before opencode reads them, and fails with a clear error if one is still unquoted. It is a no-op once the repository takes the harness fix. Needs no action from consumers beyond `workflows update`.
+- **Implement stops at the first spawn error.** Where the prompt said to report when `planner-sub` is not in the task tool's list, it now also covers an error on spawning it, and forbids retrying with `planner` or another agent. A run used to spend seven minutes and ten errors on the fallbacks before giving up.
+
 ## 1.20.1
 
 ### Fixed
