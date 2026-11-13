@@ -3,10 +3,11 @@
 // Keeps the paths a platform contract (.platform/contract.yml) marks as `owned` equal to the template
 // they come from. A pull request may change them only in a template sync (it changes `sync.marker` or
 // moves `sync.version`) or under an unexpired exception; conflict markers and expired exceptions fail.
-// With --compare, owned files are also compared with `source.url` at the recorded version.
+// With --compare, owned files are also compared with `source.url` at the recorded version; with
+// --require-source as well, a template it cannot read is a failure rather than a note.
 // Without a contract it passes silently. .copier-answers.yml + .platform/manifest is read as one.
 //
-// Usage: node scripts/check-platform-conformance.mjs [--base <git ref>] [--compare]
+// Usage: node scripts/check-platform-conformance.mjs [--base <git ref>] [--compare [--require-source]]
 //        node scripts/check-platform-conformance.mjs --contract   (key=value lines for $GITHUB_OUTPUT)
 
 import { execFileSync } from 'node:child_process';
@@ -321,7 +322,7 @@ function sourceBlobs(url, version) {
   }
 }
 
-function compareWithSource(root, contract, patterns, live, version) {
+function compareWithSource(root, contract, patterns, live, version, requireSource = false) {
   const failures = [];
   const notes = [];
   const { name, url, changes } = contract.source;
@@ -331,7 +332,8 @@ function compareWithSource(root, contract, patterns, live, version) {
     source = sourceBlobs(url, version);
   } catch (error) {
     const reason = String(error.stderr ?? error.message).trim().split('\n').at(-1);
-    return { failures, notes: [`cannot read ${url} at ${version} (${reason}); owned files were not compared with the source`] };
+    const message = `cannot read ${url} at ${version} (${reason}); owned files were not compared with the source`;
+    return requireSource ? { failures: [message], notes, compared: false } : { failures, notes: [message], compared: false };
   }
   const local = blobIds(git(root, ['ls-files', '-s', '-z']), 1);
   for (const [path, id] of source) {
@@ -343,10 +345,10 @@ function compareWithSource(root, contract, patterns, live, version) {
   }
   const onlyHere = [...local.keys()].filter((path) => isOwned(patterns, path) && !source.has(path));
   if (onlyHere.length > 0) notes.push(`${onlyHere.length} owned file(s) are not in ${name} at ${version} under the same path; not compared`);
-  return { failures, notes };
+  return { failures, notes, compared: true };
 }
 
-export function checkConformance(root, { base, compare = false, today = new Date().toISOString().slice(0, 10) } = {}) {
+export function checkConformance(root, { base, compare = false, requireSource = false, today = new Date().toISOString().slice(0, 10) } = {}) {
   const read = (path) => (existsSync(join(root, path)) ? readFileSync(join(root, path), 'utf8') : undefined);
   let contract;
   try {
@@ -395,12 +397,14 @@ export function checkConformance(root, { base, compare = false, today = new Date
       }
     }
   }
+  let compared;
   if (compare) {
-    const result = compareWithSource(root, contract, patterns, live, version);
+    const result = compareWithSource(root, contract, patterns, live, version, requireSource);
     failures.push(...result.failures);
     notes.push(...result.notes);
+    compared = result.compared;
   }
-  return { adopted: true, failures, notes };
+  return { adopted: true, failures, notes, compared };
 }
 
 // One key=value line per field, for $GITHUB_OUTPUT; contract=absent when there is none.
@@ -428,9 +432,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const args = process.argv.slice(2);
   const baseIndex = args.indexOf('--base');
   const base = baseIndex === -1 ? undefined : args[baseIndex + 1];
-  const unknown = args.filter((arg, i) => i !== baseIndex + 1 || baseIndex === -1).filter((arg) => !['--base', '--compare', '--contract'].includes(arg));
+  const unknown = args.filter((arg, i) => i !== baseIndex + 1 || baseIndex === -1).filter((arg) => !['--base', '--compare', '--require-source', '--contract'].includes(arg));
   if ((baseIndex !== -1 && !base) || unknown.length > 0) {
-    console.error('usage: node scripts/check-platform-conformance.mjs [--base <git ref>] [--compare] | --contract');
+    console.error('usage: node scripts/check-platform-conformance.mjs [--base <git ref>] [--compare [--require-source]] | --contract');
     process.exit(2);
   }
   const root = fileURLToPath(new URL('..', import.meta.url));
@@ -444,10 +448,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.exit(1);
     }
   }
-  const { adopted, failures, notes } = checkConformance(root, { base, compare: args.includes('--compare') });
+  const { adopted, failures, notes, compared } = checkConformance(root, { base, compare: args.includes('--compare'), requireSource: args.includes('--require-source') });
   if (!adopted) process.exit(0);
   for (const note of notes) console.log(`· ${note}`);
   for (const failure of failures) console.error(`✗ ${failure}`);
-  if (failures.length === 0) console.log('✓ owned files match the template');
+  // Only a comparison that ran may say the files match: an unread template proves nothing.
+  if (failures.length === 0) console.log(compared === false ? '✓ no owned file changed outside a template sync (not compared with the template)' : '✓ owned files match the template');
   process.exit(failures.length === 0 ? 0 : 1);
 }

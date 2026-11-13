@@ -3744,6 +3744,10 @@ rc 'test-timings\.mjs' "$CI_DOTNET" 'the .NET template must summarise the test t
 SYNC_YML="${HERE}/../../templates/platform-template/.github/workflows/platform-template-sync.yml"
 rc '^  UV_SHA256: [0-9a-f]{64}$' "$SYNC_YML" 'the template sync must pin uv by SHA-256'
 rc 'sha256sum --check --strict' "$SYNC_YML" 'the template sync must check the uv download'
+# A conformance run that could not read the template must not pass as a comparison.
+rc 'compare\+=\(--require-source\)' "$CI_DOTNET" 'the conformance job must require the template when it has a token'
+rc 'create-github-app-token@[0-9a-f]{40}' "$CI_DOTNET" 'the conformance job must mint a token that reads the template'
+rc "requireSource \\? \\{ failures: \\[message\\]" "${HERE}/../../templates/platform-template/scripts/check-platform-conformance.mjs" 'check-platform-conformance must fail on an unread template with --require-source'
 rc "python3 -c 'import ensurepip'" "$SYNC_YML" 'the template sync must not try a venv where ensurepip is missing'
 if [ "$RC_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
