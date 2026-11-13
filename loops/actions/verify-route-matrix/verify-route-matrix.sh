@@ -3721,6 +3721,22 @@ if [ -f "$RTP_YML" ] && worker_installed release; then
   if [ "$RTP_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+echo "── Apply-review reads a review's summary ─────────────────────────────────"
+
+# "Request changes" from the review box puts its whole list in the review's summary body: no
+# thread, no inline comment. The worker told the agent the whole conversation was on disk but wrote
+# only threads, inline comments and conversation comments, so such a review read as "no feedback"
+# and nothing was ever applied. The summaries must be fetched and the prompt must name the file.
+APPLY_REVIEW_MD="${WORKFLOWS_DIR}/agent-apply-review.md"
+if [ -f "$APPLY_REVIEW_MD" ]; then
+  AR_OK=1
+  ar() { grep -qF -- "$1" "$APPLY_REVIEW_MD" || { AR_OK=0; echo "FAIL: apply-review: $2" >&2; }; }
+  ar 'pulls/$PR/reviews' 'the review summaries must be fetched (a request-changes review has no thread)'
+  ar '/tmp/gh-aw/agent/reviews.json' 'the agent must be told where the review summaries are'
+  ar 'is actionable even when there is no' 'a human change request in a review summary must count as feedback'
+  if [ "$AR_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
 echo "── Required checks and side workflows ────────────────────────────────────"
 
 # The main ruleset requires one check, Full CI, so Full CI must need every blocking job, and the

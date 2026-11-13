@@ -471,6 +471,11 @@ steps:
       gh api "repos/$REPO/issues/$PR/comments" --paginate \
         --jq '[.[] | {author: .user.login, body}]' \
         > /tmp/gh-aw/agent/conversation.json
+      # The summary of a submitted review: "Request changes" from the review box puts its whole list
+      # here, with no thread and no inline comment, so without this file that feedback is invisible.
+      gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
+        --jq '[.[] | {id, author: .user.login, state, body, commit: .commit_id, submitted: .submitted_at}]' \
+        > /tmp/gh-aw/agent/reviews.json
       gh api graphql -f query='
         query($owner:String!, $name:String!, $number:Int!) {
           repository(owner:$owner, name:$name) {
@@ -546,6 +551,7 @@ timeout-minutes: 90
    - `/tmp/gh-aw/agent/review-threads.json` , every thread with its resolved and outdated state
    - `/tmp/gh-aw/agent/review-comments.json` , every inline comment with its file and line
    - `/tmp/gh-aw/agent/conversation.json` , every conversation comment
+   - `/tmp/gh-aw/agent/reviews.json` , every submitted review with its state and summary body
    - `/tmp/gh-aw/agent/diff.patch` , the current diff
 
    A reviewer often makes one point across several comments. Applying them one at a time
@@ -553,7 +559,11 @@ timeout-minutes: 90
 
 4. Work out which items are genuinely actionable and still outstanding. Skip anything already
    addressed by a later commit, anything a bot wrote, anything from the pull request author,
-   and anything that is a question rather than a request. You must account for every unresolved
+   and anything that is a question rather than a request. A human's review in `reviews.json` with
+   state `CHANGES_REQUESTED` and a body that lists requests is actionable even when there is no
+   thread and no inline comment: that is how a reviewer requests changes from the summary box. It
+   is outstanding unless the same person approved afterwards or a later commit on the branch
+   already does what it asks. Name each such review by its `id` in your comment. You must account for every unresolved
    human review thread by its `PRRT_...` ID. Do not claim feedback was implemented when no branch
    change is needed: that requires reviewer confirmation.
 
