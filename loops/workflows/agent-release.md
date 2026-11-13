@@ -43,8 +43,8 @@ on:
       deploy:
         description: "true when release-to-production.yml asked for a deploy: the release PR then carries the deploy marker"
         required: false
-        type: string
-        default: "false"
+        type: boolean
+        default: false
 
 runs-on: agents-arc
 runs-on-slim: agents-arc
