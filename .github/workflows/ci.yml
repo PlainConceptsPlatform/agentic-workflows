@@ -255,6 +255,30 @@ jobs:
           sys.exit(1 if failed else 0)
           PY
 
+  # The consumers' SAST job scans every script this package installs, with the blocking rule sets, so
+  # a finding here would turn every consumer's CI red on its next update: 1.21.0's test-timings
+  # parser did, with a RegExp built from a variable. The same scan, on what ships, with the same
+  # exclusion the consumers' SEMGREP_EXCLUDES default carries (capture-evidence).
+  shipped-sast:
+    name: Semgrep on shipped scripts (consumer SAST)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Semgrep scan (blocking, as the consumers run it)
+        env:
+          WORKSPACE: ${{ github.workspace }}
+          SEMGREP_IMAGE: "semgrep/semgrep:1.168.0"
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$WORKSPACE:/src" -w /src "$SEMGREP_IMAGE" \
+            semgrep scan --error --metrics=off --oss-only --disable-version-check \
+              --config p/default --config p/security-audit --config p/secrets \
+              --config p/typescript --config loops/templates/quality-gates/.semgrep/ \
+              --exclude-rule yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag \
+              --exclude loops/actions/capture-evidence \
+              loops/actions loops/templates/quality-gates/scripts loops/templates/platform-template/scripts
+
   runner-image-pins:
     name: Runner image pins
     runs-on: ubuntu-latest
