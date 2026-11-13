@@ -2,6 +2,16 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.21.5
+
+### Fixed
+
+- **Platform conformance compares with the template, or says it did not.** The template repository is private, and the conformance job had only `GITHUB_TOKEN`, so every run printed "cannot read … owned files were not compared with the source" and then "✓ owned files match the template". Now:
+  - The job mints the bot App token (`BOT_APP_ID`, `BOT_PRIVATE_KEY`, new optional `workflow_call` secrets) and hands it to git through process-scoped config.
+  - With that token, `check-platform-conformance.mjs --require-source` makes an unreadable template a failure.
+  - Without a token (Dependabot, or a caller that passes no secrets) the job warns that it did not compare, and the script no longer prints "owned files match" when it compared nothing.
+  - A deploy pipeline that calls the CI with `uses:` passes the two secrets; the platform template's `app-deploy.yml` does so from its next version.
+
 ## 1.21.4
 
 ### Fixed
@@ -13,16 +23,6 @@ Releases of `@plainconceptsplatform/workflows`. Earlier versions are described i
 ### Fixed
 
 - **Implement can spawn `planner-sub` again.** agent-harness before 3.12.1 generates `resource: *` in the planner agents; a bare `*` is a YAML alias, so opencode dropped their `mode` and refused to spawn them ("Agent planner-sub cannot run as a subagent"). 1.20.2 quoted the generated files, but the harness plugin rewrites them when opencode starts, so the fix never reached the agent. The CI setup now quotes the value in the plugin's generator (`pc-subagent-tiers-core.js`) before the sync, and fails the step if it cannot. Verified in a consumer: the same patch took the implement run from the spawn error to a planner-sub and backend-engineer run and an opened pull request. The route matrix asserts it.
-
-## 1.21.3
-
-### Fixed
-
-- **Platform conformance compares with the template, or says it did not.** The template repository is private, and the conformance job had only `GITHUB_TOKEN`, so every run printed "cannot read … owned files were not compared with the source" and then "✓ owned files match the template". Now:
-  - The job mints the bot App token (`BOT_APP_ID`, `BOT_PRIVATE_KEY`, new optional `workflow_call` secrets) and hands it to git through process-scoped config.
-  - With that token, `check-platform-conformance.mjs --require-source` makes an unreadable template a failure.
-  - Without a token (Dependabot, or a caller that passes no secrets) the job warns that it did not compare, and the script no longer prints "owned files match" when it compared nothing.
-  - A deploy pipeline that calls the CI with `uses:` passes the two secrets; the platform template's `app-deploy.yml` does so from its next version.
 
 ## 1.21.2
 
