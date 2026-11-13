@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.21.7
+
+### Fixed
+
+- **Apply-review reads the summary of a review.** "Request changes" from the review box puts its whole numbered list in the review's summary body, with no thread and no inline comment. The worker told the agent the whole conversation was on disk, but its collection step wrote only the threads, the inline comments and the conversation comments, so such a review read as "no feedback": the agent answered "nothing to apply" and pushed nothing, and the pull request stayed blocked on a change request nobody was acting on (seen on three pull requests of one consumer, five runs). The step now also writes `reviews.json` (id, author, state, body, commit) and the prompt names it: a human's `CHANGES_REQUESTED` review with a body that lists requests is actionable unless the same person approved afterwards or a later commit already does it. The route matrix asserts the fetch, the file name and the rule.
+
 ## 1.21.6
 
 ### Fixed
