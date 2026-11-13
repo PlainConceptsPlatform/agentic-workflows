@@ -520,6 +520,17 @@ for line in "${candidates[@]}"; do
     [ $((now_epoch - $(iso_epoch "$ci_created"))) -lt $((STUCK_HOURS * 3600)) ] || ci_stuck=true
   fi
 
+  # A green CI run is not the whole verdict: a side workflow (Agentics checks) on the same head may be
+  # red or still running, and the gate could then never land it. Held until that changes.
+  if [ "$ci_status" = completed ] && [ "$ci_conclusion" = success ] && [ "$park" = none ]; then
+    side=$(bash "$(dirname "${BASH_SOURCE[0]}")/../land-pull-request/side-checks.sh" "$REPO" "$head_sha")
+    if [ -n "$side" ]; then
+      echo "#$pr ($author): hold, $side."
+      summary "| #$pr | $author | hold | $side |"
+      continue
+    fi
+  fi
+
   mergeable=UNKNOWN
   behind_by=0
   if [ "$park" = none ] && [ "$hold" != true ] && [ "$review_decision" != CHANGES_REQUESTED ]; then

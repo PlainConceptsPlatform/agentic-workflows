@@ -2,6 +2,19 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.21.0
+
+### Added
+
+- **Test timings in the .NET CI.** Every test step of `app-ci-dotnet-next.yml` writes a `.trx` report, and a new `Test timings` step puts where the time went in the job summary: per test project the wall time, the summed test time and the average number of tests running at once, then the slowest classes (with the time of their first test, where a class fixture's setup is paid) and the slowest tests. `scripts/test-timings.mjs` and `scripts/lib/test-timings.mjs` ship with the quality gates, with their `node:test` suite. It never fails the job.
+- **A ruleset that requires `Full CI`.** `loops/templates/rulesets/main-required-checks.json` requires `Full CI` on the default branch, with repository admins able to bypass it. Without a required check nothing stopped a merge while a job was red.
+- **Side workflows block a landing.** `land-pull-request/side-checks.sh` refuses a head whose `Agentics checks` run (or any workflow in `SIDE_CHECK_WORKFLOWS`) failed or is still running. Both merge points call it (`land-pull-request` and `merge-agent-pr`), and the merge train holds such a pull request instead of dispatching a gate. That workflow runs only when workflow files change, so no ruleset can require it, and the CI verdict the train reads never included it. 1.20.0's release button merged into three apps with its workflow lint red that way.
+- **`CI_JOBS_PER_VM`** on the runner scaler: queued CI/Deploy jobs per VM, default 4 (unchanged). Lowering it shortens CI queues at the cost of more VMs. The runners README no longer describes `MAX_VMS` as a compile-time 2.
+
+### Changed
+
+- **`Full CI` needs every blocking job.** In both CI templates it now also needs the scans (TruffleHog, Trivy, Semgrep), and in the .NET template the Markdown, repository and platform conformance checks, so the one required check covers them.
+
 ## 1.20.2
 
 ### Fixed

@@ -214,19 +214,19 @@ jobs:
       - name: Unit tests + coverage
         if: env.UNIT_TEST_PROJECT != ''
         run: dotnet test "$UNIT_TEST_PROJECT" --no-build -c Release
-          --collect:"XPlat Code Coverage" --settings "$COVERAGE_SETTINGS" --results-directory TestResults
+          --collect:"XPlat Code Coverage" --settings "$COVERAGE_SETTINGS" --results-directory TestResults --logger trx
       - name: Parity tests
         if: env.PARITY_TEST_PROJECT != ''
-        run: dotnet test "$PARITY_TEST_PROJECT" --no-build -c Release
+        run: dotnet test "$PARITY_TEST_PROJECT" --no-build -c Release --results-directory TestResults --logger trx
       - name: Architecture tests
         if: env.ARCHITECTURE_TEST_PROJECT != ''
-        run: dotnet test "$ARCHITECTURE_TEST_PROJECT" --no-build -c Release
+        run: dotnet test "$ARCHITECTURE_TEST_PROJECT" --no-build -c Release --results-directory TestResults --logger trx
       # Executable OpenSpec scenarios (Reqnroll). Each scenario is bound to a spec scenario by tag
       # and fails if that scenario disappears from openspec/.
       - name: Acceptance tests (Reqnroll) + coverage
         if: env.ACCEPTANCE_TEST_PROJECT != ''
         run: dotnet test "$ACCEPTANCE_TEST_PROJECT" --no-build -c Release
-          --collect:"XPlat Code Coverage" --settings "$COVERAGE_SETTINGS" --results-directory TestResults
+          --collect:"XPlat Code Coverage" --settings "$COVERAGE_SETTINGS" --results-directory TestResults --logger trx
       # APP_SQL_SERVER is the connection string without a database; each later step names its own.
       - name: Create test databases
         env:
@@ -259,11 +259,16 @@ jobs:
           export "$INTEGRATION_CONNECTION_ENV=$APP_SQL_SERVER;Database=$PRIMARY_DATABASE"
           for pair in $EXTRA_DATABASES; do export "${pair%%=*}=$APP_SQL_SERVER;Database=${pair#*=}"; done
           dotnet test "$INTEGRATION_TEST_PROJECT" --no-build -c Release \
-            --collect:"XPlat Code Coverage" --settings "$COVERAGE_SETTINGS" --results-directory TestResults
+            --collect:"XPlat Code Coverage" --settings "$COVERAGE_SETTINGS" --results-directory TestResults --logger trx
       # The coverage step runs a small node script; fresh runner VMs ship no node.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+      # Where the run's time went, by test class: a class is what xUnit runs in parallel and where a
+      # fixture's setup is paid, so a slow class shows up the day it is added. Never fails the job.
+      - name: Test timings
+        if: ${{ !cancelled() }}
+        run: node "$GITHUB_WORKSPACE/scripts/test-timings.mjs" TestResults >> "$GITHUB_STEP_SUMMARY" || true
       # pipefail: without it the step reports tee's status and passes however low coverage is.
       - name: Coverage floor (merged)
         run: |
@@ -854,20 +859,22 @@ jobs:
           retention-days: 90
 
   # The merge train reads this job by its name to tell a full run from a light one: do not rename it.
+  # It is also the check the main ruleset requires (loops/templates/rulesets), so it needs every
+  # blocking job, the scans as well as the heavy ones: a red scan must stop a merge too.
   full-ci:
     name: Full CI
-    needs: [depth, api, web, e2e, engineering-excellence]
+    needs: [depth, api, web, e2e, engineering-excellence, markdown, repo-checks, platform-conformance, secret-scan, deps-and-iac-scan, sast-scan]
     if: ${{ always() && needs.depth.outputs.full == 'true' }}
     runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
     timeout-minutes: 5
     steps:
-      - name: Every heavy job passed
+      - name: Every blocking job passed
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
           for result in $RESULTS; do
             case "$result" in
-              failure | cancelled | timed_out) echo "A heavy job ended $result."; exit 1 ;;
+              failure | cancelled | timed_out) echo "A blocking job ended $result."; exit 1 ;;
             esac
           done
           echo "Full CI passed."
