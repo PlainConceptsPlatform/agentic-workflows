@@ -265,6 +265,20 @@ describe("check-platform-conformance --compare", { timeout: 20_000 }, () => {
     expect(result.stdout).toMatch(/cannot read .+ at v1\.0\.0 \(.+\); owned files were not compared with the source/);
     expect(result.stderr).toContain(`the exception for ${ACME_FILE} expired on 2000-01-01`);
   });
+
+  it("never claims the files match when the template was not read, and fails on it with --require-source", async () => {
+    const { repository, template } = await adoptedFromTemplate({});
+    await rm(template, { force: true, recursive: true });
+
+    const lenient = await check(repository, ["--compare"]);
+    expect(lenient.code).toBe(0);
+    expect(lenient.stdout).toContain("not compared with the template");
+    expect(lenient.stdout).not.toContain("owned files match the template");
+
+    const strict = await check(repository, ["--compare", "--require-source"]);
+    expect(strict.code).toBe(1);
+    expect(strict.stderr).toMatch(/cannot read .+ at v1\.0\.0 \(.+\); owned files were not compared with the source/);
+  });
 });
 
 async function adoptedFromTemplate(files: Record<string, string>): Promise<{ repository: string; template: string }> {

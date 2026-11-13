@@ -33,6 +33,12 @@ on:
     secrets:
       NPM_REGISTRY_TOKEN:
         required: false
+      # The bot App, for the platform conformance job to read the template repository when it is
+      # private. A deploy pipeline passes them; without them the owned files are not compared.
+      BOT_APP_ID:
+        required: false
+      BOT_PRIVATE_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -518,17 +524,34 @@ jobs:
     name: Platform conformance
     runs-on: ${{ vars.CI_RUNNER || 'agents-arc' }}
     timeout-minutes: 5
+    env:
+      HAS_BOT_APP: ${{ secrets.BOT_APP_ID != '' && secrets.BOT_PRIVATE_KEY != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The template repository is usually private, and GITHUB_TOKEN reads only this one. Without a
+      # token the comparison could not run and the job still said the owned files matched.
+      - name: Token that reads the platform template
+        id: app-token
+        if: env.HAS_BOT_APP == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+      # The token reaches git through process-scoped config only, never a file on the runner.
       - name: Owned files change only through a template sync
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
+          GIT_CONFIG_COUNT: ${{ steps.app-token.outputs.token != '' && '1' || '0' }}
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
+          HAS_TOKEN: ${{ steps.app-token.outputs.token != '' }}
         run: |
           set -euo pipefail
           if [ ! -f .platform/contract.yml ] && { [ ! -f .copier-answers.yml ] || [ ! -f .platform/manifest ]; }; then
@@ -539,11 +562,19 @@ jobs:
             echo "::error::This repository has a platform contract but no scripts/check-platform-conformance.mjs. Install it with: npx @plainconceptsplatform/workflows add --template platform-template"
             exit 1
           fi
+          # With a token the template must be read; without one (Dependabot, a caller that passes no
+          # secrets) the job still checks for changes outside a sync, and says it did not compare.
+          compare=(--compare)
+          if [ "$HAS_TOKEN" = true ]; then
+            compare+=(--require-source)
+          else
+            echo "::warning::No bot App token in this run, so the owned files were not compared with the template. Pass BOT_APP_ID and BOT_PRIVATE_KEY to this workflow."
+          fi
           if [ "$EVENT" = pull_request ]; then
             git fetch origin "$BASE_REF"
-            node scripts/check-platform-conformance.mjs --compare --base "origin/$BASE_REF" | tee -a "$GITHUB_STEP_SUMMARY"
+            node scripts/check-platform-conformance.mjs "${compare[@]}" --base "origin/$BASE_REF" | tee -a "$GITHUB_STEP_SUMMARY"
           else
-            node scripts/check-platform-conformance.mjs --compare | tee -a "$GITHUB_STEP_SUMMARY"
+            node scripts/check-platform-conformance.mjs "${compare[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
   secret-scan:
