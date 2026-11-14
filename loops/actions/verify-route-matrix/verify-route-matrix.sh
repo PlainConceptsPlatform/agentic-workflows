@@ -1206,10 +1206,10 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
   # Every write goes through act(), which is the only place dry-run is honoured. A second
   # write path would make --dry-run a lie exactly once, on the run that deletes something.
   hk 'const act = async' 'has no act\(\) wrapper, so dry-run cannot be enforced in one place'
-  writes=$(count -cE 'github\.rest\.(issues\.(create|update|createComment|removeLabel|addLabels)|git\.deleteRef|actions\.createWorkflowDispatch)\(' "$HOUSEKEEPING_YML")
+  writes=$(count -cE 'github\.rest\.(issues\.(create|update|createComment|removeLabel|addLabels)|pulls\.create|git\.deleteRef|actions\.createWorkflowDispatch)\(' "$HOUSEKEEPING_YML")
   outside=$(awk '
     /await act\(/ { inact = 1 }
-    inact && /github\.rest\.(issues\.(create|update|createComment|removeLabel|addLabels)|git\.deleteRef|actions\.createWorkflowDispatch)\(/ { seen++ }
+    inact && /github\.rest\.(issues\.(create|update|createComment|removeLabel|addLabels)|pulls\.create|git\.deleteRef|actions\.createWorkflowDispatch)\(/ { seen++ }
     inact && /^          \}\);$/ { inact = 0 }
     END { print seen + 0 }
   ' "$HOUSEKEEPING_YML")
@@ -2176,6 +2176,17 @@ if worker_installed merge-gate; then
     assert "hold keeps a pull request off the train" skip "$(move HOLD=true CI_STATUS=completed CI_CONCLUSION=success)"
     assert "requested changes keep it off the train" skip "$(move REVIEW_DECISION=CHANGES_REQUESTED CI_STATUS=completed CI_CONCLUSION=success)"
     assert "a parked pull request is passed by, not waited on" skip "$(move PARK=held CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a stack root with open children is not gated" skip "$(move OPEN_CHILDREN=2 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a stack root with open children is not gated, even conflicting" skip "$(move OPEN_CHILDREN=1 MERGEABLE=CONFLICTING CI_STATUS=none)"
+    assert "a stack root whose children all closed is gated" gate "$(move OPEN_CHILDREN=0 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a stack root behind its base is kept current while children are open" update "$(move OPEN_CHILDREN=2 BEHIND_BY=3 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    # Reviews submitted through the API do not always reach the router: the train answers them.
+    assert "a parked pull request approved on its head, green, is landed" land "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "an approved parked pull request with red CI is not landed" skip "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
+    assert "an approved parked pull request that conflicts is not landed" skip "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=CONFLICTING CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "an unanswered change request is sent to the agent" apply-review "$(move REVIEW_DECISION=CHANGES_REQUESTED CHANGES_UNANSWERED=true CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "an answered change request waits for its reviewer" skip "$(move REVIEW_DECISION=CHANGES_REQUESTED CHANGES_UNANSWERED=false CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "hold beats an approval" skip "$(move HOLD=true PARK=held APPROVED_ON_HEAD=true CI_STATUS=completed CI_CONCLUSION=success)"
     assert "a spent attempt budget is passed by" skip "$(move ATTEMPTS=6 MAX_ATTEMPTS=6 CI_STATUS=completed CI_CONCLUSION=failure)"
     # The loop that ran Pliny-Bot's gate twenty times on one pull request: the gate declined it
     # (its issue was closed), left no verdict and no attempt, and every tick handed it back.
@@ -3243,6 +3254,35 @@ if worker_installed implement; then
     echo "FAIL: implement does not rebase a patch its base moved under before parking it" >&2
   fi
 fi
+# A run refused only the pull request (Actions may not create pull requests) or whose agent job
+# died after publishing still has an outcome: it concludes, the rescue opens the pull request from
+# the branch gh-aw pushed, and `incomplete` does not re-run the work. A consumer implemented one
+# issue three times and filed a fallback issue each time.
+if worker_installed implement; then
+  conclude_job=$(sed -n '/^  conclude:$/,/^  incomplete:$/p' "$IMPL_MD")
+  incomplete_job=$(sed -n '/^  incomplete:$/,/^  agent:$/p' "$IMPL_MD")
+  if grep -qF "contains(needs.agent.outputs.output_types, 'create_pull_request')" <<<"$(sed -n '1,/runs-on/p' <<<"$conclude_job")" \
+    && grep -qF "!(" <<<"$incomplete_job" \
+    && grep -qF 'refs/heads/${branch}-*' "${HERE}/../rebase-stale-patch/rebase-stale-patch.sh" \
+    && grep -qF 'rescue-pushed' "${HERE}/../rebase-stale-patch/rebase-stale-patch.sh"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: implement does not open the pull request a run pushed but was refused, or retries a run that published one" >&2
+  fi
+fi
+# Housekeeping never re-implements an issue whose work exists: an open pull request parks it as
+# pr-pending, and a pushed branch with no pull request gets one.
+if [ -f "${HERE}/../housekeeping/action.yml" ]; then
+  if grep -qF "already closes it" "${HERE}/../housekeeping/action.yml" \
+    && grep -qF "github.rest.pulls.create" "${HERE}/../housekeeping/action.yml" \
+    && grep -qF "neverProposed" "${HERE}/../housekeeping/action.yml"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: housekeeping retries implement for an issue that already has a pull request or a pushed branch" >&2
+  fi
+fi
 # The subagent monitor never sees a CI child finish and denies every spawn after the cap.
 if grep -qF 'for plugin in pc-system-reminders pc-subagent-monitor' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   PASS=$((PASS + 1))
@@ -3878,7 +3918,9 @@ st() {
 # assertions take the block on stdin: handing a multi-line string to grep as a filename
 # fails with "File name too long" and reads as a wiring failure that is not one.
 st_str() {
-  printf '%s' "$2" | grep -qE "$1" || { STACK_OK=0; echo "FAIL: stacked features ${3}" >&2; }
+  # A here-string, not a pipe: grep -q exits on the first match, and under pipefail the writer's
+  # SIGPIPE failed this check at random.
+  grep -qE "$1" <<<"$2" || { STACK_OK=0; echo "FAIL: stacked features ${3}" >&2; }
 }
 
 # 1. The resolver. check-stack-branch reads the child's own marker first, then the

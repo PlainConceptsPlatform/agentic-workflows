@@ -120,8 +120,11 @@ Audit creates work rather than consuming it, and files into `refine` rather than
 
 One pull request moves at a time, the lowest number first, whoever opened it. Everything else waits
 untouched, so a merge never invalidates work in flight. A pull request a person has to decide on is
-passed by, so it never blocks the line. The train ticks on every merge, every CI completion, after
-every gate, and hourly as the fallback.
+passed by, so it never blocks the line. A writer's approval or change request whose review event
+never reached the router is answered here: an approved, green, parked head is landed, and an
+unanswered change request goes to apply-review. A stack root is not gated while its children are
+open; it is only kept up to date with its base. The train ticks on every merge, every CI
+completion, after every gate, and hourly as the fallback.
 
 ```mermaid
 flowchart TD
@@ -131,7 +134,15 @@ flowchart TD
     trainLive -->|no| trainNext
     trainNext{"Oldest open PR from this repo,<br/>bot or writer, not draft,<br/>no hold label"}
     trainNext -.->|"none left"| trainIdle
-    trainNext --> trainPark
+    trainNext --> trainReview
+    trainReview{"A writer's review<br/>the router never saw?"}
+    trainReview -->|"change request,<br/>no answer yet"| trainApply
+    trainReview -->|"approved on this head,<br/>parked, green"| trainLand
+    trainReview -->|no| trainRoot
+    trainRoot{"A stack root with<br/>open children?"}
+    trainRoot -->|"yes, behind its base"| trainUpdate
+    trainRoot -.->|"yes, current"| trainNext
+    trainRoot -->|no| trainPark
     trainPark{"Parked on this head?<br/>owner or human review,<br/>blocked with main unmoved,<br/>attempts spent"}
     trainPark -.->|"yes: pass it by"| trainNext
     trainPark -->|no| trainCi
@@ -141,6 +152,8 @@ flowchart TD
     trainCi -->|"red, conflicting,<br/>or green and current"| trainGate
     trainUpdate(("Merge main in<br/>CI reruns on what it<br/>will land on"))
     trainGate(("Dispatch the gate<br/>repair or squash-merge"))
+    trainApply(("Dispatch apply-review"))
+    trainLand(("Land the approved head"))
     trainWait(("Wait<br/>the next tick looks again"))
     trainIdle(("Idle<br/>the train is empty"))
 
@@ -149,9 +162,9 @@ flowchart TD
     classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class trainTick start
-    class trainLive,trainNext,trainPark,trainCi decision
+    class trainLive,trainNext,trainReview,trainRoot,trainPark,trainCi decision
     class trainWait,trainIdle idle
-    class trainUpdate,trainGate success
+    class trainUpdate,trainGate,trainApply,trainLand success
 ```
 
 ### How a feature stacks

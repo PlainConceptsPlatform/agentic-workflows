@@ -113,6 +113,16 @@ runs:
             ...context.repo, state: 'open', per_page: 100,
           });
           const names = (issue) => issue.labels.map((l) => (typeof l === 'string' ? l : l.name));
+          // Read once, and only when a stalled implement issue needs it.
+          let branchCache = null;
+          const getBranches = async () => {
+            branchCache ??= await github.paginate(github.rest.repos.listBranches, { ...context.repo, per_page: 100 });
+            return branchCache;
+          };
+          // A branch whose pull request was closed or merged is history, not work to publish.
+          const neverProposed = async (branch) => (await github.rest.pulls.list({
+            ...context.repo, head: `${context.repo.owner}:${branch.name}`, state: 'all', per_page: 1,
+          })).data.length === 0;
 
           // 0b. Clean orphaned bot-working labels. When a workflow run is cancelled (above) or
           // dies without clearing bot-working, the issue sits with bot-working + a work label
@@ -189,6 +199,54 @@ runs:
             if (waited < retryAfterMs) {
               retrying.push({ issue, waited, attempts, work, due: retryAfterMs - waited });
               continue;
+            }
+            // Work that already exists is never implemented again. A run can end "stalled" after
+            // its branch was pushed: the pull request was refused (the repository does not let
+            // GitHub Actions create pull requests), or the agent job died after publishing. On a
+            // consumer that re-ran a five-point issue three times and filed a fallback issue each
+            // time. An open pull request that closes the issue parks it as pr-pending; a pushed
+            // branch for it with no pull request gets one, opened here with the App token.
+            if (work === 'implement') {
+              const closing = pulls.find((p) => new RegExp(`(clos(e|es|ed)|fix(es|ed)?|resolves?)\\s+#${issue.number}\\b`, 'i').test(p.body ?? ''));
+              const branchPattern = new RegExp(`(^|/)issue-${issue.number}(-[0-9a-f]+)?(-rebased-\\d+)?$`);
+              // Several runs may each have pushed a branch; the newest one carries the finished work.
+              let pushed = null;
+              if (!closing) {
+                let newest = 0;
+                for (const branch of (await getBranches()).filter((b) => branchPattern.test(b.name))) {
+                  if (!(await neverProposed(branch))) continue;
+                  const { data: commit } = await github.rest.repos.getCommit({ ...context.repo, ref: branch.commit.sha });
+                  const when = Date.parse(commit.commit.committer?.date ?? 0);
+                  if (when > newest) { newest = when; pushed = branch; }
+                }
+              }
+              if (closing || pushed) {
+                await act(`#${issue.number}: ${closing ? `#${closing.number} already closes it` : `opening a pull request from ${pushed.name}`}, not retrying ${work}`, async () => {
+                  let number = closing?.number;
+                  if (!number) {
+                    const base = /<!-- stack-root-branch: (\S+) -->/.exec(issue.body ?? '')?.[1];
+                    const baseExists = base ? await github.rest.repos.getBranch({ ...context.repo, branch: base }).then(() => true).catch(() => false) : false;
+                    const created = await github.rest.pulls.create({
+                      ...context.repo,
+                      head: pushed.name,
+                      base: baseExists ? base : context.payload.repository.default_branch,
+                      title: `[bot] ${issue.title}`,
+                      body: `Closes #${issue.number}\n\nOpened by housekeeping from \`${pushed.name}\`: the implement run pushed this branch but never opened its pull request.`,
+                    });
+                    number = created.data.number;
+                  }
+                  await github.rest.issues.createComment({
+                    ...context.repo, issue_number: issue.number,
+                    body: `${RETRY_MARKER}\nNot retried: the work is in #${number}, which now carries it.`,
+                  });
+                  for (const label of ['review', 'stalled']) {
+                    await github.rest.issues.removeLabel({ ...context.repo, issue_number: issue.number, name: label })
+                      .catch((error) => { if (error.status !== 404) throw error; });
+                  }
+                  await github.rest.issues.addLabels({ ...context.repo, issue_number: issue.number, labels: ['pr-pending'] });
+                });
+                continue;
+              }
             }
             if (attempts >= maxRetries || !work) {
               needsHuman.push({ kind: attempts >= maxRetries ? 'retries-exhausted' : 'no-work-label', issue, labels, waited, attempts });

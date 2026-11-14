@@ -2,6 +2,23 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.22.0
+
+Fewer places where the loop waits for a person. Each change below replaces something a supervisor had to do by hand on a consumer during two days of unattended running.
+
+### Fixed
+
+- **A pull request the run could not open is opened anyway.** When the repository does not let GitHub Actions create pull requests, gh-aw pushed the agent's branch, was refused the pull request ("GitHub Actions is not permitted to create or approve pull requests"), and filed the work as a fallback issue. The implement rescue now finds the branch gh-aw pushed, checks its tree is exactly the agent's work, and opens the pull request with the App token, which that setting does not bind; it closes the fallback issue. A base that moved under the run is still rebased first, as before.
+- **A run that published its pull request request concludes, even if the agent job failed.** The engine can exit non-zero after the payload is written; safe_outputs still publishes it. `conclude` (where the rescue lives) used to require a green agent job, so `incomplete` took over, called it a failure and retried the whole implementation. One consumer issue was implemented three times this way. `conclude` now runs whenever safe_outputs succeeded and the agent asked for a pull request, and `incomplete` stays out of it.
+- **Housekeeping never re-implements work that exists.** A stalled `implement` issue with an open pull request that closes it is moved to `pr-pending` instead of being retried. A stalled issue whose implement run pushed a branch (`…issue-N…`) that never had a pull request gets one, from the newest such branch.
+- **The route matrix's stack checks no longer fail at random.** A `printf | grep -q` under `pipefail` failed whenever grep exited before the writer finished; it reads a here-string now.
+
+### Changed
+
+- **A stack root is gated once, when its stack is complete.** The merge train used to dispatch the gate on a root after every child landing, and the gate answered "blocked: the other children are missing" each time. It now skips a root whose child issues are still open (sub-issues first, the `split-parent` marker as fallback; a listing that fails counts nothing, so the root is gated as before).
+- **A stack root is kept up to date while its children are open.** When a root is behind its base and has no conflict, the train brings it up to date with GitHub's update-branch, which merges the base in on GitHub's side. The children then merge into a current branch, and nobody has to ask an agent to merge `main`, a push the protected-files rule refuses whenever `main` carries workflow files or lockfiles.
+- **The merge train answers reviews whose event never reached the router.** Reviews submitted through the API sometimes start no router run. A pull request whose gate verdict is waiting for a person, approved by a writer on its current head and green, is now landed by the train. A writer's change request newer than the head commit with no apply-review run after it sends the pull request to apply-review.
+
 ## 1.21.7
 
 ### Fixed

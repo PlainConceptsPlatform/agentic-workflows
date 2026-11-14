@@ -44,13 +44,35 @@ set -euo pipefail
 #                      cost every open pull request its repairs for seven hours)
 #   BEHIND_BY          commits on the base branch the head does not have
 #   TRUSTED_AUTHOR     true when a trusted bot opened it (only those runs are approved)
+#   APPROVED_ON_HEAD   true when a writer approved the head commit itself, so a parked verdict has its
+#                      answer. The approval event that should land it does not always reach the
+#                      router (reviews submitted through the API went missing on a consumer), and
+#                      the pull request then sat approved, green and parked
+#   CHANGES_UNANSWERED true when a writer's change request is newer than the head commit and no
+#                      apply-review run has answered it: the same lost event, on the other verdict
+#   OPEN_CHILDREN      for a stack's root pull request, how many of its child issues are still open.
+#                      A root is gated once, when its stack is complete: gating it after every child
+#                      landing spent a runner on a "blocked: the other children are missing" verdict
+#                      each time (a consumer's six roots took dozens of gate runs in a day)
 train_move() {
   local move="" reason=""
 
   if [ "${HOLD:-false}" = true ]; then
     move=skip; reason="it carries the hold label"
+  elif [ "${REVIEW_DECISION:-}" = CHANGES_REQUESTED ] && [ "${CHANGES_UNANSWERED:-false}" = true ]; then
+    move=apply-review; reason="a change request has not reached the agent"
   elif [ "${REVIEW_DECISION:-}" = CHANGES_REQUESTED ]; then
     move=skip; reason="a reviewer requested changes"
+  elif [ "${OPEN_CHILDREN:-0}" -gt 0 ] && [ "${BEHIND_BY:-0}" -gt 0 ] && [ "${MERGEABLE:-UNKNOWN}" = MERGEABLE ]; then
+    # Keeping the stack's branch current is what lets its children merge cleanly: GitHub merges the
+    # base in on its side, which no agent push can do once the base carries protected files.
+    move=update; reason="its stack is ${BEHIND_BY} commit(s) behind its base and still has ${OPEN_CHILDREN} open child issue(s)"
+  elif [ "${OPEN_CHILDREN:-0}" -gt 0 ]; then
+    move=skip; reason="its stack still has ${OPEN_CHILDREN} open child issue(s)"
+  elif [ "${PARK:-none}" = held ] && [ "${APPROVED_ON_HEAD:-false}" = true ] &&
+    [ "${CI_STATUS:-none}" = completed ] && [ "${CI_CONCLUSION:-}" = success ] &&
+    [ "${MERGEABLE:-UNKNOWN}" != CONFLICTING ]; then
+    move=land; reason="a writer approved this head after the gate handed it over"
   elif [ "${PARK:-none}" = held ]; then
     move=skip; reason="a gate verdict on this head is waiting for a person"
   elif [ "${ATTEMPTS:-0}" -ge "${MAX_ATTEMPTS:-6}" ]; then
@@ -599,10 +621,49 @@ for line in "${candidates[@]}"; do
   trusted_author=false
   is_trusted_bot "$author" && trusted_author=true
 
+  # Reviews by writers, read once: whether the head carries an approval, and whether the latest
+  # change request is still unanswered (newer than the head, and no apply-review run spoke after it).
+  approved_on_head=false
+  changes_unanswered=false
+  if [ "$review_decision" = APPROVED ] || [ "$review_decision" = CHANGES_REQUESTED ]; then
+    reviews=$(gh api --paginate "repos/$REPO/pulls/$pr/reviews?per_page=100" \
+      --jq '.[] | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED") | [.state, .commit_id, .submitted_at, .user.login] | @tsv' 2>/dev/null || true)
+    while IFS=$'\t' read -r r_state r_commit r_at r_user; do
+      [ -n "$r_state" ] || continue
+      r_perm=$(gh api "repos/$REPO/collaborators/$r_user/permission" --jq '.permission' 2>/dev/null || echo none)
+      case "$r_perm" in admin|maintain|write) ;; *) continue ;; esac
+      if [ "$r_state" = APPROVED ] && [ "$r_commit" = "$head_sha" ] && [ "$review_decision" = APPROVED ]; then
+        approved_on_head=true
+      fi
+      if [ "$r_state" = CHANGES_REQUESTED ] && [ "$review_decision" = CHANGES_REQUESTED ] &&
+        { [ -z "$head_committed" ] || [ "$r_at" \> "$head_committed" ]; }; then
+        # shellcheck disable=SC2016 # $at is jq's, not the shell's
+        answered=$(gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" 2>/dev/null |
+          jq -s --arg at "$r_at" '[(add // [])[] | select(.created_at > $at and (.body | contains("<!-- agent-apply-review")))] | length' 2>/dev/null || echo 1)
+        if [ "${answered:-1}" = 0 ]; then changes_unanswered=true; else changes_unanswered=false; fi
+      fi
+    done <<<"$reviews"
+  fi
+
+  # A stack root waits for its children without a gate run. The listing is the one the router's
+  # stack-complete announcement uses: sub-issues first, the split-parent marker as fallback. A
+  # listing that fails counts nothing, so the root is gated as before rather than parked on a guess.
+  open_children=0
+  if [ -n "$linked_issue" ] && gh issue view "$linked_issue" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null |
+    grep -q "<!-- stack-root-pr: $pr -->"; then
+    open_children=$(gh api "repos/$REPO/issues/$linked_issue/sub_issues?per_page=100" \
+      --jq '[.[] | select(.state == "open")] | length' 2>/dev/null || echo 0)
+    if [ "${open_children:-0}" = 0 ]; then
+      open_children=$(gh issue list --repo "$REPO" --state open --limit 100 \
+        --search "\"<!-- split-parent: ${linked_issue} -->\" in:body" --json number --jq 'length' 2>/dev/null || echo 0)
+    fi
+  fi
+
   decision=$(HOLD="$hold" REVIEW_DECISION="$review_decision" PARK="$park" \
     ATTEMPTS="$attempts" MAX_ATTEMPTS="$MAX_ATTEMPTS" SILENT_GATE="$silent_gate" MERGEABLE="$mergeable" \
     CI_STATUS="$ci_status" CI_CONCLUSION="$ci_conclusion" CI_STUCK="$ci_stuck" SAME_AS_MAIN="$same_as_main" \
-    BEHIND_BY="${behind_by:-0}" TRUSTED_AUTHOR="$trusted_author" CI_SHALLOW="$ci_shallow" train_move)
+    BEHIND_BY="${behind_by:-0}" TRUSTED_AUTHOR="$trusted_author" CI_SHALLOW="$ci_shallow" \
+    OPEN_CHILDREN="${open_children:-0}" APPROVED_ON_HEAD="$approved_on_head" CHANGES_UNANSWERED="$changes_unanswered" train_move)
   move=$(sed -n 's/^move=//p' <<<"$decision")
   reason=$(sed -n 's/^reason=//p' <<<"$decision")
 
@@ -632,6 +693,27 @@ for line in "${candidates[@]}"; do
 
   case "$move" in
     skip) continue ;;
+    apply-review)
+      act "Dispatching apply-review for #$pr: its change request never reached the agent." \
+        gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
+          -f ref="$DEFAULT_BRANCH" -f "inputs[operation]=apply-review" -f "inputs[pr-number]=$pr" >/dev/null ||
+        echo "::warning::Could not dispatch apply-review for #$pr."
+      continue
+      ;;
+    land)
+      if [ "$merge_blocked" = true ]; then
+        echo "  #$pr is approved; it waits for the pull request ahead of it."
+        continue
+      fi
+      if act "Landing #$pr, which a writer approved on its head." \
+        env PR="$pr" HEAD_SHA="$head_sha" GITHUB_OUTPUT=/dev/null \
+          bash "$(dirname "${BASH_SOURCE[0]}")/../land-pull-request/land-pull-request.sh"; then
+        merge_blocked=true
+      else
+        echo "::warning::Could not land #$pr; it stays approved for the next tick."
+      fi
+      continue
+      ;;
     wait)
       # Its CI is running: nothing behind it may merge or be brought up to date first, but the
       # pull requests behind it that need repair do not wait for anyone.
