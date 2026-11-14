@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.23.0
+
+### Added
+
+- **A human-review verdict can time out, like refine's questions.** New router setting `HUMAN_REVIEW_TIMEOUT_HOURS` (merge-train input `human-review-timeout-hours`), in working hours, Monday to Friday. When a pull request the merge gate handed to a person (`human-review`) gets no review and no comment from anyone in that time, the gate's own review stands: the train lands it if its CI is green and it has no conflict, and labels it `auto-decided` so it is easy to find and revert. Anyone speaking after the verdict stops the clock. `owner-review` (protected paths, owner paths, high blast radius) never times out. The default is `"0"`, which waits for a person as before; a repository that runs unattended sets it (for example `"6"`).
+
 ## 1.22.0
 
 Fewer places where the loop waits for a person. Each change below replaces something a supervisor had to do by hand on a consumer during two days of unattended running.

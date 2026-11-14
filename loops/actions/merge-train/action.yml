@@ -36,6 +36,14 @@ inputs:
     description: How many pull requests may be in repair at once. Merges stay one at a time.
     required: false
     default: '1'
+  human-review-timeout-hours:
+    description: >-
+      Working hours (Monday to Friday, UTC) a human-review verdict waits for a person. When they pass
+      with no review and no comment from anyone after the verdict, the gate's own review stands: the
+      train lands the pull request if its CI is green and it has no conflict, and labels it
+      auto-decided. owner-review never times out. "0" waits for a person however long that takes.
+    required: false
+    default: '0'
   main-red-wait-hours:
     description: >-
       How long the train waits for a base branch whose checks fail the same way as a pull request's
@@ -85,6 +93,7 @@ runs:
         STUCK_HOURS: ${{ inputs.stuck-hours }}
         MAIN_RED_WAIT_HOURS: ${{ inputs.main-red-wait-hours }}
         MAX_REPAIRS: ${{ inputs.max-repairs }}
+        HUMAN_REVIEW_TIMEOUT_HOURS: ${{ inputs.human-review-timeout-hours }}
         DRY_RUN: ${{ inputs.dry-run }}
         MERGE_QUEUE: ${{ inputs.merge-queue }}
         CI_DEPTH_TIERED: ${{ inputs.ci-depth-tiered }}

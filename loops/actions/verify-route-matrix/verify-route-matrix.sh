@@ -2187,6 +2187,11 @@ if worker_installed merge-gate; then
     assert "an unanswered change request is sent to the agent" apply-review "$(move REVIEW_DECISION=CHANGES_REQUESTED CHANGES_UNANSWERED=true CI_STATUS=completed CI_CONCLUSION=success)"
     assert "an answered change request waits for its reviewer" skip "$(move REVIEW_DECISION=CHANGES_REQUESTED CHANGES_UNANSWERED=false CI_STATUS=completed CI_CONCLUSION=success)"
     assert "hold beats an approval" skip "$(move HOLD=true PARK=held APPROVED_ON_HEAD=true CI_STATUS=completed CI_CONCLUSION=success)"
+    # The human-review clock: nobody answered in time, so the gate's review stands. Never owner-review.
+    assert "a timed-out human-review on a green head is landed" land "$(move PARK=held VERDICT=human-review REVIEW_TIMED_OUT=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "owner-review never times out" skip "$(move PARK=held VERDICT=owner-review REVIEW_TIMED_OUT=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a human-review inside its window waits" skip "$(move PARK=held VERDICT=human-review REVIEW_TIMED_OUT=false MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a timed-out human-review with red CI is not landed" skip "$(move PARK=held VERDICT=human-review REVIEW_TIMED_OUT=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
     assert "a spent attempt budget is passed by" skip "$(move ATTEMPTS=6 MAX_ATTEMPTS=6 CI_STATUS=completed CI_CONCLUSION=failure)"
     # The loop that ran Pliny-Bot's gate twenty times on one pull request: the gate declined it
     # (its issue was closed), left no verdict and no attempt, and every tick handed it back.
