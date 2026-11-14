@@ -3299,6 +3299,18 @@ if worker_installed apply-review; then
     echo "FAIL: apply-review drops an outcome comment that has no item_number" >&2
   fi
 fi
+# The digest names the two things nobody else repairs or reports: a stack root that conflicts with
+# its base (the hand merge the train cannot do), and the pull requests the review timer merged.
+if [ -f "${HERE}/../housekeeping/action.yml" ]; then
+  if grep -qF "'stack-root-conflict'" "${HERE}/../housekeeping/action.yml" \
+    && grep -qF "mergeable_state === 'dirty'" "${HERE}/../housekeeping/action.yml" \
+    && grep -qF "Merged on the review timer" "${HERE}/../housekeeping/action.yml"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the digest misses conflicting stack roots or the merges the review timer made" >&2
+  fi
+fi
 # Housekeeping never re-implements an issue whose work exists: an open pull request parks it as
 # pr-pending, and a pushed branch with no pull request gets one.
 if [ -f "${HERE}/../housekeeping/action.yml" ]; then
