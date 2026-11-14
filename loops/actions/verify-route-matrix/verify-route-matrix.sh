@@ -3311,6 +3311,16 @@ if [ -f "${HERE}/../housekeeping/action.yml" ]; then
     echo "FAIL: the digest misses conflicting stack roots or the merges the review timer made" >&2
   fi
 fi
+# Evidence never commits onto a feature branch: that branch is a stack root's head, and a
+# [skip ci] commit there leaves the root without its required check.
+if [ -f "${WORKFLOWS_DIR}/evidence.yml" ]; then
+  if grep -qF '[ "$BRANCH" != "$DEFAULT_BRANCH" ]' "${WORKFLOWS_DIR}/evidence.yml"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: evidence commits screenshots onto a feature branch, which strands its root pull request" >&2
+  fi
+fi
 # Housekeeping never re-implements an issue whose work exists: an open pull request parks it as
 # pr-pending, and a pushed branch with no pull request gets one.
 if [ -f "${HERE}/../housekeeping/action.yml" ]; then
