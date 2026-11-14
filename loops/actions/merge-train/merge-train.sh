@@ -731,6 +731,14 @@ for line in "${candidates[@]}"; do
   case "$move" in
     skip) continue ;;
     apply-review)
+      # A dispatched apply-review can queue for an hour or two behind the fleet; asking again on
+      # every tick would stack copies of the same run. Its title names the pull request.
+      if gh api "repos/$REPO/actions/workflows/work-router.yml/runs?event=workflow_dispatch&per_page=50" \
+        --jq '.workflow_runs[] | select(.status != "completed") | .display_title' 2>/dev/null |
+        grep -qxF "Agent: Apply Review - PR #$pr"; then
+        echo "  #$pr already has an apply-review run waiting or running."
+        continue
+      fi
       act "Dispatching apply-review for #$pr: its change request never reached the agent." \
         gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
           -f ref="$DEFAULT_BRANCH" -f "inputs[operation]=apply-review" -f "inputs[pr-number]=$pr" >/dev/null ||

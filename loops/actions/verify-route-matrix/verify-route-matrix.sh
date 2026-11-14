@@ -3276,6 +3276,15 @@ if worker_installed implement; then
     echo "FAIL: implement does not open the pull request a run pushed but was refused, or retries a run that published one" >&2
   fi
 fi
+# The train asks apply-review once per change request: the dispatched run's title names the pull
+# request, and the train looks for it before dispatching again.
+if grep -qF "format('Agent: Apply Review - PR #{0}', inputs.pr-number)" "$ROUTER_YML" \
+  && grep -qF 'Agent: Apply Review - PR #$pr' "${HERE}/../merge-train/merge-train.sh"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the train can dispatch apply-review again while one for the same pull request waits" >&2
+fi
 # Housekeeping never re-implements an issue whose work exists: an open pull request parks it as
 # pr-pending, and a pushed branch with no pull request gets one.
 if [ -f "${HERE}/../housekeeping/action.yml" ]; then
