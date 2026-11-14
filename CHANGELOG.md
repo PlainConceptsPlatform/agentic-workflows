@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.23.1
+
+### Fixed
+
+- **The merge train asks apply-review once per change request.** A dispatched apply-review run was titled `dispatch: apply-review`, with no pull request number, so the train (1.22.0) could not see one already queued behind the fleet and would dispatch another on every tick until the first ran. Dispatched apply-review runs are now titled `Agent: Apply Review - PR #N`, and the train skips a pull request that has one waiting or running. Found by replaying the train against a consumer's open pull requests before rolling it out.
+
 ## 1.23.0
 
 ### Added

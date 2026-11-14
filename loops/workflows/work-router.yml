@@ -71,6 +71,9 @@ run-name: >-
   && inputs.operation == 'merge-gate'
   && format('Agent: Merge Gate - PR #{0}{1}', inputs.pr-number, inputs.ci-conclusion == 'failure' && ' (repair)' || '')
   || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'apply-review'
+  && format('Agent: Apply Review - PR #{0}', inputs.pr-number)
+  || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'merge-train'
   && format('Agentics: Merge Train{0}', '')
   || github.event_name == 'workflow_dispatch'
