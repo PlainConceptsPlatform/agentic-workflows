@@ -50,6 +50,10 @@ set -euo pipefail
 #                      the pull request then sat approved, green and parked
 #   CHANGES_UNANSWERED true when a writer's change request is newer than the head commit and no
 #                      apply-review run has answered it: the same lost event, on the other verdict
+#   VERDICT            the standing gate verdict word on this head (with PARK=held)
+#   REVIEW_TIMED_OUT   true when that verdict is human-review and HUMAN_REVIEW_TIMEOUT_HOURS working
+#                      hours passed with no review and no comment from anyone after it: the gate's
+#                      review stands, as refine's proposed answers do when nobody replies
 #   OPEN_CHILDREN      for a stack's root pull request, how many of its child issues are still open.
 #                      A root is gated once, when its stack is complete: gating it after every child
 #                      landing spent a runner on a "blocked: the other children are missing" verdict
@@ -73,6 +77,10 @@ train_move() {
     [ "${CI_STATUS:-none}" = completed ] && [ "${CI_CONCLUSION:-}" = success ] &&
     [ "${MERGEABLE:-UNKNOWN}" != CONFLICTING ]; then
     move=land; reason="a writer approved this head after the gate handed it over"
+  elif [ "${PARK:-none}" = held ] && [ "${VERDICT:-}" = human-review ] && [ "${REVIEW_TIMED_OUT:-false}" = true ] &&
+    [ "${CI_STATUS:-none}" = completed ] && [ "${CI_CONCLUSION:-}" = success ] &&
+    [ "${MERGEABLE:-UNKNOWN}" != CONFLICTING ]; then
+    move=land; reason="nobody reviewed it in the time allowed, so the gate's review stands (auto-decided)"
   elif [ "${PARK:-none}" = held ]; then
     move=skip; reason="a gate verdict on this head is waiting for a person"
   elif [ "${ATTEMPTS:-0}" -ge "${MAX_ATTEMPTS:-6}" ]; then
@@ -183,6 +191,19 @@ GATE_TITLE_PREFIX="Agent: Merge Gate - PR #"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 now_epoch=$(date -u +%s)
+HUMAN_REVIEW_TIMEOUT_HOURS="${HUMAN_REVIEW_TIMEOUT_HOURS:-0}"
+case "$HUMAN_REVIEW_TIMEOUT_HOURS" in ''|*[!0-9]*) HUMAN_REVIEW_TIMEOUT_HOURS=0 ;; esac
+# Hours since $1 that fall on a weekday, in UTC, counted up to the timeout and no further: the
+# same clock refine's proposed answers run on.
+working_hours_since() {
+  local t h=0
+  t=$(date -u -d "$1" +%s 2>/dev/null || echo "$now_epoch")
+  while [ "$t" -lt "$now_epoch" ] && [ "$h" -lt "$HUMAN_REVIEW_TIMEOUT_HOURS" ]; do
+    [ "$(date -u -d "@$t" +%u)" -le 5 ] && h=$((h + 1))
+    t=$((t + 3600))
+  done
+  echo "$h"
+}
 iso_epoch() { date -u -d "$1" +%s 2>/dev/null || echo 0; }
 
 # The failing jobs of the CI run on a commit, read from the Actions API. The App behind the train's token
@@ -645,6 +666,21 @@ for line in "${candidates[@]}"; do
     done <<<"$reviews"
   fi
 
+  # The human-review clock. Anyone speaking after the verdict, a review or a comment, stops it:
+  # a person is on it, and the train waits for them.
+  review_timed_out=false
+  if [ "$park" = held ] && [ "$verdict" = human-review ] && [ "$HUMAN_REVIEW_TIMEOUT_HOURS" -gt 0 ] &&
+    [ "$(working_hours_since "$verdict_at")" -ge "$HUMAN_REVIEW_TIMEOUT_HOURS" ]; then
+    # shellcheck disable=SC2016 # $at is jq's, not the shell's
+    spoken=$( {
+      gh api --paginate "repos/$REPO/pulls/$pr/reviews?per_page=100" 2>/dev/null |
+        jq -s --arg at "$verdict_at" '[(add // [])[] | select(.user.type != "Bot" and (.submitted_at // "") > $at)] | length'
+      gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" 2>/dev/null |
+        jq -s --arg at "$verdict_at" '[(add // [])[] | select(.user.type != "Bot" and .created_at > $at)] | length'
+    } | awk '{ n += $1 } END { print n + 0 }')
+    [ "${spoken:-1}" = 0 ] && review_timed_out=true
+  fi
+
   # A stack root waits for its children without a gate run. The listing is the one the router's
   # stack-complete announcement uses: sub-issues first, the split-parent marker as fallback. A
   # listing that fails counts nothing, so the root is gated as before rather than parked on a guess.
@@ -663,7 +699,8 @@ for line in "${candidates[@]}"; do
     ATTEMPTS="$attempts" MAX_ATTEMPTS="$MAX_ATTEMPTS" SILENT_GATE="$silent_gate" MERGEABLE="$mergeable" \
     CI_STATUS="$ci_status" CI_CONCLUSION="$ci_conclusion" CI_STUCK="$ci_stuck" SAME_AS_MAIN="$same_as_main" \
     BEHIND_BY="${behind_by:-0}" TRUSTED_AUTHOR="$trusted_author" CI_SHALLOW="$ci_shallow" \
-    OPEN_CHILDREN="${open_children:-0}" APPROVED_ON_HEAD="$approved_on_head" CHANGES_UNANSWERED="$changes_unanswered" train_move)
+    OPEN_CHILDREN="${open_children:-0}" APPROVED_ON_HEAD="$approved_on_head" CHANGES_UNANSWERED="$changes_unanswered" \
+    VERDICT="$verdict" REVIEW_TIMED_OUT="$review_timed_out" train_move)
   move=$(sed -n 's/^move=//p' <<<"$decision")
   reason=$(sed -n 's/^reason=//p' <<<"$decision")
 
@@ -705,7 +742,12 @@ for line in "${candidates[@]}"; do
         echo "  #$pr is approved; it waits for the pull request ahead of it."
         continue
       fi
-      if act "Landing #$pr, which a writer approved on its head." \
+      if [ "$review_timed_out" = true ]; then
+        act "Labelling #$pr auto-decided: nobody reviewed it in ${HUMAN_REVIEW_TIMEOUT_HOURS} working hours." \
+          gh api "repos/$REPO/issues/$pr/labels" --method POST -f "labels[]=auto-decided" >/dev/null ||
+          echo "::warning::Could not label #$pr auto-decided."
+      fi
+      if act "Landing #$pr: $reason." \
         env PR="$pr" HEAD_SHA="$head_sha" GITHUB_OUTPUT=/dev/null \
           bash "$(dirname "${BASH_SOURCE[0]}")/../land-pull-request/land-pull-request.sh"; then
         merge_blocked=true
