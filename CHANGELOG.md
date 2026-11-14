@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.24.2
+
+### Fixed
+
+- **Evidence no longer strands a stack root.** After a stack child merged, the evidence job committed its screenshots beside the plans on the branch the child merged into, with `[skip ci]` and the run's own token. That branch is the head of the stack's root pull request, so the root's newest commit never had a CI run, its required check never reported, and the root stayed blocked even with an auto-merge verdict (five roots on one consumer). Screenshots are now archived only on the default branch; a child's run says it will be archived when its feature merges, and the root's own evidence run replays every plan the stack carries.
+
 ## 1.24.1
 
 ### Fixed
