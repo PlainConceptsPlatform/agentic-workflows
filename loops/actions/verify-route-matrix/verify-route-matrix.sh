@@ -1685,6 +1685,9 @@ if [ -f "$REVIEW_VALIDATOR" ] && worker_installed apply-review; then
   # null, and `unique` dies: the run fails instead of reporting the output as unusable. This is
   # the case the `// []` guards; the bracketed scan alone does not reach it.
   rv_case "a comment aimed at another pull request" invalid    "[]" '{"items":[{"type":"add_comment","item_number":999,"body":"**Review outcome:** implemented"},{"type":"push_to_pull_request_branch","pr_number":181}]}'
+  # The agent left item_number out. apply-agent-comments posts it on this pull request, so it is
+  # this pull request's outcome: a correct fix used to be thrown away for the missing number.
+  rv_case "a comment with no item_number"          implemented "[]" '{"items":[{"type":"add_comment","body":"**Review outcome:** implemented"},{"type":"push_to_pull_request_branch","pr_number":181}]}'
 
   rm -f "${rv_fixture}-threads.json" "${rv_fixture}-out.json"
   if [ "$REVIEW_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
@@ -3284,6 +3287,17 @@ if grep -qF "format('Agent: Apply Review - PR #{0}', inputs.pr-number)" "$ROUTER
 else
   FAIL=$((FAIL + 1))
   echo "FAIL: the train can dispatch apply-review again while one for the same pull request waits" >&2
+fi
+# The comment that carries apply-review's outcome reaches the pull request even without item_number.
+if worker_installed apply-review; then
+  if grep -qF 'comment-number: ${{ inputs.pr-number }}' "${WORKFLOWS_DIR}/agent-apply-review.md" \
+    && grep -qF 'default-number: ${{ inputs.comment-number }}' "${HERE}/../apply-agent-output/action.yml" \
+    && grep -qF 'process.env.DEFAULT_NUMBER' "${HERE}/../apply-agent-comments/action.yml"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: apply-review drops an outcome comment that has no item_number" >&2
+  fi
 fi
 # Housekeeping never re-implements an issue whose work exists: an open pull request parks it as
 # pr-pending, and a pushed branch with no pull request gets one.

@@ -23,7 +23,9 @@ jq -r --arg pr "$pr_number" --slurpfile threads "$threads_file" '
   def decide:
   .items as $items
   | ($threads[0] | map(select(.isResolved == false and .isOutdated == false) | .id) | sort) as $expected
-  | ($items | [.[] | select(.type == "add_comment" and (.item_number | tostring) == $pr and (.body | type == "string"))]) as $comments
+  | ($items | [.[] | select(.type == "add_comment" and ((.item_number // $pr) | tostring) == $pr and (.body | type == "string"))]) as $comments
+  # A comment with no item_number goes to this pull request (apply-agent-comments posts it there),
+  # so it counts as one: a correct fix was thrown away because the agent left the number out.
   # The line is matched by shape, not exact markdown: a model that writes
   # **Review outcome** : implemented or **Review outcome - implemented still means
   # the same. See the triage validator for the same pattern.
