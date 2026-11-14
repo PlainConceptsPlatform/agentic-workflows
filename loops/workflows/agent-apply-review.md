@@ -282,6 +282,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           push-to-branch: 'true'
           apply-labels: 'false'
+          comment-number: ${{ inputs.pr-number }}
       - name: Release implemented review
         if: needs.validate_output.outputs.outcome == 'implemented'
         uses: ./.github/actions/remove-issue-labels

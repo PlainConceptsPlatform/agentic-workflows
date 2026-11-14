@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.23.2
+
+### Fixed
+
+- **Apply-review keeps a fix whose comment left out the pull request number.** The worker's comment target is `"*"`, so each `add_comment` names its pull request in `item_number`. An agent that left it out wrote a correct fix and a correct "Review outcome: implemented" comment, and the validator, which only counted comments addressed to the pull request, called the output invalid: the fix was never pushed and the pull request was flagged as stalled (seen on a consumer's stack root, twice, on a transaction fix the reviewer had asked for). A comment with no `item_number` now goes to the worker's pull request, both in the validator and when it is posted (`apply-agent-output` and `apply-agent-comments` take an optional default number).
+
 ## 1.23.1
 
 ### Fixed
