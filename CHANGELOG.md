@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.24.3
+
+### Fixed
+
+- **Apply-review and the merge gate keep what the agent published when its job ended red.** The engine can exit non-zero after the agent has written its output, and safe_outputs still publishes it; both workers then skipped validation and `conclude`, so the push the agent made was never applied and the run was reported incomplete. On a consumer, a reviewer-requested fix was lost this way and had to be applied by hand. Validation now runs whenever safe_outputs succeeded and the agent produced output, and `conclude` follows the validator's verdict, as implement has done since 1.22.0. A run that produced nothing still goes to `incomplete`.
+
 ## 1.24.2
 
 ### Fixed

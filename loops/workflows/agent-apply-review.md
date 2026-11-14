@@ -214,7 +214,13 @@ jobs:
             ${{ env.STALLED_LABEL }}
   validate_output:
     needs: [activation, subject, agent, safe_outputs]
-    if: always() && needs.agent.result == 'success' && needs.safe_outputs.result == 'success'
+    # The agent job can end red after the agent wrote its output (the engine exits non-zero once the
+    # payload is written); safe_outputs still publishes it. That output is validated like any other:
+    # a consumer lost a reviewer-requested fix this way (implement had the same bug, fixed in 1.22.0).
+    if: >
+      always() &&
+      needs.safe_outputs.result == 'success' &&
+      (needs.agent.result == 'success' || needs.agent.outputs.output_types != '')
     runs-on: agents-arc
     permissions:
       contents: read
@@ -255,7 +261,7 @@ jobs:
   conclude:
     needs: [activation, subject, agent, safe_outputs, validate_output]
     if: >
-      needs.agent.result == 'success' &&
+      always() &&
       needs.safe_outputs.result == 'success' &&
       needs.validate_output.outputs.valid == 'true'
     runs-on: agents-arc
@@ -314,7 +320,7 @@ jobs:
     if: >
       always() &&
       needs.subject.outputs.found == 'true' &&
-      (needs.agent.result != 'success' || needs.safe_outputs.result != 'success' || needs.validate_output.outputs.valid != 'true')
+      (needs.safe_outputs.result != 'success' || needs.validate_output.outputs.valid != 'true')
     runs-on: agents-arc
     permissions:
       contents: read
