@@ -2,6 +2,14 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.24.0
+
+### Added
+
+- **The "Needs a human" digest names what only a person can do now.** Two new entries:
+  - A stack root whose branch conflicts with its base while children are still open. The merge train keeps a clean root current (1.22.0), but a conflict needs a hand merge into the feature branch: the agent's push of a base merge is refused whenever the base carries workflow files or lockfiles. Until now such a root sat silent until a person happened to look.
+  - The pull requests the review timer (1.23.0) merged in the metrics window, under "Merged on the review timer, worth a read", so the decisions the machine took on someone's behalf can be read and reverted afterwards.
+
 ## 1.23.2
 
 ### Fixed
