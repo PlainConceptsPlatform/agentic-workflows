@@ -637,8 +637,9 @@ for line in "${candidates[@]}"; do
       fi
       if [ "$r_state" = CHANGES_REQUESTED ] && [ "$review_decision" = CHANGES_REQUESTED ] &&
         { [ -z "$head_committed" ] || [ "$r_at" \> "$head_committed" ]; }; then
-        answered=$(gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" \
-          --jq --arg at "$r_at" '[.[] | select(.created_at > $at and (.body | contains("<!-- agent-apply-review")))] | length' 2>/dev/null || echo 1)
+        # shellcheck disable=SC2016 # $at is jq's, not the shell's
+        answered=$(gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" 2>/dev/null |
+          jq -s --arg at "$r_at" '[(add // [])[] | select(.created_at > $at and (.body | contains("<!-- agent-apply-review")))] | length' 2>/dev/null || echo 1)
         if [ "${answered:-1}" = 0 ]; then changes_unanswered=true; else changes_unanswered=false; fi
       fi
     done <<<"$reviews"
