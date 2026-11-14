@@ -64,6 +64,52 @@ if ! git rev-parse --verify --quiet "$head" >/dev/null; then
   head="$(git for-each-ref --format='%(refname)' refs/remotes/rescue-bundle | head -1)"
 fi
 
+grep -qiE "(closes|fixes|resolves) #${ISSUE}\b" "$work/body.md" || printf '\n\nCloses #%s\n' "$ISSUE" >> "$work/body.md"
+[[ "$title" == "[bot] "* ]] || title="[bot] $title"
+
+# The issue gh-aw filed with the patch is superseded by the pull request.
+close_stray() {
+  local stray
+  stray="$(gh issue list --repo "$REPO" --state open --limit 30 --json number,title 2>/dev/null |
+    jq -r --arg t "$title" '[.[] | select(.title == $t)] | first | .number // empty' || true)"
+  if [ -n "$stray" ]; then
+    gh issue close "$stray" --repo "$REPO" --reason "not planned" \
+      --comment "Superseded by #$1: the work was opened as a pull request." >/dev/null
+  fi
+}
+
+# gh-aw may have pushed the branch and then failed only to open the pull request: the repository
+# setting that lets GitHub Actions create pull requests is off, and the run's own token is refused
+# ("GitHub Actions is not permitted to create or approve pull requests"). The App token is not
+# bound by that setting, so the pull request is opened here from the branch gh-aw already pushed,
+# when its tree is exactly the agent's work. Seen twice in one day on a consumer: each time the
+# finished work sat in a fallback issue and housekeeping re-ran the whole implementation.
+want_tree="$(git rev-parse "${head}^{tree}")"
+pushed=""
+while read -r _sha ref; do
+  candidate="${ref#refs/heads/}"
+  git fetch --quiet "$remote" "+${ref}:refs/remotes/rescue-pushed/${candidate}" || continue
+  if [ "$(git rev-parse "refs/remotes/rescue-pushed/${candidate}^{tree}")" = "$want_tree" ]; then
+    pushed="$candidate"
+    break
+  fi
+done < <(git ls-remote "$remote" "refs/heads/${branch}" "refs/heads/${branch}-*" 2>/dev/null)
+if [ -n "$pushed" ]; then
+  existing="$(gh pr list --repo "$REPO" --head "$pushed" --state open --json number --jq '.[0].number // empty')"
+  if [ -n "$existing" ]; then
+    say "#${existing} is already open from ${pushed}."
+    done_with true "$existing"
+  fi
+  # shellcheck disable=SC2016
+  printf '\n\nOpened by the workflow from `%s`: the run pushed the branch but could not open the pull request itself.\n' \
+    "$pushed" >> "$work/body.md"
+  url="$(gh pr create --repo "$REPO" --base "$base" --head "$pushed" --title "$title" --body-file "$work/body.md")"
+  number="${url##*/}"
+  close_stray "$number"
+  say "Opened #${number} from the pushed branch ${pushed}."
+  done_with true "$number"
+fi
+
 rescued_branch="${branch}-rebased-${RUN_ID}"
 git checkout --quiet -B "$rescued_branch" "$head"
 if ! git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
@@ -75,21 +121,12 @@ fi
 
 git push --quiet "$remote" "HEAD:refs/heads/${rescued_branch}"
 
-grep -qiE "(closes|fixes|resolves) #${ISSUE}\b" "$work/body.md" || printf '\n\nCloses #%s\n' "$ISSUE" >> "$work/body.md"
 # shellcheck disable=SC2016
 printf '\n\nRebased onto `%s` by the workflow: the agent'"'"'s commits no longer applied after `%s` moved during the run.\n' \
   "$base" "$base" >> "$work/body.md"
-[[ "$title" == "[bot] "* ]] || title="[bot] $title"
 url="$(gh pr create --repo "$REPO" --base "$base" --head "$rescued_branch" --title "$title" --body-file "$work/body.md")"
 number="${url##*/}"
-
-# The issue gh-aw filed with the patch is superseded by the pull request.
-stray="$(gh issue list --repo "$REPO" --state open --limit 30 --json number,title 2>/dev/null |
-  jq -r --arg t "$title" '[.[] | select(.title == $t)] | first | .number // empty' || true)"
-if [ -n "$stray" ]; then
-  gh issue close "$stray" --repo "$REPO" --reason "not planned" \
-    --comment "Superseded by #${number}: the patch was rebased onto ${base} and opened as a pull request." >/dev/null
-fi
+close_stray "$number"
 
 say "Rebased onto ${base} and opened #${number}."
 done_with true "$number"
