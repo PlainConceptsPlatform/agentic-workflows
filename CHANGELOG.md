@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.24.1
+
+### Fixed
+
+- **The merge train no longer updates a stack root while its children are open.** 1.22.0 brought a root behind its base up to date with update-branch, and every update started the root's full CI: on a consumer, four full root runs sat in the runner queue ahead of the child work that was the point, for pull requests that could not merge until their children landed. A root with open children is now passed by entirely. GitHub reports a conflict without an update, and the digest (1.24.0) names a conflicting root.
+
 ## 1.24.0
 
 ### Added

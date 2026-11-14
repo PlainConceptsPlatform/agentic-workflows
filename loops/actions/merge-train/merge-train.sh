@@ -67,11 +67,10 @@ train_move() {
     move=apply-review; reason="a change request has not reached the agent"
   elif [ "${REVIEW_DECISION:-}" = CHANGES_REQUESTED ]; then
     move=skip; reason="a reviewer requested changes"
-  elif [ "${OPEN_CHILDREN:-0}" -gt 0 ] && [ "${BEHIND_BY:-0}" -gt 0 ] && [ "${MERGEABLE:-UNKNOWN}" = MERGEABLE ]; then
-    # Keeping the stack's branch current is what lets its children merge cleanly: GitHub merges the
-    # base in on its side, which no agent push can do once the base carries protected files.
-    move=update; reason="its stack is ${BEHIND_BY} commit(s) behind its base and still has ${OPEN_CHILDREN} open child issue(s)"
   elif [ "${OPEN_CHILDREN:-0}" -gt 0 ]; then
+    # Not even brought up to date: every update of a root starts its full CI, and a consumer's
+    # roots queued four full runs ahead of the child work that was the point (1.22.0 did this).
+    # GitHub reports a conflict without an update, and the digest names a conflicting root.
     move=skip; reason="its stack still has ${OPEN_CHILDREN} open child issue(s)"
   elif [ "${PARK:-none}" = held ] && [ "${APPROVED_ON_HEAD:-false}" = true ] &&
     [ "${CI_STATUS:-none}" = completed ] && [ "${CI_CONCLUSION:-}" = success ] &&
