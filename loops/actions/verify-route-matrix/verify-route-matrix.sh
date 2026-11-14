@@ -2182,7 +2182,7 @@ if worker_installed merge-gate; then
     assert "a stack root with open children is not gated" skip "$(move OPEN_CHILDREN=2 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
     assert "a stack root with open children is not gated, even conflicting" skip "$(move OPEN_CHILDREN=1 MERGEABLE=CONFLICTING CI_STATUS=none)"
     assert "a stack root whose children all closed is gated" gate "$(move OPEN_CHILDREN=0 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
-    assert "a stack root behind its base is kept current while children are open" update "$(move OPEN_CHILDREN=2 BEHIND_BY=3 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a stack root behind its base is not updated while children are open" skip "$(move OPEN_CHILDREN=2 BEHIND_BY=3 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
     # Reviews submitted through the API do not always reach the router: the train answers them.
     assert "a parked pull request approved on its head, green, is landed" land "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
     assert "an approved parked pull request with red CI is not landed" skip "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"

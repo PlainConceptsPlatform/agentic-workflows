@@ -122,8 +122,8 @@ One pull request moves at a time, the lowest number first, whoever opened it. Ev
 untouched, so a merge never invalidates work in flight. A pull request a person has to decide on is
 passed by, so it never blocks the line. A writer's approval or change request whose review event
 never reached the router is answered here: an approved, green, parked head is landed, and an
-unanswered change request goes to apply-review. A stack root is not gated while its children are
-open; it is only kept up to date with its base. The train ticks on every merge, every CI
+unanswered change request goes to apply-review. A stack root is neither gated nor updated while
+its children are open. The train ticks on every merge, every CI
 completion, after every gate, and hourly as the fallback.
 
 ```mermaid
@@ -140,8 +140,7 @@ flowchart TD
     trainReview -->|"approved on this head,<br/>parked, green"| trainLand
     trainReview -->|no| trainRoot
     trainRoot{"A stack root with<br/>open children?"}
-    trainRoot -->|"yes, behind its base"| trainUpdate
-    trainRoot -.->|"yes, current"| trainNext
+    trainRoot -.->|"yes: pass it by"| trainNext
     trainRoot -->|no| trainPark
     trainPark{"Parked on this head?<br/>owner or human review,<br/>blocked with main unmoved,<br/>attempts spent"}
     trainPark -.->|"yes: pass it by"| trainNext
