@@ -502,10 +502,12 @@ jobs:
             Bot is working on fixing it.
   validate_output:
     needs: [activation, subject, protected_changes, code_rules, agent, safe_outputs]
+    # Validated even when the agent job ended red after writing its output: safe_outputs published
+    # it, and the validator decides from the output itself (same rule as implement and apply-review).
     if: >
       always() &&
-      needs.agent.result == 'success' &&
-      needs.safe_outputs.result == 'success'
+      needs.safe_outputs.result == 'success' &&
+      (needs.agent.result == 'success' || needs.agent.outputs.output_types != '')
     runs-on: agents-arc
     permissions:
       contents: read
@@ -548,7 +550,7 @@ jobs:
     # fails, and '' != 'true'. A guard whose safety comes from somewhere else is a guard that
     # stops working the moment someone adds always() to this job.
     if: >
-       needs.agent.result == 'success' &&
+       always() &&
         needs.safe_outputs.result == 'success' &&
         needs.protected_changes.result == 'success' &&
         needs.validate_output.outputs.valid == 'true' &&
@@ -764,7 +766,6 @@ jobs:
        needs.subject.outputs.found == 'true' &&
        needs.protected_changes.outputs.holds_review != 'true' &&
        (
-         needs.agent.result != 'success' ||
          needs.safe_outputs.result != 'success' ||
          needs.validate_output.outputs.valid != 'true' ||
          needs.conclude.result == 'failure'

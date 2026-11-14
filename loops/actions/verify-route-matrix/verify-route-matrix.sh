@@ -3321,6 +3321,21 @@ if [ -f "${WORKFLOWS_DIR}/evidence.yml" ]; then
     echo "FAIL: evidence commits screenshots onto a feature branch, which strands its root pull request" >&2
   fi
 fi
+# Apply-review and the merge gate apply what the agent published even when its job ended red after
+# writing it, as implement does: a consumer lost a reviewer-requested fix to a skipped conclude.
+for worker in apply-review merge-gate; do
+  if worker_installed "$worker"; then
+    md="${WORKFLOWS_DIR}/agent-${worker}.md"
+    validate_job=$(sed -n '/^  validate_output:$/,/^    runs-on:/p' "$md")
+    if grep -qF "needs.agent.outputs.output_types != ''" <<<"$validate_job" \
+      && ! grep -qF "needs.agent.result == 'success' &&" <<<"$(sed -n '/^  conclude:$/,/^    runs-on:/p' "$md")"; then
+      PASS=$((PASS + 1))
+    else
+      FAIL=$((FAIL + 1))
+      echo "FAIL: ${worker} drops output the agent published when its job ended red" >&2
+    fi
+  fi
+done
 # Housekeeping never re-implements an issue whose work exists: an open pull request parks it as
 # pr-pending, and a pushed branch with no pull request gets one.
 if [ -f "${HERE}/../housekeeping/action.yml" ]; then
