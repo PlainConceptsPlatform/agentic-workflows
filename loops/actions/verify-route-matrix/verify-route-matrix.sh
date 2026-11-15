@@ -3336,6 +3336,14 @@ for worker in apply-review merge-gate; do
     fi
   fi
 done
+# A gate that handed the pull request back before its agent ran is not a silent gate: the train
+# counts only gate runs whose agent job ran, or an approved green pull request waits forever.
+if grep -qF 'endswith("/ agent")' "${HERE}/../merge-train/merge-train.sh"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the train counts a gate that handed the pull request back as a gate that did nothing" >&2
+fi
 # Housekeeping never re-implements an issue whose work exists: an open pull request parks it as
 # pr-pending, and a pushed branch with no pull request gets one.
 if [ -f "${HERE}/../housekeeping/action.yml" ]; then

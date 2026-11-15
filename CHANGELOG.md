@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.24.4
+
+### Fixed
+
+- **A gate that hands a pull request back no longer strands it.** When the CI run the train passed to the gate judged an older commit and CI was still running on the new head, the gate handed the pull request back before its agent started, leaving no verdict and no attempt (by design). The train counted that run anyway, called it "a gate that ran and left no verdict or attempt", and never offered the pull request again on that head: on a consumer, an approved, green pull request sat waiting. The train now counts only gate runs whose agent job ran, for the silent-gate guard and for the attempt budget alike.
+
 ## 1.24.3
 
 ### Fixed
