@@ -833,10 +833,24 @@ jobs:
               --silent -i 2>/dev/null | head -1 | awk '{print $2}' || true)
             echo "Merged $DEFAULT_BRANCH into $STACK_BRANCH: HTTP ${code:-unknown} (201 merged, 204 up to date, 409 conflict)"
           fi
-          gh workflow run agent-implement.lock.yml --repo "$REPO" --ref "$ref" \
+          # When that merge conflicted, the feature branch keeps workflows older than the default
+          # branch, and its agent-implement may not declare an input this router passes: GitHub then
+          # refuses the whole dispatch (HTTP 422, Unexpected inputs) and the child is lost until
+          # housekeeping notices. Dispatch again with only the inputs every version declares.
+          if ! out=$(gh workflow run agent-implement.lock.yml --repo "$REPO" --ref "$ref" \
             -f issue-number="$ISSUE_NUMBER" \
             -f attempts_so_far="$ATTEMPTS" \
-            -f queue="$QUEUE"
+            -f queue="$QUEUE" 2>&1); then
+            if grep -q "Unexpected inputs" <<<"$out"; then
+              echo "::warning::agent-implement on $ref is older than $DEFAULT_BRANCH and refuses an input; dispatching #$ISSUE_NUMBER without it. Merge $DEFAULT_BRANCH into $ref to bring its workflows up to date."
+              gh workflow run agent-implement.lock.yml --repo "$REPO" --ref "$ref" \
+                -f issue-number="$ISSUE_NUMBER" \
+                -f attempts_so_far="$ATTEMPTS"
+            else
+              echo "$out" >&2
+              exit 1
+            fi
+          fi
 
   # Triage on issue open is for read-only outside collaborators only. A trusted actor who opens
   # an issue should not start triage: they can add refine/implement/direct labels or dispatch

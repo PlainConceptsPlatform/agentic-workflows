@@ -2,6 +2,13 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.26.11
+
+### Fixed
+
+- **The train stops asking a gate that says "remediated" and pushes nothing.** A real repair pushes a commit, so exactly one `remediated` verdict is newer than the head it produced. When the gate answered `remediated` without a patch, the head did not move, the verdict reset the attempt budget, and the train sent the pull request back to repair on every tick: on a consumer, a dozen repair runs over four hours on one pull request, holding the only repair slot while another pull request waited. A second `remediated` verdict on the same head now makes the train skip the pull request, and `(repair)` gate runs count toward the attempt budget like any other gate run.
+- **A stack child is dispatched even when its feature branch runs older workflows.** The router merges the default branch into `feat/N` before dispatching a child there; when that merge conflicts, the branch keeps an older `agent-implement` that may not declare an input the router now passes (`queue`), and GitHub refused the whole dispatch, so the child was lost until housekeeping noticed. The router now dispatches again without that input and warns that the branch needs the default branch merged in.
+
 ## 1.26.10
 
 ### Fixed
