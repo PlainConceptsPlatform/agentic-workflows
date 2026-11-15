@@ -260,6 +260,7 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: ${{ github.repository }}
           permission-issues: write
+          permission-pull-requests: read
       # GITHUB_TOKEN on purpose. A label applied by the app raises a labeled event, and the
       # classifier routes bot-working straight back into this same worker: the second run
       # queues behind this one and then executes, doing the work twice. Nothing needs to see
@@ -320,6 +321,8 @@ jobs:
           repositories: ${{ github.repository }}
           permission-issues: write
           permission-contents: write
+          permission-pull-requests: write
+          permission-actions: write
       - name: Remove bot-working label
         uses: ./.github/actions/remove-issue-labels
         with:
@@ -615,6 +618,8 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: ${{ github.repository }}
           permission-issues: write
+          permission-pull-requests: read
+          permission-actions: write
       # The shared rule, which this worker used to carry its own copy of. It repeats a run that died
       # young, and now also one that was killed after a long time: the runner's VM taken away
       # mid-job, or the AI gateway answering nothing and ending the engine one turn after it began.

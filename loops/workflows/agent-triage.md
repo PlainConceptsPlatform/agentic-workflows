@@ -379,6 +379,7 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: ${{ github.repository }}
           permission-issues: write
+          permission-actions: write
       - name: Decide whether this failure is worth repeating
         id: decide
         uses: ./.github/actions/decide-agent-retry
