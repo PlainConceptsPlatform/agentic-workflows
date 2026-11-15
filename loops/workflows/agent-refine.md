@@ -132,6 +132,10 @@ run-name: "Agent: Refine - #${{ inputs.issue-number }}"
 concurrency:
   group: refine-${{ inputs.issue-number }}
   cancel-in-progress: false
+  # The router starts this worker with gh workflow run, so each dispatch is its own run; give
+  # it its own slot in the compiler-generated conclusion group too. The extension is stripped
+  # from the lock.
+  job-discriminator: ${{ github.run_id }}
 
 imports:
   - shared/opencode.md

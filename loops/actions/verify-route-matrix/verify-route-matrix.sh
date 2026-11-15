@@ -4012,7 +4012,7 @@ triage;agent-triage;Agent: Triage - #\${{ inputs.issue-number }};triage-\${{ inp
 apply-review;agent-apply-review;Agent: Apply Review - PR #\${{ inputs.pr-number }};pr-feedback-\${{ inputs.pr-number }};
 audit;agent-audit;Agent: Audit - \${{ inputs.trigger-kind }};audit;
 docs-audit;agent-docs-audit;Agent: Docs Audit - \${{ inputs.trigger-kind }};docs-audit;
-release;agent-release;Agent: Release - \${{ inputs.version-bump }};;
+release;agent-release;Agent: Release - \${{ inputs.version-bump }};release;
 evidence;evidence;Agentics: Evidence - PR #\${{ inputs.pr-number }};evidence-\${{ inputs.pr-number }};"
 while IFS=';' read -r route worker title group queue; do
   [ -n "$route" ] || continue

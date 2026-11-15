@@ -59,6 +59,10 @@ run-name: "Agent: Docs Audit - ${{ inputs.trigger-kind }}"
 concurrency:
   group: docs-audit
   cancel-in-progress: false
+  # The router starts this worker with gh workflow run, so each dispatch is its own run; give
+  # it its own slot in the compiler-generated conclusion group too. The extension is stripped
+  # from the lock.
+  job-discriminator: ${{ github.run_id }}
 
 # Shared: network policy only. This workflow owns its Safe Outputs and OpenCode configuration.
 # permissions, engine, model and runs-on cannot be shared , see shared/platform-defaults.md.

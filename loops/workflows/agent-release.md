@@ -69,6 +69,14 @@ on:
         type: boolean
         default: false
 
+# One release at a time for the repository: a second dispatch waits rather than racing the
+# bump. The discriminator gives each dispatch its own slot in the compiler-generated
+# conclusion group; the extension is stripped from the lock.
+concurrency:
+  group: release
+  cancel-in-progress: false
+  job-discriminator: ${{ github.run_id }}
+
 runs-on: agents-arc
 runs-on-slim: agents-arc
 

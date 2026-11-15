@@ -62,6 +62,10 @@ run-name: "Agent: Apply Review - PR #${{ inputs.pr-number }}"
 concurrency:
   group: pr-feedback-${{ inputs.pr-number }}
   cancel-in-progress: false
+  # The router starts this worker with gh workflow run, so each dispatch is its own run; give
+  # it its own slot in the compiler-generated conclusion group too. The extension is stripped
+  # from the lock.
+  job-discriminator: ${{ github.run_id }}
 
 # Router-only worker. The Work Router owns triggers, classification, and rung 1-2 checks.
 # This workflow receives the classified inputs and runs rung 3+.
