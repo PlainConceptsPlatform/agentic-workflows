@@ -23,6 +23,7 @@ const QUALITY_GATES = [
   ".jscpd.json.md",
   ".semgrep/platform-hygiene.yml",
   ".semgrep/platform-mockup-leak.yml",
+  ".semgrepignore",
   ".zap/rules.tsv",
   "scripts/check-complexity.mjs",
   "scripts/check-coverage.mjs",

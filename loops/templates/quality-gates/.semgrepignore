@@ -1,0 +1,7 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/templates/quality-gates/.semgrepignore. Update with `workflows update --force`; consumer edits may be overwritten.
+# Generated agent workflow lock files are compiled output, never authored. The compiler emits
+# quoted paths and secret-bearing env wiring that Semgrep's github-actions rules read as
+# findings (gha-workflow-env-secret on the OTEL block, mutable-action-tag on pinned uses).
+# The locks carry their own checks in agentics-checks.yml (version agreement, freshness,
+# the needs lint); SAST scans the authored sources, not the compiler's output.
+.github/workflows/*.lock.yml
