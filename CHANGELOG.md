@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.26.11
+
+### Fixed
+
+- **The train stops asking a gate that says "remediated" and pushes nothing.** A real repair pushes a commit, so exactly one `remediated` verdict is newer than the head it produced. When the gate answered `remediated` without a patch, the head did not move, the verdict reset the attempt budget, and the train sent the pull request back to repair on every tick: on a consumer, a dozen repair runs over four hours on one pull request, holding the only repair slot while another pull request waited. A second `remediated` verdict on the same head now makes the train skip the pull request, and `(repair)` gate runs count toward the attempt budget like any other gate run.
+
 ## 1.26.10
 
 ### Fixed

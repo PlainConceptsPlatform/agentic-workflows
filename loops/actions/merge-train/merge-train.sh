@@ -31,6 +31,7 @@ set -euo pipefail
 #   ATTEMPTS           failed gate attempts on this head; MAX_ATTEMPTS is the budget. Counts the
 #                      larger of the attempt comments and the gate runs, so a gate that fails
 #                      without a comment still spends it
+#   REMEDIATED_ON_HEAD remediated verdicts newer than the head commit; a real repair leaves one
 #   SILENT_GATE        true when a gate already ran on this head and left no verdict and no attempt
 #                      comment: it declined, or died before it could say so. Handing it the same
 #                      pull request again reproduces that, a hot loop with every tick
@@ -93,6 +94,11 @@ train_move() {
     move=skip; reason="its gate attempt budget on this head is spent"
   elif [ "${SILENT_GATE:-false}" = true ]; then
     move=skip; reason="its gate already ran on this head and left no verdict or attempt"
+  elif [ "${REMEDIATED_ON_HEAD:-0}" -ge 2 ]; then
+    # The gate answered remediated and pushed nothing, more than once: asking again repeats it.
+    # A consumer's pull request was repaired about every fifteen minutes for hours this way, and
+    # held the only repair slot while another pull request waited.
+    move=skip; reason="its gate said remediated ${REMEDIATED_ON_HEAD} times on this head without pushing a fix"
   elif [ "${MERGEABLE:-UNKNOWN}" = CONFLICTING ]; then
     # A conflicting pull request has no merge ref, so CI can never run on it: waiting for a
     # verdict would wait forever. Resolving the conflict is the gate's job.
@@ -394,7 +400,7 @@ gate_run_count() {
   local pr="$1" since="$2" id workflow ran=0
   for workflow in $GATE_WORKFLOWS; do
     for id in $(gh api --paginate "repos/$REPO/actions/workflows/$workflow/runs?event=workflow_dispatch&per_page=100" \
-      --jq ".workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\") | select(.created_at > \"$since\") | .id" 2>/dev/null); do
+      --jq ".workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\" or .display_title == \"$GATE_TITLE_PREFIX$pr (repair)\") | select(.created_at > \"$since\") | .id" 2>/dev/null); do
       if gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" \
       --jq '[.jobs[] | select(((.name | endswith("/ agent")) and .conclusion != null and .conclusion != "skipped")
         or ((.name | test("/ (pre_)?activation$")) and .conclusion == "failure"))] | length > 0' \
@@ -528,6 +534,9 @@ for line in "${candidates[@]}"; do
     verdict_newer=true
   fi
   retries=$(awk -F'\t' -v since="$head_committed" '$1 > since && ($2 == "blocked" || $2 == "auto-merge")' <<<"$verdicts" | grep -c . || true)
+  # A real remediation pushes a commit, so exactly one remediated verdict is newer than the head
+  # it produced. A second one on the same head is a gate that said it pushed and did not.
+  remediated_on_head=$(awk -F'\t' -v since="$head_committed" '$1 > since && $2 == "remediated"' <<<"$verdicts" | grep -c . || true)
 
   base_moved=false
   if [ "$verdict_newer" = true ]; then
@@ -743,7 +752,7 @@ for line in "${candidates[@]}"; do
   fi
 
   decision=$(HOLD="$hold" REVIEW_DECISION="$review_decision" PARK="$park" \
-    ATTEMPTS="$attempts" MAX_ATTEMPTS="$MAX_ATTEMPTS" SILENT_GATE="$silent_gate" MERGEABLE="$mergeable" \
+    ATTEMPTS="$attempts" MAX_ATTEMPTS="$MAX_ATTEMPTS" SILENT_GATE="$silent_gate" REMEDIATED_ON_HEAD="${remediated_on_head:-0}" MERGEABLE="$mergeable" \
     CI_STATUS="$ci_status" CI_CONCLUSION="$ci_conclusion" CI_STUCK="$ci_stuck" SAME_AS_MAIN="$same_as_main" \
     BEHIND_BY="${behind_by:-0}" TRUSTED_AUTHOR="$trusted_author" CI_SHALLOW="$ci_shallow" \
     OPEN_CHILDREN="${open_children:-0}" APPROVED_ON_HEAD="$approved_on_head" CHANGES_UNANSWERED="$changes_unanswered" \
