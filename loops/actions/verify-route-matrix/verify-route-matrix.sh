@@ -2650,6 +2650,7 @@ if worker_installed merge-gate; then
   mk 'never the mockup' "$MERGE_GATE_WORKER_MD" 'merge-gate may judge acceptance criteria against the mockup'
 fi
 [ -f "${HERE}/../../templates/quality-gates/.semgrep/platform-mockup-leak.yml" ] ||
+  [ -f "${HERE}/../../../.semgrep/platform-mockup-leak.yml" ] ||
   { MK_OK=0; echo "FAIL: mockups: the Semgrep rule that catches copied mockup markup is missing" >&2; }
 
 if [ "$MK_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
@@ -3511,11 +3512,10 @@ else
 fi
 # No prompt rule stopped the model ending a turn in text; the compiled engine command continues the
 # session when no safe output exists. Pliny-Bot #771 passed verify and exited with nothing delivered.
-COMPILE_MJS="${HERE}/../../scripts/compile-agent-workflows.mjs"
-  # In a consumer the engine definition sits under .github/workflows/shared/ and the script at
-  # the repository root. The nudge lives in the definition's harness: after a clean exit with
-  # no safe output, the same session (`--session <id>`) is continued, twice at most.
-  ENGINE_MD="${HERE}/../../workflows/shared/opencode.md"
+# In a consumer the engine definition sits under .github/workflows/shared/ and the script at
+# the repository root. The nudge lives in the definition's harness: after a clean exit with
+# no safe output, the same session (`--session <id>`) is continued, twice at most.
+ENGINE_MD="${HERE}/../../workflows/shared/opencode.md"
   [ -f "$ENGINE_MD" ] || ENGINE_MD="${HERE}/../../../.github/workflows/shared/opencode.md"
   if [ -f "$ENGINE_MD" ] && grep -qF 'args: [...commandArgs, "--session", sessionID]' "$ENGINE_MD" && grep -qF 'No safe output yet, continuing the session' "$ENGINE_MD" && grep -qF 'const nudgeMessage' "$ENGINE_MD"; then
     PASS=$((PASS + 1))
@@ -4351,28 +4351,57 @@ rc() { grep -qE "$1" "$2" || { RC_OK=0; echo "FAIL: required checks: $3" >&2; };
 CI_DOTNET="${HERE}/../../templates/ci/app-ci-dotnet-next.yml"
 CI_NODE="${HERE}/../../templates/ci/app-ci-node-monorepo.yml"
 RULESET="${HERE}/../../templates/rulesets/main-required-checks.json"
+CONFORMANCE_MJS="${HERE}/../../templates/platform-template/scripts/check-platform-conformance.mjs"
+SYNC_YML="${HERE}/../../templates/platform-template/.github/workflows/platform-template-sync.yml"
+# In a consumer the templates are installed, not checked out beside the action. Resolve the
+# installed equivalents: the CI file that app-ci.yml's ownership header names (a node-only
+# repository has no .NET assertions and the other way round), the template sync and the
+# conformance script the update installed, and the repository's live rulesets, which are the
+# thing the ruleset assertions actually describe where no template copy exists.
+if [ ! -d "${HERE}/../../templates" ]; then
+  root="${HERE}/../../../"
+  installed_ci="${root}.github/workflows/app-ci.yml"
+  if [ -f "$installed_ci" ]; then
+    case "$(sed -n '1,3p' "$installed_ci")" in
+      *app-ci-dotnet-next.yml*) CI_DOTNET="$installed_ci"; CI_NODE="" ;;
+      *app-ci-node-monorepo.yml*) CI_NODE="$installed_ci"; CI_DOTNET="" ;;
+      *) RC_OK=0; echo 'FAIL: required checks: app-ci.yml carries no template ownership header' >&2 ;;
+    esac
+  fi
+  [ -f "${root}.github/workflows/platform-template-sync.yml" ] && SYNC_YML="${root}.github/workflows/platform-template-sync.yml"
+  [ -f "${root}scripts/check-platform-conformance.mjs" ] && CONFORMANCE_MJS="${root}scripts/check-platform-conformance.mjs"
+  if [ -n "${GITHUB_REPOSITORY:-}" ] && command -v gh > /dev/null 2>&1; then
+    live="$(mktemp)"
+    if gh api "repos/${GITHUB_REPOSITORY}/rulesets" --jq '.[].id' 2>/dev/null | while read -r id; do
+      gh api "repos/${GITHUB_REPOSITORY}/rulesets/${id}" 2>/dev/null || true
+    done >> "$live" && [ -s "$live" ]; then
+      RULESET="$live"
+    fi
+  fi
+fi
 for job in sast-scan secret-scan deps-and-iac-scan platform-conformance engineering-excellence api web; do
+  [ -n "$CI_DOTNET" ] || break
   awk '/^  full-ci:$/{f=1} f&&/needs:/{print; exit}' "$CI_DOTNET" | grep -qE "[[ ]${job}[],]" || { RC_OK=0; echo "FAIL: required checks: the .NET template's Full CI does not need ${job}" >&2; }
 done
 for job in lint sast-scan secret-scan deps-and-iac-scan web; do
+  [ -n "$CI_NODE" ] || break
   awk '/^  full-ci:$/{f=1} f&&/needs:/{print; exit}' "$CI_NODE" | grep -qE "[[ ]${job}[],]" || { RC_OK=0; echo "FAIL: required checks: the node template's Full CI does not need ${job}" >&2; }
 done
-rc '"context": "Full CI"' "$RULESET" 'the ruleset must require Full CI'
-rc '"include": \["~DEFAULT_BRANCH"\]' "$RULESET" 'the ruleset must target the default branch'
+rc '"context": *"Full CI"' "$RULESET" 'the ruleset must require Full CI'
+rc '"include": *\["~DEFAULT_BRANCH"\]' "$RULESET" 'the ruleset must target the default branch'
 rc 'side-checks\.sh' "${HERE}/../land-pull-request/land-pull-request.sh" 'land-pull-request must check the side workflows'
 rc 'side-checks\.sh' "${HERE}/../merge-agent-pr/action.yml" 'merge-agent-pr must check the side workflows'
 rc 'land-pull-request/side-checks\.sh' "${HERE}/../merge-train/merge-train.sh" 'the merge train must hold a pull request whose side workflow is red'
 rc 'test-timings\.mjs' "$CI_DOTNET" 'the .NET template must summarise the test timings'
-[ "$(grep -c -- '--logger trx' "$CI_DOTNET")" -ge 5 ] || { RC_OK=0; echo "FAIL: required checks: every .NET test step must write a trx report" >&2; }
+[ "$(grep -c -- '--logger trx' "$CI_DOTNET" 2>/dev/null)" -ge 5 ] || { RC_OK=0; echo "FAIL: required checks: every .NET test step must write a trx report" >&2; }
 # The template sync installs copier on a runner whose Python cannot make a venv: the pinned uv it
 # falls back to must stay checked against its SHA-256, or the sync never runs (it never had).
-SYNC_YML="${HERE}/../../templates/platform-template/.github/workflows/platform-template-sync.yml"
 rc '^  UV_SHA256: [0-9a-f]{64}$' "$SYNC_YML" 'the template sync must pin uv by SHA-256'
 rc 'sha256sum --check --strict' "$SYNC_YML" 'the template sync must check the uv download'
 # A conformance run that could not read the template must not pass as a comparison.
 rc 'compare\+=\(--require-source\)' "$CI_DOTNET" 'the conformance job must require the template when it has a token'
 rc 'create-github-app-token@[0-9a-f]{40}' "$CI_DOTNET" 'the conformance job must mint a token that reads the template'
-rc "requireSource \\? \\{ failures: \\[message\\]" "${HERE}/../../templates/platform-template/scripts/check-platform-conformance.mjs" 'check-platform-conformance must fail on an unread template with --require-source'
+rc "requireSource \\? \\{ failures: \\[message\\]" "$CONFORMANCE_MJS" 'check-platform-conformance must fail on an unread template with --require-source'
 rc "python3 -c 'import ensurepip'" "$SYNC_YML" 'the template sync must not try a venv where ensurepip is missing'
 if [ "$RC_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
