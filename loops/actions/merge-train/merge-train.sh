@@ -132,7 +132,9 @@ train_move() {
     esac
   fi
 
-  printf 'move=%s\nreason=%s\n' "$move" "$reason"
+  printf 'move=%s
+reason=%s
+' "$move" "$reason"
 }
 
 # A standing verdict holds the pull request when it is newer than the head commit. Two verdicts
@@ -187,6 +189,14 @@ STUCK_HOURS="${STUCK_HOURS:-3}"
 DRY_RUN="${DRY_RUN:-false}"
 SELF_RUN_ID="${GITHUB_RUN_ID:-0}"
 GATE_TITLE_PREFIX="Agent: Merge Gate - PR #"
+# The gate runs in agentics-merge-belt.yml. Runs started before the split ran in work-router.yml and
+# may still be queued there after an update, so every lookup reads both; a dispatch goes to the
+# belt alone.
+GATE_WORKFLOW="agentics-merge-belt.yml"
+GATE_WORKFLOWS="agentics-merge-belt.yml work-router.yml"
+# apply-review is dispatched through the router, which starts the worker as its own run.
+ROUTER_WORKFLOW="work-router.yml"
+APPLY_REVIEW_WORKFLOWS="work-router.yml agent-apply-review.lock.yml"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 now_epoch=$(date -u +%s)
@@ -215,7 +225,8 @@ ci_runs_for_sha() {
   # Every completed run on the commit, not only the CI workflow's: on the default branch the CI runs inside the
   # deploy workflow. Extra failures on the base are harmless, the rule only asks that the pull request's own
   # failures are among them.
-  runs=$(gh api "repos/$REPO/actions/runs?head_sha=$sha&per_page=100"     --jq '.workflow_runs[] | select(.status == "completed") | .id' 2>/dev/null) || return 1
+  runs=$(gh api "repos/$REPO/actions/runs?head_sha=$sha&per_page=100" \
+      --jq '.workflow_runs[] | select(.status == "completed") | .id' 2>/dev/null) || return 1
   [ -n "$runs" ] || return 1
   printf '%s
 ' "$runs"
@@ -227,7 +238,8 @@ ci_failed_jobs() {
     --jq '.jobs[] | select(.conclusion == "failure") | [(.name | sub("^.* / "; "")), .completed_at] | @tsv' 2>/dev/null
 }
 
-summary() { printf '%s\n' "$*" >>"$SUMMARY"; }
+summary() { printf '%s
+' "$*" >>"$SUMMARY"; }
 
 # Every write goes through this, so a dry run is honest: there is no second path that forgets.
 act() {
@@ -313,13 +325,14 @@ can_ride() {
 # every other gate may merge, and there is one of those at a time across the repository. The run
 # this tick belongs to is excluded: the tick after a gate runs inside the gate's own router run.
 live_gates() {
-  local status
-  for status in queued in_progress waiting pending requested; do
-    gh api "repos/$REPO/actions/workflows/work-router.yml/runs?status=$status&per_page=100"       --jq ".workflow_runs[]
+  local status workflow
+  for workflow in $GATE_WORKFLOWS; do for status in queued in_progress waiting pending requested; do
+    gh api "repos/$REPO/actions/workflows/$workflow/runs?status=$status&per_page=100" \
+      --jq ".workflow_runs[]
         | select(.id != $SELF_RUN_ID)
         | select(.display_title | startswith(\"$GATE_TITLE_PREFIX\"))
         | .display_title" 2>/dev/null
-  done | sort -u
+  done; done | sort -u
 }
 
 # GitHub works mergeability out on demand: the first read of a pull request nobody has opened
@@ -368,14 +381,16 @@ update_branch() {
 # no attempt by design; counting it made the train call the next one "a gate that did nothing" and
 # never offer the pull request again on that head (a consumer's approved, green PR sat that way).
 gate_run_count() {
-  local pr="$1" since="$2" id ran=0
-  for id in $(gh api --paginate "repos/$REPO/actions/workflows/work-router.yml/runs?event=workflow_dispatch&per_page=100" \
-    --jq ".workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\") | select(.created_at > \"$since\") | .id" 2>/dev/null); do
-    if gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" \
+  local pr="$1" since="$2" id workflow ran=0
+  for workflow in $GATE_WORKFLOWS; do
+    for id in $(gh api --paginate "repos/$REPO/actions/workflows/$workflow/runs?event=workflow_dispatch&per_page=100" \
+      --jq ".workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\") | select(.created_at > \"$since\") | .id" 2>/dev/null); do
+      if gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" \
       --jq '[.jobs[] | select((.name | endswith("/ agent")) and .conclusion != null and .conclusion != "skipped")] | length > 0' \
-      2>/dev/null | grep -qx true; then
-      ran=$((ran + 1))
-    fi
+        2>/dev/null | grep -qx true; then
+        ran=$((ran + 1))
+      fi
+    done
   done
   echo "$ran"
 }
@@ -401,7 +416,7 @@ close_landed_child() {
 dispatch_gate() {
   local pr="$1" conclusion="$2" run_id="$3" attempts="$4" since
   since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
+  gh api "repos/$REPO/actions/workflows/$GATE_WORKFLOW/dispatches" --method POST \
     -f ref="$DEFAULT_BRANCH" \
     -f "inputs[operation]=merge-gate" \
     -f "inputs[pr-number]=$pr" \
@@ -410,7 +425,7 @@ dispatch_gate() {
     -f "inputs[attempts_so_far]=$attempts" >/dev/null
   # The next tick waits behind this one and must see the gate it started, or it starts a second.
   for _ in $(seq 1 12); do
-    if gh api "repos/$REPO/actions/workflows/work-router.yml/runs?event=workflow_dispatch&created=>=$since&per_page=20" \
+    if gh api "repos/$REPO/actions/workflows/$GATE_WORKFLOW/runs?event=workflow_dispatch&created=>=$since&per_page=20" \
       --jq ".workflow_runs[] | select(.display_title | startswith(\"$GATE_TITLE_PREFIX$pr\")) | .id" 2>/dev/null | grep -q .; then
       return 0
     fi
@@ -730,13 +745,15 @@ for line in "${candidates[@]}"; do
   # skipped four green Pliny-Bot pull requests with "a gate is already on it" until it was cancelled
   # by hand. Cancel it and let the pull request move.
   if { [ "$move" = gate ] || [ "$move" = update ]; } && [ "$ci_status" = completed ] && [ "$ci_conclusion" = success ] &&
-    printf '%s\n' "$live_titles" | grep -qE "PR #${pr} \(repair\)$"; then
-    for run_id in $(gh api "repos/$REPO/actions/workflows/work-router.yml/runs?per_page=100" \
-      --jq ".workflow_runs[] | select(.status != \"completed\" and (.display_title | endswith(\"PR #${pr} (repair)\"))) | .id" 2>/dev/null); do
+    printf '%s
+' "$live_titles" | grep -qE "PR #${pr} \(repair\)$"; then
+    for run_id in $(for workflow in $GATE_WORKFLOWS; do gh api "repos/$REPO/actions/workflows/$workflow/runs?per_page=100" \
+      --jq ".workflow_runs[] | select(.status != \"completed\" and (.display_title | endswith(\"PR #${pr} (repair)\"))) | .id" 2>/dev/null; done); do
       act "Cancelling the repair gate $run_id on #$pr: its CI is green." \
         gh api -X POST "repos/$REPO/actions/runs/$run_id/cancel" --silent
     done
-    live_titles=$(printf '%s\n' "$live_titles" | grep -vE "PR #${pr} \(repair\)$" || true)
+    live_titles=$(printf '%s
+' "$live_titles" | grep -vE "PR #${pr} \(repair\)$" || true)
   fi
 
   # A gate is already on this pull request, whatever kind: offering it another would run the same
@@ -754,14 +771,15 @@ for line in "${candidates[@]}"; do
     apply-review)
       # A dispatched apply-review can queue for an hour or two behind the fleet; asking again on
       # every tick would stack copies of the same run. Its title names the pull request.
-      if gh api "repos/$REPO/actions/workflows/work-router.yml/runs?event=workflow_dispatch&per_page=50" \
-        --jq '.workflow_runs[] | select(.status != "completed") | .display_title' 2>/dev/null |
-        grep -qxF "Agent: Apply Review - PR #$pr"; then
+      if for workflow in $APPLY_REVIEW_WORKFLOWS; do
+        gh api "repos/$REPO/actions/workflows/$workflow/runs?event=workflow_dispatch&per_page=50" \
+          --jq '.workflow_runs[] | select(.status != "completed") | .display_title' 2>/dev/null
+      done | grep -qxF "Agent: Apply Review - PR #$pr"; then
         echo "  #$pr already has an apply-review run waiting or running."
         continue
       fi
       act "Dispatching apply-review for #$pr: its change request never reached the agent." \
-        gh api "repos/$REPO/actions/workflows/work-router.yml/dispatches" --method POST \
+        gh api "repos/$REPO/actions/workflows/$ROUTER_WORKFLOW/dispatches" --method POST \
           -f ref="$DEFAULT_BRANCH" -f "inputs[operation]=apply-review" -f "inputs[pr-number]=$pr" >/dev/null ||
         echo "::warning::Could not dispatch apply-review for #$pr."
       continue

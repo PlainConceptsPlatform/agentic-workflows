@@ -45,12 +45,23 @@ export const retiredWorkflowFiles = [
   "agent-visual-verify.lock.yml",
 ] as const;
 
+// Plain workflows split out of the router. Each owns its triggers and keeps an `env:` block the
+// consumer may change, so `workflows update` merges it the way it merges the router's. On a first
+// install its values come from the router the consumer already has, and a key the router also
+// declares is copied from the router, which stays the one place to change it.
+export const plumbingWorkflowFiles = [
+  "agentics-housekeeping.yml",
+  "agentics-merge-belt.yml",
+  "agentics-pr-plumbing.yml",
+] as const;
+
 export const packageOwnedTargets = [
   ".github/actions",
   ".github/workflows/agent-*.md",
   ".github/workflows/shared/platform-defaults.md",
   ".github/workflows/shared/opencode-ci.md",
   ".github/workflows/work-router.yml",
+  ...plumbingWorkflowFiles.map((file) => `.github/workflows/${file}`),
   ".github/workflows/evidence.yml",
   "scripts/compile-agent-workflows.mjs",
   "opencode.ci.json",

@@ -122,6 +122,13 @@ description: |
   Contract inputs: issue-number, mode(first|rerefine|assume).
 
 name: "Agent: Refine Issue"
+# The router dispatches this worker (gh workflow run), so it is a run of its own in the Actions
+# tab. The title carries the number the bot-working sweep and the stuck-run janitor look for, and
+# the concurrency group is the one the router's call job used to hold.
+run-name: "Agent: Refine - #${{ inputs.issue-number }}"
+concurrency:
+  group: refine-${{ inputs.issue-number }}
+  cancel-in-progress: false
 
 imports:
   - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
@@ -130,6 +137,23 @@ imports:
 
 on:
   workflow_call:
+    inputs:
+      attempts_so_far:
+        description: Runs already made for this work that died before producing an answer. Filled by the worker when it re-dispatches itself, not by people.
+        required: false
+        type: string
+        default: '0'
+      issue-number:
+        description: Issue number to refine.
+        required: true
+        type: string
+      mode:
+        description: Refinement pass mode (first, rerefine or assume).
+        required: false
+        type: string
+        default: first
+  # The router starts this worker with gh workflow run; the inputs match workflow_call's.
+  workflow_dispatch:
     inputs:
       attempts_so_far:
         description: Runs already made for this work that died before producing an answer. Filled by the worker when it re-dispatches itself, not by people.

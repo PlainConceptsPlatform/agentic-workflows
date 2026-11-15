@@ -1,0 +1,191 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/workflows/agentics-housekeeping.yml. Update with `workflows update --force`; consumer edits may be overwritten.
+name: "Agentics: Housekeeping"
+
+# The scheduled janitor: housekeeping, audit-close and cleanup-artifacts. No model runs here.
+# These jobs used to be routes of work-router.yml, so every cron tick opened a router run with
+# all of its jobs. Each cron now starts only the job it is for, and the router keeps the events
+# that can start an agent. work-router.yml still accepts `operation=housekeeping`, `audit-close`
+# and `cleanup-artifacts` and forwards them here.
+
+# The titles are the ones the router gave these runs, so anything that reads them keeps working.
+run-name: >-
+  ${{ github.event_name == 'schedule'
+  && github.event.schedule == '43 3 * * *'
+  && format('Agentics: Audit Close - daily{0}', '')
+  || github.event_name == 'schedule'
+  && github.event.schedule == '0 6 * * *'
+  && format('Agentics: Cleanup - daily{0}', '')
+  || github.event_name == 'schedule'
+  && github.event.schedule == '23 */6 * * *'
+  && format('Agentics: Maintenance - 6h{0}', '')
+  || github.event_name == 'workflow_dispatch'
+  && format('Agentics: {0} - manual', inputs.operation)
+  || github.event_name }}
+
+# The part of this file a repository may change. `workflows update` keeps these values. A key
+# that also lives in work-router.yml (MERGE_TRAIN_HOLD_LABEL) is copied from the router on every
+# update, so the router stays the one place to change it.
+env:
+  # How long an issue may sit parked with `stalled` before the janitor retries it, and how many
+  # times it tries before leaving the issue to a person. Only machine failures are retried; a
+  # verdict the agent reached on purpose is reported and never re-run, because re-running a
+  # decision reproduces it.
+  HOUSEKEEPING_RETRY_AFTER_HOURS: "1"
+  HOUSEKEEPING_MAX_RETRIES: "3"
+  # A bot pull request older than this with no merge-gate verdict at all is reported, never
+  # closed: the janitor deletes branches and labels, never someone's work.
+  HOUSEKEEPING_STALE_PR_DAYS: "3"
+  # The single issue that lists what genuinely needs a person. Set it empty to turn the digest
+  # off and keep the rest of the janitor.
+  HOUSEKEEPING_DIGEST_TITLE: "Needs a human"
+  # Which Dependabot pull requests the six-hourly maintenance squash-merges once every check is
+  # green: "all", "minor" (minor and patch), "patch", or "off". CI is the gate; only pull requests
+  # Dependabot opened, with every commit Dependabot's, are touched. A repository variable of the
+  # same name overrides this without a commit.
+  DEPENDABOT_MERGE: "all"
+  # "true" also merges a Dependabot pull request in a repository with no checks at all, once its
+  # head is an hour old. "false" leaves those for a person.
+  DEPENDABOT_MERGE_WITHOUT_CHECKS: "true"
+  # How long an audit report may sit open before it is labelled `stale-audit`. The audit's own
+  # backpressure ignores a stale report, so three abandoned reports can no longer disable the
+  # weekly audit for good; the digest lists them instead. Two missed weekly cycles.
+  AUDIT_STALE_AFTER_DAYS: "14"
+  # Pull requests with this label stay off the merge train, and the Dependabot merge skips them.
+  # Copied from work-router.yml on every update.
+  MERGE_TRAIN_HOLD_LABEL: "hold"
+
+on:
+  schedule:
+    - cron: "43 3 * * *" # audit-close
+    - cron: "0 6 * * *" # cleanup-artifacts
+    - cron: "23 */6 * * *" # housekeeping: retry what stalled, tidy what it stranded
+
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Job to run"
+        required: true
+        type: choice
+        options:
+          - housekeeping
+          - audit-close
+          - cleanup-artifacts
+      dry-run:
+        description: "Housekeeping only: print every intended change and write nothing"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Off switch: a repository variable AGENTIC_WORKFLOWS_DISABLED, with any value, stops every job
+  # here, as it stops every route of the router.
+  audit-close:
+    if: >-
+      vars.AGENTIC_WORKFLOWS_DISABLED == '' &&
+      (github.event.schedule == '43 3 * * *' || inputs.operation == 'audit-close')
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 15
+    concurrency:
+      group: audit-close
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+      # It reads the open pull requests before closing a report, so a report whose
+      # implement workers are still in review is left alone. Without this the list
+      # call answers 403 and the nightly job fails having closed nothing.
+      pull-requests: read
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/audit-close
+        with:
+          token: ${{ github.token }}
+          stale-after-days: ${{ env.AUDIT_STALE_AFTER_DAYS }}
+
+  cleanup-artifacts:
+    if: >-
+      vars.AGENTIC_WORKFLOWS_DISABLED == '' && !github.event.repository.fork &&
+      (github.event.schedule == '0 6 * * *' || inputs.operation == 'cleanup-artifacts')
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 15
+    concurrency:
+      group: cleanup-artifacts
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/cleanup-artifacts
+        with:
+          token: ${{ github.token }}
+          artifact-retention-days: ${{ vars.ARTIFACT_RETENTION_DAYS }}
+
+  # The janitor. Deterministic, no model: it retries work the machine stalled on, clears the state
+  # a dead run stranded, deletes branches whose pull request is finished, and keeps one issue
+  # listing what genuinely needs a person.
+  housekeeping:
+    if: >-
+      vars.AGENTIC_WORKFLOWS_DISABLED == '' && !github.event.repository.fork &&
+      (github.event.schedule == '23 */6 * * *' || inputs.operation == 'housekeeping')
+    runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 15
+    concurrency:
+      group: housekeeping
+      cancel-in-progress: false
+    permissions:
+      # contents: write deletes branches whose pull request is closed or merged.
+      contents: write
+      issues: write
+      pull-requests: read
+      # actions: write cancels workflow runs stuck pending in the fleet queue.
+      actions: write
+      # The Dependabot merge reads check runs and statuses with this token, not the App's.
+      checks: read
+      statuses: read
+    env:
+      BOT_APP_ID: ${{ secrets.BOT_APP_ID }}
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # A retry is a workflow_dispatch, and GitHub refuses to start a workflow run from an event
+      # raised with GITHUB_TOKEN. With the default token every retry would report success and do
+      # nothing, which is the exact failure mode this job exists to remove.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+      - uses: ./.github/actions/housekeeping
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          retry-after-hours: ${{ env.HOUSEKEEPING_RETRY_AFTER_HOURS }}
+          max-retries: ${{ env.HOUSEKEEPING_MAX_RETRIES }}
+          stale-pr-days: ${{ env.HOUSEKEEPING_STALE_PR_DAYS }}
+          digest-title: ${{ env.HOUSEKEEPING_DIGEST_TITLE }}
+          dry-run: ${{ github.event.inputs.dry-run || 'false' }}
+      # Dependabot updates merge here rather than on a cron of their own. API calls only: no pull
+      # request code is checked out. It runs even when the sweep above failed.
+      - name: Merge Dependabot pull requests
+        if: ${{ !cancelled() && steps.app-token.outcome == 'success' }}
+        uses: ./.github/actions/merge-dependabot
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          read-token: ${{ github.token }}
+          scope: ${{ vars.DEPENDABOT_MERGE || env.DEPENDABOT_MERGE }}
+          merge-without-checks: ${{ env.DEPENDABOT_MERGE_WITHOUT_CHECKS }}
+          skip-labels: do-not-merge blocked human-review ${{ env.MERGE_TRAIN_HOLD_LABEL }}
+          dry-run: ${{ github.event.inputs.dry-run || 'false' }}

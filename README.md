@@ -41,8 +41,16 @@ to sit at the bottom of each worker's markdown, which is the prompt, so every ru
 240 lines of Mermaid and then read an instruction telling it to ignore them. `verify-route-matrix.sh`
 now fails if one reappears in a prompt.
 
-Every worker is a `workflow_call` reusable workflow. Nothing triggers itself: `work-router.yml`
-owns all the triggers, classifies the event into exactly one route, and calls one worker. That
+No worker triggers itself: `work-router.yml` owns every trigger that can start an agent,
+classifies the event into exactly one route, and dispatches one worker with `gh workflow run`.
+The router run ends there, and the worker is a run of its own in the Actions tab, under its own
+name and titled with its issue or pull request (`Agent: Implement - #42`), so following one agent
+means opening one run. Each worker holds its own concurrency group, which the router's call used to
+hold. The merge gate is the exception: the merge belt still calls it, because the train waits for
+its verdict in the same run. Three groups of jobs have their own files: the scheduled janitor jobs, which start no
+agent, in `agentics-housekeeping.yml`; the merge train with the gate it calls in
+`agentics-merge-belt.yml`, which hears CI completions, merges and approvals itself; and the pull
+request and stack jobs in `agentics-pr-plumbing.yml`, which hear pull request events. That
 is why a worker can be added or removed without touching the others, and why the route matrix
 in `verify-route-matrix.sh` is the thing to run after changing any of them.
 
@@ -58,6 +66,11 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | `release` | `agent-release.md` | on demand (`operation=release`), or the **Release to production** button (`release-to-production.yml`) | a `chore(release): vX.Y.Z` pull request with auto-merge; `release-tag.yml` tags it and publishes the GitHub Release once it merges, and deploys the tag to production when the button started it |
 
 Plus the plumbing, which has no agent in it: `work-router.yml` (the router itself),
+`agentics-housekeeping.yml` (the janitor jobs below, on their own crons),
+`agentics-merge-belt.yml` (the merge train, the merge gate it calls, the merge of a pull request a
+person approved, and the hourly reconcile),
+`agentics-pr-plumbing.yml` (approving the CI of a bot's pull request, and moving a stack on when a
+child or a root merges),
 `authorize-bot-work.yml` (a human's label is checked, then the bot re-labels so the workers see
 a trusted actor), `release-tag.yml` (installed with the `release` route: tags a merged release
 pull request), `evidence.yml` (when a pull request merges, replays the verification plan its
@@ -89,7 +102,7 @@ left to.
 ### Keeping itself running
 
 Two deterministic jobs exist because the measured problem was never bad decisions, it was
-silence. Across four consumers, 58 of the 237 issues closed since 1 August were closed by the
+silence. Both run from `agentics-housekeeping.yml`. Across four consumers, 58 of the 237 issues closed since 1 August were closed by the
 bot: autonomy between 6% and 50%. The rest stopped somewhere and told nobody.
 
 | Job | Runs | Does |
@@ -110,8 +123,8 @@ one climbs.
 
 It runs on the App token, because GitHub starts no workflow run from an event raised with
 `GITHUB_TOKEN` -- with the default token every retry would be a green no-op. Every write goes
-through one wrapper, which is the only place `dry-run` is read, so `operation=housekeeping` with
-`dry-run` on prints exactly what it would change and writes nothing. `verify-route-matrix.sh`
+through one wrapper, which is the only place `dry-run` is read, so running `agentics-housekeeping.yml`
+with `operation=housekeeping` and `dry-run` on prints exactly what it would change and writes nothing. `verify-route-matrix.sh`
 asserts all of that, including that it closes only two kinds of issue.
 
 The same run merges Dependabot's updates, so nobody has to: a pull request Dependabot opened, with every commit verified and Dependabot's, targeting the default branch and carrying no hold label, is squash-merged once every check is green. A stale one gets one `@dependabot rebase`, a failing one is listed in the job summary, and nothing of the pull request is checked out or run. `DEPENDABOT_MERGE` (`all`, `minor`, `patch` or `off`) and `DEPENDABOT_MERGE_WITHOUT_CHECKS` in the `env:` block set the scope; a repository variable `DEPENDABOT_MERGE` overrides it. A repository without the router gets the same from the `dependabot-merge` template. See [docs/dependabot-merge.md](docs/dependabot-merge.md) for the rules, the security model and how to turn it off.
@@ -175,7 +188,7 @@ to work alone: the people refine and answer questions by day, the pipeline build
   check-diff, anything the workflow could not measure.
 - Features chain. A feature issue blocked by another (GitHub's "blocked by" relation, or a
   `Blocked by #N` line in its body) keeps its children held until that feature's stack root merges.
-  The router's `stack-landed` job then merges the default branch into the waiting feature's branch,
+  The `stack-landed` job (in `agentics-pr-plumbing.yml`) then merges the default branch into the waiting feature's branch,
   releases its children, and opens an **Unattended report** issue listing the pull requests that
   merged, labelled `needs-human` when any merged on a judgement call. A branch that will not merge
   cleanly keeps its feature held and labels it `needs-human`.
@@ -196,7 +209,7 @@ step and leaves the rest alone:
 | green and up to date | hands it to the merge gate, which reviews and squash-merges |
 | parked for a person, a draft, or labelled `hold` | passes it by, so it never blocks the line |
 
-It ticks on every merge, every CI completion, after every gate, and hourly as the fallback. Merges are one at a time; a red pull request is repaired in parallel with the others (`MERGE_TRAIN_REPAIRS`), because a repair pushes to its own branch and never merges, so a
+It runs in `agentics-merge-belt.yml` and ticks on every merge, every CI completion, after every gate, and hourly as the fallback. Merges are one at a time; a red pull request is repaired in parallel with the others (`MERGE_TRAIN_REPAIRS`), because a repair pushes to its own branch and never merges, so a
 night or a weekend of pull requests drains without anyone merging by hand. Before the train, every
 eligible pull request was sent to the gate at once; each merge then moved the default branch under
 the rest, and a parked verdict never expired, so a batch left on Friday was still waiting on Monday.
@@ -216,7 +229,9 @@ up to `MERGE_TRAIN_MAX_RETRIES` times: the failure may have been the base's.
 
 A consumer CI hands its verdict to the train from its last job (`dispatch-merge-train` in
 `app-ci-node-monorepo`, `dispatch-merge-gate` in `app-ci-dotnet-next`), because GitHub sends no `workflow_run` event for CI a bot started. A CI that still
-dispatches `operation=merge-gate` is treated as the same handover until it is updated.
+dispatches `operation=merge-gate` is treated as the same handover until it is updated. Both still
+dispatch `work-router.yml`, which forwards them to `agentics-merge-belt.yml`, as it forwards the
+`merge-gate` label a person adds.
 
 Three labels are the controls a person has: `review` parks anything for a human, `future`
 holds a refined issue back from implementation until it is removed, and `hold` keeps a pull
@@ -378,31 +393,54 @@ A dispatched run always goes ahead. `docs-audit` reports count against their own
 at a time, and `audit-close` closes and marks them stale exactly as it does audit reports.
 
 The other value in that block is `CI_WORKFLOW_NAME`, the name of the CI workflow the merge belt
-reads its verdict from. It works the same way, mirrored into the `workflow_run` trigger, and
-getting it wrong is equally quiet: the belt logs no completed CI run and the pull request waits.
+reads its verdict from. It works the same way, mirrored into the `workflow_run` trigger of
+`agentics-merge-belt.yml`, and getting it wrong is equally quiet: the belt logs no completed CI run
+and the pull request waits. Set it in the router; `workflows update` copies it into the belt.
 
-The daily and hourly crons (`audit-close`, `cleanup-artifacts`, `reconcile-bot-pr-runs`,
-`housekeeping`) do not need staggering: they run on
-GitHub-hosted runners and never touch the fleet. The reconcile cron runs hourly at minute 17 and
-ticks the merge train.
+The janitor's crons (`housekeeping` every six hours, `audit-close` and `cleanup-artifacts` daily)
+are in their own workflow, `agentics-housekeeping.yml`, and the hourly reconcile (minute 17, which
+also ticks the merge train) is in `agentics-merge-belt.yml`. A cron tick starts only the job it is
+for, and the router keeps the events that can start an agent. A push to a pull request reaches
+`agentics-pr-plumbing.yml` only; the router hears a pull request only when it is labelled or closed.
+The router still accepts the moved
+operations (`housekeeping`, `audit-close`, `cleanup-artifacts`, `merge-gate`, `merge-train`,
+`reconcile-bot-pr-runs`) and forwards them.
 
-The rest of that `env:` block belongs to the janitor and the audit chain, and each value is a
-repository's to change:
+`agentics-housekeeping.yml`, `agentics-merge-belt.yml` and `agentics-pr-plumbing.yml` each have
+their own `env:` block, which `workflows update` keeps like the router's. When one is first
+installed it takes the values a repository had set for its keys in its router. A key the router
+also needs (`CI_WORKFLOW_NAME`, `TRUSTED_BOTS`, `MERGE_TRAIN_HOLD_LABEL`, `UNATTENDED`) is copied
+from the router on every update, so change it in the router only. `agentics-pr-plumbing.yml` has
+no setting of its own: it carries only `UNATTENDED`, for `stack-landed`.
+`agentics-housekeeping.yml`:
 
 | Value | Default | Means |
 |---|---|---|
-| `HOUSEKEEPING_RETRY_AFTER_HOURS` | `6` | how long a `stalled` issue waits before a retry |
+| `HOUSEKEEPING_RETRY_AFTER_HOURS` | `1` | how long a `stalled` issue waits before a retry |
 | `HOUSEKEEPING_MAX_RETRIES` | `3` | retries before the issue is left to a person |
 | `HOUSEKEEPING_STALE_PR_DAYS` | `3` | a bot pull request older than this with no gate verdict is reported, never closed |
 | `HOUSEKEEPING_DIGEST_TITLE` | `Needs a human` | the one issue listing what needs a person; empty turns the digest off |
 | `DEPENDABOT_MERGE` | `all` | which Dependabot updates the maintenance run merges once green: `all`, `minor`, `patch` or `off`; a repository variable of the same name overrides it |
 | `DEPENDABOT_MERGE_WITHOUT_CHECKS` | `true` | merge a Dependabot update in a repository with no checks at all, once its head is an hour old |
 | `AUDIT_STALE_AFTER_DAYS` | `14` | when an unactioned audit report stops blocking the next audit |
+
+`agentics-merge-belt.yml`:
+
+| Value | Default | Means |
+|---|---|---|
 | `MAX_GATE_ATTEMPTS` | `6` | failed merge-gate attempts one pull request head may consume before the train passes it by |
-| `MERGE_TRAIN_HOLD_LABEL` | `hold` | a pull request with this label stays off the merge train |
 | `MERGE_TRAIN_MAX_RETRIES` | `3` | how often a `blocked` verdict is retried after the base branch moves |
+| `MERGE_TRAIN_STACK_ROOT_AUTOMERGE` | `true` | a stack root merges itself through the gate once every child has landed |
 | `MERGE_TRAIN_DRY_RUN` | `false` | `true` logs the move the train would make and makes none |
 | `MERGE_TRAIN_REPAIRS` | `1` | how many pull requests may be in repair at once; a repair never merges so repairs do not race, while merges stay one at a time, oldest first |
+| `REFINE_ANSWER_TIMEOUT_HOURS` | `24` | working hours refine's questions wait before the hourly reconcile sends the issue back to refine with the proposed answers; `0` waits for a person |
+
+The rest of the router's `env:` block belongs to the workers it starts, and each value is a
+repository's to change:
+
+| Value | Default | Means |
+|---|---|---|
+| `MERGE_TRAIN_HOLD_LABEL` | `hold` | a pull request with this label stays off the merge train and is skipped by the Dependabot merge |
 | `IMPLEMENT_PARALLELISM` | `1` | how many implement runs work at once; the children of one refine always share a queue and run one after another |
 
 ## Consumer prerequisite

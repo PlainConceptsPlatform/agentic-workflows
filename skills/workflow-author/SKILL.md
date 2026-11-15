@@ -48,10 +48,19 @@ context, give it a bounded task, and require one complete final Safe Outputs pay
 
 ## Source contract
 
-- `loops/workflows/work-router.yml` owns public triggers, route selection, concurrency, and calls to
-  workers. It is plain YAML, not a gh-aw markdown workflow.
-- `loops/workflows/agent-*.md` are `workflow_call` workers only. They have no public trigger and
-  declare no concurrency.
+- `loops/workflows/work-router.yml` owns the public triggers that can start an agent and route
+  selection, and starts each worker with `gh workflow run`. It is plain YAML, not a gh-aw markdown
+  workflow.
+- `loops/workflows/agentics-*.yml` are plain YAML workflows split out of the router
+  (`agentics-housekeeping.yml`: housekeeping, audit-close, cleanup-artifacts;
+  `agentics-merge-belt.yml`: the merge train, merge-approved, the hourly reconcile, and the merge
+  gate it calls, the one worker that does not start from the router;
+  `agentics-pr-plumbing.yml`: bot-approve, land-stack-child, stack-landed). Each owns its own triggers,
+  an `env:` block the installer keeps, and the `AGENTIC_WORKFLOWS_DISABLED` check on every job. When an operation moves to one, the router keeps
+  the operation and forwards it, because other code and people still dispatch it there.
+- `loops/workflows/agent-*.md` are workers. The router starts each one with `workflow_dispatch`;
+  `workflow_call` stays for the merge gate, which the belt calls. A worker declares its own run
+  title and concurrency group, because the router run that dispatched it has already ended.
 - `loops/workflows/shared/*.md` are imported mechanics files with no `on:`. The compiler validates
   them but never compiles them on their own.
 - `loops/actions/` contains deterministic, parameterised composite actions.
@@ -77,19 +86,26 @@ workers that have no public trigger at all.
 
 ```
 loops/workflows/
-  work-router.yml              conventional YAML. Every on: the repository has.
+  work-router.yml              conventional YAML. Every on: that can start an agent but the gate.
     classify                   one event in, exactly one route out
-      call-refine              agent-refine.md              workflow_call only
-      call-implement           agent-implement.md           workflow_call only
-      call-triage              agent-triage.md              workflow_call only
-      call-apply-review        agent-apply-review.md        workflow_call only
+      dispatch-refine          agent-refine.md              its own run: Agent: Refine - #N
+      dispatch-implement       agent-implement.md           its own run: Agent: Implement - #N
+      dispatch-triage          agent-triage.md              its own run: Agent: Triage - #N
+      dispatch-apply-review    agent-apply-review.md        its own run: Agent: Apply Review - PR #N
+      dispatch-audit           agent-audit.md               its own run: Agent: Audit - <kind>
+      dispatch-docs-audit      agent-docs-audit.md          its own run: Agent: Docs Audit - <kind>
+      dispatch-release         agent-release.md             its own run: Agent: Release - <bump>
+      dispatch-evidence        evidence.yml                 plain YAML, no model
+      deterministic jobs       check-implement-pr, check-stack-branch, forward-merge-train,
+                              forward-reconcile, forward-housekeeping, validate
+  agentics-housekeeping.yml    its own crons: housekeeping, audit-close, cleanup-artifacts
+  agentics-merge-belt.yml      CI completions, merges, approvals, the hourly cron
+    classify                   the same classifier as the router
       call-merge-gate          agent-merge-gate.md          workflow_call only
-      call-audit               agent-audit.md               workflow_call only
-      call-release             agent-release.md             workflow_call only
-      call-evidence            evidence.yml                 plain YAML, no model
-      deterministic jobs       check-implement-pr, dispatch-triage, bot-approve,
-                              merge-train, land-stack-child, reconcile-bot-pr-runs,
-                              audit-close, cleanup-artifacts, validate
+      merge-train, merge-approved, reconcile-bot-pr-runs
+  agentics-pr-plumbing.yml     pull requests opened, pushed, labeled, closed
+    classify                   the same classifier as the router
+      bot-approve, land-stack-child, stack-landed
   authorize-bot-work.yml       human adds implement/refine → bot adds bot-working
 ```
 
@@ -136,13 +152,27 @@ See "App tokens fire events" below.
 
 ### The worker contract
 
-A worker exposes `workflow_call` and nothing else. It declares its inputs, and the router passes
-exactly those. Adding a public trigger to a worker bypasses the router and breaks the
-one-route-per-event guarantee. If you need a manual entry point, add an operation to the router's
-`workflow_dispatch`, not a trigger to the worker.
+A worker declares `workflow_dispatch` and `workflow_call` with the same inputs, and no event
+trigger. The router classifies the event, authorizes it and runs `gh workflow run <worker>.lock.yml`
+with the App token, then ends; the worker is a run of its own in the Actions tab. Adding an event
+trigger to a worker bypasses the router and breaks the one-route-per-event guarantee. If you need a
+manual entry point, add an operation to the router's `workflow_dispatch`: it goes through the
+classifier and its guards, and a direct dispatch of the worker does not.
 
-The caller job must grant `permissions: write-all`. This is not laziness and it is the single most
-expensive thing to get wrong. See the trap table below.
+What a call used to give for free, the worker now declares itself:
+
+- `run-name` with the issue or pull request number (`Agent: Refine - #N`). The bot-working sweep
+  keeps a label while a live run names `#N`, and the janitor groups stuck runs by the title before
+  ` - `.
+- `concurrency`, keyed on its inputs: `refine-<issue>`, `implement-queue-<queue>` (FIFO,
+  `queue: max`), `triage-<issue>`, `pr-feedback-<pr>`, `evidence-<pr>`, `audit`, `docs-audit`.
+- `GH_AW_ALLOWED_BOTS` with the App's login in `env:`, because the App is the run's actor.
+- No secrets travel with a dispatch. The worker reads the repository's, and the compile step gives
+  its engine key a `FORGE_API_KEY` fallback.
+
+The merge gate is still a call, from the belt, and that caller job must grant
+`permissions: write-all`. This is not laziness and it is the single most expensive thing to get
+wrong. See the trap table below.
 
 ## The determinism ladder
 
@@ -369,7 +399,9 @@ When adding a new `workflow_dispatch` operation and its worker:
 2. If the route dispatches an agent worker, use `Agent: {Name} {subject}`.
 3. If the route is deterministic infrastructure, use `Agentics: {Name} {subject}`.
 4. Add the operation to the `workflow_dispatch.inputs.operation` choice list.
-5. Add a `call-{route}` job with `secrets:` passing the keys the worker declares.
+5. Add a `dispatch-{route}` job that runs `gh workflow run` with the App token and `actions: write`,
+   and give the worker the run title, concurrency group and allowed bot described under "The
+   worker contract". The route matrix's worker dispatch section checks each of them.
 6. Add a case to `classify-route.sh` that validates the required inputs.
 
 ## Events over schedules
@@ -412,8 +444,18 @@ description: |
 
 name: "Agent: Example"        # REQUIRED. workflow_run matches this, not the filename.
 
+run-name: "Agent: Example - #${{ inputs.issue-number }}"   # the sweep looks for #N
+concurrency:
+  group: example-${{ inputs.issue-number }}
+  cancel-in-progress: false
+
 on:
-  workflow_call:             # Router-only worker. No public trigger.
+  workflow_call:             # Same inputs on both triggers. No event trigger.
+    inputs:
+      issue-number:
+        required: true
+        type: string
+  workflow_dispatch:         # How the router starts it (gh workflow run).
     inputs:
       issue-number:
         required: true

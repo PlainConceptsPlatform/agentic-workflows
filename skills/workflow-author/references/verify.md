@@ -454,10 +454,12 @@ resolved `{{#if}}` blocks. Two recurring causes:
 
 Two things make a live workflow look dead.
 
-A `workflow_call`-only workflow never appears in the Actions tab. Find its callers:
+A `workflow_call`-only workflow never appears in the Actions tab. Find its callers, and the
+dispatches that start a worker by file name:
 
 ```bash
 grep -rn 'uses: \./\.github/workflows/' .github/workflows/*.yml
+grep -rn 'gh workflow run [a-z-]*\.lock\.yml\|gh workflow run evidence\.yml' .github/workflows/*.yml
 ```
 
 A `workflow_run` consumer is referenced by workflow name, not filename:

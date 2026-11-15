@@ -1,21 +1,24 @@
 import { routeNames, workflowRoutes, type RouteName } from "./workflow-catalog.js";
 
-// The router is the one derived file: its content is a function of the installed route set.
-// The classifier stays the complete pure function (a route with no job is a no-op run), and the
-// route matrix reads the installed worker files, so neither is rewritten here.
+// The router and the merge belt are the derived files: their content is a function of the
+// installed route set. The classifier stays the complete pure function (a route with no job is a
+// no-op run), and the route matrix reads the installed worker files, so neither is rewritten here.
 
 const routeCrons: Partial<Record<RouteName, string>> = {
   audit: "17 1 * * 1",
   "docs-audit": "47 2 1,15 * *",
 };
 
-// Deterministic router jobs that exist only to serve one worker route. They leave with it, or
-// the route matrix finds a `route == 'implement'` guard in a router with no implement worker.
+// Deterministic jobs that exist only to serve one worker route. They leave with it, or the route
+// matrix finds a `route == 'implement'` guard in a router with no implement worker. The merge
+// gate's live in agentics-merge-belt.yml, except the router's forwarder.
 const routeHelperJobs: Partial<Record<RouteName, readonly string[]>> = {
-  implement: ["check-implement-pr"],
-  triage: ["dispatch-triage"],
-  "merge-gate": ["merge-approved", "merge-train"],
+  implement: ["check-implement-pr", "check-stack-branch"],
+  "merge-gate": ["merge-approved", "merge-train", "forward-merge-train"],
 };
+
+// The files a route's jobs, crons and operations can live in.
+const derivedFiles = ["work-router.yml", "agentics-merge-belt.yml"] as const;
 
 // Dispatch operations that exist only to serve one worker route. A router without the worker
 // would offer an operation no job answers, which the route matrix reports.
@@ -36,7 +39,9 @@ export function stripRouteFromRouter(yaml: string, route: RouteName): string {
     );
   }
 
-  for (const job of [`call-${route}`, ...(routeHelperJobs[route] ?? [])]) {
+  // A worker the router starts is a dispatch-<route> job; the merge gate is still called from the
+  // belt, as call-merge-gate.
+  for (const job of [`dispatch-${route}`, `call-${route}`, ...(routeHelperJobs[route] ?? [])]) {
     result = removeJobBlock(result, job);
   }
 
@@ -58,14 +63,15 @@ export function processRoutes(
   if (excludedRoutes.length === 0) return files;
 
   const result = new Map(files);
-  const routerKey = findFileKey(result, "work-router.yml");
-  if (routerKey === undefined) return result;
-
-  let router = result.get(routerKey)!;
-  for (const route of excludedRoutes) {
-    router = stripRouteFromRouter(router, route);
+  for (const file of derivedFiles) {
+    const key = findFileKey(result, file);
+    if (key === undefined) continue;
+    let content = result.get(key)!;
+    for (const route of excludedRoutes) {
+      content = stripRouteFromRouter(content, route);
+    }
+    result.set(key, content);
   }
-  result.set(routerKey, router);
 
   return result;
 }

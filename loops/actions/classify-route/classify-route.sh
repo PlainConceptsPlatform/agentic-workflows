@@ -14,10 +14,12 @@ set -euo pipefail
 # route matrix asserts the two still agree.
 readonly AUDIT_CRON="${AUDIT_CRON:-17 1 * * 1}"
 readonly DOCS_AUDIT_CRON="${DOCS_AUDIT_CRON:-47 2 1,15 * *}"
-readonly AUDIT_CLOSE_CRON="43 3 * * *"
-readonly CLEANUP_ARTIFACTS_CRON="0 6 * * *"
+# The hourly reconcile cron belongs to agentics-merge-belt.yml, which classifies its events with
+# this same file: CI completions, merges and approvals as well as this cron.
 readonly RECONCILE_BOT_PR_RUNS_CRON="17 * * * *"
-readonly HOUSEKEEPING_CRON="23 */6 * * *"
+# The housekeeping, audit-close and cleanup-artifacts crons belong to agentics-housekeeping.yml,
+# which never calls this classifier. Their operations still route here, and the router forwards
+# them, as it forwards merge-gate, merge-train and reconcile-bot-pr-runs to the merge belt.
 
 has_label() {
   jq -e --arg name "$1" 'index($name)' >/dev/null 2>&1 <<<"${ISSUE_LABELS:-[]}"
@@ -157,9 +159,9 @@ classify_route() {
         ci_run_id=""
       elif [ "${ACTION:-}" = "closed" ] && [ "${PR_MERGED:-false}" = "true" ]; then
         # A merge is when the change's verification plan describes what the default branch now
-        # does, so the evidence run replays it then. The merge train and land-stack-child react
-        # to this same event as event-gated jobs, not as routes, so taking the route here costs
-        # them nothing.
+        # does, so the evidence run replays it then. The merge train (agentics-merge-belt.yml) and
+        # land-stack-child and stack-landed (agentics-pr-plumbing.yml) react to this same event as
+        # event-gated jobs, not as routes, so taking the route here costs them nothing.
         if [ "${EVIDENCE_ENABLED:-true}" = "true" ]; then
           route="evidence"
           pr_number="${EVENT_PR_NUMBER:-}"
@@ -167,6 +169,7 @@ classify_route() {
           error="evidence is turned off for this repository (EVIDENCE_ENABLED)"
         fi
       else
+        # Answered by bot-approve in agentics-pr-plumbing.yml; the router has no job for it.
         route="bot-approve"
       fi
       ;;
@@ -194,10 +197,7 @@ classify_route() {
       case "${SCHEDULE:-}" in
         "$AUDIT_CRON") route="audit" ;;
         "$DOCS_AUDIT_CRON") route="docs-audit" ;;
-        "$AUDIT_CLOSE_CRON") route="audit-close" ;;
-        "$CLEANUP_ARTIFACTS_CRON") route="cleanup-artifacts" ;;
         "$RECONCILE_BOT_PR_RUNS_CRON") route="reconcile-bot-pr-runs" ;;
-        "$HOUSEKEEPING_CRON") route="housekeeping" ;;
         *) error="no route for cron '${SCHEDULE:-}'" ;;
       esac
       ;;

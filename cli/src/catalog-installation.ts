@@ -6,10 +6,10 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { parse as parseYaml } from "yaml";
 
-import { catalogTemplates, defaultRouteNames, mandatoryFiles, retiredWorkflowFiles, routeNames, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
+import { catalogTemplates, defaultRouteNames, mandatoryFiles, plumbingWorkflowFiles, retiredWorkflowFiles, routeNames, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
 import { processRoutes, excludedWorkerFiles } from "./route-processing.js";
 import { generateOpencodeCi, generateOpencodeConfig, generateStackDefaults, injectStackEnv, shippedVerifyDefaults } from "./stack-defaults.js";
-import { mergeRouter, mergeWorker, mirrorRouterLiterals } from "./worker-env.js";
+import { dropMovedRouterEnv, mergePlumbing, mergeRouter, mergeWorker, mirrorRouterLiterals, parseYamlEnv, type WorkerMergeReport } from "./worker-env.js";
 import { fetchBaseline, hasOwnershipHeader, installedVersion, packageVersion, stampVersion, type BaselineFetcher } from "./package-baseline.js";
 import type { RepositoryInspection } from "./repository-inspection.js";
 import { installBundle, isBundleTemplate } from "./template-bundles.js";
@@ -99,8 +99,11 @@ export function catalogSourcePath(modulePath = fileURLToPath(import.meta.url)): 
  */
 const ACTIONS_LOCK = ".github/aw/actions-lock.json";
 
+const ROUTER_TARGET = ".github/workflows/work-router.yml";
 const isWorker = (target: string): boolean => target.startsWith(".github/workflows/agent-") && target.endsWith(".md");
-const isRouter = (target: string): boolean => target === ".github/workflows/work-router.yml";
+const isRouter = (target: string): boolean => target === ROUTER_TARGET;
+const isPlumbing = (target: string): boolean =>
+  plumbingWorkflowFiles.some((file) => target === `.github/workflows/${file}`);
 const carriesHeader = (target: string): boolean => /\.(ya?ml|md|sh|mjs|cjs)$/.test(target);
 const normalizeEol = (text: string): string => text.replaceAll("\r\n", "\n");
 
@@ -155,12 +158,53 @@ export async function installCatalog(
   const updates: ContentUpdate[] = [];
   const installedVersions = new Set<string>();
 
+  // Keys a split-out workflow declares and the router no longer does: they moved out of the router.
+  const packageRouterKeys = new Set(parseYamlEnv(processed.get(ROUTER_TARGET) ?? "").entries.map((entry) => entry.key));
+  const movedKeys = new Set<string>();
   for (const [target, packageText] of processed) {
+    if (!isPlumbing(target)) continue;
+    for (const entry of parseYamlEnv(packageText).entries) {
+      if (!packageRouterKeys.has(entry.key)) movedKeys.add(entry.key);
+    }
+  }
+  const routerRecorded = existing.has(ROUTER_TARGET) ? installedVersion(existing.get(ROUTER_TARGET)!) : undefined;
+  // The router's content after its merge. A split-out workflow copies the router's shared keys from it.
+  let finalRouter: string | undefined;
+
+  const envReport = (report: WorkerMergeReport) => ({
+    ...(report.keptEnv.length > 0 ? { keptEnv: report.keptEnv } : {}),
+    ...(report.updatedDefaults.length > 0 ? { updatedDefaults: report.updatedDefaults } : {}),
+    ...(report.consumerOnlyEnv.length > 0 ? { consumerOnlyEnv: report.consumerOnlyEnv } : {}),
+    ...(report.droppedEnv.length > 0 ? { droppedEnv: report.droppedEnv } : {}),
+  });
+
+  // The split-out workflows go last: they need the router's merged content.
+  const ordered = [
+    ...[...processed].filter(([target]) => !isPlumbing(target)),
+    ...[...processed].filter(([target]) => isPlumbing(target)),
+  ];
+
+  for (const [target, packageText] of ordered) {
     const current = existing.get(target);
     let text = packageText;
     let change: FileChange = { target, status: "added" };
 
-    if (current !== undefined) {
+    if (isPlumbing(target)) {
+      const recorded = current === undefined ? undefined : installedVersion(current);
+      if (recorded !== undefined) installedVersions.add(recorded);
+      // A first install is seeded from the consumer's router, so its baseline is that router's release.
+      const baselineText = current === undefined
+        ? routerRecorded === undefined ? undefined : await baselineSource(await baselineFor(routerRecorded), ROUTER_TARGET)
+        : recorded === undefined ? undefined : await baselineSource(await baselineFor(recorded), target);
+      const merged = mergePlumbing(packageText, current, baselineText, existing.get(ROUTER_TARGET), finalRouter);
+      text = merged.content;
+      change = {
+        target,
+        status: current === undefined ? "added" : "updated",
+        ...(recorded === undefined ? {} : { installedVersion: recorded }),
+        ...envReport(merged.report),
+      };
+    } else if (current !== undefined) {
       const recorded = carriesHeader(target) ? installedVersion(current) : undefined;
       if (recorded !== undefined) installedVersions.add(recorded);
 
@@ -169,19 +213,22 @@ export async function installCatalog(
         const merge = isRouter(target) ? mergeRouter : mergeWorker;
         const merged = merge(packageText, current, baselineText);
         text = merged.content;
+        let report = merged.report;
+        if (isRouter(target)) {
+          text = dropMovedRouterEnv(text, movedKeys);
+          report = { ...report, consumerOnlyEnv: report.consumerOnlyEnv.filter((key) => !movedKeys.has(key)) };
+        }
         change = {
           target,
           status: "updated",
           ...(recorded === undefined ? {} : { installedVersion: recorded }),
-          ...(merged.report.keptEnv.length > 0 ? { keptEnv: merged.report.keptEnv } : {}),
-          ...(merged.report.updatedDefaults.length > 0 ? { updatedDefaults: merged.report.updatedDefaults } : {}),
-          ...(merged.report.consumerOnlyEnv.length > 0 ? { consumerOnlyEnv: merged.report.consumerOnlyEnv } : {}),
-          ...(merged.report.droppedEnv.length > 0 ? { droppedEnv: merged.report.droppedEnv } : {}),
+          ...envReport(report),
         };
       } else {
         change = { target, status: "updated", ...(recorded === undefined ? {} : { installedVersion: recorded }) };
       }
     }
+    if (isRouter(target)) finalRouter = text;
 
     text = stampVersion(text, version);
 
