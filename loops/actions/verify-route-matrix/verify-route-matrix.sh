@@ -3635,6 +3635,16 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: housekeeping leaves an implement issue nothing will pick up waiting forever" >&2
 fi
+# The three writing workers count safe_outputs' published items as an outcome too: the agent job's
+# output_types can be empty when it dies late, and the published work was then dropped.
+for worker in implement apply-review merge-gate; do
+  if worker_installed "$worker" && ! grep -qF "needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0')" "${WORKFLOWS_DIR}/agent-${worker}.md"; then
+    FAIL=$((FAIL + 1))
+    echo "FAIL: ${worker} ignores safe_outputs' published items when the agent job ended red" >&2
+  else
+    PASS=$((PASS + 1))
+  fi
+done
 # Housekeeping never re-implements an issue whose work exists: an open pull request parks it as
 # pr-pending, and a pushed branch with no pull request gets one.
 if [ -f "${HERE}/../housekeeping/action.yml" ]; then

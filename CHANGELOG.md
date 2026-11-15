@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.26.4
+
+### Fixed
+
+- **Published work is kept even when the agent job's own outputs are empty.** 1.22.0 and 1.24.3 let implement, apply-review and the merge gate conclude when the agent job ended red after publishing, keyed on the agent job's `output_types`. When the job dies late that output can be empty although safe_outputs published the work: on a consumer an implement run pushed its branch, was refused the pull request, and `conclude` (where the pull request rescue lives) was skipped, so the issue was flagged stalled with the finished work on a branch. The three workers now also count safe_outputs' own published-item counter (`process_safe_outputs_items_succeeded`).
+
 ## 1.25.0
 
 ### Changed
