@@ -389,7 +389,7 @@ update_branch() {
 # never offer the pull request again on that head (a consumer's approved, green PR sat that way).
 # A gate whose activation failed (a missing engine secret, a broken setup) counts too: it is broken,
 # not handing back, and leaving it out made the train ask again on every tick (33 runs in two hours
-# on a consumer, each one a runner).
+# in a repository without the secret, each one a runner).
 gate_run_count() {
   local pr="$1" since="$2" id workflow ran=0
   for workflow in $GATE_WORKFLOWS; do

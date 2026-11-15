@@ -6,7 +6,7 @@ Releases of `@plainconceptsplatform/workflows`. Earlier versions are described i
 
 ### Fixed
 
-- **A gate that fails before its agent starts is counted, so the train stops asking again.** 1.24.4 counted only gate runs whose agent job ran, so that a gate handing a pull request back by design would not strand it. A gate whose activation failed (for example, the engine's API key secret is missing) was left out too, and the train dispatched a new gate on every tick: on a consumer, 33 gate runs in two hours on one pull request, each one a runner. A failed `activation` or `pre_activation` job now counts as a gate run, for the silent-gate guard and the attempt budget.
+- **A gate that fails before its agent starts is counted, so the train stops asking again.** 1.24.4 counted only gate runs whose agent job ran, so that a gate handing a pull request back by design would not strand it. A gate whose activation failed (for example, the engine's API key secret is missing) was left out too, and the train dispatched a new gate on every tick: in a repository without that secret, 33 gate runs in two hours on one pull request, each one a runner. A failed `activation` or `pre_activation` job now counts as a gate run, for the silent-gate guard and the attempt budget.
 - **An approved, green pull request lands when its gate can no longer decide.** When the gate spent its attempt budget on a head, or ran without a verdict, the train skipped the pull request even after a writer approved that exact head with CI green. The train now lands it, the same way it lands an approved pull request that a gate parked for a person.
 
 ## 1.26.4
