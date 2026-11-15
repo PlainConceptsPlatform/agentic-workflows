@@ -230,6 +230,7 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: ${{ github.repository }}
           permission-issues: write
+          permission-pull-requests: read
       - name: Mark the linked issue as in progress
         uses: ./.github/actions/add-issue-labels
         with:
@@ -313,6 +314,7 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
           permission-contents: write
+          permission-actions: read
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -381,6 +383,8 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: ${{ github.repository }}
           permission-issues: write
+          permission-pull-requests: read
+          permission-actions: write
       - name: Decide whether this failure is worth repeating
         id: decide
         uses: ./.github/actions/decide-agent-retry

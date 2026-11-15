@@ -407,6 +407,8 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: ${{ github.repository }}
           permission-issues: write
+          permission-pull-requests: read
+          permission-actions: write
       # Only the reservation comes off. pr-pending says a pull request for this issue is open
       # and waiting, which is still true when the gate hands it to a human, so taking it off
       # here left a board where three issues with three open pull requests looked like they
@@ -482,6 +484,7 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: ${{ github.repository }}
           permission-issues: write
+          permission-pull-requests: read
       - name: Check for merge conflicts
         id: conflicts
         env:
@@ -579,6 +582,7 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
           permission-contents: write
+          permission-actions: write
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -799,6 +803,8 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: ${{ github.repository }}
           permission-issues: write
+          permission-pull-requests: read
+          permission-actions: write
       # The attempt record comes first. The belt bounds its retries by counting attempt comments
       # newer than the CI verdict, not by labels; releasing the labels before the record existed
       # meant a failure in either step below un-reserved the issue with nothing to count, and the

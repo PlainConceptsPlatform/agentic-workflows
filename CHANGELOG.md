@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.26.10
+
+### Fixed
+
+- **The bot tokens carry the permissions their jobs use, so the gate lands again.** 1.26.0 scoped each worker's GitHub App token to a few permissions, and several jobs needed more. The merge gate's `reserve` job could not read the pull request ("Resource not accessible by integration"), so every gate run ended red and conflict repair never started; its `conclude` job could not read workflow runs, so no auto-merge verdict landed; implement's `conclude` could not open or link a pull request or re-dispatch the router; every `incomplete` job could not read runs or re-dispatch a retry. Each token now asks for `pull-requests` and `actions` where its job reads pull requests, reads runs or dispatches a workflow. The route matrix checks each job's token against the calls it makes.
+
 ## 1.26.9
 
 ### Fixed

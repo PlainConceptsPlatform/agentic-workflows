@@ -479,6 +479,7 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
           permission-contents: write
+          permission-actions: write
       # Path B needs this step, exactly as triage and merge-gate have it. `staged: true` above
       # means the framework writes nothing, so without an apply the run validates everything and
       # publishes nothing: the agent's comment and the refined body stay in the artifact, conclude
@@ -888,6 +889,7 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: ${{ github.repository }}
           permission-issues: write
+          permission-actions: write
       - name: Decide whether this failure is worth repeating
         id: decide
         uses: ./.github/actions/decide-agent-retry

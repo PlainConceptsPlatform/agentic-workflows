@@ -4721,6 +4721,41 @@ fi
 
 if [ "$STACK_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# Scoped bot tokens (1.26.0) carry only what each job asks for. A job that dispatches a workflow
+# needs actions: write and one that reads or edits a pull request needs pull-requests: otherwise
+# the call fails ("Resource not accessible by integration") and, on a consumer, every gate stopped
+# landing. Each job's app token must cover the calls made with it.
+# shellcheck disable=SC2016 # the JavaScript is node's, not the shell's
+token_js='
+const fs = require("fs");
+let bad = [];
+for (const file of process.argv.slice(1)) {
+  const lines = fs.readFileSync(file, "utf8").split("\n");
+  let job = null, start = 0;
+  const jobs = [];
+  lines.forEach((l, i) => { const m = /^  ([a-z_]+):\s*$/.exec(l); if (m) { if (job) jobs.push([job, start, i]); job = m[1]; start = i; } });
+  if (job) jobs.push([job, start, lines.length]);
+  for (const [name, a, b] of jobs) {
+    const body = lines.slice(a, b).join("\n");
+    if (!body.includes("create-github-app-token")) continue;
+    const perm = (k) => (new RegExp("permission-" + k + ": (read|write)").exec(body) || [])[1];
+    const usesApp = body.includes("steps.app-token.outputs.token");
+    if (!usesApp) continue;
+    const short = file.split("/").pop() + " " + name;
+    if (/gh workflow run|\/dispatches/.test(body) && perm("actions") !== "write") bad.push(short + ": dispatches without actions: write");
+    if (/gh pr (view|edit|create|list|merge)|land-pull-request|link-pr-to-issue|rebase-stale-patch/.test(body) && !perm("pull-requests")) bad.push(short + ": reads pull requests without pull-requests");
+    if (/gh run (view|download)|decide-agent-retry|land-pull-request|rebase-stale-patch/.test(body) && !perm("actions")) bad.push(short + ": reads runs without actions");
+  }
+}
+if (bad.length) { console.error(bad.join("\n")); process.exit(1); }
+'
+if node -e "$token_js" "${WORKFLOWS_DIR}"/agent-*.md; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: a scoped bot token lacks a permission its job uses" >&2
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   TcMsg="Route matrix: ${PASS} passed"
