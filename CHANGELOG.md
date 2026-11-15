@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.24.5
+
+### Fixed
+
+- **A stack child the merge train lands is closed.** GitHub closes a pull request's linked issue only when it merges into the default branch, and the merge gate closes a stack child's issue itself when it merges one. Since 1.22.0 the train also lands an approved pull request on its own, and for a child that lands in its feature branch nothing closed the issue: the finished child stayed open and the stack root was never gated ("its stack still has 1 open child issue"), until housekeeping's six-hourly sweep. On a consumer the engine's and the evaluation harness's roots waited that way. After landing into a non-default branch the train now closes the issue the pull request names and clears its working labels.
+
 ## 1.24.4
 
 ### Fixed

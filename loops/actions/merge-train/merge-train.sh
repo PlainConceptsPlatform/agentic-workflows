@@ -388,6 +388,16 @@ attempt_count() {
 }
 
 # shellcheck disable=SC2317 # called through act
+close_landed_child() {
+  local issue="$1" pr="$2" base="$3" label
+  gh issue close "$issue" --repo "$REPO" --reason completed \
+    --comment "Done: #$pr landed in \`$base\`." >/dev/null
+  for label in implement bot-working review owner-review blocked pr-pending; do
+    gh api -X DELETE "repos/$REPO/issues/$issue/labels/$label" >/dev/null 2>&1 || true
+  done
+}
+
+# shellcheck disable=SC2317 # called through act
 dispatch_gate() {
   local pr="$1" conclusion="$2" run_id="$3" attempts="$4" since
   since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -770,6 +780,15 @@ for line in "${candidates[@]}"; do
         env PR="$pr" HEAD_SHA="$head_sha" GITHUB_OUTPUT=/dev/null \
           bash "$(dirname "${BASH_SOURCE[0]}")/../land-pull-request/land-pull-request.sh"; then
         merge_blocked=true
+        # GitHub closes the linked issue only on a merge into the default branch. A stack child lands
+        # in its feature branch, and the gate, which closes it on its own merges, did not merge this
+        # one: left open, the child kept its root from ever being gated (a consumer's engine root
+        # waited on two finished children).
+        if [ "$base_ref" != "$DEFAULT_BRANCH" ] && [ -n "$linked_issue" ] &&
+          [ "$(gh pr view "$pr" --repo "$REPO" --json state --jq .state 2>/dev/null)" = MERGED ]; then
+          act "Closing #$linked_issue: its pull request #$pr landed in $base_ref." close_landed_child "$linked_issue" "$pr" "$base_ref" ||
+            echo "::warning::Could not close #$linked_issue after #$pr landed."
+        fi
       else
         echo "::warning::Could not land #$pr; it stays approved for the next tick."
       fi
