@@ -4045,6 +4045,13 @@ while IFS=';' read -r route worker title group queue; do
   [ "$(front_value "$src" run-name)" = "$title" ] || wd_fail "${src##*/} run-name is '$(front_value "$src" run-name)', expected '${title}'"
   [ "$(front_group "$src")" = "$group" ] || wd_fail "${src##*/} concurrency group is '$(front_group "$src")', expected '${group}'"
   [ "$(front_queue "$src")" = "$queue" ] || wd_fail "${src##*/} concurrency queue is '$(front_queue "$src")', expected '${queue}'"
+  # skip-if-match searches issues in pre_activation with the run's own token. A dispatched worker has no
+  # caller to inherit permissions from, and on a private repository a token without issues: read is
+  # refused ("The listed users and repositories cannot be searched"), so the run fails before it starts.
+  if grep -qE '^  skip-if-match:' "$src" &&
+     ! awk '/^on:/ { o = 1; next } o && /^[a-z]/ { exit } o && /^  permissions:/ { p = 1; next } p && /^  [a-z]/ { p = 0 } p && /^    issues: read[[:space:]]*$/ { f = 1 } END { exit !f }' "$src"; then
+    wd_fail "${src##*/} uses skip-if-match but its on: block gives pre_activation no issues: read"
+  fi
 done <<<"$WD_TABLE"
 
 # The janitor's stuck-run check groups runs by the title before " - ", and the bot-working sweep

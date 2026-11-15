@@ -92,6 +92,11 @@ on:
   skip-if-match:
     query: "is:issue is:open label:audit -label:stale-audit"
     max: 3
+  # The skip-if-match search runs in pre_activation with the run's own GITHUB_TOKEN. A worker the router
+  # dispatches has no caller to inherit permissions from, and on a private repository a token without
+  # issues: read gets "The listed users and repositories cannot be searched", which fails the run.
+  permissions:
+    issues: read
 
 runs-on: agents-arc
 runs-on-slim: agents-arc

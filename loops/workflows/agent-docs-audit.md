@@ -86,6 +86,11 @@ on:
   skip-if-match:
     query: "is:issue is:open label:docs-audit -label:stale-audit"
     max: 1
+  # The skip-if-match search runs in pre_activation with the run's own GITHUB_TOKEN. A worker the router
+  # dispatches has no caller to inherit permissions from, and on a private repository a token without
+  # issues: read gets "The listed users and repositories cannot be searched", which fails the run.
+  permissions:
+    issues: read
 
   # gh-aw folds the top-level `if:` into activation without depending on the job it reads, so
   # the reference would resolve to '' and the agent would never run.
