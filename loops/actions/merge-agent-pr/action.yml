@@ -34,6 +34,12 @@ runs:
 
           HEAD_REF=$(gh pr view "$PR_NUM" --repo "$REPO" --json headRefName --jq '.headRefName')
 
+          reason=$(bash ./.github/actions/land-pull-request/side-checks.sh "$REPO" "$HEAD_SHA")
+          if [ -n "$reason" ]; then
+            echo "::warning::Not merging #$PR_NUM: $reason."
+            continue
+          fi
+
           gh pr merge "$PR_NUM" --repo "$REPO" --squash --match-head-commit "$HEAD_SHA"
 
           # Delete the branch, because nothing else ever has: four repositories had accumulated

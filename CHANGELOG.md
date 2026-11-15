@@ -2,7 +2,7 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
-## 1.21.0
+## 1.25.0
 
 ### Changed
 
@@ -26,9 +26,150 @@ Releases of `@plainconceptsplatform/workflows`. Earlier versions are described i
 - `merge-train.sh` dispatches the gate in `agentics-merge-belt.yml` and looks for live gates in both files, so a gate run queued before the update still counts. The housekeeping sweep reads stuck runs from both files and ticks the train in the belt.
 - **`workflows update` installs and fills the new files.** On the first install each file takes the values the repository had set in its router, and the moved keys are removed from the router. `CI_WORKFLOW_NAME`, `TRUSTED_BOTS`, `MERGE_TRAIN_HOLD_LABEL` and `UNATTENDED` stay in the router and are copied into the new files on every update, so the router is still the place to change them. `CI_WORKFLOW_NAME` is also written into the belt's `workflow_run` trigger. A repository without the merge gate gets a belt without the gate's jobs and a router without the forwarder.
 - `verify-route-matrix.sh` reads each moved job from its new file and has a section per file that asserts both halves of the move: the job exists in exactly one file, the triggers and run titles moved with it, the shared values agree, and the forwards exist.
+- **What 1.21.0 to 1.24.5 changed in the moved jobs lives in their new files.** `HUMAN_REVIEW_TIMEOUT_HOURS` and its `human-review-timeout-hours` input belong to `agentics-merge-belt.yml` and leave the router with the other train settings. Refine's auto-accept, which finds its questions by their visible prefix, runs in the belt. The train looks for a live apply-review run in the router and in the worker, and counts only gate runs whose agent ran, in both gate files.
 - **The bot login reaches the split-out files too.** `agentics-merge-belt.yml`'s `TRUSTED_BOTS`, `bot-approve`'s `if:` in `agentics-pr-plumbing.yml`, and `GH_AW_ALLOWED_BOTS` in `agent-audit`, `agent-docs-audit` and `agent-release` read `vars.BOT_LOGIN` with the same default as the router and the other workers.
 
-Downgrading below 1.21.0 needs care: an older CLI does not know the new files and leaves them in place, so their jobs would run twice. Delete `agentics-housekeeping.yml`, `agentics-merge-belt.yml` and `agentics-pr-plumbing.yml` from `.github/workflows/` after the downgrade.
+Downgrading below 1.25.0 needs care: an older CLI does not know the new files and leaves them in place, so their jobs would run twice. Delete `agentics-housekeeping.yml`, `agentics-merge-belt.yml` and `agentics-pr-plumbing.yml` from `.github/workflows/` after the downgrade.
+
+## 1.24.5
+
+### Fixed
+
+- **A stack child the merge train lands is closed.** GitHub closes a pull request's linked issue only when it merges into the default branch, and the merge gate closes a stack child's issue itself when it merges one. Since 1.22.0 the train also lands an approved pull request on its own, and for a child that lands in its feature branch nothing closed the issue: the finished child stayed open and the stack root was never gated ("its stack still has 1 open child issue"), until housekeeping's six-hourly sweep. On a consumer the engine's and the evaluation harness's roots waited that way. After landing into a non-default branch the train now closes the issue the pull request names and clears its working labels.
+
+## 1.24.4
+
+### Fixed
+
+- **A gate that hands a pull request back no longer strands it.** When the CI run the train passed to the gate judged an older commit and CI was still running on the new head, the gate handed the pull request back before its agent started, leaving no verdict and no attempt (by design). The train counted that run anyway, called it "a gate that ran and left no verdict or attempt", and never offered the pull request again on that head: on a consumer, an approved, green pull request sat waiting. The train now counts only gate runs whose agent job ran, for the silent-gate guard and for the attempt budget alike.
+
+## 1.24.3
+
+### Fixed
+
+- **Apply-review and the merge gate keep what the agent published when its job ended red.** The engine can exit non-zero after the agent has written its output, and safe_outputs still publishes it; both workers then skipped validation and `conclude`, so the push the agent made was never applied and the run was reported incomplete. On a consumer, a reviewer-requested fix was lost this way and had to be applied by hand. Validation now runs whenever safe_outputs succeeded and the agent produced output, and `conclude` follows the validator's verdict, as implement has done since 1.22.0. A run that produced nothing still goes to `incomplete`.
+
+## 1.24.2
+
+### Fixed
+
+- **Evidence no longer strands a stack root.** After a stack child merged, the evidence job committed its screenshots beside the plans on the branch the child merged into, with `[skip ci]` and the run's own token. That branch is the head of the stack's root pull request, so the root's newest commit never had a CI run, its required check never reported, and the root stayed blocked even with an auto-merge verdict (five roots on one consumer). Screenshots are now archived only on the default branch; a child's run says it will be archived when its feature merges, and the root's own evidence run replays every plan the stack carries.
+
+## 1.24.1
+
+### Fixed
+
+- **The merge train no longer updates a stack root while its children are open.** 1.22.0 brought a root behind its base up to date with update-branch, and every update started the root's full CI: on a consumer, four full root runs sat in the runner queue ahead of the child work that was the point, for pull requests that could not merge until their children landed. A root with open children is now passed by entirely. GitHub reports a conflict without an update, and the digest (1.24.0) names a conflicting root.
+
+## 1.24.0
+
+### Added
+
+- **The "Needs a human" digest names what only a person can do now.** Two new entries:
+  - A stack root whose branch conflicts with its base while children are still open. The merge train keeps a clean root current (1.22.0), but a conflict needs a hand merge into the feature branch: the agent's push of a base merge is refused whenever the base carries workflow files or lockfiles. Until now such a root sat silent until a person happened to look.
+  - The pull requests the review timer (1.23.0) merged in the metrics window, under "Merged on the review timer, worth a read", so the decisions the machine took on someone's behalf can be read and reverted afterwards.
+
+## 1.23.2
+
+### Fixed
+
+- **Apply-review keeps a fix whose comment left out the pull request number.** The worker's comment target is `"*"`, so each `add_comment` names its pull request in `item_number`. An agent that left it out wrote a correct fix and a correct "Review outcome: implemented" comment, and the validator, which only counted comments addressed to the pull request, called the output invalid: the fix was never pushed and the pull request was flagged as stalled (seen on a consumer's stack root, twice, on a transaction fix the reviewer had asked for). A comment with no `item_number` now goes to the worker's pull request, both in the validator and when it is posted (`apply-agent-output` and `apply-agent-comments` take an optional default number).
+
+## 1.23.1
+
+### Fixed
+
+- **The merge train asks apply-review once per change request.** A dispatched apply-review run was titled `dispatch: apply-review`, with no pull request number, so the train (1.22.0) could not see one already queued behind the fleet and would dispatch another on every tick until the first ran. Dispatched apply-review runs are now titled `Agent: Apply Review - PR #N`, and the train skips a pull request that has one waiting or running. Found by replaying the train against a consumer's open pull requests before rolling it out.
+
+## 1.23.0
+
+### Added
+
+- **A human-review verdict can time out, like refine's questions.** New router setting `HUMAN_REVIEW_TIMEOUT_HOURS` (merge-train input `human-review-timeout-hours`), in working hours, Monday to Friday. When a pull request the merge gate handed to a person (`human-review`) gets no review and no comment from anyone in that time, the gate's own review stands: the train lands it if its CI is green and it has no conflict, and labels it `auto-decided` so it is easy to find and revert. Anyone speaking after the verdict stops the clock. `owner-review` (protected paths, owner paths, high blast radius) never times out. The default is `"0"`, which waits for a person as before; a repository that runs unattended sets it (for example `"6"`).
+
+## 1.22.0
+
+Fewer places where the loop waits for a person. Each change below replaces something a supervisor had to do by hand on a consumer during two days of unattended running.
+
+### Fixed
+
+- **A pull request the run could not open is opened anyway.** When the repository does not let GitHub Actions create pull requests, gh-aw pushed the agent's branch, was refused the pull request ("GitHub Actions is not permitted to create or approve pull requests"), and filed the work as a fallback issue. The implement rescue now finds the branch gh-aw pushed, checks its tree is exactly the agent's work, and opens the pull request with the App token, which that setting does not bind; it closes the fallback issue. A base that moved under the run is still rebased first, as before.
+- **A run that published its pull request request concludes, even if the agent job failed.** The engine can exit non-zero after the payload is written; safe_outputs still publishes it. `conclude` (where the rescue lives) used to require a green agent job, so `incomplete` took over, called it a failure and retried the whole implementation. One consumer issue was implemented three times this way. `conclude` now runs whenever safe_outputs succeeded and the agent asked for a pull request, and `incomplete` stays out of it.
+- **Housekeeping never re-implements work that exists.** A stalled `implement` issue with an open pull request that closes it is moved to `pr-pending` instead of being retried. A stalled issue whose implement run pushed a branch (`…issue-N…`) that never had a pull request gets one, from the newest such branch.
+- **The route matrix's stack checks no longer fail at random.** A `printf | grep -q` under `pipefail` failed whenever grep exited before the writer finished; it reads a here-string now.
+
+### Changed
+
+- **A stack root is gated once, when its stack is complete.** The merge train used to dispatch the gate on a root after every child landing, and the gate answered "blocked: the other children are missing" each time. It now skips a root whose child issues are still open (sub-issues first, the `split-parent` marker as fallback; a listing that fails counts nothing, so the root is gated as before).
+- **A stack root is kept up to date while its children are open.** When a root is behind its base and has no conflict, the train brings it up to date with GitHub's update-branch, which merges the base in on GitHub's side. The children then merge into a current branch, and nobody has to ask an agent to merge `main`, a push the protected-files rule refuses whenever `main` carries workflow files or lockfiles.
+- **The merge train answers reviews whose event never reached the router.** Reviews submitted through the API sometimes start no router run. A pull request whose gate verdict is waiting for a person, approved by a writer on its current head and green, is now landed by the train. A writer's change request newer than the head commit with no apply-review run after it sends the pull request to apply-review.
+
+## 1.21.7
+
+### Fixed
+
+- **Apply-review reads the summary of a review.** "Request changes" from the review box puts its whole numbered list in the review's summary body, with no thread and no inline comment. The worker told the agent the whole conversation was on disk, but its collection step wrote only the threads, the inline comments and the conversation comments, so such a review read as "no feedback": the agent answered "nothing to apply" and pushed nothing, and the pull request stayed blocked on a change request nobody was acting on (seen on three pull requests of one consumer, five runs). The step now also writes `reviews.json` (id, author, state, body, commit) and the prompt names it: a human's `CHANGES_REQUESTED` review with a body that lists requests is actionable unless the same person approved afterwards or a later commit already does it. The route matrix asserts the fetch, the file name and the rule.
+
+## 1.21.6
+
+### Fixed
+
+- **A stack child whose merge gate failed once is retried again.** GitHub links `Closes #N` only on pull requests into the default branch, so a stack child (into `feat/N`) has no linked issue. The merge train looked for the gate's attempt notes only there, missed the one the failed gate left on the issue, and read the run as a gate that did nothing: the child was skipped on every tick ("its gate already ran on this head and left no verdict or attempt") and never merged. The train now reads `Closes #N` from the body, as the gate already does. The route matrix asserts it.
+
+## 1.21.5
+
+### Fixed
+
+- **Platform conformance compares with the template, or says it did not.** The template repository is private, and the conformance job had only `GITHUB_TOKEN`, so every run printed "cannot read … owned files were not compared with the source" and then "✓ owned files match the template". Now:
+  - The job mints the bot App token (`BOT_APP_ID`, `BOT_PRIVATE_KEY`, new optional `workflow_call` secrets) and hands it to git through process-scoped config.
+  - With that token, `check-platform-conformance.mjs --require-source` makes an unreadable template a failure.
+  - Without a token (Dependabot, or a caller that passes no secrets) the job warns that it did not compare, and the script no longer prints "owned files match" when it compared nothing.
+  - A deploy pipeline that calls the CI with `uses:` passes the two secrets; the platform template's `app-deploy.yml` does so from its next version.
+
+## 1.21.4
+
+### Fixed
+
+- **Refine's proposed answers are taken again, by thumbs-up or after the timeout.** The router's step looked for the `<!-- agent-refine -->` marker in refine's questions, but gh-aw strips HTML comments from safe-output comments, so it never found any: issues with accepted or timed-out questions stayed parked (seen in Bots, Odyssey and a Labs repository). It now also matches refine's visible `Refinement update` prefix. The route matrix asserts it.
+
+## 1.21.3
+
+### Fixed
+
+- **Implement can spawn `planner-sub` again.** agent-harness before 3.12.1 generates `resource: *` in the planner agents; a bare `*` is a YAML alias, so opencode dropped their `mode` and refused to spawn them ("Agent planner-sub cannot run as a subagent"). 1.20.2 quoted the generated files, but the harness plugin rewrites them when opencode starts, so the fix never reached the agent. The CI setup now quotes the value in the plugin's generator (`pc-subagent-tiers-core.js`) before the sync, and fails the step if it cannot. Verified in a consumer: the same patch took the implement run from the spawn error to a planner-sub and backend-engineer run and an opened pull request. The route matrix asserts it.
+
+## 1.21.2
+
+### Fixed
+
+- **The platform template sync installs copier on the self-hosted runners.** Their Python has no `python3-venv`, so the sync's last fallback, `python3 -m venv`, failed: no app had ever synced a template version through the workflow. Where neither `uvx` nor `pipx` is present and `ensurepip` is missing, `platform-template-sync.yml` now downloads uv `UV_VERSION` (0.13.5), checks it against `UV_SHA256` and runs copier through `uvx`. The route matrix asserts the pin, the check and the guard.
+
+## 1.21.1
+
+### Fixed
+
+- **The test timings parser passes the consumers' SAST.** `scripts/lib/test-timings.mjs` built a `RegExp` from a variable to read a `.trx` attribute, and Semgrep's `detect-non-literal-regexp` (a blocking rule in every consumer's SAST job) failed the first app that installed 1.21.0. It now reads every attribute of a tag with one literal pattern.
+- **This repository runs the consumers' SAST on what it ships.** A new CI job scans `loops/actions` and the quality-gates and platform-template scripts with the same blocking rule sets and exclusions the consumers use, so such a finding fails here before it reaches an app.
+
+## 1.21.0
+
+### Added
+
+- **Test timings in the .NET CI.** Every test step of `app-ci-dotnet-next.yml` writes a `.trx` report, and a new `Test timings` step puts where the time went in the job summary: per test project the wall time, the summed test time and the average number of tests running at once, then the slowest classes (with the time of their first test, where a class fixture's setup is paid) and the slowest tests. `scripts/test-timings.mjs` and `scripts/lib/test-timings.mjs` ship with the quality gates, with their `node:test` suite. It never fails the job.
+- **A ruleset that requires `Full CI`.** `loops/templates/rulesets/main-required-checks.json` requires `Full CI` on the default branch, with repository admins able to bypass it. Without a required check nothing stopped a merge while a job was red.
+- **Side workflows block a landing.** `land-pull-request/side-checks.sh` refuses a head whose `Agentics checks` run (or any workflow in `SIDE_CHECK_WORKFLOWS`) failed or is still running. Both merge points call it (`land-pull-request` and `merge-agent-pr`), and the merge train holds such a pull request instead of dispatching a gate. That workflow runs only when workflow files change, so no ruleset can require it, and the CI verdict the train reads never included it. 1.20.0's release button merged into three apps with its workflow lint red that way.
+- **`CI_JOBS_PER_VM`** on the runner scaler: queued CI/Deploy jobs per VM, default 4 (unchanged). Lowering it shortens CI queues at the cost of more VMs. The runners README no longer describes `MAX_VMS` as a compile-time 2.
+
+### Changed
+
+- **`Full CI` needs every blocking job.** In both CI templates it now also needs the scans (TruffleHog, Trivy, Semgrep), and in the .NET template the Markdown, repository and platform conformance checks, so the one required check covers them.
+
+## 1.20.2
+
+### Fixed
+
+- **`planner-sub` can be spawned again.** `agent-harness` before 3.11.3 wrote `resource: *` into the generated `plan.md`, `planner.md` and `planner-sub.md`. A bare `*` is a YAML alias, so the frontmatter did not parse, opencode dropped each agent's `mode`, treated it as primary and refused to spawn it (`Agent planner-sub cannot run as a subagent`). The implement worker mandates `planner-sub` for propose and archive, so a run either recovered by luck or ended with nothing and a stalled issue. The shared CI setup (`opencode-ci.md`) now quotes the value in the generated agent files before opencode reads them, and fails with a clear error if one is still unquoted. It is a no-op once the repository takes the harness fix. Needs no action from consumers beyond `workflows update`.
+- **Implement stops at the first spawn error.** Where the prompt said to report when `planner-sub` is not in the task tool's list, it now also covers an error on spawning it, and forbids retrying with `planner` or another agent. A run used to spend seven minutes and ten errors on the fallbacks before giving up.
 
 ## 1.20.1
 

@@ -1250,10 +1250,10 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
   # Every write goes through act(), which is the only place dry-run is honoured. A second
   # write path would make --dry-run a lie exactly once, on the run that deletes something.
   hk 'const act = async' 'has no act\(\) wrapper, so dry-run cannot be enforced in one place'
-  writes=$(count -cE 'github\.rest\.(issues\.(create|update|createComment|removeLabel|addLabels)|git\.deleteRef|actions\.createWorkflowDispatch)\(' "$HOUSEKEEPING_YML")
+  writes=$(count -cE 'github\.rest\.(issues\.(create|update|createComment|removeLabel|addLabels)|pulls\.create|git\.deleteRef|actions\.createWorkflowDispatch)\(' "$HOUSEKEEPING_YML")
   outside=$(awk '
     /await act\(/ { inact = 1 }
-    inact && /github\.rest\.(issues\.(create|update|createComment|removeLabel|addLabels)|git\.deleteRef|actions\.createWorkflowDispatch)\(/ { seen++ }
+    inact && /github\.rest\.(issues\.(create|update|createComment|removeLabel|addLabels)|pulls\.create|git\.deleteRef|actions\.createWorkflowDispatch)\(/ { seen++ }
     inact && /^          \}\);$/ { inact = 0 }
     END { print seen + 0 }
   ' "$HOUSEKEEPING_YML")
@@ -1501,7 +1501,7 @@ else
   done
   # The train's own settings moved with it; a copy left in the router would be dead.
   for knob in MAX_GATE_ATTEMPTS MERGE_TRAIN_MAX_RETRIES MERGE_TRAIN_STACK_ROOT_AUTOMERGE MERGE_TRAIN_DRY_RUN \
-    MERGE_TRAIN_REPAIRS REFINE_ANSWER_TIMEOUT_HOURS; do
+    MERGE_TRAIN_REPAIRS HUMAN_REVIEW_TIMEOUT_HOURS REFINE_ANSWER_TIMEOUT_HOURS; do
     [ -z "$(router_env "$knob")" ] || mb_fail "work-router.yml still declares ${knob}; it belongs to agentics-merge-belt.yml"
     [ -n "$(belt_env "$knob")" ] || mb_fail "agentics-merge-belt.yml does not declare ${knob}"
   done
@@ -1951,6 +1951,9 @@ if [ -f "$REVIEW_VALIDATOR" ] && worker_installed apply-review; then
   # null, and `unique` dies: the run fails instead of reporting the output as unusable. This is
   # the case the `// []` guards; the bracketed scan alone does not reach it.
   rv_case "a comment aimed at another pull request" invalid    "[]" '{"items":[{"type":"add_comment","item_number":999,"body":"**Review outcome:** implemented"},{"type":"push_to_pull_request_branch","pr_number":181}]}'
+  # The agent left item_number out. apply-agent-comments posts it on this pull request, so it is
+  # this pull request's outcome: a correct fix used to be thrown away for the missing number.
+  rv_case "a comment with no item_number"          implemented "[]" '{"items":[{"type":"add_comment","body":"**Review outcome:** implemented"},{"type":"push_to_pull_request_branch","pr_number":181}]}'
 
   rm -f "${rv_fixture}-threads.json" "${rv_fixture}-out.json"
   if [ "$REVIEW_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
@@ -2200,6 +2203,28 @@ fi
 if worker_installed implement && ! grep -qF 'subagent_type: planner-sub' "$IMPLEMENT_WORKER_MD"; then
   LEAD_OK=0; echo "FAIL: the implement prompt must run propose and archive in the planner-sub agent" >&2
 fi
+# agent-harness before 3.12.1 writes `resource: *`, a YAML alias that does not parse: opencode drops the agent's
+# mode and refuses to spawn planner and planner-sub ("cannot run as a subagent"). The CI setup repairs the
+# generated files before opencode reads them, and the implement prompt stops at the first spawn error.
+if ! grep -qF 'resource: ${JSON.stringify(p.resource)}' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
+  LEAD_OK=0; echo "FAIL: the CI setup must quote the permission resource in the harness generator, which rewrites the agents at startup" >&2
+fi
+if ! grep -qF 'resource: "*"' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
+  LEAD_OK=0; echo "FAIL: the CI setup must quote the generated agents' permission resource (a bare * is a YAML alias)" >&2
+fi
+if worker_installed implement && ! grep -qF 'cannot run as a subagent' "$IMPLEMENT_WORKER_MD"; then
+  LEAD_OK=0; echo "FAIL: the implement prompt must stop at a planner-sub spawn error instead of retrying other agents" >&2
+fi
+# gh-aw strips HTML comments from safe-output comments, so the refine marker never reaches GitHub: the
+# auto-accept (in agentics-merge-belt.yml since the router split) found no questions anywhere until it matched refine's visible prefix as well.
+if ! grep -qF 'contains($prefix)' "$BELT_WF_YML" || ! grep -qF 'REFINE_PREFIX: "Refinement update"' "$BELT_WF_YML"; then
+  LEAD_OK=0; echo "FAIL: the refine auto-accept must find the questions by refine's visible prefix, not only the stripped marker" >&2
+fi
+# A stack child (into feat/N) has no closingIssuesReferences; the train must read `Closes #N` from the body like the
+# gate does, or a failed gate's attempt on the issue is invisible and the child is parked as a silent gate forever.
+if [ -f "${HERE}/../merge-train/merge-train.sh" ] && ! grep -qF "(close[sd]?|fixe?[sd]?|resolve[sd]?) +#[0-9]+" "${HERE}/../merge-train/merge-train.sh"; then
+  LEAD_OK=0; echo "FAIL: the merge train must find a stack child's issue from 'Closes #N' in the body" >&2
+fi
 if [ "$LEAD_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # The harness plugins only load with .opencode/node_modules installed; without it every CI run
 # spawned untiered workers on the session's model. And the tier model a worker pins has to be one
@@ -2421,6 +2446,22 @@ if worker_installed merge-gate; then
     assert "hold keeps a pull request off the train" skip "$(move HOLD=true CI_STATUS=completed CI_CONCLUSION=success)"
     assert "requested changes keep it off the train" skip "$(move REVIEW_DECISION=CHANGES_REQUESTED CI_STATUS=completed CI_CONCLUSION=success)"
     assert "a parked pull request is passed by, not waited on" skip "$(move PARK=held CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a stack root with open children is not gated" skip "$(move OPEN_CHILDREN=2 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a stack root with open children is not gated, even conflicting" skip "$(move OPEN_CHILDREN=1 MERGEABLE=CONFLICTING CI_STATUS=none)"
+    assert "a stack root whose children all closed is gated" gate "$(move OPEN_CHILDREN=0 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a stack root behind its base is not updated while children are open" skip "$(move OPEN_CHILDREN=2 BEHIND_BY=3 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    # Reviews submitted through the API do not always reach the router: the train answers them.
+    assert "a parked pull request approved on its head, green, is landed" land "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "an approved parked pull request with red CI is not landed" skip "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
+    assert "an approved parked pull request that conflicts is not landed" skip "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=CONFLICTING CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "an unanswered change request is sent to the agent" apply-review "$(move REVIEW_DECISION=CHANGES_REQUESTED CHANGES_UNANSWERED=true CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "an answered change request waits for its reviewer" skip "$(move REVIEW_DECISION=CHANGES_REQUESTED CHANGES_UNANSWERED=false CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "hold beats an approval" skip "$(move HOLD=true PARK=held APPROVED_ON_HEAD=true CI_STATUS=completed CI_CONCLUSION=success)"
+    # The human-review clock: nobody answered in time, so the gate's review stands. Never owner-review.
+    assert "a timed-out human-review on a green head is landed" land "$(move PARK=held VERDICT=human-review REVIEW_TIMED_OUT=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "owner-review never times out" skip "$(move PARK=held VERDICT=owner-review REVIEW_TIMED_OUT=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a human-review inside its window waits" skip "$(move PARK=held VERDICT=human-review REVIEW_TIMED_OUT=false MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a timed-out human-review with red CI is not landed" skip "$(move PARK=held VERDICT=human-review REVIEW_TIMED_OUT=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
     assert "a spent attempt budget is passed by" skip "$(move ATTEMPTS=6 MAX_ATTEMPTS=6 CI_STATUS=completed CI_CONCLUSION=failure)"
     # The loop that ran Pliny-Bot's gate twenty times on one pull request: the gate declined it
     # (its issue was closed), left no verdict and no attempt, and every tick handed it back.
@@ -3489,6 +3530,109 @@ if worker_installed implement; then
     echo "FAIL: implement does not rebase a patch its base moved under before parking it" >&2
   fi
 fi
+# A run refused only the pull request (Actions may not create pull requests) or whose agent job
+# died after publishing still has an outcome: it concludes, the rescue opens the pull request from
+# the branch gh-aw pushed, and `incomplete` does not re-run the work. A consumer implemented one
+# issue three times and filed a fallback issue each time.
+if worker_installed implement; then
+  conclude_job=$(sed -n '/^  conclude:$/,/^  incomplete:$/p' "$IMPL_MD")
+  incomplete_job=$(sed -n '/^  incomplete:$/,/^  agent:$/p' "$IMPL_MD")
+  if grep -qF "contains(needs.agent.outputs.output_types, 'create_pull_request')" <<<"$(sed -n '1,/runs-on/p' <<<"$conclude_job")" \
+    && grep -qF "!(" <<<"$incomplete_job" \
+    && grep -qF 'refs/heads/${branch}-*' "${HERE}/../rebase-stale-patch/rebase-stale-patch.sh" \
+    && grep -qF 'rescue-pushed' "${HERE}/../rebase-stale-patch/rebase-stale-patch.sh"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: implement does not open the pull request a run pushed but was refused, or retries a run that published one" >&2
+  fi
+fi
+# The train asks apply-review once per change request: the dispatched run's title names the pull
+# request, and the train looks for it before dispatching again.
+if grep -qF "format('Agent: Apply Review - PR #{0}', inputs.pr-number)" "$ROUTER_YML" \
+  && grep -qF 'Agent: Apply Review - PR #$pr' "${HERE}/../merge-train/merge-train.sh"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the train can dispatch apply-review again while one for the same pull request waits" >&2
+fi
+# The comment that carries apply-review's outcome reaches the pull request even without item_number.
+if worker_installed apply-review; then
+  if grep -qF 'comment-number: ${{ inputs.pr-number }}' "${WORKFLOWS_DIR}/agent-apply-review.md" \
+    && grep -qF 'default-number: ${{ inputs.comment-number }}' "${HERE}/../apply-agent-output/action.yml" \
+    && grep -qF 'process.env.DEFAULT_NUMBER' "${HERE}/../apply-agent-comments/action.yml"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: apply-review drops an outcome comment that has no item_number" >&2
+  fi
+fi
+# The digest names the two things nobody else repairs or reports: a stack root that conflicts with
+# its base (the hand merge the train cannot do), and the pull requests the review timer merged.
+if [ -f "${HERE}/../housekeeping/action.yml" ]; then
+  if grep -qF "'stack-root-conflict'" "${HERE}/../housekeeping/action.yml" \
+    && grep -qF "mergeable_state === 'dirty'" "${HERE}/../housekeeping/action.yml" \
+    && grep -qF "Merged on the review timer" "${HERE}/../housekeeping/action.yml"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the digest misses conflicting stack roots or the merges the review timer made" >&2
+  fi
+fi
+# Evidence never commits onto a feature branch: that branch is a stack root's head, and a
+# [skip ci] commit there leaves the root without its required check.
+if [ -f "${WORKFLOWS_DIR}/evidence.yml" ]; then
+  if grep -qF '[ "$BRANCH" != "$DEFAULT_BRANCH" ]' "${WORKFLOWS_DIR}/evidence.yml"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: evidence commits screenshots onto a feature branch, which strands its root pull request" >&2
+  fi
+fi
+# Apply-review and the merge gate apply what the agent published even when its job ended red after
+# writing it, as implement does: a consumer lost a reviewer-requested fix to a skipped conclude.
+for worker in apply-review merge-gate; do
+  if worker_installed "$worker"; then
+    md="${WORKFLOWS_DIR}/agent-${worker}.md"
+    validate_job=$(sed -n '/^  validate_output:$/,/^    runs-on:/p' "$md")
+    if grep -qF "needs.agent.outputs.output_types != ''" <<<"$validate_job" \
+      && ! grep -qF "needs.agent.result == 'success' &&" <<<"$(sed -n '/^  conclude:$/,/^    runs-on:/p' "$md")"; then
+      PASS=$((PASS + 1))
+    else
+      FAIL=$((FAIL + 1))
+      echo "FAIL: ${worker} drops output the agent published when its job ended red" >&2
+    fi
+  fi
+done
+# A gate that handed the pull request back before its agent ran is not a silent gate: the train
+# counts only gate runs whose agent job ran, or an approved green pull request waits forever.
+if grep -qF 'endswith("/ agent")' "${HERE}/../merge-train/merge-train.sh"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the train counts a gate that handed the pull request back as a gate that did nothing" >&2
+fi
+# A stack child the train lands is closed by the train: GitHub only closes on the default branch,
+# and an open finished child keeps its root from ever being gated.
+if grep -qF 'close_landed_child "$linked_issue"' "${HERE}/../merge-train/merge-train.sh" \
+  && grep -qF '"$base_ref" != "$DEFAULT_BRANCH"' "${HERE}/../merge-train/merge-train.sh"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the train lands a stack child without closing its issue, so the root waits forever" >&2
+fi
+# Housekeeping never re-implements an issue whose work exists: an open pull request parks it as
+# pr-pending, and a pushed branch with no pull request gets one.
+if [ -f "${HERE}/../housekeeping/action.yml" ]; then
+  if grep -qF "already closes it" "${HERE}/../housekeeping/action.yml" \
+    && grep -qF "github.rest.pulls.create" "${HERE}/../housekeeping/action.yml" \
+    && grep -qF "neverProposed" "${HERE}/../housekeeping/action.yml"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: housekeeping retries implement for an issue that already has a pull request or a pushed branch" >&2
+  fi
+fi
 # The subagent monitor never sees a CI child finish and denies every spawn after the cap.
 if grep -qF 'for plugin in pc-system-reminders pc-subagent-monitor' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
   PASS=$((PASS + 1))
@@ -4150,6 +4294,57 @@ if [ -f "$RTP_YML" ] && worker_installed release; then
   if [ "$RTP_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 fi
 
+echo "── Apply-review reads a review's summary ─────────────────────────────────"
+
+# "Request changes" from the review box puts its whole list in the review's summary body: no
+# thread, no inline comment. The worker told the agent the whole conversation was on disk but wrote
+# only threads, inline comments and conversation comments, so such a review read as "no feedback"
+# and nothing was ever applied. The summaries must be fetched and the prompt must name the file.
+APPLY_REVIEW_MD="${WORKFLOWS_DIR}/agent-apply-review.md"
+if [ -f "$APPLY_REVIEW_MD" ]; then
+  AR_OK=1
+  ar() { grep -qF -- "$1" "$APPLY_REVIEW_MD" || { AR_OK=0; echo "FAIL: apply-review: $2" >&2; }; }
+  ar 'pulls/$PR/reviews' 'the review summaries must be fetched (a request-changes review has no thread)'
+  ar '/tmp/gh-aw/agent/reviews.json' 'the agent must be told where the review summaries are'
+  ar 'is actionable even when there is no' 'a human change request in a review summary must count as feedback'
+  if [ "$AR_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+fi
+
+echo "── Required checks and side workflows ────────────────────────────────────"
+
+# The main ruleset requires one check, Full CI, so Full CI must need every blocking job, and the
+# side workflows no ruleset can require (Agentics checks runs only on its paths) must be checked
+# by both merge points and held by the train. Dropping any one of these lets a red job merge.
+RC_OK=1
+rc() { grep -qE "$1" "$2" || { RC_OK=0; echo "FAIL: required checks: $3" >&2; }; }
+CI_DOTNET="${HERE}/../../templates/ci/app-ci-dotnet-next.yml"
+CI_NODE="${HERE}/../../templates/ci/app-ci-node-monorepo.yml"
+RULESET="${HERE}/../../templates/rulesets/main-required-checks.json"
+for job in sast-scan secret-scan deps-and-iac-scan platform-conformance engineering-excellence api web; do
+  awk '/^  full-ci:$/{f=1} f&&/needs:/{print; exit}' "$CI_DOTNET" | grep -qE "[[ ]${job}[],]" || { RC_OK=0; echo "FAIL: required checks: the .NET template's Full CI does not need ${job}" >&2; }
+done
+for job in lint sast-scan secret-scan deps-and-iac-scan web; do
+  awk '/^  full-ci:$/{f=1} f&&/needs:/{print; exit}' "$CI_NODE" | grep -qE "[[ ]${job}[],]" || { RC_OK=0; echo "FAIL: required checks: the node template's Full CI does not need ${job}" >&2; }
+done
+rc '"context": "Full CI"' "$RULESET" 'the ruleset must require Full CI'
+rc '"include": \["~DEFAULT_BRANCH"\]' "$RULESET" 'the ruleset must target the default branch'
+rc 'side-checks\.sh' "${HERE}/../land-pull-request/land-pull-request.sh" 'land-pull-request must check the side workflows'
+rc 'side-checks\.sh' "${HERE}/../merge-agent-pr/action.yml" 'merge-agent-pr must check the side workflows'
+rc 'land-pull-request/side-checks\.sh' "${HERE}/../merge-train/merge-train.sh" 'the merge train must hold a pull request whose side workflow is red'
+rc 'test-timings\.mjs' "$CI_DOTNET" 'the .NET template must summarise the test timings'
+[ "$(grep -c -- '--logger trx' "$CI_DOTNET")" -ge 5 ] || { RC_OK=0; echo "FAIL: required checks: every .NET test step must write a trx report" >&2; }
+# The template sync installs copier on a runner whose Python cannot make a venv: the pinned uv it
+# falls back to must stay checked against its SHA-256, or the sync never runs (it never had).
+SYNC_YML="${HERE}/../../templates/platform-template/.github/workflows/platform-template-sync.yml"
+rc '^  UV_SHA256: [0-9a-f]{64}$' "$SYNC_YML" 'the template sync must pin uv by SHA-256'
+rc 'sha256sum --check --strict' "$SYNC_YML" 'the template sync must check the uv download'
+# A conformance run that could not read the template must not pass as a comparison.
+rc 'compare\+=\(--require-source\)' "$CI_DOTNET" 'the conformance job must require the template when it has a token'
+rc 'create-github-app-token@[0-9a-f]{40}' "$CI_DOTNET" 'the conformance job must mint a token that reads the template'
+rc "requireSource \\? \\{ failures: \\[message\\]" "${HERE}/../../templates/platform-template/scripts/check-platform-conformance.mjs" 'check-platform-conformance must fail on an unread template with --require-source'
+rc "python3 -c 'import ensurepip'" "$SYNC_YML" 'the template sync must not try a venv where ensurepip is missing'
+if [ "$RC_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 echo "── App error privacy ─────────────────────────────────────────────────────"
 
 # The application error report files into the private repository rather than out of it, so
@@ -4256,7 +4451,9 @@ st() {
 # assertions take the block on stdin: handing a multi-line string to grep as a filename
 # fails with "File name too long" and reads as a wiring failure that is not one.
 st_str() {
-  printf '%s' "$2" | grep -qE "$1" || { STACK_OK=0; echo "FAIL: stacked features ${3}" >&2; }
+  # A here-string, not a pipe: grep -q exits on the first match, and under pipefail the writer's
+  # SIGPIPE failed this check at random.
+  grep -qE "$1" <<<"$2" || { STACK_OK=0; echo "FAIL: stacked features ${3}" >&2; }
 }
 
 # 1. The resolver. check-stack-branch reads the child's own marker first, then the

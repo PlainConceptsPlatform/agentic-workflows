@@ -2,6 +2,10 @@
 name: Apply agent output
 description: Download the agent artifact and apply its safe outputs in one fixed order, so every worker concludes the same way.
 inputs:
+  comment-number:
+    description: Issue or pull request an add_comment without item_number goes to. Empty skips such a comment.
+    required: false
+    default: ''
   token:
     description: GitHub token the writes are made with.
     required: true
@@ -109,6 +113,7 @@ runs:
       with:
         output-file: ${{ steps.output.outputs.output-file }}
         token: ${{ inputs.token }}
+        default-number: ${{ inputs.comment-number }}
 
     - name: Apply agent label changes
       if: inputs.apply-labels == 'true' && steps.output.outputs.item-count != '0'

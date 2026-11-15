@@ -66,6 +66,12 @@ env:
   # the default branch, so repairs of different pull requests do not race; only merges are serial.
   # 1 repairs one pull request at a time.
   MERGE_TRAIN_REPAIRS: "1"
+  # Working hours, Monday to Friday, a pull request the merge gate handed to a person
+  # (human-review) waits for one. When they pass with no review and no comment after the verdict,
+  # the gate's review stands and the train lands it (CI green, no conflict) with the label
+  # `auto-decided`, the same way refine takes its proposed answers. owner-review (protected paths,
+  # owner paths, high blast radius) never times out. "0" waits for a person however long it takes.
+  HUMAN_REVIEW_TIMEOUT_HOURS: "0"
   # Working hours, Monday to Friday, that refine's questions wait for an answer. Every question
   # carries the answer the bot would take; once this passes with no reply, or as soon as the
   # author reacts with a thumbs-up, the hourly reconcile sends the issue back to refine with those
@@ -260,6 +266,7 @@ jobs:
           max-retries: ${{ env.MERGE_TRAIN_MAX_RETRIES }}
           stack-root-automerge: ${{ env.MERGE_TRAIN_STACK_ROOT_AUTOMERGE }}
           max-repairs: ${{ env.MERGE_TRAIN_REPAIRS }}
+          human-review-timeout-hours: ${{ env.HUMAN_REVIEW_TIMEOUT_HOURS }}
           dry-run: ${{ env.MERGE_TRAIN_DRY_RUN }}
           ci-run-id: ${{ needs.classify.outputs.ci-run-id }}
           ci-conclusion: ${{ needs.classify.outputs.ci-conclusion }}
@@ -470,6 +477,10 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           REFINE_MARKER: "<!-- agent-refine -->"
+          # gh-aw strips HTML comments from safe-output comments, so the marker above never reaches
+          # GitHub and this step found no questions in any repository. The visible prefix refine
+          # puts first (agent-refine's SAFE_OUTPUT_COMMENT_PREFIX) identifies them instead.
+          REFINE_PREFIX: "Refinement update"
           QUESTIONS_LINE: "I have some questions about this issue"
           PROPOSED_TAG: "**Proposed:**"
           DECISION_TAG: "**Your decision needed:**"
@@ -496,8 +507,10 @@ jobs:
             while IFS=$'\t' read -r issue people; do
               [ -n "$issue" ] || continue
               comments=$(gh api --paginate "repos/$REPO/issues/$issue/comments?per_page=100" | jq -s 'add // []')
-              asked=$(jq -c --arg marker "$REFINE_MARKER" --arg line "$QUESTIONS_LINE" '
-                [.[] | select(.user.type == "Bot" and (.body | contains($marker)) and (.body | contains($line)))]
+              asked=$(jq -c --arg marker "$REFINE_MARKER" --arg prefix "$REFINE_PREFIX" --arg line "$QUESTIONS_LINE" '
+                [.[] | select(.user.type == "Bot"
+                  and ((.body | contains($marker)) or (.body | contains($prefix)))
+                  and (.body | contains($line)))]
                 | last // empty | {id, created_at, body}' <<<"$comments")
               [ -n "$asked" ] || continue
               asked_at=$(jq -r '.created_at' <<<"$asked")

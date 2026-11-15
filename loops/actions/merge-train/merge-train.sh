@@ -44,13 +44,42 @@ set -euo pipefail
 #                      cost every open pull request its repairs for seven hours)
 #   BEHIND_BY          commits on the base branch the head does not have
 #   TRUSTED_AUTHOR     true when a trusted bot opened it (only those runs are approved)
+#   APPROVED_ON_HEAD   true when a writer approved the head commit itself, so a parked verdict has its
+#                      answer. The approval event that should land it does not always reach the
+#                      router (reviews submitted through the API went missing on a consumer), and
+#                      the pull request then sat approved, green and parked
+#   CHANGES_UNANSWERED true when a writer's change request is newer than the head commit and no
+#                      apply-review run has answered it: the same lost event, on the other verdict
+#   VERDICT            the standing gate verdict word on this head (with PARK=held)
+#   REVIEW_TIMED_OUT   true when that verdict is human-review and HUMAN_REVIEW_TIMEOUT_HOURS working
+#                      hours passed with no review and no comment from anyone after it: the gate's
+#                      review stands, as refine's proposed answers do when nobody replies
+#   OPEN_CHILDREN      for a stack's root pull request, how many of its child issues are still open.
+#                      A root is gated once, when its stack is complete: gating it after every child
+#                      landing spent a runner on a "blocked: the other children are missing" verdict
+#                      each time (a consumer's six roots took dozens of gate runs in a day)
 train_move() {
   local move="" reason=""
 
   if [ "${HOLD:-false}" = true ]; then
     move=skip; reason="it carries the hold label"
+  elif [ "${REVIEW_DECISION:-}" = CHANGES_REQUESTED ] && [ "${CHANGES_UNANSWERED:-false}" = true ]; then
+    move=apply-review; reason="a change request has not reached the agent"
   elif [ "${REVIEW_DECISION:-}" = CHANGES_REQUESTED ]; then
     move=skip; reason="a reviewer requested changes"
+  elif [ "${OPEN_CHILDREN:-0}" -gt 0 ]; then
+    # Not even brought up to date: every update of a root starts its full CI, and a consumer's
+    # roots queued four full runs ahead of the child work that was the point (1.22.0 did this).
+    # GitHub reports a conflict without an update, and the digest names a conflicting root.
+    move=skip; reason="its stack still has ${OPEN_CHILDREN} open child issue(s)"
+  elif [ "${PARK:-none}" = held ] && [ "${APPROVED_ON_HEAD:-false}" = true ] &&
+    [ "${CI_STATUS:-none}" = completed ] && [ "${CI_CONCLUSION:-}" = success ] &&
+    [ "${MERGEABLE:-UNKNOWN}" != CONFLICTING ]; then
+    move=land; reason="a writer approved this head after the gate handed it over"
+  elif [ "${PARK:-none}" = held ] && [ "${VERDICT:-}" = human-review ] && [ "${REVIEW_TIMED_OUT:-false}" = true ] &&
+    [ "${CI_STATUS:-none}" = completed ] && [ "${CI_CONCLUSION:-}" = success ] &&
+    [ "${MERGEABLE:-UNKNOWN}" != CONFLICTING ]; then
+    move=land; reason="nobody reviewed it in the time allowed, so the gate's review stands (auto-decided)"
   elif [ "${PARK:-none}" = held ]; then
     move=skip; reason="a gate verdict on this head is waiting for a person"
   elif [ "${ATTEMPTS:-0}" -ge "${MAX_ATTEMPTS:-6}" ]; then
@@ -103,7 +132,9 @@ train_move() {
     esac
   fi
 
-  printf 'move=%s\nreason=%s\n' "$move" "$reason"
+  printf 'move=%s
+reason=%s
+' "$move" "$reason"
 }
 
 # A standing verdict holds the pull request when it is newer than the head commit. Two verdicts
@@ -163,9 +194,25 @@ GATE_TITLE_PREFIX="Agent: Merge Gate - PR #"
 # belt alone.
 GATE_WORKFLOW="agentics-merge-belt.yml"
 GATE_WORKFLOWS="agentics-merge-belt.yml work-router.yml"
+# apply-review is dispatched through the router, which starts the worker as its own run.
+ROUTER_WORKFLOW="work-router.yml"
+APPLY_REVIEW_WORKFLOWS="work-router.yml agent-apply-review.lock.yml"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 now_epoch=$(date -u +%s)
+HUMAN_REVIEW_TIMEOUT_HOURS="${HUMAN_REVIEW_TIMEOUT_HOURS:-0}"
+case "$HUMAN_REVIEW_TIMEOUT_HOURS" in ''|*[!0-9]*) HUMAN_REVIEW_TIMEOUT_HOURS=0 ;; esac
+# Hours since $1 that fall on a weekday, in UTC, counted up to the timeout and no further: the
+# same clock refine's proposed answers run on.
+working_hours_since() {
+  local t h=0
+  t=$(date -u -d "$1" +%s 2>/dev/null || echo "$now_epoch")
+  while [ "$t" -lt "$now_epoch" ] && [ "$h" -lt "$HUMAN_REVIEW_TIMEOUT_HOURS" ]; do
+    [ "$(date -u -d "@$t" +%u)" -le 5 ] && h=$((h + 1))
+    t=$((t + 3600))
+  done
+  echo "$h"
+}
 iso_epoch() { date -u -d "$1" +%s 2>/dev/null || echo 0; }
 
 # The failing jobs of the CI run on a commit, read from the Actions API. The App behind the train's token
@@ -178,7 +225,8 @@ ci_runs_for_sha() {
   # Every completed run on the commit, not only the CI workflow's: on the default branch the CI runs inside the
   # deploy workflow. Extra failures on the base are harmless, the rule only asks that the pull request's own
   # failures are among them.
-  runs=$(gh api "repos/$REPO/actions/runs?head_sha=$sha&per_page=100"     --jq '.workflow_runs[] | select(.status == "completed") | .id' 2>/dev/null) || return 1
+  runs=$(gh api "repos/$REPO/actions/runs?head_sha=$sha&per_page=100" \
+      --jq '.workflow_runs[] | select(.status == "completed") | .id' 2>/dev/null) || return 1
   [ -n "$runs" ] || return 1
   printf '%s
 ' "$runs"
@@ -190,7 +238,8 @@ ci_failed_jobs() {
     --jq '.jobs[] | select(.conclusion == "failure") | [(.name | sub("^.* / "; "")), .completed_at] | @tsv' 2>/dev/null
 }
 
-summary() { printf '%s\n' "$*" >>"$SUMMARY"; }
+summary() { printf '%s
+' "$*" >>"$SUMMARY"; }
 
 # Every write goes through this, so a dry run is honest: there is no second path that forgets.
 act() {
@@ -278,7 +327,8 @@ can_ride() {
 live_gates() {
   local status workflow
   for workflow in $GATE_WORKFLOWS; do for status in queued in_progress waiting pending requested; do
-    gh api "repos/$REPO/actions/workflows/$workflow/runs?status=$status&per_page=100"       --jq ".workflow_runs[]
+    gh api "repos/$REPO/actions/workflows/$workflow/runs?status=$status&per_page=100" \
+      --jq ".workflow_runs[]
         | select(.id != $SELF_RUN_ID)
         | select(.display_title | startswith(\"$GATE_TITLE_PREFIX\"))
         | .display_title" 2>/dev/null
@@ -326,11 +376,23 @@ update_branch() {
 # How many gate runs were started for a pull request since a moment, whatever became of them. A
 # run is titled by the router's run-name; this is the one count that does not depend on the gate
 # having written anything.
+# Gate runs on this pull request since $2 whose agent actually ran. A gate that hands the pull request
+# back before its agent starts (CI still running on a new head, the subject gone) leaves no verdict and
+# no attempt by design; counting it made the train call the next one "a gate that did nothing" and
+# never offer the pull request again on that head (a consumer's approved, green PR sat that way).
 gate_run_count() {
-  local pr="$1" since="$2" workflow
+  local pr="$1" since="$2" id workflow ran=0
   for workflow in $GATE_WORKFLOWS; do
-    gh api --paginate "repos/$REPO/actions/workflows/$workflow/runs?event=workflow_dispatch&per_page=100"     --jq "[.workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\") | select(.created_at > \"$since\")] | length"     2>/dev/null
-  done | awk '{ n += $1 } END { print n + 0 }'
+    for id in $(gh api --paginate "repos/$REPO/actions/workflows/$workflow/runs?event=workflow_dispatch&per_page=100" \
+      --jq ".workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\") | select(.created_at > \"$since\") | .id" 2>/dev/null); do
+      if gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" \
+      --jq '[.jobs[] | select((.name | endswith("/ agent")) and .conclusion != null and .conclusion != "skipped")] | length > 0' \
+        2>/dev/null | grep -qx true; then
+        ran=$((ran + 1))
+      fi
+    done
+  done
+  echo "$ran"
 }
 
 attempt_count() {
@@ -338,6 +400,16 @@ attempt_count() {
   gh api --paginate "repos/$REPO/issues/$number/comments?per_page=100" \
     --jq "[.[] | select(.body | contains(\"<!-- agent-merge-gate-attempt -->\")) | select(.created_at > \"$since\")] | length" \
     2>/dev/null | awk '{ n += $1 } END { print n + 0 }'
+}
+
+# shellcheck disable=SC2317 # called through act
+close_landed_child() {
+  local issue="$1" pr="$2" base="$3" label
+  gh issue close "$issue" --repo "$REPO" --reason completed \
+    --comment "Done: #$pr landed in \`$base\`." >/dev/null
+  for label in implement bot-working review owner-review blocked pr-pending; do
+    gh api -X DELETE "repos/$REPO/issues/$issue/labels/$label" >/dev/null 2>&1 || true
+  done
 }
 
 # shellcheck disable=SC2317 # called through act
@@ -417,10 +489,18 @@ for line in "${candidates[@]}"; do
     continue
   fi
 
-  meta=$(gh pr view "$pr" --repo "$REPO" --json reviewDecision,commits,closingIssuesReferences 2>/dev/null || echo '{}')
+  meta=$(gh pr view "$pr" --repo "$REPO" --json reviewDecision,commits,closingIssuesReferences,body 2>/dev/null || echo '{}')
   review_decision=$(jq -r '.reviewDecision // ""' <<<"$meta")
   head_committed=$(jq -r '[.commits[]?.committedDate] | max // ""' <<<"$meta")
   linked_issue=$(jq -r '.closingIssuesReferences[0].number // ""' <<<"$meta")
+  # GitHub links closing keywords only on pull requests into the default branch, so a stack
+  # child (into feat/N) has none. The gate reads `Closes #N` from the body instead
+  # (identify-gate-subject); the train must find the same issue, or it misses the attempt the
+  # gate recorded there, counts a failed gate as a silent one and never retries it.
+  if [ -z "$linked_issue" ]; then
+    linked_issue=$(jq -r '.body // ""' <<<"$meta" |
+      grep -oiE '(close[sd]?|fixe?[sd]?|resolve[sd]?) +#[0-9]+' | grep -oE '[0-9]+' | head -n 1 || true)
+  fi
 
   # The latest verdict on the pull request or its issue, and how many retries it has had.
   verdicts=$(
@@ -527,6 +607,17 @@ for line in "${candidates[@]}"; do
     [ $((now_epoch - $(iso_epoch "$ci_created"))) -lt $((STUCK_HOURS * 3600)) ] || ci_stuck=true
   fi
 
+  # A green CI run is not the whole verdict: a side workflow (Agentics checks) on the same head may be
+  # red or still running, and the gate could then never land it. Held until that changes.
+  if [ "$ci_status" = completed ] && [ "$ci_conclusion" = success ] && [ "$park" = none ]; then
+    side=$(bash "$(dirname "${BASH_SOURCE[0]}")/../land-pull-request/side-checks.sh" "$REPO" "$head_sha")
+    if [ -n "$side" ]; then
+      echo "#$pr ($author): hold, $side."
+      summary "| #$pr | $author | hold | $side |"
+      continue
+    fi
+  fi
+
   mergeable=UNKNOWN
   behind_by=0
   if [ "$park" = none ] && [ "$hold" != true ] && [ "$review_decision" != CHANGES_REQUESTED ]; then
@@ -587,10 +678,65 @@ for line in "${candidates[@]}"; do
   trusted_author=false
   is_trusted_bot "$author" && trusted_author=true
 
+  # Reviews by writers, read once: whether the head carries an approval, and whether the latest
+  # change request is still unanswered (newer than the head, and no apply-review run spoke after it).
+  approved_on_head=false
+  changes_unanswered=false
+  if [ "$review_decision" = APPROVED ] || [ "$review_decision" = CHANGES_REQUESTED ]; then
+    reviews=$(gh api --paginate "repos/$REPO/pulls/$pr/reviews?per_page=100" \
+      --jq '.[] | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED") | [.state, .commit_id, .submitted_at, .user.login] | @tsv' 2>/dev/null || true)
+    while IFS=$'\t' read -r r_state r_commit r_at r_user; do
+      [ -n "$r_state" ] || continue
+      r_perm=$(gh api "repos/$REPO/collaborators/$r_user/permission" --jq '.permission' 2>/dev/null || echo none)
+      case "$r_perm" in admin|maintain|write) ;; *) continue ;; esac
+      if [ "$r_state" = APPROVED ] && [ "$r_commit" = "$head_sha" ] && [ "$review_decision" = APPROVED ]; then
+        approved_on_head=true
+      fi
+      if [ "$r_state" = CHANGES_REQUESTED ] && [ "$review_decision" = CHANGES_REQUESTED ] &&
+        { [ -z "$head_committed" ] || [ "$r_at" \> "$head_committed" ]; }; then
+        # shellcheck disable=SC2016 # $at is jq's, not the shell's
+        answered=$(gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" 2>/dev/null |
+          jq -s --arg at "$r_at" '[(add // [])[] | select(.created_at > $at and (.body | contains("<!-- agent-apply-review")))] | length' 2>/dev/null || echo 1)
+        if [ "${answered:-1}" = 0 ]; then changes_unanswered=true; else changes_unanswered=false; fi
+      fi
+    done <<<"$reviews"
+  fi
+
+  # The human-review clock. Anyone speaking after the verdict, a review or a comment, stops it:
+  # a person is on it, and the train waits for them.
+  review_timed_out=false
+  if [ "$park" = held ] && [ "$verdict" = human-review ] && [ "$HUMAN_REVIEW_TIMEOUT_HOURS" -gt 0 ] &&
+    [ "$(working_hours_since "$verdict_at")" -ge "$HUMAN_REVIEW_TIMEOUT_HOURS" ]; then
+    # shellcheck disable=SC2016 # $at is jq's, not the shell's
+    spoken=$( {
+      gh api --paginate "repos/$REPO/pulls/$pr/reviews?per_page=100" 2>/dev/null |
+        jq -s --arg at "$verdict_at" '[(add // [])[] | select(.user.type != "Bot" and (.submitted_at // "") > $at)] | length'
+      gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" 2>/dev/null |
+        jq -s --arg at "$verdict_at" '[(add // [])[] | select(.user.type != "Bot" and .created_at > $at)] | length'
+    } | awk '{ n += $1 } END { print n + 0 }')
+    [ "${spoken:-1}" = 0 ] && review_timed_out=true
+  fi
+
+  # A stack root waits for its children without a gate run. The listing is the one the router's
+  # stack-complete announcement uses: sub-issues first, the split-parent marker as fallback. A
+  # listing that fails counts nothing, so the root is gated as before rather than parked on a guess.
+  open_children=0
+  if [ -n "$linked_issue" ] && gh issue view "$linked_issue" --repo "$REPO" --json body --jq '.body // ""' 2>/dev/null |
+    grep -q "<!-- stack-root-pr: $pr -->"; then
+    open_children=$(gh api "repos/$REPO/issues/$linked_issue/sub_issues?per_page=100" \
+      --jq '[.[] | select(.state == "open")] | length' 2>/dev/null || echo 0)
+    if [ "${open_children:-0}" = 0 ]; then
+      open_children=$(gh issue list --repo "$REPO" --state open --limit 100 \
+        --search "\"<!-- split-parent: ${linked_issue} -->\" in:body" --json number --jq 'length' 2>/dev/null || echo 0)
+    fi
+  fi
+
   decision=$(HOLD="$hold" REVIEW_DECISION="$review_decision" PARK="$park" \
     ATTEMPTS="$attempts" MAX_ATTEMPTS="$MAX_ATTEMPTS" SILENT_GATE="$silent_gate" MERGEABLE="$mergeable" \
     CI_STATUS="$ci_status" CI_CONCLUSION="$ci_conclusion" CI_STUCK="$ci_stuck" SAME_AS_MAIN="$same_as_main" \
-    BEHIND_BY="${behind_by:-0}" TRUSTED_AUTHOR="$trusted_author" CI_SHALLOW="$ci_shallow" train_move)
+    BEHIND_BY="${behind_by:-0}" TRUSTED_AUTHOR="$trusted_author" CI_SHALLOW="$ci_shallow" \
+    OPEN_CHILDREN="${open_children:-0}" APPROVED_ON_HEAD="$approved_on_head" CHANGES_UNANSWERED="$changes_unanswered" \
+    VERDICT="$verdict" REVIEW_TIMED_OUT="$review_timed_out" train_move)
   move=$(sed -n 's/^move=//p' <<<"$decision")
   reason=$(sed -n 's/^reason=//p' <<<"$decision")
 
@@ -599,13 +745,15 @@ for line in "${candidates[@]}"; do
   # skipped four green Pliny-Bot pull requests with "a gate is already on it" until it was cancelled
   # by hand. Cancel it and let the pull request move.
   if { [ "$move" = gate ] || [ "$move" = update ]; } && [ "$ci_status" = completed ] && [ "$ci_conclusion" = success ] &&
-    printf '%s\n' "$live_titles" | grep -qE "PR #${pr} \(repair\)$"; then
+    printf '%s
+' "$live_titles" | grep -qE "PR #${pr} \(repair\)$"; then
     for run_id in $(for workflow in $GATE_WORKFLOWS; do gh api "repos/$REPO/actions/workflows/$workflow/runs?per_page=100" \
       --jq ".workflow_runs[] | select(.status != \"completed\" and (.display_title | endswith(\"PR #${pr} (repair)\"))) | .id" 2>/dev/null; done); do
       act "Cancelling the repair gate $run_id on #$pr: its CI is green." \
         gh api -X POST "repos/$REPO/actions/runs/$run_id/cancel" --silent
     done
-    live_titles=$(printf '%s\n' "$live_titles" | grep -vE "PR #${pr} \(repair\)$" || true)
+    live_titles=$(printf '%s
+' "$live_titles" | grep -vE "PR #${pr} \(repair\)$" || true)
   fi
 
   # A gate is already on this pull request, whatever kind: offering it another would run the same
@@ -620,6 +768,50 @@ for line in "${candidates[@]}"; do
 
   case "$move" in
     skip) continue ;;
+    apply-review)
+      # A dispatched apply-review can queue for an hour or two behind the fleet; asking again on
+      # every tick would stack copies of the same run. Its title names the pull request.
+      if for workflow in $APPLY_REVIEW_WORKFLOWS; do
+        gh api "repos/$REPO/actions/workflows/$workflow/runs?event=workflow_dispatch&per_page=50" \
+          --jq '.workflow_runs[] | select(.status != "completed") | .display_title' 2>/dev/null
+      done | grep -qxF "Agent: Apply Review - PR #$pr"; then
+        echo "  #$pr already has an apply-review run waiting or running."
+        continue
+      fi
+      act "Dispatching apply-review for #$pr: its change request never reached the agent." \
+        gh api "repos/$REPO/actions/workflows/$ROUTER_WORKFLOW/dispatches" --method POST \
+          -f ref="$DEFAULT_BRANCH" -f "inputs[operation]=apply-review" -f "inputs[pr-number]=$pr" >/dev/null ||
+        echo "::warning::Could not dispatch apply-review for #$pr."
+      continue
+      ;;
+    land)
+      if [ "$merge_blocked" = true ]; then
+        echo "  #$pr is approved; it waits for the pull request ahead of it."
+        continue
+      fi
+      if [ "$review_timed_out" = true ]; then
+        act "Labelling #$pr auto-decided: nobody reviewed it in ${HUMAN_REVIEW_TIMEOUT_HOURS} working hours." \
+          gh api "repos/$REPO/issues/$pr/labels" --method POST -f "labels[]=auto-decided" >/dev/null ||
+          echo "::warning::Could not label #$pr auto-decided."
+      fi
+      if act "Landing #$pr: $reason." \
+        env PR="$pr" HEAD_SHA="$head_sha" GITHUB_OUTPUT=/dev/null \
+          bash "$(dirname "${BASH_SOURCE[0]}")/../land-pull-request/land-pull-request.sh"; then
+        merge_blocked=true
+        # GitHub closes the linked issue only on a merge into the default branch. A stack child lands
+        # in its feature branch, and the gate, which closes it on its own merges, did not merge this
+        # one: left open, the child kept its root from ever being gated (a consumer's engine root
+        # waited on two finished children).
+        if [ "$base_ref" != "$DEFAULT_BRANCH" ] && [ -n "$linked_issue" ] &&
+          [ "$(gh pr view "$pr" --repo "$REPO" --json state --jq .state 2>/dev/null)" = MERGED ]; then
+          act "Closing #$linked_issue: its pull request #$pr landed in $base_ref." close_landed_child "$linked_issue" "$pr" "$base_ref" ||
+            echo "::warning::Could not close #$linked_issue after #$pr landed."
+        fi
+      else
+        echo "::warning::Could not land #$pr; it stays approved for the next tick."
+      fi
+      continue
+      ;;
     wait)
       # Its CI is running: nothing behind it may merge or be brought up to date first, but the
       # pull requests behind it that need repair do not wait for anyone.

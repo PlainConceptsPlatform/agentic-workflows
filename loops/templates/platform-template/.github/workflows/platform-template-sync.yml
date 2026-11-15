@@ -25,6 +25,10 @@ concurrency:
 env:
   # copier 9.19.1 needs Python 3.10 or newer on the runner.
   COPIER_VERSION: "9.19.1"
+  # The pinned uv the copier step downloads when the runner has no uvx, no pipx and no ensurepip
+  # (the self-hosted runner image ships Python without python3-venv, so a venv cannot be made).
+  UV_VERSION: "0.13.5"
+  UV_SHA256: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
   NODE_VERSION: "22"
   SYNC_BRANCH: platform/template-sync
 
@@ -79,7 +83,8 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
-      # uvx where uv is installed, then pipx, then a virtual environment from the runner's Python.
+      # uvx where uv is installed, then pipx, then a virtual environment from the runner's Python, and
+      # where that Python cannot make one, a pinned uv checked against its SHA-256.
       - name: Install copier
         if: steps.decide.outputs.run == 'true' && startsWith(steps.contract.outputs.update, 'copier ')
         run: |
@@ -90,10 +95,16 @@ jobs:
             run="uvx --from copier==$COPIER_VERSION copier"
           elif command -v pipx >/dev/null 2>&1; then
             run="pipx run --spec copier==$COPIER_VERSION copier"
-          else
+          elif python3 -c 'import ensurepip' >/dev/null 2>&1; then
             python3 -m venv "$RUNNER_TEMP/copier-venv"
             "$RUNNER_TEMP/copier-venv/bin/pip" install --quiet "copier==$COPIER_VERSION"
             run="$RUNNER_TEMP/copier-venv/bin/copier"
+          else
+            tarball="$RUNNER_TEMP/uv.tar.gz"
+            curl -fsSL -o "$tarball" "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz"
+            echo "${UV_SHA256}  $tarball" | sha256sum --check --strict
+            tar -xzf "$tarball" -C "$RUNNER_TEMP"
+            run="$RUNNER_TEMP/uv-x86_64-unknown-linux-gnu/uvx --from copier==$COPIER_VERSION copier"
           fi
           cat > "$bin/copier" <<EOF
           #!/usr/bin/env bash

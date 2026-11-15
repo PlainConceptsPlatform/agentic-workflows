@@ -272,10 +272,17 @@ jobs:
             ${{ env.STALLED_LABEL }}
   conclude:
     needs: [activation, agent, safe_outputs]
+    # The agent job can fail after the agent asked for its pull request: the engine exits non-zero
+    # once the payload is written, and safe_outputs still publishes it. That run has an outcome, so
+    # it concludes here, where the rescue can open a pull request the run was refused, instead of
+    # being retried from scratch by `incomplete` (a consumer's issue was implemented three times).
     if: >
       always() &&
-      needs.agent.result == 'success' &&
-      needs.safe_outputs.result == 'success'
+      needs.safe_outputs.result == 'success' &&
+      (
+        needs.agent.result == 'success' ||
+        contains(needs.agent.outputs.output_types, 'create_pull_request')
+      )
     runs-on: agents-arc
     permissions:
       contents: read
@@ -307,8 +314,10 @@ jobs:
       # gh-aw pushes onto the base as it is when the run ends; a base that moved under a long run
       # makes the commits not apply and the work is filed as an issue. A plain rebase applies most
       # of them (Pliny-Bot #787 and #794 were rebased by hand in minutes), so it is tried here, and
-      # every step below treats the rescued pull request as the one the agent opened.
-      - name: Rebase a patch the base moved under
+      # every step below treats the rescued pull request as the one the agent opened. The same step
+      # opens the pull request from the branch gh-aw pushed when only the pull request was refused
+      # (the repository does not let GitHub Actions create pull requests; the App token may).
+      - name: Open the pull request the run could not
         id: rescue
         if: needs.safe_outputs.outputs.created_pr_number == '' && contains(needs.agent.outputs.output_types, 'create_pull_request')
         uses: ./.github/actions/rebase-stale-patch
@@ -560,6 +569,10 @@ jobs:
       (
         needs.agent.result != 'success' ||
         needs.safe_outputs.result != 'success'
+      ) &&
+      !(
+        needs.safe_outputs.result == 'success' &&
+        contains(needs.agent.outputs.output_types, 'create_pull_request')
       )
     runs-on: agents-arc
     permissions:
@@ -821,8 +834,11 @@ timeout-minutes: 180
    (`pc-plan-propose` or `pc-plan-archive`), the issue context path above, the branch, and that it
    runs in autonomous mode with no one to ask. `planner-sub` runs on the repository's plan model,
    which these two steps decide the whole change on. Wait for it in the same turn, then continue
-   with the next phase yourself. If `planner-sub` is not in the task tool's enum, call
-   `report_incomplete` naming it; do not load `pc-plan-propose` here. Only when the harness is
+   with the next phase yourself. If `planner-sub` is not in the task tool's enum, or the task tool
+   returns an error when you spawn it (`Agent planner-sub cannot run as a subagent`, `Unknown agent`),
+   call `report_incomplete` once with that exact error text and stop: do not retry with `planner` or
+   any other agent, and do not load `pc-plan-propose` here. Another attempt fails the same way and
+   only spends the run; the cause is the repository's generated agent files, not the issue. Only when the harness is
    older than 3.4.0 and has neither `planner` nor `planner-sub` may you load the skill here.
 
    2. `pc-plan-propose`, even when the issue is refined. It is what turns the issue into

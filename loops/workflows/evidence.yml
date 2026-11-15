@@ -323,9 +323,20 @@ jobs:
           REPO: ${{ github.repository }}
           SERVER: ${{ github.server_url }}
           BRANCH: ${{ steps.pr.outputs.branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PR: ${{ inputs.pr-number }}
         run: |
           set -euo pipefail
+          # Only on the default branch. A stack child merges into its feature branch, which is the
+          # head of the stack's root pull request: a [skip ci] commit there left the root with no CI
+          # on its head, so its required check never reported and five consumer roots sat blocked.
+          # Nothing is lost: when the root merges, this job replays every plan the stack carries.
+          if [ -n "$DEFAULT_BRANCH" ] && [ "$BRANCH" != "$DEFAULT_BRANCH" ]; then
+            echo "Merged into $BRANCH, not $DEFAULT_BRANCH: the screenshots are archived when that branch merges."
+            echo "base=" >> "$GITHUB_OUTPUT"
+            echo "reason=the pull request merged into $BRANCH, and the screenshots are archived when it merges into $DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           src="$RUNNER_TEMP/evidence/files"
           if [ ! -d "$src" ] || [ -z "$(find "$src" -name '*.jpg' -print -quit)" ]; then
             echo "No screenshots to keep; the comment records why."

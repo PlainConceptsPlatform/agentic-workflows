@@ -67,6 +67,9 @@ run-name: >-
   && (inputs.operation == 'merge-gate' || inputs.operation == 'merge-train' || inputs.operation == 'reconcile-bot-pr-runs')
   && format('Event: {0}{1} forwarded to Agentics: Merge Belt', inputs.operation, inputs.pr-number != '' && format(' on PR #{0}', inputs.pr-number) || '')
   || github.event_name == 'workflow_dispatch'
+  && inputs.operation == 'apply-review'
+  && format('Agent: Apply Review - PR #{0}', inputs.pr-number)
+  || github.event_name == 'workflow_dispatch'
   && inputs.operation == 'evidence'
   && format('Agentics: Evidence - PR #{0}', inputs.pr-number)
   || github.event_name == 'workflow_dispatch'

@@ -73,6 +73,9 @@ var MaxVms = int.Parse(Environment.GetEnvironmentVariable("MAX_VMS") ?? "6");
 // an agent run. Agents are capped at MaxVms - ReservedCiVms and the held VMs serve CI only.
 // 0 disables it (exactly the pre-reserve behaviour). Set the RESERVED_CI_VMS app setting.
 var ReservedCiVms = int.Parse(Environment.GetEnvironmentVariable("RESERVED_CI_VMS") ?? "0");
+// Queued CI/Deploy jobs per VM: the cost-first default 4 means four queued jobs share one VM and
+// wait their turn. Lower it (CI_JOBS_PER_VM app setting) to buy shorter CI queues with more VMs.
+var CiJobsPerVm = Math.Max(1, int.Parse(Environment.GetEnvironmentVariable("CI_JOBS_PER_VM") ?? "4"));
 // How long a leased VM waits after its last served job, with nothing queued or running for
 // its run, before it decides the run is over and releases the lease. Measured from the last
 // job served (LastActivity), never from polls or heartbeats, so a VM that keeps polling
@@ -456,11 +459,11 @@ int Demand() => Sessions() + CiDemand();
 // reserve so CI keeps runners of its own; with no CI, agents may use the whole fleet
 // (nothing is held idle, so no boot/retire churn).
 int AgentCap() => CiDemand() > 0 ? Math.Max(0, MaxVms - ReservedCiVms) : MaxVms;
-// Unlabelled jobs (CI/Deploy) keep the historical per-4 tiering so this deploy changes
+// Unlabelled jobs (CI/Deploy) keep the historical per-CI_JOBS_PER_VM tiering (4) so this deploy changes
 // nothing until affinity labels exist; each workflow session then adds one dedicated VM.
 // Capping the session term at AgentCap stops the reserve being provisioned as idle VMs;
 // the CI term is floored at the reserve while CI is queued so those VMs are actually made.
-int CiTier(int n) => n switch { <= 0 => 0, <= 4 => 1, <= 8 => 2, <= 12 => 3, <= 16 => 4, <= 20 => 5, _ => 6 };
+int CiTier(int n) => n <= 0 ? 0 : Math.Min(6, (n + CiJobsPerVm - 1) / CiJobsPerVm);
 int DesiredVms() => Math.Min(
     Math.Min(Sessions(), AgentCap())
     + Math.Max(CiTier(CiDemand()), CiDemand() > 0 ? ReservedCiVms : 0),

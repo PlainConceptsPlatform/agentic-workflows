@@ -34,6 +34,12 @@ if [ "$current" != "$HEAD_SHA" ]; then
   out ""
   exit 0
 fi
+reason=$(bash "$(dirname "${BASH_SOURCE[0]}")/side-checks.sh" "$REPO" "$HEAD_SHA")
+if [ -n "$reason" ]; then
+  echo "::warning::Not landing #$PR: $reason."
+  out ""
+  exit 0
+fi
 base=$(jq -r .baseRefName <<<"$pr_json")
 head_ref=$(jq -r .headRefName <<<"$pr_json")
 

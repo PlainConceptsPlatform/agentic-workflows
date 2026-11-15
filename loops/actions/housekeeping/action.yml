@@ -125,6 +125,16 @@ runs:
             ...context.repo, state: 'open', per_page: 100,
           });
           const names = (issue) => issue.labels.map((l) => (typeof l === 'string' ? l : l.name));
+          // Read once, and only when a stalled implement issue needs it.
+          let branchCache = null;
+          const getBranches = async () => {
+            branchCache ??= await github.paginate(github.rest.repos.listBranches, { ...context.repo, per_page: 100 });
+            return branchCache;
+          };
+          // A branch whose pull request was closed or merged is history, not work to publish.
+          const neverProposed = async (branch) => (await github.rest.pulls.list({
+            ...context.repo, head: `${context.repo.owner}:${branch.name}`, state: 'all', per_page: 1,
+          })).data.length === 0;
 
           // 0b. Clean orphaned bot-working labels. When a workflow run is cancelled (above) or
           // dies without clearing bot-working, the issue sits with bot-working + a work label
@@ -162,6 +172,7 @@ runs:
           // request, marked, so the rate costs one extra listing rather than a store.
           const dispositions = {};
           const autoMerged = [];
+          const autoDecided = [];
           const reverts = [];
           const metricsWindowMs = 14 * 24 * 3600000;
           // Stalled work still inside its retry window. Separate from needsHuman because nobody
@@ -201,6 +212,54 @@ runs:
             if (waited < retryAfterMs) {
               retrying.push({ issue, waited, attempts, work, due: retryAfterMs - waited });
               continue;
+            }
+            // Work that already exists is never implemented again. A run can end "stalled" after
+            // its branch was pushed: the pull request was refused (the repository does not let
+            // GitHub Actions create pull requests), or the agent job died after publishing. On a
+            // consumer that re-ran a five-point issue three times and filed a fallback issue each
+            // time. An open pull request that closes the issue parks it as pr-pending; a pushed
+            // branch for it with no pull request gets one, opened here with the App token.
+            if (work === 'implement') {
+              const closing = pulls.find((p) => new RegExp(`(clos(e|es|ed)|fix(es|ed)?|resolves?)\\s+#${issue.number}\\b`, 'i').test(p.body ?? ''));
+              const branchPattern = new RegExp(`(^|/)issue-${issue.number}(-[0-9a-f]+)?(-rebased-\\d+)?$`);
+              // Several runs may each have pushed a branch; the newest one carries the finished work.
+              let pushed = null;
+              if (!closing) {
+                let newest = 0;
+                for (const branch of (await getBranches()).filter((b) => branchPattern.test(b.name))) {
+                  if (!(await neverProposed(branch))) continue;
+                  const { data: commit } = await github.rest.repos.getCommit({ ...context.repo, ref: branch.commit.sha });
+                  const when = Date.parse(commit.commit.committer?.date ?? 0);
+                  if (when > newest) { newest = when; pushed = branch; }
+                }
+              }
+              if (closing || pushed) {
+                await act(`#${issue.number}: ${closing ? `#${closing.number} already closes it` : `opening a pull request from ${pushed.name}`}, not retrying ${work}`, async () => {
+                  let number = closing?.number;
+                  if (!number) {
+                    const base = /<!-- stack-root-branch: (\S+) -->/.exec(issue.body ?? '')?.[1];
+                    const baseExists = base ? await github.rest.repos.getBranch({ ...context.repo, branch: base }).then(() => true).catch(() => false) : false;
+                    const created = await github.rest.pulls.create({
+                      ...context.repo,
+                      head: pushed.name,
+                      base: baseExists ? base : context.payload.repository.default_branch,
+                      title: `[bot] ${issue.title}`,
+                      body: `Closes #${issue.number}\n\nOpened by housekeeping from \`${pushed.name}\`: the implement run pushed this branch but never opened its pull request.`,
+                    });
+                    number = created.data.number;
+                  }
+                  await github.rest.issues.createComment({
+                    ...context.repo, issue_number: issue.number,
+                    body: `${RETRY_MARKER}\nNot retried: the work is in #${number}, which now carries it.`,
+                  });
+                  for (const label of ['review', 'stalled']) {
+                    await github.rest.issues.removeLabel({ ...context.repo, issue_number: issue.number, name: label })
+                      .catch((error) => { if (error.status !== 404) throw error; });
+                  }
+                  await github.rest.issues.addLabels({ ...context.repo, issue_number: issue.number, labels: ['pr-pending'] });
+                });
+                continue;
+              }
             }
             if (attempts >= maxRetries || !work) {
               needsHuman.push({ kind: attempts >= maxRetries ? 'retries-exhausted' : 'no-work-label', issue, labels, waited, attempts });
@@ -362,7 +421,17 @@ runs:
             if (!root) {
               needsHuman.push({ kind: 'stack-root-missing', issue, rootPr, waited: age(issue.updated_at) });
             } else if (root.state === 'open') {
-              if (openChildren > 0) continue; // mid-stack: the normal state, not worth a line
+              if (openChildren > 0) {
+                // Mid-stack is the normal state. The one thing nobody else repairs is a root whose
+                // branch conflicts with its base: the merge train keeps a clean root current, but a
+                // conflict needs a hand merge into the feature branch (the agent's push of a base
+                // merge is refused whenever the base carries workflow files or lockfiles).
+                const { data: full } = await github.rest.pulls.get({ ...context.repo, pull_number: root.number });
+                if (full.mergeable_state === 'dirty') {
+                  needsHuman.push({ kind: 'stack-root-conflict', issue, pull: root, waited: age(full.updated_at), openChildren });
+                }
+                continue;
+              }
               // Every child is done, so the completion announcement should exist on the root
               // pull request. Its absence is the lost race above; a person is told here rather
               // than the stack sitting finished and silent. When the announcement exists but
@@ -482,6 +551,11 @@ runs:
             // An auto-merge followed by a revert is the number that has to stay at zero while
             // the rate climbs. Anything else is a rate bought with escaped defects.
             if (parsed === 'auto-merge' && pull.merged_at) autoMerged.push(pull.number);
+            // Merged because nobody answered a human-review verdict in time: listed so a person can
+            // read them afterwards. They are decisions the machine took on someone's behalf.
+            if (pull.merged_at && (pull.labels ?? []).some((l) => (typeof l === 'string' ? l : l.name) === 'auto-decided')) {
+              autoDecided.push(pull);
+            }
           }
 
           // 6. One digest. Everything above either fixed itself or is listed here, so there is a
@@ -501,6 +575,7 @@ runs:
             if (entry.kind === 'stack-ready') return `- PR #${entry.pull.number} · stack finished ${days(entry.waited)}d ago, never announced · human merge needed · ${entry.pull.title}`;
             if (entry.kind === 'stack-held') return `- PR #${entry.pull.number} · stack ready and waiting on a human merge for ${days(entry.waited)}d · ${entry.pull.title}`;
             if (entry.kind === 'stack-root-missing') return `- #${entry.issue.number} · names root PR #${entry.rootPr}, which does not exist · ${entry.issue.title}`;
+            if (entry.kind === 'stack-root-conflict') return `- PR #${entry.pull.number} · conflicts with its base, ${entry.openChildren} child(ren) still open · merge the base into its feature branch by hand · ${entry.pull.title}`;
             if (entry.kind === 'stack-root-closed') return `- PR #${entry.pull.number} · stack root closed unmerged, ${entry.openChildren} child(ren) still open · ${entry.issue.title} · restore the branch from refs/pull/${entry.pull.number}/head if accidental`;
             if (entry.kind === 'stack-orphaned') return `- #${entry.issue.number} · root merged but ${entry.openChildren} child(ren) still open · ${entry.issue.title}`;
             if (entry.kind === 'retries-exhausted') return `- #${entry.issue.number} · stalled ${days(entry.waited)}d · retried ${entry.attempts}× and still stalling · ${entry.issue.title}`;
@@ -540,12 +615,15 @@ runs:
             DIGEST_MARKER,
             `_Updated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC. This issue is rewritten by the housekeeping job; edits to it are lost._`,
             section('Waiting on a decision', ['decided']),
-            section('Stacked features waiting on a human', ['stack-ready', 'stack-held', 'stack-root-missing', 'stack-root-closed', 'stack-orphaned']),
+            section('Stacked features waiting on a human', ['stack-ready', 'stack-held', 'stack-root-conflict', 'stack-root-missing', 'stack-root-closed', 'stack-orphaned']),
             section('Pull requests parked by the gate', ['pr-parked', 'pr-stale']),
             section('Stalled beyond the retry budget', ['retries-exhausted', 'no-work-label']),
             section('Audit reports nobody actioned', ['stale-audit']),
             retryingSection(),
             gateSection(),
+            autoDecided.length === 0 ? '' : `\n### Merged on the review timer, worth a read (${autoDecided.length})\n\n` +
+              'Nobody answered the gate\'s human-review verdict in time, so its review stood. Revert any that should not have gone in.\n\n' +
+              autoDecided.map((p) => `- PR #${p.number} · merged ${p.merged_at.slice(0, 10)} · ${p.title}`).join('\n') + '\n',
             needsHuman.length === 0 ? '\nNothing is waiting on a person right now.\n' : '',
             `\n---\n\nThis run retried ${retried} stalled issue(s) and made ${planned.length} change(s) in total.`,
           ].filter(Boolean).join('\n');

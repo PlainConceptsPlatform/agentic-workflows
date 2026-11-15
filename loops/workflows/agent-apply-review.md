@@ -237,7 +237,13 @@ jobs:
             ${{ env.STALLED_LABEL }}
   validate_output:
     needs: [activation, subject, agent, safe_outputs]
-    if: always() && needs.agent.result == 'success' && needs.safe_outputs.result == 'success'
+    # The agent job can end red after the agent wrote its output (the engine exits non-zero once the
+    # payload is written); safe_outputs still publishes it. That output is validated like any other:
+    # a consumer lost a reviewer-requested fix this way (implement had the same bug, fixed in 1.22.0).
+    if: >
+      always() &&
+      needs.safe_outputs.result == 'success' &&
+      (needs.agent.result == 'success' || needs.agent.outputs.output_types != '')
     runs-on: agents-arc
     permissions:
       contents: read
@@ -278,7 +284,7 @@ jobs:
   conclude:
     needs: [activation, subject, agent, safe_outputs, validate_output]
     if: >
-      needs.agent.result == 'success' &&
+      always() &&
       needs.safe_outputs.result == 'success' &&
       needs.validate_output.outputs.valid == 'true'
     runs-on: agents-arc
@@ -305,6 +311,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           push-to-branch: 'true'
           apply-labels: 'false'
+          comment-number: ${{ inputs.pr-number }}
       - name: Release implemented review
         if: needs.validate_output.outputs.outcome == 'implemented'
         uses: ./.github/actions/remove-issue-labels
@@ -336,7 +343,7 @@ jobs:
     if: >
       always() &&
       needs.subject.outputs.found == 'true' &&
-      (needs.agent.result != 'success' || needs.safe_outputs.result != 'success' || needs.validate_output.outputs.valid != 'true')
+      (needs.safe_outputs.result != 'success' || needs.validate_output.outputs.valid != 'true')
     runs-on: agents-arc
     permissions:
       contents: read
@@ -494,6 +501,11 @@ steps:
       gh api "repos/$REPO/issues/$PR/comments" --paginate \
         --jq '[.[] | {author: .user.login, body}]' \
         > /tmp/gh-aw/agent/conversation.json
+      # The summary of a submitted review: "Request changes" from the review box puts its whole list
+      # here, with no thread and no inline comment, so without this file that feedback is invisible.
+      gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
+        --jq '[.[] | {id, author: .user.login, state, body, commit: .commit_id, submitted: .submitted_at}]' \
+        > /tmp/gh-aw/agent/reviews.json
       gh api graphql -f query='
         query($owner:String!, $name:String!, $number:Int!) {
           repository(owner:$owner, name:$name) {
@@ -569,6 +581,7 @@ timeout-minutes: 90
    - `/tmp/gh-aw/agent/review-threads.json` , every thread with its resolved and outdated state
    - `/tmp/gh-aw/agent/review-comments.json` , every inline comment with its file and line
    - `/tmp/gh-aw/agent/conversation.json` , every conversation comment
+   - `/tmp/gh-aw/agent/reviews.json` , every submitted review with its state and summary body
    - `/tmp/gh-aw/agent/diff.patch` , the current diff
 
    A reviewer often makes one point across several comments. Applying them one at a time
@@ -576,7 +589,11 @@ timeout-minutes: 90
 
 4. Work out which items are genuinely actionable and still outstanding. Skip anything already
    addressed by a later commit, anything a bot wrote, anything from the pull request author,
-   and anything that is a question rather than a request. You must account for every unresolved
+   and anything that is a question rather than a request. A human's review in `reviews.json` with
+   state `CHANGES_REQUESTED` and a body that lists requests is actionable even when there is no
+   thread and no inline comment: that is how a reviewer requests changes from the summary box. It
+   is outstanding unless the same person approved afterwards or a later commit on the branch
+   already does what it asks. Name each such review by its `id` in your comment. You must account for every unresolved
    human review thread by its `PRRT_...` ID. Do not claim feedback was implemented when no branch
    change is needed: that requires reviewer confirmation.
 

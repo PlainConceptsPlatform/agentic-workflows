@@ -8,6 +8,10 @@ inputs:
   token:
     description: GitHub token with issues:write and pull-requests:write.
     required: true
+  default-number:
+    description: Issue or pull request a comment goes to when the agent left out item_number. Empty skips such a comment.
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -16,6 +20,7 @@ runs:
       env:
         AGENT_OUTPUT_LIB: ${{ github.action_path }}/../agent-output.cjs
         OUTPUT_FILE: ${{ inputs.output-file }}
+        DEFAULT_NUMBER: ${{ inputs.default-number }}
       with:
         github-token: ${{ inputs.token }}
         script: |
@@ -25,14 +30,17 @@ runs:
           let posted = 0;
 
           for (const item of items) {
-            if (!item.item_number) {
+            // A worker with one subject (apply-review's pull request) names it here: the agent
+            // leaving out item_number must not lose the comment that carries its outcome.
+            const number = item.item_number || process.env.DEFAULT_NUMBER;
+            if (!number) {
               core.warning(`add_comment item has no item_number, skipping: ${JSON.stringify(item)}`);
               continue;
             }
 
             await github.rest.issues.createComment({
               ...context.repo,
-              issue_number: Number(item.item_number),
+              issue_number: Number(number),
               body: item.body,
             });
 

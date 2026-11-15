@@ -1,6 +1,6 @@
 # Managed by @plainconceptsplatform/workflows. Source: loops/actions/rebase-stale-patch/action.yml. Update with workflows update --force; consumer edits may be overwritten.
 name: Rebase a stale agent patch
-description: When an agent's patch no longer applies because its base branch moved, rebase the run's bundle onto the base and open the pull request the agent asked for. A real conflict is left for a person.
+description: Open the pull request an agent asked for when the run could not. If the run pushed the branch but was refused the pull request (Actions may not create pull requests), open it from that branch with the App token; if the patch no longer applies because the base moved, rebase the bundle onto the base first. A real conflict is left for a person.
 inputs:
   token:
     description: App token that can push a branch, open a pull request and close an issue.

@@ -95,6 +95,22 @@ The job names are the ones the apps' required checks and the merge train read (`
 
 It stays a single-file template: once installed it is the app's, and `--force` replaces it with the package's, `env:` included.
 
+### Required checks on the default branch
+
+Without a required check, nothing stops a merge while a job is red: the merge train lands a pull request on the CI workflow's verdict, and a person can merge from the pull request page. `Full CI` needs every blocking job, the scans and the platform conformance check as well as the heavy jobs, so it is the one check to require. `loops/templates/rulesets/main-required-checks.json` is that ruleset: `Full CI` required on the default branch, repository admins able to bypass it, and nothing else (no merge queue, no required approval). Apply it once per repository:
+
+```bash
+gh api -X POST repos/OWNER/REPO/rulesets --input node_modules/@plainconceptsplatform/workflows/loops/templates/rulesets/main-required-checks.json
+```
+
+`Full CI` is skipped on a tiered light run, and a skipped check counts as passed; the merge train still asks for the full run before it lands a pull request. `gh pr merge --auto` (the release pull request) now waits for `Full CI` instead of merging at once.
+
+`Agentics checks` runs only when workflow files change, so no ruleset can require it: a required check that never reports blocks the pull request for good. Both merge points check it instead (`land-pull-request/side-checks.sh`, the workflows listed in `SIDE_CHECK_WORKFLOWS`, default `Agentics checks`): a pull request whose side workflow failed or is still running on its head is not landed, and the merge train holds it rather than dispatching a gate.
+
+### Test timings
+
+Every test step writes a `.trx` report, and the `Test timings` step adds where the time went to the job summary: per test project the wall time, the summed test time and how many tests ran at once on average, then the slowest classes with the time of their first test (a class fixture's setup is paid there) and the slowest tests. It never fails the job.
+
 It runs no mutation testing. A pull request's per-change gate is the coverage floor; mutation testing is out of band, below.
 
 ## The weekly mutation run: quality-mutation

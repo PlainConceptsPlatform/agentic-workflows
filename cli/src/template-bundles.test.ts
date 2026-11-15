@@ -42,6 +42,9 @@ const QUALITY_GATES = [
   "scripts/lib/quality-config.mjs",
   "scripts/lib/quality-config.test.mjs",
   "scripts/lib/source-files.mjs",
+  "scripts/lib/test-timings.mjs",
+  "scripts/lib/test-timings.test.mjs",
+  "scripts/test-timings.mjs",
 ];
 
 const PLATFORM_TEMPLATE = [
