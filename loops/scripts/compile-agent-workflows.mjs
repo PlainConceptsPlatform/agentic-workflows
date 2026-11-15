@@ -1,37 +1,19 @@
 // Managed by @plainconceptsplatform/workflows. Source: loops/scripts/compile-agent-workflows.mjs. Update with `workflows update --force`; consumer edits may be overwritten.
-
-const OPENCODE_VERSION = '2.0.22'
-const OPENCODE_PACKAGE = '@opencode/cli'
-
-const OPENCODE_NUDGE =
-  '; rc=$?; for nudge in 1 2; do [ -s "${RUNNER_TEMP}/gh-aw/safeoutputs/outputs.jsonl" ] && break; ' +
-  'echo "No safe output yet, continuing the session ($nudge of 2)"; ' +
-  'OPENCODE_DISABLE_MODELS_FETCH=1 opencode run --continue --print-logs --log-level info ' +
-  '"Your last message ended without a tool call, so nothing has been delivered and this run is about to end. ' +
-  'Do not explain or plan: continue the task now and finish with the safe-output call the task names."; ' +
-  'rc=$?; done; exit $rc'
-
-// The install the compiled locks carry, shared so both rewrite sites emit exactly
-// the same command.
 //
-// `--allow-scripts` is the part that matters. npm now blocks a dependency's
-// install scripts unless the package is explicitly allowed, and @opencode/cli
-// downloads its platform binary from its own postinstall. Without the flag the
-// install "succeeds" (exit 0, `added N packages`) while the postinstall is
-// skipped with a warning, leaving a stub bin and the previous version in place,
-// so the job runs OpenCode 1 against OpenCode 2 config and the gateway rejects
-// every model. `NPM_CONFIG_ALLOW_SCRIPTS` is the spelling npm accepts for a
-// global install; the CLI form is refused for project-scoped installs.
-//
-// The trailing check turns a silent bad install into a loud failure: if the
-// version still is not there after installing, the step exits non-zero rather
-// than letting the agent run on the wrong binary.
-const OPENCODE_INSTALL_GUARD =
-  "opencode --version 2>/dev/null | grep -qF '" + OPENCODE_VERSION + "' || " +
-  "flock /tmp/opencode-install.lock sh -c " +
-  "'NPM_CONFIG_ALLOW_SCRIPTS=" + OPENCODE_PACKAGE + " npm install -g " + OPENCODE_PACKAGE + "@" + OPENCODE_VERSION + "' ; " +
-  "opencode --version 2>/dev/null | grep -qF '" + OPENCODE_VERSION + "' || " +
-  "{ echo \"::error::opencode " + OPENCODE_VERSION + " is not installed after the install step\"; exit 1; }"
+// gh-aw 1.2.2 replaced the legacy OpenCode wiring this script used to rewrite. The engine
+// definition (loops/workflows/shared/opencode.md) now installs @opencode/cli with its
+// postinstall allowed, forces lowercase log levels, disables the models-registry fetch, and
+// collects safe outputs natively ("Ingest agent output"; bundles are in the artifact glob).
+// The rewrites that carried those fixes until upstream shipped them are gone. What remains
+// here is fleet integration: VM affinity, per-runner MCP gateway ports, the awf host lock,
+// the Forge gateway and AgentMemory wiring, secret fallbacks, and the safe-output contracts
+// (update_issue must carry a body; the MCP config must not see the pull request base).
+
+// The engine's install step runs in the shared runner's global npm prefix. Two agent jobs on
+// one VM installing the same package concurrently rewrite the binary the other is executing
+// and kill it with SIGKILL mid-run, so installs serialize behind a per-VM lock. The
+// opencode-ai guard this replaces is gone: the engine pins @opencode/cli itself.
+const OPENCODE_INSTALL_FLOCK = "flock /tmp/opencode-install.lock npm install -g @opencode/cli@"
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -88,7 +70,13 @@ function undeclaredNeeds(lock) {
       if (item) { needs.add(item[1]); continue; }
       inList = false;
     }
-    for (const m of line.matchAll(/needs\.([a-z_][a-zA-Z0-9_-]*)\./g)) refs.add(m[1]);
+    // A JSON mapping key is not a read. gh-aw's prompt interpolation defers the prompt's
+    // needs.* references into literal keys like "needs.reserve.outputs.has_conflicts" in
+    // activation metadata, quoted or backslash-escaped inside env JSON; the runner never
+    // evaluates a key, so strip keys first, then any remaining needs.X counts: ${{ }}
+    // expressions and bare `if:` conditions alike.
+    const bare = line.replace(/\\?"needs\.[a-zA-Z0-9_.-]+\\?":/g, "");
+    for (const m of bare.matchAll(/needs\.([a-z_][a-zA-Z0-9_-]*)\./g)) refs.add(m[1]);
   }
   flush();
   return { jobs, violations };
@@ -148,27 +136,6 @@ for (const file of readdirSync(workflowDirectory)) {
     // (agents-arc) can never land on a run's dedicated VM. Done post-compile because
     // gh-aw's frontmatter runs-on is a plain scalar. The function form keeps ${{ }} literal.
     .replace(/runs-on: agents-arc/g, () => 'runs-on: [agents-aw, "affinity-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}"]')
-    // The engine command is normalized to one shape:
-    //   - OPENCODE_DISABLE_MODELS_FETCH=1: opencode otherwise fetches its model
-    //     registry from https://models.opencode.ai/api.json at startup and blocks
-    //     bootstrap on it. Inside the awf sandbox that host is not on the egress
-    //     allowlist, so the fetch hangs and every agent run stalls right after
-    //     "init" until the runner kills it. The forge provider declares its models
-    //     explicitly, so the remote registry is not needed here.
-    //   - --print-logs + a non-silent level: stripping --print-logs and forcing
-    //     ERROR hid every engine log, so a stalled bootstrap looked like silence.
-    //     The level must be lower case: OpenCode 2 rejects `INFO` with
-    //     "Invalid value for flag --log-level", aborting before the agent runs.
-    //     The old upper-case spelling was valid in v1 and is not in v2.
-    .replace(/opencode run(?: --print-logs)? --log-level (?:DEBUG|ERROR|INFO|debug|error|info)/g, "OPENCODE_DISABLE_MODELS_FETCH=1 opencode run --print-logs --log-level info")
-    // A turn that ends in text ends `opencode run`, whatever the text promised, and no prompt rule
-    // stopped glm-5-2 doing it: Pliny-Bot #771 passed verify, wrote "let me discover the exact
-    // safeoutputs command" and exited with nothing delivered. When no safe output exists yet, the
-    // same session is continued, twice at most, and told to finish.
-    .replace(/("\$\(cat \/tmp\/gh-aw\/aw-prompts\/prompt\.txt\)")'/g, (_, prompt) => prompt + OPENCODE_NUDGE + "'")
-    .replace(/GH_AW_INFO_MODEL: "[^"]*"/g, 'GH_AW_INFO_MODEL: "per-agent"')
-    .replace(/OPENCODE_MODEL: [^\n]+/g, "OPENCODE_MODEL: ''")
-    .replace(/GH_AW_INFO_MODEL_COSTS: '[^']*'/g, 'GH_AW_INFO_MODEL_COSTS: \'{"providers":{}}\'')
     // The MCP gateway is the only thing the agent publishes on the host loopback, so it is the
     // one thing two runners on the same machine cannot share. Honour an inherited port so each
     // runner service can pick its own; everything else is namespaced by its Docker daemon.
@@ -195,17 +162,6 @@ for (const file of readdirSync(workflowDirectory)) {
     // All of these sites are step-level run: or env:, where the runner context is available. It
     // is not available at workflow level, which is what broke the staging path earlier.
     //
-    // Install only when the pinned version is missing, and take a lock so two jobs starting at
-    // once cannot both write the global prefix.
-    // gh-aw pins opencode-ai 1.2.14 at every release checked, up to v0.90.0. That version is
-    // from 2026-02-25, and it was the pin the guard used until the OpenCode 2 migration: the
-    // harness now ships @opencode/cli at OPENCODE_VERSION above, and the pin is ours to choose
-    // because a gh-aw upgrade does not move it.
-    // gh-aw defaults NPM_CONFIG_MIN_RELEASE_AGE to 3 days, which blocks any package
-    // published in the last three days with ETARGET "No matching version found ... with a
-    // date before". Lowered to 1 so a fix released yesterday is usable. This is a
-    // supply-chain cooldown: shortening it accepts a newer package sooner.
-    .replace(/NPM_CONFIG_MIN_RELEASE_AGE: ['\"]?3['\"]?/g, "NPM_CONFIG_MIN_RELEASE_AGE: '1'")
     // The MCP gateway runs inside a per-runner Docker-in-Docker daemon. gh-aw publishes it on
     // 127.0.0.1, which is the DinD container's own loopback, while the outer publish forwards to
     // that container's eth0, so the two never meet and gh-aw's health check fails 120 times with
@@ -221,49 +177,6 @@ for (const file of readdirSync(workflowDirectory)) {
     // daemon, awf's container names are fixed, and the jobs must be serialised.
     .replaceAll('          awf --config', '          flock /tmp/agentic-awf.lock awf --config')
     .replaceAll('export MCP_GATEWAY_PORT="8080"', 'export MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-8080}"')
-    // The agent's safe outputs land in safeoutputs.jsonl, but the collector reads
-    // agent_output.json, and nothing in the generated workflow converts one to the other.
-    // With the OpenCode engine the tool calls go through the MCP server rather than stdout,
-    // so the log parser never produces agent_output.json and the placeholder step writes
-    // {"items":[]} over a run that did real work: the job goes green and the pull request
-    // is silently dropped. Build the collector's input from what the agent actually emitted.
-    .replaceAll("echo '{\"items\":[]}' > /tmp/gh-aw-${{ github.run_id }}/agent_output.json", "if [ -s /tmp/gh-aw-${{ github.run_id }}/safeoutputs.jsonl ]; then jq -s '{items: .}' /tmp/gh-aw-${{ github.run_id }}/safeoutputs.jsonl > /tmp/gh-aw-${{ github.run_id }}/agent_output.json; else echo '{\"items\":[]}' > /tmp/gh-aw-${{ github.run_id }}/agent_output.json; fi")
-    // The "Copy Safe Outputs" step runs on the host after the awf container exits. At that
-    // point /tmp/gh-aw/ IS the host's /tmp/gh-aw/, where the safeoutputs MCP container wrote
-    // patch and bundle files (via the MCP gateway's -v /tmp:/tmp:rw mount). Extend the step
-    // to also copy those files to RUNNER_TEMP/gh-aw/ so the upload step can include them.
-    // Without this, the upload step's glob /tmp/gh-aw/aw-*.patch runs inside the awf chroot
-    // (where /tmp/gh-aw is a different path) and finds nothing. The safe_outputs and conclude
-    // jobs then receive no patches in the artifact and silently skip the push.
-    .replace(
-      '          cp "$GH_AW_SAFE_OUTPUTS" /tmp/gh-aw/safeoutputs.jsonl 2>/dev/null || true\n',
-      '          cp "$GH_AW_SAFE_OUTPUTS" /tmp/gh-aw/safeoutputs.jsonl 2>/dev/null || true\n' +
-      '          # Copy patch/bundle files generated by the safeoutputs MCP container to\n' +
-      '          # RUNNER_TEMP/gh-aw/ so the upload step includes them in the artifact.\n' +
-      '          mkdir -p "${RUNNER_TEMP}/gh-aw"\n' +
-      '          ls -la /tmp/gh-aw/ 2>/dev/null || true\n' +
-      '          cp /tmp/gh-aw/aw-*.patch "${RUNNER_TEMP}/gh-aw/" 2>/dev/null || true\n' +
-      '          cp /tmp/gh-aw/aw-*.bundle "${RUNNER_TEMP}/gh-aw/" 2>/dev/null || true\n' +
-      '          ls -la "${RUNNER_TEMP}/gh-aw/"aw-* 2>/dev/null || true\n')
-    // Add patch/bundle paths to the upload glob so the agent artifact carries what
-    // push-agent-branch needs. The anchor is the two adjacent path lines of the
-    // "...agent" upload step; the "...agent-output-fallback" upload lists them in the
-    // opposite order, so it cannot match. Anchoring matters: the first bare
-    // '/tmp/gh-aw/agent_output.json\n' in the file is the placeholder step's echo line,
-    // and replacing there corrupted the placeholder into executing the globs as
-    // commands while the upload list stayed without bundles. The artifact then carried
-    // no bundle, push-agent-branch silently skipped the push, and the gate reported
-    // "remediated" on a pull request that was never touched.
-    // Only the /tmp/gh-aw globs may be added: a ${{ runner.temp }} path as well would
-    // move the upload's least-common-ancestor from /tmp/gh-aw to /, and every file in
-    // the artifact (agent_output.json included) would gain a prefix that
-    // download-agent-output does not look for.
-    .replace(
-      '            /tmp/gh-aw/safeoutputs.jsonl\n            /tmp/gh-aw/agent_output.json\n',
-      '            /tmp/gh-aw/safeoutputs.jsonl\n' +
-      '            /tmp/gh-aw/aw-*.patch\n' +
-      '            /tmp/gh-aw/aw-*.bundle\n' +
-      '            /tmp/gh-aw/agent_output.json\n')
     // "A failed run is already a red run": report-failure-as-issue: false and
     // GH_AW_REPORT_FAILED_JOBS: "false" were supposed to silence issue creation, but
     // 0.87.5's engine-failure reporter files an "[aw] ... failed" issue anyway (seen as
@@ -275,18 +188,12 @@ for (const file of readdirSync(workflowDirectory)) {
       /^([ \t]+)- name: Report failed jobs\n([ \t]*)id: report_failed_jobs\n[ \t]*if: always\(\)\n/m,
       '$1- name: Report failed jobs\n$2id: report_failed_jobs\n$2if: false # never: failures surface in the run and the retry belt\n')
 
-    // v0.90.0's arc-dind mode stages the engine CLI to a daemon-visible path but assumes the
-    // Copilot engine: command -v copilot is empty under engine: opencode and cp "" fails the
-    // job before the agent starts. OpenCode needs no staging, because npm -g installs it under
-    // the tool-cache prefix inside _work, which the dind daemon shares.
     // Centralised AgentMemory: an always-on App Service; the shim proxies to it when the
     // URL is set and authenticates with the HMAC secret. Local development leaves both
     // unset and keeps the local per-run store.
     .replace(/^env:\n/m, 'env:\n  AGENTMEMORY_URL: https://agentmemory-pro-01.azurewebsites.net\n')
     // the secret is scoped to the one step that runs the agent (semgrep: a secret in
     // workflow-level env is visible to every job and step)
-    .replaceAll('          OPENAI_BASE_URL: http://host.docker.internal:10001',
-      '          OPENAI_BASE_URL: https://forge.plainconcepts.com/v1')
     .replaceAll('          OPENAI_BASE_URL: https://forge.plainconcepts.com/v1',
       '          OPENAI_BASE_URL: https://forge.plainconcepts.com/v1' + '\n' +
       '          AGENTMEMORY_SECRET: ${{ secrets.AGENTMEMORY_SECRET }}')
@@ -294,56 +201,19 @@ for (const file of readdirSync(workflowDirectory)) {
     // so the callee must declare everything it accepts
     .replace(/^      COPILOT_GITHUB_TOKEN:/m,
       '      AGENTMEMORY_SECRET:' + '\n' + '        required: false' + '\n' + '      COPILOT_GITHUB_TOKEN:')
-    .replaceAll('          COPILOT_SRC="$(command -v copilot)"',
-      '          command -v copilot >/dev/null 2>&1 || { echo "no copilot binary (engine is opencode); skipping"; exit 0; }' + '\n' +
-      '          COPILOT_SRC="$(command -v copilot)"')
     // "A failed run is already a red run": report-failure-as-issue: false silences one
     // reporter, but gh-aw hardcodes a second one (report_failed_jobs) that files an
     // "[aw] Failed jobs" issue per red run. Same philosophy, same off switch.
     .replaceAll('GH_AW_REPORT_FAILED_JOBS: "true"', 'GH_AW_REPORT_FAILED_JOBS: "false"')
-    // gh-aw injects this "Restore .NET dependencies" step whenever a consumer's
-    // frontend (e.g. VERIFY_COMMANDS) references dotnet. An AI agent can create a
-    // .claude/worktrees/agent-XXX/ worktree at restore time — the first .slnx find
-    // matches that scratch dir, and the hardcoded path lands in the lock, breaking
-    // every agent run with MSB1009. Replace with dynamic discovery that excludes
-    // agent scratch directories so a stale worktree never poisons the restore.
-    .replace(
-      /^( +)- name: Restore \.NET dependencies\n\1  run: dotnet restore .*$/m,
-      (_m, indent) =>
-        indent + '- name: Restore .NET dependencies\n' + indent +
-        '  run: |-\n' + indent +
-        '    SLNX=$(find . -maxdepth 5 -name "*.slnx" -not -path "./.claude/*" -not -path "./.opencode/*" | head -1)\n' + indent +
-        '    [ -n "$SLNX" ] && dotnet restore "$SLNX" || echo "No .slnx found, skipping restore"')
-    .replace(
-      /^( +)- name: Setup \.NET\n\1  uses: actions\/setup-dotnet@[^\n]*\n\1  with:\n((?:\1    [^\n]*\n)+)(?!\1  env:)/gm,
-      (_m, indent, withBody) =>
-        indent + '- name: Setup .NET\n' + indent + '  uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0\n' +
-        indent + '  with:\n' + withBody +
-        indent + '  env:\n' + indent + '    DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet\n')
-    // OpenCode 2 ships as @opencode/cli, not opencode-ai. gh-aw's engine manifest
-    // still names opencode-ai and installs it with --ignore-scripts, which blocks
-    // the postinstall that selects the platform binary.
-    //
-    // The whole guard is replaced, not just the install inside it. gh-aw emits
-    //   opencode --version | grep -qF '<gh-aw pin>' || sh -c 'npm install … opencode-ai@<pin>'
-    // and rewriting only the inner install left the outer grep on gh-aw's pin while
-    // the image carries ours: the grep never matched, so the guard re-ran the install
-    // on every job, and a lock already wearing the sentinel was never revisited. The
-    // first pattern below collapses that shape — outer guard, wrapper and all — to a
-    // single clean guard; the second handles a bare install the outer guard is absent from.
-    .replace(
-      /opencode --version[^\n]*grep -qF '[0-9][0-9.]*' \|\|[^\n]*?npm install --ignore-scripts -g opencode-ai@[0-9][0-9.]*[^\n]*/g,
-      () =>
-        OPENCODE_INSTALL_GUARD)
-    .replace(
-      /npm install --ignore-scripts -g opencode-ai@([0-9][0-9.]*)/g,
-      () => OPENCODE_INSTALL_GUARD)
-    .replace(/opencode-ai@[0-9][0-9.]*/g, OPENCODE_PACKAGE + '@' + OPENCODE_VERSION)
-    .replace(/opencode-ai\b/g, OPENCODE_PACKAGE)
-    // One warm server per runner, on its own port, with its own data directory. Keyed on the
-    // runner rather than the run so a runner keeps its server warm between its own jobs.
-    // No double quotes here: the enclosing run: is a double-quoted YAML scalar, so a quote
-    // would have to be escaped. The default has no spaces, so bare is safe shell.
+    // The engine installs @opencode/cli into the shared global npm prefix. Two agent jobs
+    // on one VM installing concurrently rewrite the binary the other is about to execute;
+    // the flock serializes installs per machine. The version is the engine definition's.
+    .replace(/( *)run: npm install -g @opencode\/cli@/,
+      (_, indent) => `${indent}run: ${OPENCODE_INSTALL_FLOCK}`)
+    // One XDG data directory per runner, not one shared: standalone runs keep session state
+    // on the host, and two runners on one VM must not see each other's sessions. No double
+    // quotes here: the enclosing run: is a double-quoted YAML scalar, so a quote would have
+    // to be escaped. The default has no spaces, so bare is safe shell.
     .replace(/\/tmp\/opencode-data(?!-\$\{\{)/g, () => '/tmp/opencode-data-${{ runner.name }}')
     // The engine key falls back to FORGE_API_KEY, the one secret every repository here has. The
     // router maps it to OPENAI_API_KEY when it CALLS a worker, but a stack child is DISPATCHED on
@@ -359,39 +229,6 @@ for (const file of readdirSync(workflowDirectory)) {
     .replaceAll('${{ secrets.OPENAI_API_KEY }}', '${{ secrets.OPENAI_API_KEY || secrets.FORGE_API_KEY }}');
 
   let rewritten = patched;
-  // A queued implement executes hours after its run was created, but actions/checkout
-  // without a ref checks out github.sha, which GitHub pins at run creation. Five children
-  // queued together at 02:01 all carried the 02:01 base; once the first sibling merged,
-  // every later push became a rebase onto a moved parent, which gh-aw's signed-commit
-  // push cannot do (it dies with "cannot rebase: You have unstaged changes" and files the
-  // pull request as an issue instead of a pull request). Checking out the branch tip at
-  // execution time makes the commit parent current main; the implement queue, shared by the
-  // children of one refine, keeps sibling merges out of the window while the agent runs.
-  //
-  // A stack child dispatches this workflow directly (`gh workflow run
-  // agent-implement.lock.yml --ref feat/N`), and there the pin must select the feature
-  // branch tip, not main: github.ref_name is the ref the dispatch named. Under
-  // workflow_call the callee inherits the caller's event, and the router is only ever
-  // dispatched on the default branch, so the dispatch arm of the ternary resolves to
-  // main there too -- flat behavior is byte-identical.
-  if (file === "agent-implement.lock.yml") {
-    const start = rewritten.indexOf("\n  agent:\n");
-    const rest = start === -1 ? "" : rewritten.slice(start + 1);
-    const next = rest.search(/\n  [a-z_][a-zA-Z_-]*:\n/);
-    if (start !== -1 && next !== -1) {
-      const end = start + 1 + next;
-      const span = rewritten.slice(start, end).replace(
-        /(uses: actions\/checkout@[^\n]*\n(\s+)with:\n(?:\2  [^\n]+\n)*)/,
-        (whole, _block, indent) =>
-          whole.includes("ref:")
-            ? whole
-            : whole +
-              indent +
-              "  ref: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || github.event.repository.default_branch }}\n",
-      );
-      rewritten = rewritten.slice(0, start) + span + rewritten.slice(end);
-    }
-  }
 
   // update_issue declares no required field, so the safe-outputs MCP server accepts a call
   // carrying only issue_number and answers success. An agent that drops the body - the
@@ -438,7 +275,6 @@ for (const file of readdirSync(workflowDirectory)) {
   // failure mode returns (an artifact with no bundle, a skipped push, a green gate on
   // an untouched pull request). Failing the compile is the only loud signal there is.
   for (const check of [
-    { name: "bundle upload glob", ok: /\n( +)- name: Upload agent artifacts\n\1  if: always\(\)\n\1  continue-on-error: true\n\1  uses: actions\/upload-artifact@[^\n]*\n\1  with:\n\1    name: \$\{\{ needs\.activation\.outputs\.artifact_prefix \}\}agent\n\1    path: \|\n(?:\1      [^\n]*\n)*\1      \/tmp\/gh-aw\/aw-\*\.bundle\n/ },
     { name: "placeholder step intact", ok: /\n( +)- name: Write agent output placeholder if missing\n\1  if: always\(\)\n\1  run: \|\n\1    if \[ ! -f \/tmp\/gh-aw\/agent_output\.json \]; then\n\1      echo '\{"items":\[\]\}' > \/tmp\/gh-aw\/agent_output\.json\n\1    fi\n/ },
     // Every read of the engine key carries the FORGE_API_KEY fallback; see the rewrite above.
     {

@@ -5,10 +5,14 @@ env:
   # pre-activation membership check refuses unless it is listed here.
   GH_AW_ALLOWED_BOTS: "${{ vars.BOT_LOGIN || 'platform-devbox[bot]' }},github-actions[bot]"
   # The model this worker's own session runs on. See agent-audit.md for why it names one.
-  AGENT_LEAD_MODEL: "forge/glm-5-2"
-  # Every harness tier on one model the CI's Forge account is granted; see agent-audit.md.
-  AGENT_TIER_MODEL: "plainconcepts/glm-5-2"
-  AGENT_FAST_MODEL: "plainconcepts/glm-5-2"
+  AGENT_LEAD_MODEL: "awf-proxy/glm-5-2"
+  # Every model a subagent in this run may name, so the harness declares them all on the
+  # awf-proxy provider (shared/opencode.md). Per-agent model values are awf-proxy/<model>.
+  GH_AW_OPENCODE_MODELS: "glm-5-2,glm-5-3"
+  # Pins every harness tier onto one model; see agent-audit.md. The CI setup remaps whatever
+  # harness.json names onto awf-proxy/<model>, so empty runs the tiers harness.json names.
+  AGENT_TIER_MODEL: "awf-proxy/glm-5-2"
+  AGENT_FAST_MODEL: "awf-proxy/glm-5-2"
   REPO_RULES: "Read-only documentation audit. Report only stale documentation you can prove with evidence from both the document and the code. Do not modify files, commit, push, or run write operations."
   # What this repository counts as its entry documents, and what the scan leaves out. Archives,
   # parked material and generated documents belong in the exclusions: a broken link in a record
@@ -59,7 +63,7 @@ concurrency:
 # Shared: network policy only. This workflow owns its Safe Outputs and OpenCode configuration.
 # permissions, engine, model and runs-on cannot be shared , see shared/platform-defaults.md.
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
+  - shared/opencode.md
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
@@ -106,7 +110,8 @@ secrets:
 
 engine:
   id: opencode
-  version: "1.2.14"
+  # Lowered from gh-aw's default 3: a fix released yesterday is usable. Strict mode rejects zero.
+  cooldown: 1
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
@@ -204,6 +209,8 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-issues: write
       # Staged, so this is the only write, as in agent-audit.md: the report, each story with its
       # labels and a link back, then the report's list. The App token lets `refine` reach the router.
       - name: Download agent output

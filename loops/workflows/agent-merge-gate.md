@@ -5,13 +5,16 @@ env:
   # every agent without its own model falls back to; the lead is where a wrong call costs a run,
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
-  AGENT_LEAD_MODEL: "forge/glm-5-2"
-  # Every harness tier (plan, build, fast) on one model the CI's Forge account is granted.
-  # harness.json names quasar-438b and carina-60b, which that account is not granted: Pliny-Bot
-  # #823's build tasks failed on quasar. Empty runs the tiers harness.json names.
-  AGENT_TIER_MODEL: "plainconcepts/glm-5-2"
-  # The fast tier alone, while the CI's Forge account is not granted carina-60b.
-  AGENT_FAST_MODEL: "plainconcepts/glm-5-2"
+  AGENT_LEAD_MODEL: "awf-proxy/glm-5-2"
+  # Every model a subagent in this run may name, so the harness declares them all on the
+  # awf-proxy provider (shared/opencode.md). Per-agent model values are awf-proxy/<model>.
+  GH_AW_OPENCODE_MODELS: "glm-5-2,glm-5-3"
+  # Pins every harness tier (plan, build, fast) onto one model. The CI setup remaps whatever
+  # harness.json names onto awf-proxy/<model> (shared/opencode-ci.md), so empty runs the tiers
+  # harness.json names; set this only to override them.
+  AGENT_TIER_MODEL: "awf-proxy/glm-5-2"
+  # The fast tier alone, when a repository's account is not granted what harness.json names for it.
+  AGENT_FAST_MODEL: "awf-proxy/glm-5-2"
   VERIFY_COMMANDS: ""
   REPO_RULES: "Review the selected pull request for defects and report what you verified. Do not decide the outcome: the workflow computes it from your report and from facts it measured before you ran."
   # Where to look first, not what to escalate on. This list used to be the check that decided
@@ -131,7 +134,7 @@ name: "Agent: Merge Gate"
 # Router-only worker. The Work Router owns triggers, classification, and rung 1-2 checks.
 # This workflow receives the classified inputs and runs rung 3+.
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
+  - shared/opencode.md
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
@@ -402,6 +405,8 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-issues: write
       # Only the reservation comes off. pr-pending says a pull request for this issue is open
       # and waiting, which is still true when the gate hands it to a human, so taking it off
       # here left a board where three issues with three open pull requests looked like they
@@ -475,6 +480,8 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-issues: write
       - name: Check for merge conflicts
         id: conflicts
         env:
@@ -567,6 +574,10 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-issues: write
+          permission-pull-requests: write
+          permission-contents: write
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -785,6 +796,8 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-issues: write
       # The attempt record comes first. The belt bounds its retries by counting attempt comments
       # newer than the CI verdict, not by labels; releasing the labels before the record existed
       # meant a failure in either step below un-reserved the issue with nothing to count, and the
@@ -929,7 +942,8 @@ secrets:
 
 engine:
   id: opencode
-  version: "1.2.14"
+  # Lowered from gh-aw's default 3: a fix released yesterday is usable. Strict mode rejects zero.
+  cooldown: 1
   # One agent per pull request and kind, not one per repository. gh-aw's default group made every
   # gate's agent job wait behind every other: Pliny-Bot's merging gate for #835 sat pending behind
   # three repair agents for #846 to #848. The router already serialises what may merge (merge-belt)

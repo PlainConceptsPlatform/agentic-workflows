@@ -217,7 +217,7 @@ cost a real debugging session.
 | `Can't find action.yml` | A job used `./.github/actions/...` without `actions/checkout` first |
 | Script exits 126 before its first line | No executable bit. A Windows checkout does not set one |
 | `require is not defined in ES module scope` | A `.js` helper in a repo whose `package.json` is `"type": "module"`. Rename to `.cjs` |
-| `tools:` block does nothing | Dropped entirely under `engine: opencode` |
+| `tools:` block does nothing | Only engines without the `tools-allowlist` capability drop it; ours declares it since 1.2.2, but platform workers still carry none |
 | Prompt receives `issue #` with no number | `needs.pre_activation.outputs.*`. Not in the agent job's `needs`, resolves empty |
 | Top-level `if:` names a guard job, `activation` runs before the guard finishes | The fold into `activation` copies the expression, not the `needs`. Only prompt-referenced custom jobs with no `needs:` of their own are hoisted; a guard with `needs:` must be listed in `on.needs:`. Compile and read `activation.needs` |
 | The agent's fix was computed and never reached the branch | The agent rebased. The push applies a bundle fast-forward only, so any history rewrite is discarded. A worker that pushes through safe-outputs must merge, never rebase, and must start on the branch it pushes to |
@@ -424,7 +424,7 @@ The router trigger surface and the `workflow_run` / `schedule` / `run-name` trap
 
 ## The frontmatter contract
 
-Verified against gh-aw v0.83.4. Full surface in `references/frontmatter.md`.
+Verified against gh-aw v1.2.2. Full surface in `references/frontmatter.md`.
 
 ```yaml
 ---
@@ -469,7 +469,9 @@ secrets:
 
 engine:
   id: opencode
-  version: "1.2.14"
+  # No version pin: the worker's imports pull shared/opencode.md, the forked engine definition
+  # that owns the @opencode/cli version. Cooldown lowered from gh-aw's 3-day default.
+  cooldown: 1
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
@@ -492,9 +494,9 @@ timeout-minutes: 30          # Always. Default is 20.
 
 No `concurrency:`. The router owns it.
 
-No `tools:` block. gh-aw drops the whole section under `engine: opencode`, `cache-memory`
-included, with one warning and nothing in the lock file. A `bash:` allowlist here is dead
-configuration that reads like a control.
+No `tools:` block. gh-aw 1.2.2 keeps the section for engines that declare the `tools-allowlist`
+capability (ours does), but the platform writes none: `permissions: read-all`, the safe-outputs
+surface and `network.allowed` are enforced outside the agent and hold regardless.
 
 `env.OPENAI_BASE_URL` is a visible worker default. Keep engine environment aligned. Worker Markdown
 frontmatter may import shared files, but imports must be optional mechanics only and must not

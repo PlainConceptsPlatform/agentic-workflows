@@ -14,19 +14,17 @@ This template provides a standalone OpenCode CI configuration for consumer
 repositories running agentic workflows in GitHub Actions. It is copied to the
 repository root as `opencode.ci.json`.
 
-### Provider
+### Models
 
-- The `forge` provider is OpenAI-compatible and reads its endpoint from
-  `OPENAI_BASE_URL` and its key from `OPENAI_API_KEY` at runtime. Those are the
-  two variables every worker's agent job sets (`engine.env` in the worker and
-  the `OPENAI_API_KEY` secret), so the file works with no consumer wiring. An
-  earlier template read `FORGE_API_URL`/`FORGE_API_KEY`, which nothing set.
-- Each consumer configures its own router endpoint, credential, model IDs, and
-  capabilities. The workflow package does not assume a particular gateway
-  host, authentication system, or model vendor.
-- Model entries are fallback metadata. Consumers should set `attachment: true`
-  only for models whose router supports image input.
-- Default model: `forge/glm-5-2`.
+- The engine harness (shared/opencode.md) declares the `awf-proxy` provider at runtime and
+  populates it with the workflow's `GH_AW_OPENCODE_MODELS` roster; its policies deny every
+  other provider. This file therefore declares no providers of its own: a provider here
+  would be denied by the policy and would lack credentials inside the sandbox anyway.
+- Default model: `awf-proxy/glm-5-2`. The CI setup merge writes each worker's
+  `AGENT_LEAD_MODEL` onto `ci-workflow-agent`, and per-agent model values are
+  `awf-proxy/<model>` so they resolve against the harness declaration.
+- A consumer adding a model to its roster does it in the workers' env
+  (`GH_AW_OPENCODE_MODELS`, `AGENT_LEAD_MODEL`), not here.
 
 ### Agents
 

@@ -8,13 +8,16 @@ env:
   # every agent without its own model falls back to; the lead is where a wrong call costs a run,
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
-  AGENT_LEAD_MODEL: "forge/glm-5-2"
-  # Every harness tier (plan, build, fast) on one model the CI's Forge account is granted.
-  # harness.json names quasar-438b and carina-60b, which that account is not granted: Pliny-Bot
-  # #823's build tasks failed on quasar. Empty runs the tiers harness.json names.
-  AGENT_TIER_MODEL: "plainconcepts/glm-5-2"
-  # The fast tier alone, while the CI's Forge account is not granted carina-60b.
-  AGENT_FAST_MODEL: "plainconcepts/glm-5-2"
+  AGENT_LEAD_MODEL: "awf-proxy/glm-5-2"
+  # Every model a subagent in this run may name, so the harness declares them all on the
+  # awf-proxy provider (shared/opencode.md). Per-agent model values are awf-proxy/<model>.
+  GH_AW_OPENCODE_MODELS: "glm-5-2,glm-5-3"
+  # Pins every harness tier (plan, build, fast) onto one model. The CI setup remaps whatever
+  # harness.json names onto awf-proxy/<model> (shared/opencode-ci.md), so empty runs the tiers
+  # harness.json names; set this only to override them.
+  AGENT_TIER_MODEL: "awf-proxy/glm-5-2"
+  # The fast tier alone, when a repository's account is not granted what harness.json names for it.
+  AGENT_FAST_MODEL: "awf-proxy/glm-5-2"
   GIT_AUTHOR_NAME: "github-actions[bot]"
   GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
   GIT_COMMITTER_NAME: "github-actions[bot]"
@@ -35,7 +38,7 @@ name: "Agent: Release"
 run-name: "Agent: Release - ${{ inputs.version-bump }}"
 
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
+  - shared/opencode.md
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
@@ -74,7 +77,8 @@ secrets:
 
 engine:
   id: opencode
-  version: "1.2.14"
+  # Lowered from gh-aw's default 3: a fix released yesterday is usable. Strict mode rejects zero.
+  cooldown: 1
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 
@@ -162,6 +166,9 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-contents: write
+          permission-pull-requests: write
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -19,13 +19,17 @@ the router down with zero-job runs that carry no annotation.
 
 | Rewrite | Why | On ephemeral VMs |
 |---|---|---|
-| `@opencode/cli` pinned to 2.0.22, scripts enabled | gh-aw's engine manifest still names `opencode-ai` (a V1 build) and installs it with `--ignore-scripts`, which blocks the postinstall that selects the platform binary | required |
-| `NPM_CONFIG_MIN_RELEASE_AGE` 3 to 1 | the 3-day cooldown rejects fresh releases with a misleading ETARGET | required |
-| copilot-staging guard | gh-aw's arc-dind step assumes the Copilot engine and fails under `engine: opencode` | inert without the topology, kept for safety |
+| `flock` around the engine's `npm install` | two agent jobs on one VM installing concurrently rewrite the binary the other is executing | uncontended no-op, kept |
 | `GH_AW_MODELS_JSON_PATH` at workflow level | the writer defaulted to a path outside the uploaded directory, so the artifact lost models.json | required |
 | staging keyed on `github.run_id` | two jobs on one host crossed prompts and outputs | harmless with one job per VM |
 | `flock /tmp/agentic-awf.lock` around awf | awf's fixed container names killed concurrent jobs on a shared daemon | uncontended no-op, kept |
-| log level, model name, cost table | noise and wrong constants for per-agent routing | cosmetic |
+| per-runner XDG data dir | standalone runs keep session state on the host; two runners on one VM must not see each other's | required with more than one runner per VM |
+
+The compiled locks carry gh-aw 1.2.2's own `@opencode/cli` pin with scripts enabled, its lowercase
+log level, its models-fetch guard and its safe-output collection natively. The rewrites that
+carried those fixes until upstream shipped them are gone, and the npm cooldown moved to each
+worker's `engine.cooldown: 1` (gh-aw 1.2.2 made it a first-class knob). Check the header of
+`loops/scripts/compile-agent-workflows.mjs` before reading older notes about its rewrites.
 
 `VERIFY_COMMANDS` is consumer-owned. Some consumers split it per area (`_API` / `_WEB`) so a
 web-only change does not pay for a cold .NET Release build; the route matrix asserts that every

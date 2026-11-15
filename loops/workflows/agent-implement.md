@@ -5,10 +5,13 @@ env:
   # every agent without its own model falls back to; the lead is where a wrong call costs a run,
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
-  AGENT_LEAD_MODEL: "forge/glm-5-2"
+  AGENT_LEAD_MODEL: "awf-proxy/glm-5-2"
   # Let harness.json drive the tiers: plan=glm-5-3, build/fast=glm-5-2. A repository
   # whose CI account is not granted a tier model can still pin every tier to one
   # model by setting AGENT_TIER_MODEL.
+  # Every model a subagent in this run may name, so the harness declares them all on the
+  # awf-proxy provider (shared/opencode.md). Per-agent model values are awf-proxy/<model>.
+  GH_AW_OPENCODE_MODELS: "glm-5-2,glm-5-3"
   AGENT_TIER_MODEL: ""
   # Empty: harness.json already names glm-5-2 for fast.
   AGENT_FAST_MODEL: ""
@@ -105,13 +108,17 @@ run-name: "Agent: Implement - #${{ inputs.issue-number }}"
 concurrency:
   group: implement-queue-${{ inputs.queue || '0' }}
   cancel-in-progress: false
+  # A stack child dispatches this workflow on its feature branch and the children of one refine
+  # run in parallel: give each dispatch its own slot in the compiler-generated conclusion group
+  # too, or they queue behind each other at the end. The extension is stripped from the lock.
+  job-discriminator: ${{ github.run_id }}
   # FIFO, up to 100 waiting: labelling six issues at once implements all six, in order.
   queue: max
 
 # Shared: network policy only. This workflow owns its Safe Outputs and OpenCode configuration.
 # permissions, engine, model and runs-on cannot be shared , see shared/platform-defaults.md.
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
+  - shared/opencode.md
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
@@ -251,6 +258,8 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-issues: write
       # GITHUB_TOKEN on purpose. A label applied by the app raises a labeled event, and the
       # classifier routes bot-working straight back into this same worker: the second run
       # queues behind this one and then executes, doing the work twice. Nothing needs to see
@@ -305,6 +314,9 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-issues: write
+          permission-contents: write
       - name: Remove bot-working label
         uses: ./.github/actions/remove-issue-labels
         with:
@@ -595,6 +607,8 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-issues: write
       # The shared rule, which this worker used to carry its own copy of. It repeats a run that died
       # young, and now also one that was killed after a long time: the runner's VM taken away
       # mid-job, or the AI gateway answering nothing and ending the engine one turn after it began.
@@ -698,7 +712,8 @@ secrets:
 
 engine:
   id: opencode
-  version: "1.2.14"
+  # Lowered from gh-aw's default 3: a fix released yesterday is usable. Strict mode rejects zero.
+  cooldown: 1
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 

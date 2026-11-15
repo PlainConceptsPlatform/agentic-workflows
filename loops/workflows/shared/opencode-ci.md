@@ -230,16 +230,21 @@ pre-agent-steps:
           git update-index --skip-worktree ".opencode/plugins/${plugin}.js" 2>/dev/null || true
         fi
       done
-      # The runners are reused VMs and keep the workspace's ignored files between jobs, so an
-      # override an earlier run wrote is still there; an empty AGENT_TIER_MODEL has to remove it
-      # or the tiers stay pinned (Pliny-Bot #774 ran on glm-5-2 after the pin was dropped).
+      # The tiers the harness plugin generates name plainconcepts/<model> (harness.json), but
+      # the CI engine's config only allows the awf-proxy provider (shared/opencode.md declares
+      # it and denies every other), so every tier is remapped onto awf-proxy first: a tier left
+      # unmapped would be denied at spawn time. AGENT_TIER_MODEL and AGENT_FAST_MODEL then pin
+      # granted models on top, for repositories whose CI account lacks what harness.json names.
+      base=$(jq '{models: (.models // {} | map_values(sub("^[^/]+/"; "awf-proxy/")))}' .opencode/harness.json 2>/dev/null || echo '{"models":{}}')
       if [ -n "${AGENT_TIER_MODEL:-}" ]; then
-        jq -n --arg m "$AGENT_TIER_MODEL" '{models: {plan: $m, build: $m, fast: $m}}' > .opencode/harness.user.json
+        printf '%s' "$base" | jq --arg m "$AGENT_TIER_MODEL" '.models + {plan: $m, build: $m, fast: $m} | {models: .}' > .opencode/harness.user.json
       elif [ -n "${AGENT_FAST_MODEL:-}" ]; then
-        # One tier only: the CI's Forge account is not granted carina-60b, which harness.json
-        # names for fast work, so that tier alone moves to a model the account has.
-        jq -n --arg m "$AGENT_FAST_MODEL" '{models: {fast: $m}}' > .opencode/harness.user.json
+        printf '%s' "$base" | jq --arg m "$AGENT_FAST_MODEL" '.models + {fast: $m} | {models: .}' > .opencode/harness.user.json
+      elif [ "$base" != '{"models":{}}' ]; then
+        printf '%s' "$base" > .opencode/harness.user.json
       else
+        # The runners are reused VMs and keep the workspace's ignored files between jobs, so an
+        # override an earlier run wrote is still there; with nothing to pin the override must go.
         rm -f .opencode/harness.user.json
       fi
       echo "Harness plugins: $(ls .opencode/plugins | tr '\n' ' ')"

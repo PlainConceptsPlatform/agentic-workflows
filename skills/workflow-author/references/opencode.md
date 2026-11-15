@@ -1,6 +1,6 @@
 # The engine: OpenCode on an OpenAI-compatible gateway
 
-Verified against gh-aw v0.83.4 by compiling and running against worker lockfiles.
+Verified against gh-aw v1.2.2 by compiling and running against worker lockfiles.
 
 Repositories run agentic workflows on an OpenAI-compatible model gateway. The wiring is spread
 across three files and none of it is discoverable from the gh-aw docs.
@@ -12,7 +12,7 @@ across three files and none of it is discoverable from the gh-aw docs.
 ```yaml
 engine:
   id: opencode
-  version: "1.2.14"
+  cooldown: 1
   env:
     OPENAI_BASE_URL: ${{ vars.FORGE_API_URL }}
 
@@ -34,8 +34,10 @@ network:
 
 All parts are load-bearing:
 
-1. `id: opencode` with a pinned `version`. Experimental in gh-aw; the compiler says so on every
-   compile. That warning is expected.
+1. `id: opencode`, no version pin. The worker's `imports:` pull `shared/opencode.md`, the
+   behavior-defined engine forked from gh-aw's and tracked in this repository; the engine's
+   `installation` block there owns the `@opencode/cli` pin (2.0.26 today). Experimental in gh-aw;
+   the compiler says so on every compile. That warning is expected.
 2. All three budgets. `max-turns` bounds tool loops. `max-turn-cache-misses: 3000` stops otherwise
    healthy runs failing at the compiler default of five consecutive misses, because Forge has no
    prompt cache so every turn is a miss. `max-ai-credits` gives multi-phase pipelines room.
@@ -58,12 +60,11 @@ them decides anything.
 
 | Layer | Value | What it does |
 |---|---|---|
-| gh-aw `model:` | `openai/glm-5-2` | Satisfies the compiler's provider validation. Nothing else. |
-| worker `env:` `AGENT_LEAD_MODEL` | `forge/glm-5-2` (see the pricing note below) | The model the worker's own session runs on. The CI merge step writes it onto `ci-workflow-agent` |
-| `opencode.ci.json` `model` | `forge/glm-5-2` | The default for every agent with no model of its own |
-| `harness.json` `models` | `plainconcepts/<model>` per tier | The models of the tier subagents and of `planner`; `opencode.ci.json` declares the `plainconcepts` provider so they resolve in CI |
-| `opencode.ci.json` `provider.forge.api` | `{env:FORGE_API_URL}` | Where the request goes |
-| `engine.args: ["--model", ...]` | discarded | The compiler drops it. See below |
+| gh-aw `model:` | `openai/glm-5-2` | Compiles to `OPENCODE_MODEL`; the engine harness parses it for the provider and the model |
+| worker `env:` `AGENT_LEAD_MODEL` | `awf-proxy/glm-5-2` | The lead model. The CI merge step writes it onto `ci-workflow-agent` |
+| worker `env:` `GH_AW_OPENCODE_MODELS` | `glm-5-2,glm-5-3` | The roster. The harness declares every name on the `awf-proxy` provider, so subagents and tiers resolve |
+| `harness.json` `models` | team naming, remapped | The CI setup rewrites every tier onto `awf-proxy/<model>` in the gitignored `harness.user.json` |
+| the engine harness (`shared/opencode.md`) | the `awf-proxy` provider | Discovers the gateway through AWF `/reflect`, declares the roster, denies every other provider by policy |
 
 The gh-aw provider segment must be one of `copilot`, `anthropic`, `openai`, `codex`. Naming our own
 gateway is rejected at compile time:
@@ -124,21 +125,28 @@ Before these prices `glm-5-2` was the only model that ran, metered by prefix mat
 rate. Change `AGENT_LEAD_MODEL`, `model` and `AGENT_TIER_MODEL` to a newly priced model once one CI run
 on it has passed.
 
-### `engine.args` is discarded, so do not reach for it
+### The definition fork, and what it changes
 
-Adding `args: ["--model", "plainconcepts/glm-5-2"]` to be explicit is a reasonable instinct and it
-does nothing. Verified on v0.83.4 by compiling two workers that differ only in that block: neither
-lock file contains `--model` anywhere, and both set `OPENCODE_MODEL: awf-proxy/glm-5-2`.
+The engine is behavior-defined: one markdown file, `loops/workflows/shared/opencode.md`, that gh-aw
+compiles into every lock. Ours is forked from gh-aw's and re-diffs against upstream on every
+upgrade. Three deltas, each with a production incident behind it:
 
-So the model comes from `model:` plus `opencode.ci.json`, and the provider gh-aw hands the CLI is its
-own. A worker carrying `engine.args` is dead configuration that reads like a control, which is worse
-than absent. Delete it.
+- The roster. Upstream declares exactly the lead model on `awf-proxy`, so a run carrying a cast
+  (lead, a verifier subagent at temperature 0, harness tiers) cannot resolve any model but the
+  lead. The harness declares `GH_AW_OPENCODE_MODELS` alongside it; every model rides the same
+  provider and the deny-all policy and placeholder credentials are untouched.
+- No forced `--agent build`. Upstream pins the run to OpenCode's built-in agent and ignores the
+  repository's `default_agent`; without the flag, `ci-workflow-agent` and its CI rules apply.
+- The nudge. A run that exits clean with no safe output is continued on the same session
+  (`--session <id>`, the ID already captured from the event stream), twice at most, and told to
+  finish with the safe-output call the task names.
 
 ### The CI config merge
 
 `opencode.jsonc` is a developer's local config and is not tracked, so it does not exist in a CI
-checkout. Without a merge step the only config the agent gets is the one gh-aw generates, which
-declares provider `awf-proxy` with a model that is not ours.
+checkout. Without a merge step the agent gets only the engine harness's runtime config: no
+`ci-workflow-agent` persona, no `finding-verifier`, and the cheap default model instead of the
+worker's lead.
 
 The merge belongs in `pre-agent-steps:`, not `steps:`. Verified ordering inside the agent job:
 
@@ -322,28 +330,12 @@ Mitigation is twofold:
 
 ---
 
-## The trap: `tools:` is ignored
+## The `tools:` block
 
-```
-Warning: 'tools' section ignored when using engine: opencode
-  (OpenCode doesn't support MCP tool allow-listing)
-```
-
-The compiler prints that once and drops the entire `tools:` block. Verified by compiling a workflow
-with `tools.cache-memory` configured and finding zero references in the resulting lock file.
-
-| You wrote | What happens |
-|---|---|
-| `tools: bash: ["gh run view"]` | Dropped. The agent's shell is unrestricted |
-| `tools: cache-memory:` | Dropped. No cache is created or restored |
-| `tools: repo-memory:` | Dropped. No memory branch |
-| `tools: github: toolsets: [issues]` | Dropped. The GitHub MCP server is mounted unrestricted |
-| `mcp-servers:` | Dropped |
-
-Three consequences:
-
-Do not write a `tools:` block. Dead configuration that reads like a control is worse than none: the
-next reader believes the workflow is constrained when it is not.
+gh-aw 1.2.2 keeps a `tools:` block for engines whose definition declares `tools-allowlist: true`,
+which ours does; the drop warning only fires for engines without the capability. Platform workers
+still carry none. The constraints that matter are enforced outside the agent and hold regardless of
+what the engine supports.
 
 The constraints that remain are the ones that matter. `permissions: read-all` means the token cannot
 write. `safe-outputs` with `allowed:` lists means writes are enumerated and validated.
@@ -364,7 +356,7 @@ database for anything a human should be able to see.
 | `max-turns:` | yes | Platform: `300`. The real guard against a confused agent looping |
 | `max-turn-cache-misses:` | yes | Platform: `3000`. Forge has no cache, so every turn is a miss |
 | `max-ai-credits:` | unreliable | Platform: `5000`. Only engages when traffic passes gh-aw's proxy accounting |
-| `tools.timeout:` | no | Inside the dropped block |
+| `tools.timeout:` | no | The platform writes no `tools:` block |
 
 ---
 

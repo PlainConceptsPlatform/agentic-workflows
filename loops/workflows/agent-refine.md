@@ -5,13 +5,16 @@ env:
   # every agent without its own model falls back to; the lead is where a wrong call costs a run,
   # so it names its model here. `model:` below only satisfies the compiler. A repository may
   # change it to any model its opencode.ci.json declares.
-  AGENT_LEAD_MODEL: "forge/glm-5-3"
-  # Every harness tier (plan, build, fast) on one model the CI's Forge account is granted.
-  # harness.json names quasar-438b and carina-60b, which that account is not granted: Pliny-Bot
-  # #823's build tasks failed on quasar. Empty runs the tiers harness.json names.
-  AGENT_TIER_MODEL: "plainconcepts/glm-5-2"
-  # The fast tier alone, while the CI's Forge account is not granted carina-60b.
-  AGENT_FAST_MODEL: "plainconcepts/glm-5-2"
+  AGENT_LEAD_MODEL: "awf-proxy/glm-5-3"
+  # Every model a subagent in this run may name, so the harness declares them all on the
+  # awf-proxy provider (shared/opencode.md). Per-agent model values are awf-proxy/<model>.
+  GH_AW_OPENCODE_MODELS: "glm-5-2,glm-5-3"
+  # Pins every harness tier (plan, build, fast) onto one model. The CI setup remaps whatever
+  # harness.json names onto awf-proxy/<model> (shared/opencode-ci.md), so empty runs the tiers
+  # harness.json names; set this only to override them.
+  AGENT_TIER_MODEL: "awf-proxy/glm-5-2"
+  # The fast tier alone, when a repository's account is not granted what harness.json names for it.
+  AGENT_FAST_MODEL: "awf-proxy/glm-5-2"
   REPO_RULES: "Refine only the selected issue into a grounded, implementation-ready user story. Read repository documentation for domain context. Write acceptance criteria that match existing patterns. Where a story or its open questions decide how business data (named people, roles, addresses) is stored, resolve it toward the repository's convention for that data -- a database entity or a settings entry -- and record that choice in the acceptance criteria; do not carry a person's name or email address into the story as something the code reads from a constant. Do not implement code. Do not use web search or web fetch tools. The issue body already contains the research that motivated it; derive your domain context from the repository's own code and documentation only."
   # The estimate decides whether a story gets split, and the prompt tells the agent these bands
   # come from this repository's own merged pull requests. They have to actually come from it, or
@@ -131,7 +134,7 @@ concurrency:
   cancel-in-progress: false
 
 imports:
-  - github/gh-aw/.github/workflows/shared/opencode.md@v0.87.5
+  - shared/opencode.md
   - shared/platform-defaults.md
   - shared/opencode-ci.md
 
@@ -262,6 +265,8 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-issues: write
       # GITHUB_TOKEN on purpose. A label applied by the app raises a labeled event, and the
       # classifier routes bot-working straight back into this same worker: the second run
       # queues behind this one and then executes, doing the work twice. Nothing needs to see
@@ -466,6 +471,10 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-issues: write
+          permission-pull-requests: write
+          permission-contents: write
       # Path B needs this step, exactly as triage and merge-gate have it. `staged: true` above
       # means the framework writes nothing, so without an apply the run validates everything and
       # publishes nothing: the agent's comment and the refined body stay in the artifact, conclude
@@ -873,6 +882,8 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-issues: write
       - name: Decide whether this failure is worth repeating
         id: decide
         uses: ./.github/actions/decide-agent-retry
@@ -1018,7 +1029,8 @@ secrets:
 
 engine:
   id: opencode
-  version: "1.2.14"
+  # Lowered from gh-aw's default 3: a fix released yesterday is usable. Strict mode rejects zero.
+  cooldown: 1
   env:
     OPENAI_BASE_URL: https://forge.plainconcepts.com/v1
 

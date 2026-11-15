@@ -2172,14 +2172,12 @@ if worker_installed implement; then
     echo "FAIL: the implement prompt must verify once on the final tree, let independent tasks run in parallel and work in few turns" >&2
   fi
 fi
-# gh-aw leaves OPENCODE_MODEL empty, so every lead ran on opencode.ci.json's one model. Each worker
-# names its own in AGENT_LEAD_MODEL, the merge step writes it onto ci-workflow-agent, and the model
-# it names, like every tier model in harness.json, has to be declared in opencode.ci.json or the
-# run dies at its first turn on "model not found".
+# The engine harness declares the models on the awf-proxy provider at runtime, from each
+# worker's GH_AW_OPENCODE_MODELS roster (shared/opencode.md). A lead or tier model missing
+# from the roster dies at its first turn on "model not found", so the roster is the list to
+# check: the old opencode.ci.json providers lookup died with the providers block, because
+# the runtime config, not the repository config, now owns the provider.
 LEAD_OK=1
-# A consumer has it at its root; this package keeps the template beside the workflows.
-CI_JSON="${HERE}/../../../opencode.ci.json"
-[ -f "$CI_JSON" ] || CI_JSON="${HERE}/../../templates/opencode/opencode.ci.json"
 for route in refine implement triage apply-review merge-gate audit docs-audit release; do
   worker_md="${WORKFLOWS_DIR}/agent-${route}.md"
   [ -f "$worker_md" ] || continue
@@ -2187,11 +2185,13 @@ for route in refine implement triage apply-review merge-gate audit docs-audit re
   if [ -z "$lead" ]; then
     LEAD_OK=0; echo "FAIL: agent-${route} names no AGENT_LEAD_MODEL, so its session runs on the cheap default" >&2; continue
   fi
-  if [ -f "$CI_JSON" ] && ! jq -e --arg p "${lead%%/*}" --arg m "${lead#*/}" '.providers[$p].models[$m]' "$CI_JSON" > /dev/null; then
-    LEAD_OK=0; echo "FAIL: agent-${route} leads on ${lead}, which opencode.ci.json does not declare" >&2
-  fi
+  roster=$(sed -n 's/^  GH_AW_OPENCODE_MODELS: "\(.*\)"$/\1/p' "$worker_md")
+  case ",${roster}," in
+    *",${lead#*/},"*) ;;
+    *) LEAD_OK=0; echo "FAIL: agent-${route} leads on ${lead}, which its GH_AW_OPENCODE_MODELS roster does not declare" >&2 ;;
+  esac
 done
-if [ -f "${WORKFLOWS_DIR}/agent-refine.md" ] && grep -q '^  AGENT_LEAD_MODEL: "forge/carina' "${WORKFLOWS_DIR}/agent-refine.md"; then
+if [ -f "${WORKFLOWS_DIR}/agent-refine.md" ] && grep -q '^  AGENT_LEAD_MODEL: ".*carina' "${WORKFLOWS_DIR}/agent-refine.md"; then
   LEAD_OK=0; echo "FAIL: refine must never lead on carina" >&2
 fi
 if ! grep -qF 'jq --arg model "$AGENT_LEAD_MODEL"' "${WORKFLOWS_DIR}/shared/opencode-ci.md"; then
@@ -2238,9 +2238,11 @@ for route in refine implement triage apply-review merge-gate audit docs-audit re
   [ -f "$worker_md" ] || continue
   tier=$(sed -n 's/^  AGENT_TIER_MODEL: "\(.*\)"$/\1/p' "$worker_md")
   [ -n "$tier" ] || continue
-  if [ -f "$CI_JSON" ] && ! jq -e --arg p "${tier%%/*}" --arg m "${tier#*/}" '.providers[$p].models[$m]' "$CI_JSON" > /dev/null; then
-    PLUGINS_OK=0; echo "FAIL: agent-${route} pins its tiers to ${tier}, which opencode.ci.json does not declare" >&2
-  fi
+  roster=$(sed -n 's/^  GH_AW_OPENCODE_MODELS: "\(.*\)"$/\1/p' "$worker_md")
+  case ",${roster}," in
+    *",${tier#*/},"*) ;;
+    *) PLUGINS_OK=0; echo "FAIL: agent-${route} pins its tiers to ${tier}, which its GH_AW_OPENCODE_MODELS roster does not declare" >&2 ;;
+  esac
 done
 if [ "$PLUGINS_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # The shape of the tests reaches the agent only through these two prompts (check-diff measures size,
@@ -3510,14 +3512,17 @@ fi
 # No prompt rule stopped the model ending a turn in text; the compiled engine command continues the
 # session when no safe output exists. Pliny-Bot #771 passed verify and exited with nothing delivered.
 COMPILE_MJS="${HERE}/../../scripts/compile-agent-workflows.mjs"
-# In a consumer the action sits under .github/ and the script at the repository root.
-[ -f "$COMPILE_MJS" ] || COMPILE_MJS="${HERE}/../../../scripts/compile-agent-workflows.mjs"
-if [ -f "$COMPILE_MJS" ] && grep -qF 'opencode run --continue' "$COMPILE_MJS"   && grep -qF 'gh-aw/safeoutputs/outputs.jsonl' "$COMPILE_MJS"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  echo "FAIL: the compiled engine command does not continue a session that delivered nothing" >&2
-fi
+  # In a consumer the engine definition sits under .github/workflows/shared/ and the script at
+  # the repository root. The nudge lives in the definition's harness: after a clean exit with
+  # no safe output, the same session (`--session <id>`) is continued, twice at most.
+  ENGINE_MD="${HERE}/../../workflows/shared/opencode.md"
+  [ -f "$ENGINE_MD" ] || ENGINE_MD="${HERE}/../../../.github/workflows/shared/opencode.md"
+  if [ -f "$ENGINE_MD" ] && grep -qF 'args: [...commandArgs, "--session", sessionID]' "$ENGINE_MD" && grep -qF 'No safe output yet, continuing the session' "$ENGINE_MD" && grep -qF 'const nudgeMessage' "$ENGINE_MD"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the compiled engine command does not continue a session that delivered nothing" >&2
+  fi
 # A patch the base moved under is rebased and opened as a pull request before anyone is asked: Pliny-Bot
 # #787 and #794 sat as issues until rebased by hand. The rescue must run before the pull request steps,
 # and the push-failure flags must stay quiet when it worked.
