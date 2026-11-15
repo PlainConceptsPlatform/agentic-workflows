@@ -363,9 +363,21 @@ update_branch() {
 # How many gate runs were started for a pull request since a moment, whatever became of them. A
 # run is titled by the router's run-name; this is the one count that does not depend on the gate
 # having written anything.
+# Gate runs on this pull request since $2 whose agent actually ran. A gate that hands the pull request
+# back before its agent starts (CI still running on a new head, the subject gone) leaves no verdict and
+# no attempt by design; counting it made the train call the next one "a gate that did nothing" and
+# never offer the pull request again on that head (a consumer's approved, green PR sat that way).
 gate_run_count() {
-  local pr="$1" since="$2"
-  gh api --paginate "repos/$REPO/actions/workflows/work-router.yml/runs?event=workflow_dispatch&per_page=100"     --jq "[.workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\") | select(.created_at > \"$since\")] | length"     2>/dev/null | awk '{ n += $1 } END { print n + 0 }'
+  local pr="$1" since="$2" id ran=0
+  for id in $(gh api --paginate "repos/$REPO/actions/workflows/work-router.yml/runs?event=workflow_dispatch&per_page=100" \
+    --jq ".workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\") | select(.created_at > \"$since\") | .id" 2>/dev/null); do
+    if gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" \
+      --jq '[.jobs[] | select((.name | endswith("/ agent")) and .conclusion != null and .conclusion != "skipped")] | length > 0' \
+      2>/dev/null | grep -qx true; then
+      ran=$((ran + 1))
+    fi
+  done
+  echo "$ran"
 }
 
 attempt_count() {
