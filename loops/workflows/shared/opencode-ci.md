@@ -331,6 +331,19 @@ pre-agent-steps:
         merged=$(jq -S . "$FRAGMENT")
       fi
 
+      # The repository's config can declare local MCP servers a developer machine runs (the
+      # browse relay from agent-harness 3.10.0, anything else that spawns). Inside the awf
+      # sandbox there is no relay and no local binary, and OpenCode 2 fails the whole run on an
+      # MCP startup failure ("mcp connect failed ... ChildProcess.spawn"), model turns and all:
+      # the Numa probe run did its work and died on it. CI gets exactly the two gateway servers,
+      # so local-only servers are dropped from the merged config here, before opencode reads it.
+      merged=$(printf '%s' "$merged" | jq '
+        def local_only: .type == "local" or (has("command") and (.type == null)) or .type == "stdio";
+        if .mcp.servers then
+          .mcp.servers |= with_entries(select((.value | local_only) | not))
+        else . end
+        | if .mcp.servers == {} then del(.mcp) else . end')
+
       # The worker's lead model, from its env. gh-aw leaves OPENCODE_MODEL empty, so without this
       # every worker's session would run on opencode.ci.json's default.
       if [ -n "${AGENT_LEAD_MODEL:-}" ]; then
