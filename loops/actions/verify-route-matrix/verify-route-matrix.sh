@@ -3512,11 +3512,10 @@ else
 fi
 # No prompt rule stopped the model ending a turn in text; the compiled engine command continues the
 # session when no safe output exists. Pliny-Bot #771 passed verify and exited with nothing delivered.
-COMPILE_MJS="${HERE}/../../scripts/compile-agent-workflows.mjs"
-  # In a consumer the engine definition sits under .github/workflows/shared/ and the script at
-  # the repository root. The nudge lives in the definition's harness: after a clean exit with
-  # no safe output, the same session (`--session <id>`) is continued, twice at most.
-  ENGINE_MD="${HERE}/../../workflows/shared/opencode.md"
+# In a consumer the engine definition sits under .github/workflows/shared/ and the script at
+# the repository root. The nudge lives in the definition's harness: after a clean exit with
+# no safe output, the same session (`--session <id>`) is continued, twice at most.
+ENGINE_MD="${HERE}/../../workflows/shared/opencode.md"
   [ -f "$ENGINE_MD" ] || ENGINE_MD="${HERE}/../../../.github/workflows/shared/opencode.md"
   if [ -f "$ENGINE_MD" ] && grep -qF 'args: [...commandArgs, "--session", sessionID]' "$ENGINE_MD" && grep -qF 'No safe output yet, continuing the session' "$ENGINE_MD" && grep -qF 'const nudgeMessage' "$ENGINE_MD"; then
     PASS=$((PASS + 1))
