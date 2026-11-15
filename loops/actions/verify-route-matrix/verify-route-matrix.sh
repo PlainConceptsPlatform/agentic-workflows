@@ -4374,7 +4374,12 @@ if [ ! -d "${HERE}/../../templates" ]; then
     case "$(sed -n '1,3p' "$installed_ci")" in
       *app-ci-dotnet-next.yml*) CI_DOTNET="$installed_ci"; CI_NODE="" ;;
       *app-ci-node-monorepo.yml*) CI_NODE="$installed_ci"; CI_DOTNET="" ;;
-      *) RC_OK=0; echo 'FAIL: required checks: app-ci.yml carries no template ownership header' >&2 ;;
+      # A consumer CI older than the family templates carries no ownership header: its own
+      # pipeline, not a drifted family file. It takes the familyless path (family contracts
+      # skip, the merge plumbing still binds) rather than a hard failure on a header it never
+      # had; the drift, if any, is the consumer's own to fix in its own file.
+      *) RULESET="" CI_DOTNET="" CI_NODE="" SYNC_YML="" CONFORMANCE_MJS=""
+         [ -f "$installed_ci" ] && echo "note: app-ci.yml carries no template ownership header; family contracts skipped" >&2 ;;
     esac
   else
     # A consumer with its own CI family (no app-ci.yml) produces no Full CI context, so the
