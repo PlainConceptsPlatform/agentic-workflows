@@ -285,12 +285,15 @@ jobs:
     # once the payload is written, and safe_outputs still publishes it. That run has an outcome, so
     # it concludes here, where the rescue can open a pull request the run was refused, instead of
     # being retried from scratch by `incomplete` (a consumer's issue was implemented three times).
+    # The agent job's own output_types can be empty when it dies late, so safe_outputs' item counter,
+    # which it sets whenever it published something, counts too (a consumer's #73 was missed that way).
     if: >
       always() &&
       needs.safe_outputs.result == 'success' &&
       (
         needs.agent.result == 'success' ||
-        contains(needs.agent.outputs.output_types, 'create_pull_request')
+        contains(needs.agent.outputs.output_types, 'create_pull_request') ||
+        (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0')
       )
     runs-on: agents-arc
     permissions:
@@ -584,7 +587,10 @@ jobs:
       ) &&
       !(
         needs.safe_outputs.result == 'success' &&
-        contains(needs.agent.outputs.output_types, 'create_pull_request')
+        (
+          contains(needs.agent.outputs.output_types, 'create_pull_request') ||
+          (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0')
+        )
       )
     runs-on: agents-arc
     permissions:

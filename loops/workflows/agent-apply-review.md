@@ -252,7 +252,8 @@ jobs:
     if: >
       always() &&
       needs.safe_outputs.result == 'success' &&
-      (needs.agent.result == 'success' || needs.agent.outputs.output_types != '')
+      (needs.agent.result == 'success' || needs.agent.outputs.output_types != '' ||
+        (needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '' && needs.safe_outputs.outputs.process_safe_outputs_items_succeeded != '0'))
     runs-on: agents-arc
     permissions:
       contents: read
