@@ -2649,9 +2649,15 @@ if worker_installed merge-gate; then
   mk 'looks different from it is never a finding' "$MERGE_GATE_WORKER_MD" 'merge-gate may count a visual difference from the mockup as a finding'
   mk 'never the mockup' "$MERGE_GATE_WORKER_MD" 'merge-gate may judge acceptance criteria against the mockup'
 fi
-[ -f "${HERE}/../../templates/quality-gates/.semgrep/platform-mockup-leak.yml" ] ||
-  [ -f "${HERE}/../../../.semgrep/platform-mockup-leak.yml" ] ||
-  { MK_OK=0; echo "FAIL: mockups: the Semgrep rule that catches copied mockup markup is missing" >&2; }
+# The rule ships with the quality-gates family. A consumer that never installed it carries
+# none of its rules (its .semgrep holds only repository-local ones), so nothing to check;
+# the failure binds only where the family is installed and the rule is missing.
+if [ ! -f "${HERE}/../../templates/quality-gates/.semgrep/platform-mockup-leak.yml" ] &&
+   [ ! -f "${HERE}/../../../.semgrep/platform-mockup-leak.yml" ] &&
+   ls "${HERE}/../../../.semgrep/"platform-*.yml > /dev/null 2>&1; then
+  MK_OK=0
+  echo "FAIL: mockups: the Semgrep rule that catches copied mockup markup is missing" >&2
+fi
 
 if [ "$MK_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
@@ -4347,7 +4353,10 @@ echo "── Required checks and side workflows ──────────�
 # side workflows no ruleset can require (Agentics checks runs only on its paths) must be checked
 # by both merge points and held by the train. Dropping any one of these lets a red job merge.
 RC_OK=1
-rc() { grep -qE "$1" "$2" || { RC_OK=0; echo "FAIL: required checks: $3" >&2; }; }
+# rc <pattern> <file> <message>: no file means the assertion's subject is not installed in this
+# repository (a consumer outside the platform CI family has no app-ci.yml, no template sync),
+# and skipping is correct: the contract only binds where its subject exists.
+rc() { [ -n "$2" ] || return 0; grep -qE "$1" "$2" || { RC_OK=0; echo "FAIL: required checks: $3" >&2; }; }
 CI_DOTNET="${HERE}/../../templates/ci/app-ci-dotnet-next.yml"
 CI_NODE="${HERE}/../../templates/ci/app-ci-node-monorepo.yml"
 RULESET="${HERE}/../../templates/rulesets/main-required-checks.json"
@@ -4367,10 +4376,18 @@ if [ ! -d "${HERE}/../../templates" ]; then
       *app-ci-node-monorepo.yml*) CI_NODE="$installed_ci"; CI_DOTNET="" ;;
       *) RC_OK=0; echo 'FAIL: required checks: app-ci.yml carries no template ownership header' >&2 ;;
     esac
+  else
+    # A consumer with its own CI family (no app-ci.yml) produces no Full CI context, so the
+    # Full CI ruleset cannot bind there: its branch protection is its own. The ruleset,
+    # CI-family and platform-template assertions are family contracts and all skip; the
+    # merge-side workflows still bind.
+    RULESET="" CI_DOTNET="" CI_NODE="" SYNC_YML="" CONFORMANCE_MJS=""
   fi
+  ci_family=0
+  [ -n "$CI_DOTNET$CI_NODE" ] && ci_family=1
   [ -f "${root}.github/workflows/platform-template-sync.yml" ] && SYNC_YML="${root}.github/workflows/platform-template-sync.yml"
   [ -f "${root}scripts/check-platform-conformance.mjs" ] && CONFORMANCE_MJS="${root}scripts/check-platform-conformance.mjs"
-  if [ -n "${GITHUB_REPOSITORY:-}" ] && command -v gh > /dev/null 2>&1; then
+  if [ "$ci_family" = 1 ] && [ -n "${GITHUB_REPOSITORY:-}" ] && command -v gh > /dev/null 2>&1; then
     live="$(mktemp)"
     if gh api "repos/${GITHUB_REPOSITORY}/rulesets" --jq '.[].id' 2>/dev/null | while read -r id; do
       gh api "repos/${GITHUB_REPOSITORY}/rulesets/${id}" 2>/dev/null || true
@@ -4393,7 +4410,7 @@ rc 'side-checks\.sh' "${HERE}/../land-pull-request/land-pull-request.sh" 'land-p
 rc 'side-checks\.sh' "${HERE}/../merge-agent-pr/action.yml" 'merge-agent-pr must check the side workflows'
 rc 'land-pull-request/side-checks\.sh' "${HERE}/../merge-train/merge-train.sh" 'the merge train must hold a pull request whose side workflow is red'
 rc 'test-timings\.mjs' "$CI_DOTNET" 'the .NET template must summarise the test timings'
-[ "$(grep -c -- '--logger trx' "$CI_DOTNET" 2>/dev/null)" -ge 5 ] || { RC_OK=0; echo "FAIL: required checks: every .NET test step must write a trx report" >&2; }
+[ -z "$CI_DOTNET" ] || { [ "$(grep -c -- '--logger trx' "$CI_DOTNET" 2>/dev/null)" -ge 5 ] || { RC_OK=0; echo "FAIL: required checks: every .NET test step must write a trx report" >&2; }; }
 # The template sync installs copier on a runner whose Python cannot make a venv: the pinned uv it
 # falls back to must stay checked against its SHA-256, or the sync never runs (it never had).
 rc '^  UV_SHA256: [0-9a-f]{64}$' "$SYNC_YML" 'the template sync must pin uv by SHA-256'
