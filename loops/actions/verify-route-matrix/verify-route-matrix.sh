@@ -3344,6 +3344,15 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: the train counts a gate that handed the pull request back as a gate that did nothing" >&2
 fi
+# A stack child the train lands is closed by the train: GitHub only closes on the default branch,
+# and an open finished child keeps its root from ever being gated.
+if grep -qF 'close_landed_child "$linked_issue"' "${HERE}/../merge-train/merge-train.sh" \
+  && grep -qF '"$base_ref" != "$DEFAULT_BRANCH"' "${HERE}/../merge-train/merge-train.sh"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the train lands a stack child without closing its issue, so the root waits forever" >&2
+fi
 # Housekeeping never re-implements an issue whose work exists: an open pull request parks it as
 # pr-pending, and a pushed branch with no pull request gets one.
 if [ -f "${HERE}/../housekeeping/action.yml" ]; then
