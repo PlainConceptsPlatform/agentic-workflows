@@ -2456,6 +2456,11 @@ if worker_installed merge-gate; then
     assert "a parked pull request approved on its head, green, is landed" land "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
     assert "an approved parked pull request with red CI is not landed" skip "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
     assert "an approved parked pull request that conflicts is not landed" skip "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=CONFLICTING CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "an approved green pull request whose gate budget is spent is landed" land "$(move APPROVED_ON_HEAD=true ATTEMPTS=6 MAX_ATTEMPTS=6 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "an approved green pull request after a silent gate is landed" land "$(move APPROVED_ON_HEAD=true SILENT_GATE=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a spent budget without an approval still skips" skip "$(move ATTEMPTS=6 MAX_ATTEMPTS=6 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "an approved pull request with a spent budget and red CI is not landed" skip "$(move APPROVED_ON_HEAD=true ATTEMPTS=6 MAX_ATTEMPTS=6 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
+    assert "an approved pull request with a spent budget that conflicts is not landed" skip "$(move APPROVED_ON_HEAD=true ATTEMPTS=6 MAX_ATTEMPTS=6 MERGEABLE=CONFLICTING CI_STATUS=completed CI_CONCLUSION=success)"
     assert "an unanswered change request is sent to the agent" apply-review "$(move REVIEW_DECISION=CHANGES_REQUESTED CHANGES_UNANSWERED=true CI_STATUS=completed CI_CONCLUSION=success)"
     assert "an answered change request waits for its reviewer" skip "$(move REVIEW_DECISION=CHANGES_REQUESTED CHANGES_UNANSWERED=false CI_STATUS=completed CI_CONCLUSION=success)"
     assert "hold beats an approval" skip "$(move HOLD=true PARK=held APPROVED_ON_HEAD=true CI_STATUS=completed CI_CONCLUSION=success)"
@@ -3617,11 +3622,12 @@ for worker in apply-review merge-gate; do
 done
 # A gate that handed the pull request back before its agent ran is not a silent gate: the train
 # counts only gate runs whose agent job ran, or an approved green pull request waits forever.
-if grep -qF 'endswith("/ agent")' "${HERE}/../merge-train/merge-train.sh"; then
+if grep -qF 'endswith("/ agent")' "${HERE}/../merge-train/merge-train.sh" \
+  && grep -qF 'test("/ (pre_)?activation$")' "${HERE}/../merge-train/merge-train.sh"; then
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))
-  echo "FAIL: the train counts a gate that handed the pull request back as a gate that did nothing" >&2
+  echo "FAIL: the train counts a gate that handed the pull request back as a gate that did nothing, or ignores a gate whose activation failed" >&2
 fi
 # A stack child the train lands is closed by the train: GitHub only closes on the default branch,
 # and an open finished child keeps its root from ever being gated.

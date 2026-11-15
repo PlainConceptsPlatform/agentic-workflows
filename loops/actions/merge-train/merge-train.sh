@@ -82,6 +82,13 @@ train_move() {
     move=land; reason="nobody reviewed it in the time allowed, so the gate's review stands (auto-decided)"
   elif [ "${PARK:-none}" = held ]; then
     move=skip; reason="a gate verdict on this head is waiting for a person"
+  elif [ "${APPROVED_ON_HEAD:-false}" = true ] &&
+    { [ "${ATTEMPTS:-0}" -ge "${MAX_ATTEMPTS:-6}" ] || [ "${SILENT_GATE:-false}" = true ]; } &&
+    [ "${CI_STATUS:-none}" = completed ] && [ "${CI_CONCLUSION:-}" = success ] &&
+    [ "${MERGEABLE:-UNKNOWN}" != CONFLICTING ]; then
+    # The gate cannot decide on this head any more, and a writer already did: an approved, green
+    # pull request used to sit skipped until someone merged it by hand.
+    move=land; reason="a writer approved this head and its gate can no longer decide on it"
   elif [ "${ATTEMPTS:-0}" -ge "${MAX_ATTEMPTS:-6}" ]; then
     move=skip; reason="its gate attempt budget on this head is spent"
   elif [ "${SILENT_GATE:-false}" = true ]; then
@@ -380,13 +387,17 @@ update_branch() {
 # back before its agent starts (CI still running on a new head, the subject gone) leaves no verdict and
 # no attempt by design; counting it made the train call the next one "a gate that did nothing" and
 # never offer the pull request again on that head (a consumer's approved, green PR sat that way).
+# A gate whose activation failed (a missing engine secret, a broken setup) counts too: it is broken,
+# not handing back, and leaving it out made the train ask again on every tick (33 runs in two hours
+# on a consumer, each one a runner).
 gate_run_count() {
   local pr="$1" since="$2" id workflow ran=0
   for workflow in $GATE_WORKFLOWS; do
     for id in $(gh api --paginate "repos/$REPO/actions/workflows/$workflow/runs?event=workflow_dispatch&per_page=100" \
       --jq ".workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\") | select(.created_at > \"$since\") | .id" 2>/dev/null); do
       if gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" \
-      --jq '[.jobs[] | select((.name | endswith("/ agent")) and .conclusion != null and .conclusion != "skipped")] | length > 0' \
+      --jq '[.jobs[] | select(((.name | endswith("/ agent")) and .conclusion != null and .conclusion != "skipped")
+        or ((.name | test("/ (pre_)?activation$")) and .conclusion == "failure"))] | length > 0' \
         2>/dev/null | grep -qx true; then
         ran=$((ran + 1))
       fi
