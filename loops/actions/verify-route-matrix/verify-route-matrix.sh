@@ -3621,6 +3621,15 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: the train lands a stack child without closing its issue, so the root waits forever" >&2
 fi
+# Housekeeping sends back an implement issue that nothing will ever pick up (no run, no hold, no
+# pull request, no open blocker), once a day at most.
+if grep -qF "ORPHAN_MARKER = '<!-- housekeeping-orphan -->'" "${HERE}/../housekeeping/action.yml" \
+  && grep -qF "liveRunTitles" "${HERE}/../housekeeping/action.yml"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: housekeeping leaves an implement issue nothing will pick up waiting forever" >&2
+fi
 # Housekeeping never re-implements an issue whose work exists: an open pull request parks it as
 # pr-pending, and a pushed branch with no pull request gets one.
 if [ -f "${HERE}/../housekeeping/action.yml" ]; then

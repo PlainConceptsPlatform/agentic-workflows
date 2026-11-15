@@ -32,6 +32,12 @@ Releases of `@plainconceptsplatform/workflows`. Earlier versions are described i
 
 Downgrading below 1.25.0 needs care: an older CLI does not know the new files and leaves them in place, so their jobs would run twice. Delete `agentics-housekeeping.yml`, `agentics-merge-belt.yml` and `agentics-pr-plumbing.yml` from `.github/workflows/` after the downgrade.
 
+## 1.24.6
+
+### Fixed
+
+- **Housekeeping picks up implement work nothing else will.** An issue could carry `implement` with nothing ever coming for it: a hand-over dispatch from refine that was lost, or a failed attempt whose retry never ran. With no working, stalled, review or pr-pending label, no stack hold, no open blocker, no open pull request and no live run, no event and no sweep looked at it again; on a consumer three stack heads and one retried story sat that way for two days. Housekeeping now sends such an issue back through the router, after the usual retry wait and at most once a day per issue, with a comment saying why.
+
 ## 1.24.5
 
 ### Fixed

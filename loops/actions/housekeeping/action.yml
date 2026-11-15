@@ -334,6 +334,57 @@ runs:
             released += 1;
           }
 
+          // 1c. Orphaned implement work. An issue can carry `implement` with nothing ever coming for it:
+          // a hand-over dispatch that was lost, or a failed attempt whose retry never ran. It has no
+          // working, stalled, review or pr-pending label, no stack hold, no open blocker, no open pull
+          // request and no live run, so no event and no other sweep will ever look at it again (a
+          // consumer had three stack heads and a retried story sit like that for two days). Send it
+          // back through the router, at most once a day per issue.
+          const ORPHAN_MARKER = '<!-- housekeeping-orphan -->';
+          let orphansSent = 0;
+          const liveRunTitles = [];
+          for (const status of ['queued', 'in_progress']) {
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              ...context.repo, workflow_id: 'work-router.yml', status, per_page: 100,
+            }).catch(() => ({ data: { workflow_runs: [] } }));
+            for (const run of data.workflow_runs) liveRunTitles.push(run.display_title ?? '');
+          }
+          for (const issue of [...issues].sort((a, b) => a.number - b.number)) {
+            if (issue.pull_request) continue;
+            const labels = names(issue);
+            if (!labels.includes('implement')) continue;
+            if (['bot-working', 'stalled', 'review', 'pr-pending', 'blocked'].some((l) => labels.includes(l))) continue;
+            if (age(issue.updated_at) < retryAfterMs) continue;
+            if (liveRunTitles.some((title) => new RegExp(`#${issue.number}\\b`).test(title))) continue;
+            if (pulls.some((p) => new RegExp(`(clos(e|es|ed)|fix(es|ed)?|resolves?)\\s+#${issue.number}\\b`, 'i').test(p.body ?? ''))) continue;
+            const thread = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo, issue_number: issue.number, per_page: 100,
+            });
+            if (thread.some((c) => (c.body ?? '').includes('<!-- stack-held -->'))) continue;
+            const lastOrphan = [...thread].reverse().find((c) => (c.body ?? '').includes(ORPHAN_MARKER));
+            if (lastOrphan && age(lastOrphan.created_at) < 24 * 3600 * 1000) continue;
+            const blockers = [...new Set([...(issue.body ?? '').matchAll(/blocked by #(\d+)/gi)].map((m) => Number(m[1])))];
+            let blocked = false;
+            for (const number of blockers) {
+              const blocker = await github.rest.issues.get({ ...context.repo, issue_number: number })
+                .then((r) => r.data).catch(() => null);
+              if (blocker && blocker.state === 'open') { blocked = true; break; }
+            }
+            if (blocked) continue;
+            await act(`#${issue.number}: re-dispatching implement, it carries implement with nothing running for it`, async () => {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: issue.number,
+                body: `${ORPHAN_MARKER}\nThis issue carries \`implement\`, but nothing has run for it and nothing is holding it, so it is going back through the router.`,
+              });
+              await github.rest.actions.createWorkflowDispatch({
+                ...context.repo, workflow_id: 'work-router.yml',
+                ref: context.payload.repository.default_branch,
+                inputs: { operation: 'implement', 'issue-number': String(issue.number) },
+              });
+            });
+            orphansSent += 1;
+          }
+
           // 2. Strands. pr-pending says a pull request is open and waiting; when that pull request
           // closed without merging, nothing ever took the label off.
           for (const issue of issues) {
