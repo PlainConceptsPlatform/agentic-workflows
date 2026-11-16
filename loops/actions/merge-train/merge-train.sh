@@ -77,6 +77,13 @@ train_move() {
     [ "${CI_STATUS:-none}" = completed ] && [ "${CI_CONCLUSION:-}" = success ] &&
     [ "${MERGEABLE:-UNKNOWN}" != CONFLICTING ]; then
     move=land; reason="a writer approved this head after the gate handed it over"
+  elif [ "${PARK:-none}" = held ] && [ "${VERDICT:-}" = auto-merge ] && [ "${STACK_ROOT:-false}" != true ] &&
+    [ "${CI_STATUS:-none}" = completed ] && [ "${CI_CONCLUSION:-}" = success ] &&
+    [ "${MERGEABLE:-UNKNOWN}" != CONFLICTING ]; then
+    # The gate already decided to merge this head; the merge itself did not happen (a token that
+    # could not read the runs, a side check still running). Waiting for the base to move left a
+    # stack child parked for good, since its feature branch moves only when a child lands.
+    move=land; reason="its gate decided to merge this head and the merge did not happen"
   elif [ "${PARK:-none}" = held ] && [ "${VERDICT:-}" = human-review ] && [ "${REVIEW_TIMED_OUT:-false}" = true ] &&
     [ "${CI_STATUS:-none}" = completed ] && [ "${CI_CONCLUSION:-}" = success ] &&
     [ "${MERGEABLE:-UNKNOWN}" != CONFLICTING ]; then
@@ -756,7 +763,7 @@ for line in "${candidates[@]}"; do
     CI_STATUS="$ci_status" CI_CONCLUSION="$ci_conclusion" CI_STUCK="$ci_stuck" SAME_AS_MAIN="$same_as_main" \
     BEHIND_BY="${behind_by:-0}" TRUSTED_AUTHOR="$trusted_author" CI_SHALLOW="$ci_shallow" \
     OPEN_CHILDREN="${open_children:-0}" APPROVED_ON_HEAD="$approved_on_head" CHANGES_UNANSWERED="$changes_unanswered" \
-    VERDICT="$verdict" REVIEW_TIMED_OUT="$review_timed_out" train_move)
+    VERDICT="$verdict" REVIEW_TIMED_OUT="$review_timed_out" STACK_ROOT="$stack_root" train_move)
   move=$(sed -n 's/^move=//p' <<<"$decision")
   reason=$(sed -n 's/^reason=//p' <<<"$decision")
 
