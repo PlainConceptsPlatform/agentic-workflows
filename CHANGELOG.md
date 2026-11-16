@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.26.12
+
+### Fixed
+
+- **The train finishes a merge the gate decided on.** When the gate's verdict was `auto-merge` and the merge itself did not happen (on 1.26.8 the token could not read the workflow runs), the train held the pull request until its base branch moved. A stack child's base is its feature branch, which moves only when a child lands, so on a consumer two approved, green children sat parked for hours. The train now lands a parked `auto-merge` verdict when CI is green and the pull request does not conflict, through the same landing checks the gate uses. A stack root's verdict still waits for a person.
+
 ## 1.26.11
 
 ### Fixed

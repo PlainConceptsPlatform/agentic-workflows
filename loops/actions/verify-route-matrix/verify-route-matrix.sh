@@ -2455,6 +2455,10 @@ if worker_installed merge-gate; then
     # Reviews submitted through the API do not always reach the router: the train answers them.
     assert "a second remediated verdict on one head stops the repairs" skip "$(move REMEDIATED_ON_HEAD=2 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
     assert "one remediated verdict newer than its head is a real repair" gate "$(move REMEDIATED_ON_HEAD=1 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
+    assert "a parked auto-merge verdict whose merge did not happen is landed" land "$(move PARK=held VERDICT=auto-merge MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a stack root's auto-merge verdict still waits for a person" skip "$(move PARK=held VERDICT=auto-merge STACK_ROOT=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
+    assert "a parked auto-merge verdict with red CI is not landed" skip "$(move PARK=held VERDICT=auto-merge MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
+    assert "a parked auto-merge verdict that conflicts is not landed" skip "$(move PARK=held VERDICT=auto-merge MERGEABLE=CONFLICTING CI_STATUS=completed CI_CONCLUSION=success)"
     assert "a parked pull request approved on its head, green, is landed" land "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
     assert "an approved parked pull request with red CI is not landed" skip "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
     assert "an approved parked pull request that conflicts is not landed" skip "$(move PARK=held APPROVED_ON_HEAD=true MERGEABLE=CONFLICTING CI_STATUS=completed CI_CONCLUSION=success)"
