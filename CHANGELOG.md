@@ -2,6 +2,18 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.27.1
+
+### Fixed
+
+- **The E2E job's API starts on the job's port.** `app-ci-dotnet-next` ran the API with the app's launch profile, whose `applicationUrl` overrides `ASPNETCORE_URLS`: on a consumer whose `launchSettings.json` pins another port, the health check waited on the job's port and the E2E job timed out. The API now starts with `--no-launch-profile`; the job env already sets the URLs, environment and auth provider.
+- **Vendored skill scripts stay out of SAST.** The quality-gates `.semgrepignore` replaced a consumer's own copy and dropped its line for `.agents/skills/*/scripts/`, the third-party helper scripts the agent harness installs, so Semgrep blocked on one of them. The managed file now ignores them.
+- **size-limit's raw report reaches the `web-quality` artifact,** so `check-bundle-size.mjs --write-baseline` can record a bundle baseline from a CI run.
+
+### Changed
+
+- **The consumer skill explains template refreshes:** `update` does not refresh `add --template` files; `--force` keeps nothing, so a repository's `env:` values and local step fixes must be carried over, and `GH_AW_VERSION` in `agentics-checks.yml` must follow the locks' compiler version.
+
 ## 1.27.0
 
 ### Added

@@ -4762,6 +4762,22 @@ else
   echo "FAIL: a scoped bot token lacks a permission its job uses" >&2
 fi
 
+# The E2E API ignores the app's launch profile, whose applicationUrl overrides the job's URLs.
+if grep -qF -- '--no-build --no-launch-profile > api.log' "${HERE}/../../templates/ci/app-ci-dotnet-next.yml"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the E2E API starts with the app's launch profile, which overrides ASPNETCORE_URLS" >&2
+fi
+# Vendored skill scripts stay out of SAST, and the raw size-limit report reaches the artifact.
+if grep -qxF '.agents/skills/*/scripts/' "${HERE}/../../templates/quality-gates/.semgrepignore" \
+  && grep -qF 'apps/web/size-limit.json' <(sed -n '/name: web-quality/,/retention-days/p' "${HERE}/../../templates/ci/app-ci-dotnet-next.yml"); then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: .semgrepignore misses the vendored skill scripts, or the web-quality artifact misses size-limit.json" >&2
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   TcMsg="Route matrix: ${PASS} passed"
