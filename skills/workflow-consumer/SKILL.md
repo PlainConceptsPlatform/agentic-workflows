@@ -75,6 +75,13 @@ Select one CI template only when its technology and commands suit the repository
 
 Full template selection guidance is in `references/templates.md`.
 
+`update` does not refresh these templates. To take a new template version, run `add --template <name>
+--force`, then put back what the repository changed: `--force` keeps nothing, so copy the old file's
+`env:` values and any step the repository fixed locally into the new one before committing (a dropped
+E2E fix turned a consumer's E2E job red). When the package's gh-aw version changes, set
+`GH_AW_VERSION` in `agentics-checks.yml` to the version in the generated locks' `compiler_version`, or
+its lockfile check fails.
+
 ## Customise standalone workers
 
 Managed files include ownership headers, source paths and the installed package version. Read the

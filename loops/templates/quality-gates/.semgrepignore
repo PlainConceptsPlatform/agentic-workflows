@@ -5,3 +5,8 @@
 # The locks carry their own checks in agentics-checks.yml (version agreement, freshness,
 # the needs lint); SAST scans the authored sources, not the compiler's output.
 .github/workflows/*.lock.yml
+
+# Third-party skill helper scripts that the agent harness installs under .agents/skills; they are
+# vendored tooling for the coding agents, never part of the app, and a scan of them blocked a
+# consumer's SAST job after this file replaced its own copy.
+.agents/skills/*/scripts/

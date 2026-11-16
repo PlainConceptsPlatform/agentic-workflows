@@ -425,6 +425,7 @@ jobs:
           path: |
             apps/web/knip-report.json
             apps/web/bundle-report.json
+            apps/web/size-limit.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -494,7 +495,11 @@ jobs:
           api="$API_WORKING_DIRECTORY/$API_PROJECT"
           export "$DATABASE_CONNECTION_ENV=Server=localhost,$SQL_PORT;Database=$PRIMARY_DATABASE;User Id=sa;Password=$SQL_SA_PASSWORD;TrustServerCertificate=true"
           dotnet build "$api" -c Release
-          nohup dotnet run --project "$api" -c Release --no-build > api.log 2>&1 &
+          # --no-launch-profile: an app's launchSettings.json pins its own applicationUrl, which overrides
+          # ASPNETCORE_URLS, so the API started on that port while the health check waited on the job's
+          # (a consumer's E2E job timed out this way). The job env already sets the URLs, the
+          # environment and the auth provider; the profile adds nothing CI needs.
+          nohup dotnet run --project "$api" -c Release --no-build --no-launch-profile > api.log 2>&1 &
           for _ in $(seq 1 60); do
             if curl -fsS http://localhost:5089/api/v1/health >/dev/null; then exit 0; fi
             sleep 2
