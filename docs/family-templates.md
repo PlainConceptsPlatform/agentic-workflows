@@ -28,17 +28,21 @@ The Kitchen-Sink gates, made app-neutral:
 | `scripts/check-complexity.mjs` | The blocking complexity gate (CC ≤ 15, CRAP ≤ 30) against the app's `scripts/complexity-baseline.json` |
 | `scripts/check-duplication.mjs` | The blocking duplication gate against the app's `scripts/duplication-baseline.json` |
 | `scripts/check-mutation.mjs` | The covered-code mutation floor per scope, for the weekly Stryker run |
-| `scripts/engineering-excellence.mjs` | Builds the coverage, complexity, mutation, security, SBOM and hygiene facets Project-Health collects |
+| `scripts/check-dead-code.mjs` | The web dead-code check: Knip's JSON per issue type against `deadCode` in `quality.config.json` |
+| `scripts/check-bundle-size.mjs` | The web bundle-size check: size-limit's JSON for the static export's chunks against the `bundle` budget |
+| `scripts/engineering-excellence.mjs` | Builds the coverage, complexity, mutation, security, SBOM, hygiene and bundle facets Project-Health collects |
 | `scripts/engineering-excellence.schema.json` | The facet contract, vendored verbatim; `.md` beside it carries the header |
 | `scripts/lib/*.mjs` | Parsers, gate rules and the quality config loader, with their `node:test` suites |
 | `scripts/dast-wait-stable.sh` | Waits until a deployed build is serving and stable before a ZAP scan |
 | `.semgrep/platform-hygiene.yml` | The empty-catch rules, `platform-hygiene-csharp-empty-catch` and `platform-hygiene-ts-empty-catch`, scoped to `apps/` |
 | `.jscpd.json` | The duplication scope; `.jscpd.json.md` beside it carries the header |
+| `knip.json` | Knip's scope, the `apps/web` workspace with the Next.js, Vitest, Playwright and Biome plugins; `knip.json.md` carries the header |
+| `.size-limit.json` | What size-limit measures, `apps/web/out/_next/static/chunks/**/*.js`; `.size-limit.json.md` carries the header |
 | `.zap/rules.tsv` | The ZAP baseline triage the family shares |
 
-JSON cannot carry a comment, so a JSON file's header lives in a companion `<file>.md`, as with `opencode.ci.json`. The JSON is the package's while that note is there with its header. To take `.jscpd.json` over, remove the header paragraph from `.jscpd.json.md` (or delete the note). A JSON file the app already had with no note beside it is the app's, and installing the template leaves it and its note out unless `--force` is passed.
+JSON cannot carry a comment, so a JSON file's header lives in a companion `<file>.md`, as with `opencode.ci.json`. The JSON is the package's while that note is there with its header. To take `.jscpd.json` over, remove the header paragraph from `.jscpd.json.md` (or delete the note); the same goes for `knip.json`, which most apps take over as soon as they need their own entries. A JSON file the app already had with no note beside it is the app's, and installing the template leaves it and its note out unless `--force` is passed.
 
-The baselines (`scripts/complexity-baseline.json`, `scripts/duplication-baseline.json`) and `quality.config.json` are app files. The template never installs or touches them.
+The baselines (`scripts/complexity-baseline.json`, `scripts/duplication-baseline.json`) and `quality.config.json` are app files. The template never installs or touches them; the gate scripts write a baseline only when asked to (`--write-baseline`, `--prune`, `--update-baseline`).
 
 Adopting the template in an app that has its own copies:
 
@@ -58,7 +62,9 @@ The numbers the gates enforce, at the repository root. Floors sit just under the
     "reportOnly": [],
     "web": 0.64
   },
-  "mutation": { "domain": 0.82, "web": 0.79 }
+  "mutation": { "domain": 0.82, "web": 0.79 },
+  "deadCode": { "mode": "report", "since": "2026-11-16", "baseline": { "exports": 120, "files": 3, "types": 45 } },
+  "bundle": { "mode": "report", "since": "2026-11-16", "baselineBytes": 412000, "limitBytes": 453200 }
 }
 ```
 
@@ -68,9 +74,29 @@ The numbers the gates enforce, at the repository root. Floors sit just under the
 | `coverage.reportOnly` | array of assembly names | Assemblies printed with their rate but not gated yet. Optional. |
 | `coverage.web` | rate | Floor for the root line-rate of the vitest v8 Cobertura report. Required for `check-coverage.mjs --web`. |
 | `mutation` | object, scope → rate | Covered-code mutation score floor per Stryker scope (`domain`, `web`, …). `check-mutation.mjs <scope>` fails for a scope with no floor. |
+| `deadCode.mode` | `"report"` or `"ratchet"` | The web dead-code check (Knip). `report`, the default when the section is absent, never fails CI. `ratchet` fails a Knip issue type over its baseline and any unused or unlisted dependency. |
+| `deadCode.since` | date, `YYYY-MM-DD` | The day the check was introduced. Written by the first `--write-baseline`; shown on the Project-Health card as "report-only since". |
+| `deadCode.baseline` | object, Knip issue type → count | Findings allowed per type (`files`, `exports`, `types`, …). Required for `ratchet`. Dependency types are never baselined. |
+| `bundle.mode` | `"report"` or `"ratchet"` | The web bundle-size check (size-limit). `report`, the default, never fails CI; `ratchet` fails a total over `limitBytes`. |
+| `bundle.since` | date, `YYYY-MM-DD` | The day the check was introduced. |
+| `bundle.baselineBytes` | whole number | The static export's JavaScript when the baseline was written, compressed as `.size-limit.json` says (brotli by default). |
+| `bundle.limitBytes` | whole number | The budget: the baseline plus 10%, written with it. Required for `ratchet`. Only a person raises it. |
 | `$schema` | string | Optional, ignored. |
 
-A rate is a number from 0 to 1. Any other key, a percentage written as 94, or a string fails every gate with the list of problems, so a typo can never silently gate nothing.
+A rate is a number from 0 to 1. Any other key, a percentage written as 94, or a string fails every gate with the list of problems, so a typo can never silently gate nothing. A `ratchet` without its baseline fails the same way.
+
+### Report first, then ratchet
+
+Every check added from 1.27.0 on starts report-only: it measures, prints the step summary and publishes its facet, and never fails CI. After two weeks the app moves it to `ratchet` in a reviewed change to `quality.config.json`; nothing flips a mode automatically. From then on existing debt (the baseline) never blocks a pull request, and only getting worse does.
+
+| Check | Tool | CI step | Facet |
+|---|---|---|---|
+| Web dead code | [Knip](https://github.com/webpro-nl/knip) 6, `knip --workspace <web package> --reporter json` | `Dead code (Knip)` in the web job, after the build | `hygiene.deadCode.web` |
+| Web bundle size | [size-limit](https://github.com/ai/size-limit) with `@size-limit/file`, `size-limit --json` | `Bundle size (size-limit)` in the web job, after the build | `bundle` (`engineering-excellence-bundle`) |
+
+Both tools are root devDependencies of the app, so they run from its lockfile with no extra token or service: `pnpm add -Dw knip@6.44.2 size-limit@14.3.0 @size-limit/file@14.3.0`. Knip 6.44.2 is the newest 6.x older than the family's seven-day `minimumReleaseAge`. Until they are installed, both steps skip with a notice. Record the first baselines with `--write-baseline` (see each script's header) in a pull request, and the `since` date with them. `--update-baseline` lowers a baseline after an improvement and never raises it; once a check is a ratchet, `--write-baseline` refuses to raise it too, so a higher baseline is always a person's edit with its reason in the pull request.
+
+A Knip run that cannot load a config (exit code 2) and a size-limit path that matches nothing leave no report: report mode notes it, ratchet mode fails, because a gate that could not measure must not read as green.
 
 ## The gates CI: app-ci-dotnet-next
 
@@ -90,6 +116,8 @@ A rate is a number from 0 to 1. Any other key, a percentage written as 94, or a 
 | `E2E_COMMAND` | Playwright against the SPA served by the API; empty skips the E2E job |
 | `MARKDOWN_LINT_COMMAND`, `REPO_CHECK_COMMANDS` | The Markdown job and the app's own checks (Kitchen-Sink's `node scripts/check-demo-manifest.mjs`); empty skips the steps |
 | `SBOM_ARTIFACT_NAME`, `SEMGREP_EXCLUDES`, images and versions | Scanner settings |
+
+The web job runs `Dead code (Knip)` and `Bundle size (size-limit)` after the build and uploads both reports as `web-quality`; the engineering-excellence job folds Knip into the hygiene facet and builds the bundle facet from them. Neither step needs an `env:` value: they read `WEB_PACKAGE`, the root `knip.json` and `.size-limit.json`, and `quality.config.json`.
 
 The job names are the ones the apps' required checks and the merge train read (`Full CI`), and the last job, `dispatch-merge-gate`, hands a bot pull request's verdict to the router's merge train exactly as the apps' CI does. A deploy pipeline that calls the workflow with `uses:` must grant `actions: write`. The `Platform conformance` job runs the guard from [platform-contracts.md](platform-contracts.md) where the app declares a platform contract and passes everywhere else.
 

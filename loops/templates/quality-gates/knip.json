@@ -1,0 +1,12 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    "apps/web": {
+      "entry": ["steiger.config.ts"],
+      "next": true,
+      "vitest": true,
+      "playwright": true,
+      "biome": true
+    }
+  }
+}

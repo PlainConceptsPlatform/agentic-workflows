@@ -45,7 +45,8 @@
             "mutation",
             "security",
             "sbom",
-            "hygiene"
+            "hygiene",
+            "bundle"
           ]
         },
         "repo": {
@@ -822,8 +823,12 @@
             },
             "warnings": {
               "$ref": "#/$defs/count"
+            },
+            "web": {
+              "$ref": "#/$defs/deadCodeWeb"
             }
-          }
+          },
+          "description": "Dead code. gated and warnings are the .NET unused private members (IDE0051, IDE0052); web is Knip's report, absent when the repository runs no Knip."
         },
         "hotspots": {
           "type": "array",
@@ -888,6 +893,170 @@
               "$ref": "#/$defs/count"
             }
           }
+        }
+      }
+    },
+    "checkGate": {
+      "type": "object",
+      "description": "A check that starts report-only and becomes a ratchet against a committed baseline when the repository flips its mode in quality.config.json, a reviewed change that is never made automatically. Report mode never fails CI.",
+      "required": [
+        "mode",
+        "since",
+        "violations",
+        "failed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "report",
+            "ratchet"
+          ]
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The day the check was introduced in the repository (YYYY-MM-DD), from quality.config.json. Null when it was not recorded."
+        },
+        "violations": {
+          "$ref": "#/$defs/count",
+          "description": "Findings over the baseline or budget on this commit, counted whether or not the mode lets them fail CI."
+        },
+        "failed": {
+          "type": "boolean",
+          "description": "True when this check failed the CI run: ratchet mode with violations."
+        }
+      }
+    },
+    "deadCodeWeb": {
+      "type": "object",
+      "description": "Knip over the web workspace (knip --reporter json): unused files, exports and dependencies, and dependencies imported but not listed.",
+      "required": [
+        "tool",
+        "unusedFiles",
+        "unusedExports",
+        "unusedDependencies",
+        "unlistedDependencies",
+        "byType",
+        "baseline",
+        "gate"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "type": "string",
+          "enum": [
+            "knip"
+          ]
+        },
+        "unusedFiles": {
+          "$ref": "#/$defs/count"
+        },
+        "unusedExports": {
+          "$ref": "#/$defs/count",
+          "description": "Unused exports and exported types: Knip's exports, nsExports, types and nsTypes."
+        },
+        "unusedDependencies": {
+          "$ref": "#/$defs/count",
+          "description": "Knip's dependencies, devDependencies and optionalPeerDependencies."
+        },
+        "unlistedDependencies": {
+          "$ref": "#/$defs/count",
+          "description": "Imported packages and binaries used but not in package.json: Knip's unlisted and binaries."
+        },
+        "byType": {
+          "type": "object",
+          "description": "Findings per Knip issue type, every type Knip reported.",
+          "additionalProperties": {
+            "$ref": "#/$defs/count"
+          }
+        },
+        "baseline": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "The committed baseline per Knip issue type from quality.config.json. Null before one is written.",
+          "additionalProperties": {
+            "$ref": "#/$defs/count"
+          }
+        },
+        "gate": {
+          "$ref": "#/$defs/checkGate"
+        }
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "description": "size-limit (@size-limit/file) over the web static export's JavaScript chunks, out/_next/static/chunks/**/*.js, against the budget in quality.config.json: the baseline plus 10%.",
+      "required": [
+        "tool",
+        "compression",
+        "totalJsBytes",
+        "largestChunkBytes",
+        "largestChunk",
+        "chunks",
+        "baselineBytes",
+        "limitBytes",
+        "overBudget",
+        "gate"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "type": "string",
+          "enum": [
+            "size-limit"
+          ]
+        },
+        "compression": {
+          "type": "string",
+          "enum": [
+            "brotli",
+            "gzip",
+            "none"
+          ],
+          "description": "How every byte count here was measured; size-limit's default is brotli."
+        },
+        "totalJsBytes": {
+          "$ref": "#/$defs/count"
+        },
+        "largestChunkBytes": {
+          "$ref": "#/$defs/count"
+        },
+        "largestChunk": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The largest chunk's path under the chunk directory."
+        },
+        "chunks": {
+          "$ref": "#/$defs/count"
+        },
+        "baselineBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "limitBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "The budget. Null before a baseline is written."
+        },
+        "overBudget": {
+          "type": "boolean"
+        },
+        "gate": {
+          "$ref": "#/$defs/checkGate"
         }
       }
     }

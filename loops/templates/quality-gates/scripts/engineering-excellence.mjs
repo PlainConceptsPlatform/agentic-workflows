@@ -4,9 +4,11 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { bundleFacetData } from './lib/bundle-gate.mjs';
 import { CC_MAX, CRAP_MAX, evaluate } from './lib/complexity-gate.mjs';
+import { deadCodeWebData } from './lib/dead-code-gate.mjs';
 import { evaluate as evaluateDuplication } from './lib/duplication-gate.mjs';
-import { loadQualityConfig } from './lib/quality-config.mjs';
+import { loadCheckConfig, loadQualityConfig } from './lib/quality-config.mjs';
 import { scopedSources } from './lib/source-files.mjs';
 import {
   apiMethods,
@@ -24,7 +26,7 @@ import {
   webMethods,
 } from './lib/engineering-excellence.mjs';
 
-const BUILT = ['coverage', 'complexity', 'mutation', 'security', 'sbom', 'hygiene'];
+const BUILT = ['coverage', 'complexity', 'mutation', 'security', 'sbom', 'hygiene', 'bundle'];
 const SCHEMA = JSON.parse(readFileSync(new URL('./engineering-excellence.schema.json', import.meta.url), 'utf8'));
 
 function parseArgs(argv) {
@@ -113,6 +115,8 @@ function build(facet, opts) {
       const lengths = new Map(files.map((f) => [f.file, lineCount(f.text)]));
       const duplicated = duplicatedLinesByFile(JSON.parse(read(required(opts, 'jscpd'))), (f) => lengths.get(f));
       const semgrep = readOptional(opts.semgrep);
+      // Knip's report from the web job; without it the facet keeps the .NET dead-code count alone.
+      const knip = readOptional(opts.knip);
       let gate = null;
       if (opts.baseline && existsSync(opts.baseline)) {
         const baseline = JSON.parse(read(opts.baseline));
@@ -128,10 +132,14 @@ function build(facet, opts) {
         files,
         duplicated,
         semgrep: semgrep && JSON.parse(semgrep),
+        deadCodeWeb: knip && deadCodeWebData(JSON.parse(knip), loadCheckConfig('deadCode')),
         thresholds: { minLines: cfg.minLines, minTokens: cfg.minTokens },
         gate,
       });
     }
+    // The measurement check-bundle-size.mjs wrote in the web job, judged against the same budget.
+    case 'bundle':
+      return bundleFacetData(JSON.parse(read(required(opts, 'report'))), loadCheckConfig('bundle'));
     default:
       return usage(`unknown facet '${facet}'`);
   }
@@ -170,6 +178,13 @@ function summary(facet, d) {
       lines.push(`| ${k} | ${s.files} | ${pct(s.duplicationRate)} | ${s.duplicatedLines} | ${n(s.swallowedExceptions)} | ${s.justifiedSwallows} | ${s.deadCodeWarnings} | ${n(s.commentDensity)} |`);
     }
     if (d.gate) lines.push('', `Duplication gate: ${d.gate.baselinedFiles} baselined files (${d.gate.baselineLines} lines) · ${d.gate.violations} violations · ${d.gate.fixed} improved`);
+    const web = d.deadCode.web;
+    if (web) {
+      lines.push('', `Dead code (Knip, ${web.gate.mode}${web.gate.since ? ` since ${web.gate.since}` : ''}): ${web.unusedFiles} files · ${web.unusedExports} exports · ${web.unusedDependencies} unused deps · ${web.unlistedDependencies} unlisted deps · ${web.gate.violations} over the baseline`);
+    }
+  } else if (facet === 'bundle') {
+    const kb = (b) => (b === null ? 'n/a' : `${(b / 1000).toFixed(1)} kB`);
+    lines.push(`Total JS ${kb(d.totalJsBytes)} (${d.compression}) in ${d.chunks} chunks · largest ${kb(d.largestChunkBytes)} · budget ${kb(d.limitBytes)} · ${d.gate.mode}${d.gate.since ? ` since ${d.gate.since}` : ''}${d.overBudget ? ' · OVER BUDGET' : ''}`);
   }
   return lines.join('\n');
 }

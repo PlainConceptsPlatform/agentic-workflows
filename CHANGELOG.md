@@ -2,6 +2,18 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.27.0
+
+### Added
+
+- **Web dead code (Knip) and bundle size (size-limit) in the quality gates.** Two new checks for the web app, both run in the app's own CI from its own lockfile, with no extra token or service:
+  - `scripts/check-dead-code.mjs` reads `knip --reporter json` (Knip 6, the root `knip.json` scoped to `apps/web` with the Next.js, Vitest, Playwright and Biome plugins) and counts the findings per Knip issue type. In ratchet mode a type over its committed baseline fails, and so does any unused or unlisted dependency, which is never baselined.
+  - `scripts/check-bundle-size.mjs` reads `size-limit --json` (`@size-limit/file` over `apps/web/out/_next/static/chunks/**/*.js`, the root `.size-limit.json`) and the chunk directory, and holds the total to a budget of the baseline plus 10%.
+- **Report first, then ratchet.** Both checks read a `mode` from `quality.config.json` (`deadCode`, `bundle`): `report`, the default, never fails CI; `ratchet` holds the committed baseline, so existing debt never blocks and only getting worse does. `since` records the day the check was introduced. Nothing flips a mode automatically: the switch is a reviewed change. A `ratchet` without a baseline is a config error, and a check that could not measure (Knip exit 2, a size-limit path that matches nothing) fails in ratchet mode instead of reading as green. `--write-baseline` records the first baseline and refuses to raise a ratchet's; `--update-baseline` only ever lowers it.
+- **Facets.** The hygiene facet's `deadCode` gains an optional `web` block (`unusedFiles`, `unusedExports`, `unusedDependencies`, `unlistedDependencies`, `byType`, `baseline`, `gate`), and a new `bundle` facet (`totalJsBytes`, `largestChunkBytes`, `largestChunk`, `chunks`, `compression`, `baselineBytes`, `limitBytes`, `overBudget`, `gate`) uploads as `engineering-excellence-bundle`. `gate` is `{ mode, since, violations, failed }` for both. A repository that runs neither tool publishes the hygiene facet exactly as before. Project-Health reads the new fields from the matching schema release; update the dashboard before the apps, or it rejects a hygiene facet that carries `deadCode.web`.
+- **CI templates.** `app-ci-dotnet-next` runs `Dead code (Knip)` and `Bundle size (size-limit)` in the web job after the build, uploads the reports as `web-quality`, and builds and uploads the bundle facet in the engineering-excellence job. `app-ci-node-monorepo` runs the two checks in its web job where the quality-gates scripts are installed. Each step skips with a notice until its tool is a root devDependency (`pnpm add -Dw knip@6.44.2 size-limit@14.3.0 @size-limit/file@14.3.0`).
+- **The consumer skill has a "Quality gates" section**: every gate, its `quality.config.json` keys, how to read a failure and how to update a baseline without silencing it.
+
 ## 1.26.12
 
 ### Fixed
