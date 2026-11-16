@@ -14,7 +14,7 @@
 import { createHash } from 'node:crypto';
 
 export const SCHEMA_VERSION = 1;
-export const FACETS = ['coverage', 'complexity', 'mutation', 'security', 'sbom', 'hygiene'];
+export const FACETS = ['coverage', 'complexity', 'mutation', 'security', 'sbom', 'hygiene', 'bundle'];
 export const CC_THRESHOLD = 10;
 export const CRAP_THRESHOLD = 30;
 const HOTSPOT_LIMIT = 20;
@@ -569,7 +569,8 @@ const finishHygiene = (a, swallowKnown) => ({
   swallowedExceptions: swallowKnown ? a.swallowedExceptions : null,
 });
 
-export function hygieneFacetData({ files, duplicated, semgrep, deadCode = {}, thresholds, gate = null, commentSlop }) {
+// `deadCodeWeb` is Knip's block (dead-code-gate.mjs deadCodeWebData), absent when the web job ran no Knip.
+export function hygieneFacetData({ files, duplicated, semgrep, deadCode = {}, deadCodeWeb = null, thresholds, gate = null, commentSlop }) {
   const swallowed = semgrep ? swallowFindings(semgrep) : {};
   const measured = files
     .map(({ file, text }) => ({
@@ -612,7 +613,11 @@ export function hygieneFacetData({ files, duplicated, semgrep, deadCode = {}, th
     thresholds,
     scopes,
     global: finishHygiene(measured.reduce(addHygiene, emptyHygiene()), Boolean(semgrep)),
-    deadCode: { gated: true, warnings: Object.values(deadCode).reduce((n, v) => n + v, 0) },
+    deadCode: {
+      gated: true,
+      warnings: Object.values(deadCode).reduce((n, v) => n + v, 0),
+      ...(deadCodeWeb ? { web: deadCodeWeb } : {}),
+    },
     hotspots,
     gate,
     ...(commentSlop ? { commentSlop } : {}),

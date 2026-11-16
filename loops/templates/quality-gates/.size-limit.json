@@ -1,0 +1,6 @@
+[
+  {
+    "name": "web: static export JavaScript chunks",
+    "path": "apps/web/out/_next/static/chunks/**/*.js"
+  }
+]

@@ -66,13 +66,47 @@ jobs:
       - run: pnpm --filter "$WEB_PACKAGE" run typecheck
       - run: pnpm --filter "$WEB_PACKAGE" run test
       - run: pnpm --filter "$WEB_PACKAGE" run lint:fsd
-      - run: pnpm --filter "$WEB_PACKAGE" run build
+      - id: build
+        run: pnpm --filter "$WEB_PACKAGE" run build
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: ${{ env.WEB_ARTIFACT_NAME }}
           path: ${{ env.WEB_EXPORT_PATH }}
           retention-days: 3
           if-no-files-found: error
+      # The quality-gates template's web checks, where it is installed: unused files, exports and
+      # dependencies (Knip) and the static export's JavaScript size (size-limit with @size-limit/file).
+      # Both read quality.config.json: `report` (the default) never fails, `ratchet` holds the
+      # committed baseline. Each skips with a notice until its tool is a root devDependency.
+      - name: Dead code (Knip)
+        if: ${{ !cancelled() && hashFiles('knip.json') != '' && hashFiles('scripts/check-dead-code.mjs') != '' }}
+        run: |
+          set -uo pipefail
+          if ! pnpm exec knip --version >/dev/null 2>&1; then
+            echo "::notice::Knip is not a root devDependency, so the dead-code check is skipped."
+            exit 0
+          fi
+          pnpm exec knip --workspace "$WEB_PACKAGE" --reporter json --no-progress --no-exit-code > knip-report.json
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::Knip exited $status without a report (see its errors above)."
+            rm -f knip-report.json
+          fi
+          node scripts/check-dead-code.mjs --report knip-report.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Bundle size (size-limit)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && hashFiles('.size-limit.json') != '' && hashFiles('scripts/check-bundle-size.mjs') != '' }}
+        run: |
+          set -uo pipefail
+          if ! pnpm exec size-limit --version >/dev/null 2>&1; then
+            echo "::notice::size-limit is not a root devDependency, so the bundle-size check is skipped."
+            exit 0
+          fi
+          if ! pnpm exec size-limit --json > size-limit.json; then
+            echo "::warning::size-limit did not finish; the bundle-size check has nothing to measure."
+            rm -f size-limit.json
+          fi
+          node scripts/check-bundle-size.mjs --size-limit size-limit.json \
+            --chunks "$WEB_EXPORT_PATH/_next/static/chunks" | tee -a "$GITHUB_STEP_SUMMARY"
 
   e2e:
     name: E2E (Playwright)

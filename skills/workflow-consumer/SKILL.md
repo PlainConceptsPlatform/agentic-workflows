@@ -236,6 +236,63 @@ bypass. `Full CI` needs every blocking job. Workflows that run only on their pat
 checks`) cannot be required; the merge points check them through `SIDE_CHECK_WORKFLOWS` instead
 (`land-pull-request/side-checks.sh`). See `docs/family-templates.md`.
 
+## Quality gates
+
+The `quality-gates` template (`add --template quality-gates`) carries the gate scripts; the app CI
+template (`app-ci-dotnet-next`, and the web job of `app-ci-node-monorepo`) runs them. The numbers
+are the app's, in `quality.config.json` at the repository root; the full key reference is in
+`docs/family-templates.md`.
+
+| Gate | Script | Fails CI when | `quality.config.json` |
+|---|---|---|---|
+| Coverage floors | `check-coverage.mjs` | a gated assembly or the web suite is under its floor | `coverage.api`, `coverage.web`, `coverage.reportOnly` |
+| Complexity | `check-complexity.mjs` | a method over CC 15 or CRAP 30 is new or worse than `scripts/complexity-baseline.json` | none |
+| Duplication | `check-duplication.mjs` | a file holds more cloned lines than `scripts/duplication-baseline.json` | none |
+| Mutation (weekly) | `check-mutation.mjs` | a scope's covered-code score is under its floor | `mutation` |
+| Dead code, web (Knip) | `check-dead-code.mjs` | ratchet mode only: a Knip issue type over its baseline, or any unused or unlisted dependency | `deadCode.mode`, `deadCode.since`, `deadCode.baseline` |
+| Bundle size, web (size-limit) | `check-bundle-size.mjs` | ratchet mode only: the static export's JavaScript over the budget (baseline + 10%) | `bundle.mode`, `bundle.since`, `bundle.baselineBytes`, `bundle.limitBytes` |
+
+**Report first, then ratchet.** A new check starts in `mode: "report"`: it measures, writes the
+step summary and the facet, and never fails CI. After two weeks the app switches it to
+`mode: "ratchet"` in a reviewed pull request; nothing flips it automatically. `since` records the day
+the check was introduced, and the Project-Health card shows "report-only since" that date. A ratchet
+needs its baseline first; `quality.config.json` with `ratchet` and no baseline fails every gate.
+
+Turning on the two web checks:
+
+1. `workflows update` (or `add --template quality-gates`) installs `knip.json`, `.size-limit.json`
+   and the scripts. Add the tools as root devDependencies, pinned:
+   `pnpm add -Dw knip@6.44.2 size-limit@14.3.0 @size-limit/file@14.3.0`. Until they are installed
+   the CI steps skip with a notice.
+2. Run the checks once and record the baselines in a pull request:
+   `node scripts/check-dead-code.mjs --report apps/web/knip-report.json --write-baseline` (after
+   `pnpm exec knip --workspace <web package> --reporter json > apps/web/knip-report.json`) and
+   `node scripts/check-bundle-size.mjs --size-limit apps/web/size-limit.json --chunks apps/web/out/_next/static/chunks --write-baseline`
+   (after the web build and `pnpm exec size-limit --json > apps/web/size-limit.json`). Each writes
+   its section with `mode: "report"` and today's `since`.
+3. Two weeks later, set `deadCode.mode` and `bundle.mode` to `"ratchet"` in a reviewed pull request.
+
+**Reading a failure.** Every gate prints what failed into the job's step summary: the method, file or
+Knip issue type, its current value and what the baseline allows. Fix the code: simplify or test the
+method, remove the clone, delete the unused file or export, remove or declare the dependency, shrink
+the bundle. A dead-code failure lists up to ten findings per type; a bundle failure names the total,
+the budget and the largest chunk.
+
+**Updating a baseline.** A baseline records debt that already exists; it is never the way to make a
+red gate green.
+
+- After an improvement, ratchet it down: `check-complexity.mjs --prune`, `check-duplication.mjs
+  --prune`, `check-dead-code.mjs --update-baseline`, `check-bundle-size.mjs --update-baseline`.
+  These only ever lower a value.
+- `--write-baseline` re-records the current state. Use it for a first baseline or a deliberate
+  reset, in its own pull request whose body says why; never in the pull request whose gate failed.
+  Once a check is a ratchet, the dead-code and bundle scripts refuse to raise any value with it.
+- Unused and unlisted dependencies are never baselined: once dead code is a ratchet, remove or
+  declare them.
+- Raising the bundle budget is an edit of `bundle.limitBytes` by a person, with the reason in the
+  pull request. An agent that hits a gate fixes the code or stops and reports; it does not raise a
+  baseline, add a Knip `ignore`, or switch a mode back to `report`.
+
 ## Compile and verify
 
 Compile in the consumer repository:

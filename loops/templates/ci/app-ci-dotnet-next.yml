@@ -5,8 +5,9 @@
 # Also the engineering gates from Foundations' ai/ENGINEERING.md, run by the quality-gates template
 # (`workflows add --template quality-gates`): Reqnroll acceptance tests, merged .NET + web coverage
 # floors from quality.config.json, the blocking complexity and duplication gates, the Semgrep
-# empty-catch rules, dead private members as build errors, and the
-# engineering-excellence-{coverage,complexity,security,sbom,hygiene} facets Project-Health
+# empty-catch rules, dead private members as build errors, the web dead-code (Knip) and bundle-size
+# (size-limit) checks, report-only until quality.config.json switches them to a ratchet, and the
+# engineering-excellence-{coverage,complexity,security,sbom,hygiene,bundle} facets Project-Health
 # collects. The facets upload from main only, which this workflow reaches through `App: Deploy` on
 # every push and through its own weekly schedule. The platform-conformance job runs the
 # platform-template guard where the app declares a platform contract.
@@ -164,7 +165,7 @@ jobs:
           fi
           git fetch origin "$BASE_REF" --depth=1
           if git diff --name-only "origin/$BASE_REF" HEAD \
-              | grep -qE '^(apps/|scripts/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|quality\.config\.json$|\.github/workflows/app-ci\.yml$)'; then
+              | grep -qE '^(apps/|scripts/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|quality\.config\.json$|knip\.json$|\.size-limit\.json$|\.github/workflows/app-ci\.yml$)'; then
             echo "app=true" >> "$GITHUB_OUTPUT"
           else
             echo "app=false" >> "$GITHUB_OUTPUT"
@@ -372,11 +373,60 @@ jobs:
         if: steps.detect.outputs.exists == 'true'
         run: pnpm --filter "$WEB_PACKAGE" run --if-present lint:i18n
       - name: Build (Next.js static export)
+        id: build
         if: steps.detect.outputs.exists == 'true'
         run: pnpm --filter "$WEB_PACKAGE" run build
       - name: App-specific web checks
         if: steps.detect.outputs.exists == 'true' && env.WEB_EXTRA_COMMANDS != ''
         run: bash -euo pipefail -c "$WEB_EXTRA_COMMANDS"
+      # Unused files, exports and dependencies (Knip, a root devDependency, with the root knip.json).
+      # quality.config.json `deadCode.mode` decides: `report` (the default) never fails; `ratchet`
+      # fails a Knip issue type over its committed baseline, and any unused or unlisted dependency.
+      # Runs after a failed step too, so a red test never hides the report. A Knip crash (exit code 2,
+      # a config it could not load) leaves no report: report mode notes it, ratchet mode fails.
+      - name: Dead code (Knip)
+        if: ${{ !cancelled() && steps.detect.outputs.exists == 'true' && hashFiles('knip.json') != '' && hashFiles('scripts/check-dead-code.mjs') != '' }}
+        run: |
+          set -uo pipefail
+          if ! pnpm exec knip --version >/dev/null 2>&1; then
+            echo "::notice::Knip is not a root devDependency, so the dead-code check is skipped. Add it to turn the check on (report-only until quality.config.json says ratchet)."
+            exit 0
+          fi
+          pnpm exec knip --workspace "$WEB_PACKAGE" --reporter json --no-progress --no-exit-code > apps/web/knip-report.json
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::Knip exited $status without a report (see its errors above); the dead-code check has nothing to measure."
+            rm -f apps/web/knip-report.json
+          fi
+          node scripts/check-dead-code.mjs --report apps/web/knip-report.json | tee -a "$GITHUB_STEP_SUMMARY"
+      # The static export's JavaScript (size-limit with @size-limit/file, root devDependencies, over
+      # the root .size-limit.json) against quality.config.json `bundle`: the budget is the baseline
+      # plus 10%. `report` (the default) never fails; `ratchet` fails a total over the budget.
+      - name: Bundle size (size-limit)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && hashFiles('.size-limit.json') != '' && hashFiles('scripts/check-bundle-size.mjs') != '' }}
+        run: |
+          set -uo pipefail
+          if ! pnpm exec size-limit --version >/dev/null 2>&1; then
+            echo "::notice::size-limit is not a root devDependency, so the bundle-size check is skipped. Add size-limit and @size-limit/file to turn it on (report-only until quality.config.json says ratchet)."
+            exit 0
+          fi
+          if ! pnpm exec size-limit --json > apps/web/size-limit.json; then
+            echo "::warning::size-limit did not finish (a path that matches no file exits 1); the bundle-size check has nothing to measure."
+            rm -f apps/web/size-limit.json
+          fi
+          node scripts/check-bundle-size.mjs --size-limit apps/web/size-limit.json \
+            --chunks apps/web/out/_next/static/chunks --out apps/web/bundle-report.json | tee -a "$GITHUB_STEP_SUMMARY"
+      # The two reports feed the hygiene and bundle facets in the engineering-excellence job.
+      - name: Upload web quality reports
+        if: ${{ !cancelled() && steps.detect.outputs.exists == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-quality
+          path: |
+            apps/web/knip-report.json
+            apps/web/bundle-report.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   # The SPA built as production builds it, served by the API from wwwroot (same origin), with mock
   # sign-in and a real SQL Server. Development environment so the API migrates and seeds on start.
@@ -749,7 +799,10 @@ jobs:
       # A pattern download matches nothing (and does not fail) when the scan left no JSON.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with: { pattern: semgrep-json, path: ee/semgrep }
-      - name: Unit tests (facet builder, complexity and duplication gates, quality config)
+      # Knip's and the bundle measurement from the web job; absent where the app runs neither.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with: { pattern: web-quality, path: ee/web-quality }
+      - name: Unit tests (facet builder, complexity, duplication, dead-code and bundle gates, quality config)
         run: |
           # shellcheck disable=SC2086 # EXTRA_NODE_TESTS is a list of files.
           node --test scripts/lib/*.test.mjs $EXTRA_NODE_TESTS
@@ -776,14 +829,28 @@ jobs:
           node scripts/engineering-excellence.mjs complexity --out ee/complexity.json \
             --api "$API" --web-final "$WEB_FINAL" --eslint "$ESLINT" \
             --baseline scripts/complexity-baseline.json | tee -a "$GITHUB_STEP_SUMMARY"
-      # Reads only this job's jscpd report and the optional Semgrep JSON, not the api/web artifacts.
+      # Reads this job's jscpd report, the optional Semgrep JSON and the optional Knip report, not the
+      # api/web coverage artifacts.
       - name: Build hygiene facet
         run: |
           set -euo pipefail
           SEMGREP=$(find ee/semgrep -name semgrep.json 2>/dev/null | head -n 1 || true)
+          KNIP=$(find ee/web-quality -name knip-report.json 2>/dev/null | head -n 1 || true)
           node scripts/engineering-excellence.mjs hygiene --out ee/hygiene.json \
             --jscpd jscpd-report/jscpd-report.json --semgrep "${SEMGREP:-ee/semgrep/missing.json}" \
+            ${KNIP:+--knip "$KNIP"} \
             --baseline scripts/duplication-baseline.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Build bundle facet
+        id: bundle
+        run: |
+          set -euo pipefail
+          BUNDLE=$(find ee/web-quality -name bundle-report.json 2>/dev/null | head -n 1 || true)
+          if [ -z "$BUNDLE" ]; then
+            echo "No bundle measurement from the web job (size-limit not set up, or the build failed); bundle facet not built."
+            exit 0
+          fi
+          node scripts/engineering-excellence.mjs bundle --out ee/bundle.json --report "$BUNDLE" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "built=true" >> "$GITHUB_OUTPUT"
       # BLOCKING: every method must satisfy CC <= 15 and CRAP <= 30 unless it is recorded backlog in
       # scripts/complexity-baseline.json, which may not get worse. Runs after the facets are built so
       # a red gate still records them.
@@ -827,6 +894,14 @@ jobs:
         with:
           name: engineering-excellence-hygiene
           path: ee/hygiene.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Upload bundle facet
+        if: ${{ !cancelled() && steps.bundle.outputs.built == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: engineering-excellence-bundle
+          path: ee/bundle.json
           if-no-files-found: error
           retention-days: 90
 
