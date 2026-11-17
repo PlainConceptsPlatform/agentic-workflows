@@ -11,6 +11,7 @@ const CHECK_DEFAULTS = {
   deadCode: { mode: 'report', since: null, baseline: null },
   bundle: { mode: 'report', since: null, baselineBytes: null, limitBytes: null },
   architecture: { mode: 'report', since: null, baseline: null },
+  paths: { api: 'apps/api', web: 'apps/web' },
 };
 
 test('parseQualityConfig_fullConfig_returnsFloors', () => {
@@ -98,4 +99,14 @@ test('writeCheckSection_keepsEveryOtherKey_andRefusesAnInvalidWrite', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('parseQualityConfig_customPaths_overridesTheDefaultsPerRoot', () => {
+  assert.deepEqual(parseQualityConfig(JSON.stringify({ paths: { web: 'app/' } })).paths, { api: 'apps/api', web: 'app' });
+  assert.deepEqual(parseQualityConfig(JSON.stringify({ paths: { api: 'api', web: 'app' } })).paths, { api: 'api', web: 'app' });
+});
+
+test('parseQualityConfig_badPaths_namesEachProblem', () => {
+  assert.throws(() => parseQualityConfig(JSON.stringify({ paths: { api: '/abs', web: '../up', mobile: 'm' } })), (err) =>
+    err.message.includes('paths.api') && err.message.includes('paths.web') && err.message.includes('paths.mobile'));
 });

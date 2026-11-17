@@ -12,12 +12,36 @@ export const CONFIG_FILE = fileURLToPath(new URL('../../quality.config.json', im
 export const CHECK_MODES = ['report', 'ratchet'];
 
 const KEYS = {
-  root: ['$schema', 'architecture', 'bundle', 'coverage', 'deadCode', 'mutation'],
+  root: ['$schema', 'architecture', 'bundle', 'coverage', 'deadCode', 'mutation', 'paths'],
+  paths: ['api', 'web'],
   coverage: ['api', 'reportOnly', 'web'],
   deadCode: ['baseline', 'mode', 'since'],
   bundle: ['baselineBytes', 'limitBytes', 'mode', 'since'],
   architecture: ['baseline', 'mode', 'since'],
 };
+
+export const DEFAULT_PATHS = { api: 'apps/api', web: 'apps/web' };
+
+// Where the api and web roots sit in the repository, repo-relative with forward slashes.
+function pathsSection(raw, problems) {
+  if (raw === undefined) return { ...DEFAULT_PATHS };
+  if (!isObject(raw)) {
+    problems.push('paths must be an object of api/web -> repo-relative folder');
+    return { ...DEFAULT_PATHS };
+  }
+  unknownKeys(raw, KEYS.paths, 'paths.', problems);
+  const out = { ...DEFAULT_PATHS };
+  for (const name of KEYS.paths) {
+    if (raw[name] === undefined) continue;
+    const value = raw[name];
+    if (typeof value !== 'string' || value === '' || /^\/|^[A-Za-z]:|\\|(^|\/)\.\.?(\/|$)/.test(value)) {
+      problems.push(`paths.${name} must be a repo-relative folder written with forward slashes, got ${JSON.stringify(value)}`);
+    } else {
+      out[name] = value.replace(/\/+$/, '');
+    }
+  }
+  return out;
+}
 
 const isRate = (value) => typeof value === 'number' && value >= 0 && value <= 1;
 const isCount = (value) => Number.isInteger(value) && value >= 0;
@@ -121,8 +145,9 @@ export function parseQualityConfig(text, file = CONFIG_FILE) {
   const deadCode = deadCodeSection(raw.deadCode, problems);
   const bundle = bundleSection(raw.bundle, problems);
   const architecture = architectureSection(raw.architecture, problems);
+  const paths = pathsSection(raw.paths, problems);
   if (problems.length > 0) throw new Error(`${file}:\n  ${problems.join('\n  ')}`);
-  return { coverage: { api, reportOnly, web: coverage.web ?? null }, mutation, deadCode, bundle, architecture };
+  return { coverage: { api, reportOnly, web: coverage.web ?? null }, mutation, deadCode, bundle, architecture, paths };
 }
 
 export function loadQualityConfig(file = CONFIG_FILE) {
@@ -151,6 +176,11 @@ export function writeCheckSection(name, update, file = CONFIG_FILE) {
   parseQualityConfig(JSON.stringify(raw), file);
   writeFileSync(file, `${JSON.stringify(raw, null, 2)}\n`);
   return raw[name];
+}
+
+export function loadPaths(file = CONFIG_FILE) {
+  if (!existsSync(file)) return { ...DEFAULT_PATHS };
+  return parseQualityConfig(readFileSync(file, 'utf8'), file).paths;
 }
 
 export const today = (now = new Date()) => now.toISOString().slice(0, 10);

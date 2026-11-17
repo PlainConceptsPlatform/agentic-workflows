@@ -12,6 +12,7 @@
 // a facet can never disagree with the gate that ran in the same job.
 
 import { createHash } from 'node:crypto';
+import { loadPaths } from './quality-config.mjs';
 
 export const SCHEMA_VERSION = 1;
 export const FACETS = ['coverage', 'complexity', 'mutation', 'security', 'sbom', 'hygiene', 'bundle', 'architecture'];
@@ -28,12 +29,23 @@ const decode = (s) =>
 const ratio = (num, den) => (den === 0 ? null : num / den);
 const round = (n, d = 4) => (n === null ? null : Math.round(n * 10 ** d) / 10 ** d);
 
+// The api and web roots come from `paths` in quality.config.json (default apps/api, apps/web).
+let layout = loadPaths();
+export const useLayout = (paths = loadPaths()) => {
+  layout = paths;
+};
+
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // Repo-relative path, so a hotspot links to the same file on every runner.
 export function repoPath(file, scope) {
-  const f = file.replace(/\\/g, '/');
-  const m = f.match(/(apps\/(?:api|web)\/.*)$/);
+  let f = file.replace(/\\/g, '/');
+  const cwd = process.cwd().replace(/\\/g, '/').replace(/\/$/, '');
+  if (f.startsWith(`${cwd}/`)) f = f.slice(cwd.length + 1);
+  const roots = [layout.api, layout.web].map(escapeRegExp).join('|');
+  const m = f.match(new RegExp(`(?:^|/)((?:${roots})/.*)$`));
   if (m) return m[1];
-  return scope === 'web' ? `apps/web/${f.replace(/^\.?\//, '')}` : f;
+  return scope === 'web' ? `${layout.web}/${f.replace(/^\.?\//, '')}` : f;
 }
 
 // Compiler/source-generator output (obj/, *.g.cs — the [GeneratedRegex] matchers
@@ -484,7 +496,8 @@ export function scannedBy(cfg) {
 
 export const lineCount = (text) => text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
 
-export const hygieneScopeOf = (file) => file.match(/^apps\/(api|web)\//)?.[1] ?? null;
+export const hygieneScopeOf = (file) =>
+  file.startsWith(`${layout.api}/`) ? 'api' : file.startsWith(`${layout.web}/`) ? 'web' : null;
 
 export function duplicatedLinesByFile(report, lengthOf = () => Infinity) {
   const lines = new Map();
