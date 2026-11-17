@@ -4,6 +4,12 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  architectureDotnetData,
+  architectureFacetData,
+  architectureLibrary,
+  architectureWebData,
+} from './lib/architecture-gate.mjs';
 import { bundleFacetData } from './lib/bundle-gate.mjs';
 import { CC_MAX, CRAP_MAX, evaluate } from './lib/complexity-gate.mjs';
 import { deadCodeWebData } from './lib/dead-code-gate.mjs';
@@ -26,7 +32,7 @@ import {
   webMethods,
 } from './lib/engineering-excellence.mjs';
 
-const BUILT = ['coverage', 'complexity', 'mutation', 'security', 'sbom', 'hygiene', 'bundle'];
+const BUILT = ['coverage', 'complexity', 'mutation', 'security', 'sbom', 'hygiene', 'bundle', 'architecture'];
 const SCHEMA = JSON.parse(readFileSync(new URL('./engineering-excellence.schema.json', import.meta.url), 'utf8'));
 
 function parseArgs(argv) {
@@ -140,6 +146,18 @@ function build(facet, opts) {
     // The measurement check-bundle-size.mjs wrote in the web job, judged against the same budget.
     case 'bundle':
       return bundleFacetData(JSON.parse(read(required(opts, 'report'))), loadCheckConfig('bundle'));
+    // Steiger's JSON from the web job and the architecture tests' TRX from the api job; either may be
+    // absent (no web app, Steiger older than 0.10, no ARCHITECTURE_TEST_PROJECT), not both.
+    case 'architecture': {
+      const steiger = readOptional(opts.steiger);
+      const trx = readOptional(opts.trx);
+      if (!steiger && !trx) return usage('architecture needs --steiger <steiger-report.json> or --trx <architecture.trx>');
+      const version = readOptional(opts['steiger-version-file'])?.split('\n')[0].trim() || null;
+      return architectureFacetData({
+        web: steiger && architectureWebData(JSON.parse(steiger), version, loadCheckConfig('architecture')),
+        dotnet: trx && architectureDotnetData(trx, architectureLibrary(readOptional(opts['test-project']))),
+      });
+    }
     default:
       return usage(`unknown facet '${facet}'`);
   }
@@ -185,6 +203,14 @@ function summary(facet, d) {
   } else if (facet === 'bundle') {
     const kb = (b) => (b === null ? 'n/a' : `${(b / 1000).toFixed(1)} kB`);
     lines.push(`Total JS ${kb(d.totalJsBytes)} (${d.compression}) in ${d.chunks} chunks · largest ${kb(d.largestChunkBytes)} · budget ${kb(d.limitBytes)} · ${d.gate.mode}${d.gate.since ? ` since ${d.gate.since}` : ''}${d.overBudget ? ' · OVER BUDGET' : ''}`);
+  } else if (facet === 'architecture') {
+    const { web, dotnet } = d;
+    if (web) {
+      lines.push(`Web (Steiger${web.version ? ` ${web.version}` : ''}, ${web.gate.mode}${web.gate.since ? ` since ${web.gate.since}` : ''}): ${web.errors} errors · ${web.warnings} warnings · ${web.gate.violations} over the warning baseline`);
+    }
+    if (dotnet) {
+      lines.push(`.NET (${dotnet.project ?? 'architecture tests'}${dotnet.tool ? `, ${dotnet.tool}` : ''}): ${dotnet.passed} of ${dotnet.rules} rules pass · ${dotnet.failed} failing${dotnet.failing.length ? `: ${dotnet.failing.slice(0, 10).join(', ')}` : ''}`);
+    }
   }
   return lines.join('\n');
 }

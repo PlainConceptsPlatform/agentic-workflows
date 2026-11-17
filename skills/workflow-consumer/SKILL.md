@@ -258,6 +258,9 @@ are the app's, in `quality.config.json` at the repository root; the full key ref
 | Mutation (weekly) | `check-mutation.mjs` | a scope's covered-code score is under its floor | `mutation` |
 | Dead code, web (Knip) | `check-dead-code.mjs` | ratchet mode only: a Knip issue type over its baseline, or any unused or unlisted dependency | `deadCode.mode`, `deadCode.since`, `deadCode.baseline` |
 | Bundle size, web (size-limit) | `check-bundle-size.mjs` | ratchet mode only: the static export's JavaScript over the budget (baseline + 10%) | `bundle.mode`, `bundle.since`, `bundle.baselineBytes`, `bundle.limitBytes` |
+| FSD boundaries, web (Steiger) | the app's `lint:fsd` | any Steiger error, in every mode | none |
+| Architecture warnings, web (Steiger) | `check-architecture.mjs` | ratchet mode only: a Steiger rule with more warnings than its baseline | `architecture.mode`, `architecture.since`, `architecture.baseline` |
+| Architecture tests, .NET | `ARCHITECTURE_TEST_PROJECT` | any failing rule (NetArchTest, ArchUnitNET or plain tests) | none |
 
 **Report first, then ratchet.** A new check starts in `mode: "report"`: it measures, writes the
 step summary and the facet, and never fails CI. After two weeks the app switches it to
@@ -279,26 +282,40 @@ Turning on the two web checks:
    its section with `mode: "report"` and today's `since`.
 3. Two weeks later, set `deadCode.mode` and `bundle.mode` to `"ratchet"` in a reviewed pull request.
 
+Turning on the architecture check (1.28.0): nothing to install, since every family app already runs
+Steiger 0.10+ (`lint:fsd`). After `workflows update`, the boundary step also writes
+`apps/web/steiger-report.json` and the architecture tests write `TestResults/architecture.trx`; the
+engineering-excellence job publishes `engineering-excellence-architecture` from main. Record the
+warning baseline from a CI run's `web-quality` artifact (or a local
+`cd apps/web && pnpm exec steiger ./src --reporter json > steiger-report.json`) with
+`node scripts/check-architecture.mjs --report apps/web/steiger-report.json --write-baseline` in a
+pull request, and switch `architecture.mode` to `"ratchet"` two weeks later.
+
 **Reading a failure.** Every gate prints what failed into the job's step summary: the method, file or
 Knip issue type, its current value and what the baseline allows. Fix the code: simplify or test the
 method, remove the clone, delete the unused file or export, remove or declare the dependency, shrink
-the bundle. A dead-code failure lists up to ten findings per type; a bundle failure names the total,
-the budget and the largest chunk.
+the bundle, fix the import or the slice's public API. A dead-code failure lists up to ten findings per
+type; a bundle failure names the total, the budget and the largest chunk; an architecture failure
+lists up to ten Steiger warnings per rule over its baseline, and a failing architecture test names
+the rule in the test output (the facet lists the failing rules too).
 
 **Updating a baseline.** A baseline records debt that already exists; it is never the way to make a
 red gate green.
 
 - After an improvement, ratchet it down: `check-complexity.mjs --prune`, `check-duplication.mjs
-  --prune`, `check-dead-code.mjs --update-baseline`, `check-bundle-size.mjs --update-baseline`.
+  --prune`, `check-dead-code.mjs --update-baseline`, `check-bundle-size.mjs --update-baseline`,
+  `check-architecture.mjs --update-baseline`.
   These only ever lower a value.
 - `--write-baseline` re-records the current state. Use it for a first baseline or a deliberate
   reset, in its own pull request whose body says why; never in the pull request whose gate failed.
-  Once a check is a ratchet, the dead-code and bundle scripts refuse to raise any value with it.
+  Once a check is a ratchet, the dead-code, bundle and architecture scripts refuse to raise any value
+  with it.
 - Unused and unlisted dependencies are never baselined: once dead code is a ratchet, remove or
-  declare them.
+  declare them. Steiger errors and failing architecture tests are never baselined either.
 - Raising the bundle budget is an edit of `bundle.limitBytes` by a person, with the reason in the
   pull request. An agent that hits a gate fixes the code or stops and reports; it does not raise a
-  baseline, add a Knip `ignore`, or switch a mode back to `report`.
+  baseline, add a Knip `ignore`, turn a Steiger rule off or down to `warn`, skip an architecture test,
+  or switch a mode back to `report`.
 
 ## Compile and verify
 
