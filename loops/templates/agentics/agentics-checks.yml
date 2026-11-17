@@ -51,6 +51,11 @@ jobs:
       # gh-aw resolves the `github/gh-aw/...` imports through the GitHub API on every compile,
       # and an unauthenticated gh on a hosted runner refuses API calls.
       GH_TOKEN: ${{ github.token }}
+      # gh keeps extensions under XDG_DATA_HOME, shared by every job on a self-hosted runner. Repos
+      # pin different gh-aw versions, and `gh extension install --pin` keeps a copy another job
+      # left there: this job then ran the wrong version and failed its own check. A folder per run
+      # makes the pin hold.
+      XDG_DATA_HOME: /tmp/gh-aw-checks-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -123,6 +128,10 @@ jobs:
             echo "::error::Running '${AGENTICS_COMPILE_COMMAND}' twice produced different locks; the post-processing is not idempotent."
             exit 1
           fi
+      - name: Remove this run's gh extensions
+        if: always()
+        shell: bash
+        run: rm -rf "$XDG_DATA_HOME"
 
   lint-workflows:
     name: Lint authored workflows and shell

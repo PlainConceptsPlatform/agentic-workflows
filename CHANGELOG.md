@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.28.1
+
+### Fixed
+
+- **The lockfile check runs the gh-aw version it pins.** `agentics-checks` installed gh-aw into gh's shared extension folder. On a self-hosted runner another repository's job may have left a different gh-aw version there, and `gh extension install --pin` kept it: the check then failed with "gh aw reports v0.87.5, this workflow pins v1.2.2" on a correct pull request. The job now installs gh-aw into a folder of its own per run (`XDG_DATA_HOME`) and removes it at the end. `update` does not refresh this template: take it with `add --template agentics-checks --force`, keeping `GH_AW_VERSION`.
+
 ## 1.28.0
 
 ### Added

@@ -4807,6 +4807,15 @@ else
   echo "FAIL: architecture facet wiring:$arch_problems" >&2
 fi
 
+# The lockfile check installs gh-aw into a folder of its own: a shared self-hosted runner keeps
+# another repository's gh-aw version, and the pinned install then ran the wrong one.
+if grep -qF 'XDG_DATA_HOME: /tmp/gh-aw-checks-' "${HERE}/../../templates/agentics/agentics-checks.yml"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: agentics-checks installs gh-aw into the runner's shared extension folder" >&2
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   TcMsg="Route matrix: ${PASS} passed"
