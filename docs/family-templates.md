@@ -45,6 +45,8 @@ JSON cannot carry a comment, so a JSON file's header lives in a companion `<file
 
 The baselines (`scripts/complexity-baseline.json`, `scripts/duplication-baseline.json`) and `quality.config.json` are app files. The template never installs or touches them; the gate scripts write a baseline only when asked to (`--write-baseline`, `--prune`, `--update-baseline`).
 
+The gate scripts find the api and web projects through the workflow `env:`, the same `API_WORKING_DIRECTORY` and `WEB_DIRECTORY` the CI templates declare (defaults `apps/api` and `apps/web`). A repository with another layout sets those two values; `update` keeps them. `.jscpd.json`, `knip.json`, `.size-limit.json` and the Semgrep rules are static files that name `apps/...` themselves: such a repository takes them over (see each `.md` header).
+
 Adopting the template in an app that has its own copies:
 
 1. Install with `--force` so the package's copies replace the app's.
@@ -75,7 +77,6 @@ The numbers the gates enforce, at the repository root. Floors sit just under the
 | `coverage.api` | object, assembly name → rate | Line-coverage floor per .NET assembly on the merged unit, acceptance and integration report. An assembly with a floor and no data fails. At least one is required. |
 | `coverage.reportOnly` | array of assembly names | Assemblies printed with their rate but not gated yet. Optional. |
 | `coverage.web` | rate | Floor for the root line-rate of the vitest v8 Cobertura report. Required for `check-coverage.mjs --web`. |
-| `paths.api`, `paths.web` | repo-relative folder | Where the api and web roots sit in the repository, written with forward slashes. Optional; defaults to `apps/api` and `apps/web`. The hygiene facet, the complexity inputs and the duplication gate read them to build repo-relative file paths and to tell the two scopes apart. `.jscpd.json`, `knip.json`, `.size-limit.json` and the Semgrep rules are static files: an app with another layout takes them over (see each `.md` header) and keeps their paths in line with `paths`. |
 | `mutation` | object, scope → rate | Covered-code mutation score floor per Stryker scope (`domain`, `web`, …). `check-mutation.mjs <scope>` fails for a scope with no floor. |
 | `deadCode.mode` | `"report"` or `"ratchet"` | The web dead-code check (Knip). `report`, the default when the section is absent, never fails CI. `ratchet` fails a Knip issue type over its baseline and any unused or unlisted dependency. |
 | `deadCode.since` | date, `YYYY-MM-DD` | The day the check was introduced. Written by the first `--write-baseline`; shown on the Project-Health card as "report-only since". |

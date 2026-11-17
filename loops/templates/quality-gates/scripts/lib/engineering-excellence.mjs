@@ -12,7 +12,6 @@
 // a facet can never disagree with the gate that ran in the same job.
 
 import { createHash } from 'node:crypto';
-import { loadPaths } from './quality-config.mjs';
 
 export const SCHEMA_VERSION = 1;
 export const FACETS = ['coverage', 'complexity', 'mutation', 'security', 'sbom', 'hygiene', 'bundle', 'architecture'];
@@ -29,10 +28,17 @@ const decode = (s) =>
 const ratio = (num, den) => (den === 0 ? null : num / den);
 const round = (n, d = 4) => (n === null ? null : Math.round(n * 10 ** d) / 10 ** d);
 
-// The api and web roots come from `paths` in quality.config.json (default apps/api, apps/web).
-let layout = loadPaths();
-export const useLayout = (paths = loadPaths()) => {
-  layout = paths;
+// The api and web roots are the CI templates' own API_WORKING_DIRECTORY and WEB_DIRECTORY, so a
+// repository with another layout sets them once in the workflow `env:`, which `update` keeps.
+export const DEFAULT_LAYOUT = { api: 'apps/api', web: 'apps/web' };
+const normalizeRoot = (value, fallback) => (value?.trim() ? value.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '') : fallback);
+export const layoutFromEnv = (env = process.env) => ({
+  api: normalizeRoot(env.API_WORKING_DIRECTORY, DEFAULT_LAYOUT.api),
+  web: normalizeRoot(env.WEB_DIRECTORY, DEFAULT_LAYOUT.web),
+});
+let layout = layoutFromEnv();
+export const useLayout = (next = layoutFromEnv()) => {
+  layout = next;
 };
 
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

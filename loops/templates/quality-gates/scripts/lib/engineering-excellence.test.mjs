@@ -11,6 +11,7 @@ import {
   envelope,
   hygieneScopeOf,
   isGenerated,
+  layoutFromEnv,
   moduleOf,
   mutationFacetData,
   mutationScores,
@@ -287,8 +288,8 @@ test('envelope_githubEnv_carriesProvenance', () => {
   );
 });
 
-test('repoPath_customLayout_followsThePathsConfig', () => {
-  useLayout({ api: 'api', web: 'app' });
+test('repoPath_customLayout_followsTheWorkflowEnv', () => {
+  useLayout(layoutFromEnv({ API_WORKING_DIRECTORY: 'api', WEB_DIRECTORY: './app/' }));
   try {
     assert.equal(repoPath('/x/y/api/src/Program.cs'), 'api/src/Program.cs');
     assert.equal(repoPath('C:\\work\\app\\src\\main.tsx'), 'app/src/main.tsx');
@@ -305,4 +306,9 @@ test('repoPath_customLayout_followsThePathsConfig', () => {
 test('repoPath_defaultLayout_keepsAppsApiAndAppsWeb', () => {
   assert.equal(repoPath('/r/apps/web/src/a.ts'), 'apps/web/src/a.ts');
   assert.equal(repoPath('src/a.ts', 'web'), 'apps/web/src/a.ts');
+});
+test('layoutFromEnv_unsetOrBlank_fallsBackToAppsApiAndAppsWeb', () => {
+  assert.deepEqual(layoutFromEnv({}), { api: 'apps/api', web: 'apps/web' });
+  assert.deepEqual(layoutFromEnv({ API_WORKING_DIRECTORY: ' ', WEB_DIRECTORY: '' }), { api: 'apps/api', web: 'apps/web' });
+  assert.deepEqual(layoutFromEnv({ API_WORKING_DIRECTORY: 'backend\\src/', WEB_DIRECTORY: 'frontend' }), { api: 'backend/src', web: 'frontend' });
 });

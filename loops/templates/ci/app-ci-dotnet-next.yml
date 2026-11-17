@@ -53,6 +53,9 @@ env:
   DOTNET_VERSION: "10.0.x"
   NODE_VERSION: "22"
   API_WORKING_DIRECTORY: apps/api
+  # Where the web app lives. The gate scripts read this and API_WORKING_DIRECTORY to build
+  # repo-relative paths, so a repository that keeps its projects elsewhere sets them once here.
+  WEB_DIRECTORY: apps/web
   DOTNET_SOLUTION: App.slnx
   # EnforceCodeStyleInBuild runs the IDE rules on build; Directory.Build.props makes IDE0051 and
   # IDE0052 (dead private members, practice 11) errors, so dead private code fails the build.
