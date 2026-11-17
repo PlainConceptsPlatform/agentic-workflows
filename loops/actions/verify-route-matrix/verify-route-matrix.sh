@@ -4772,7 +4772,7 @@ else
 fi
 # Vendored skill scripts stay out of SAST, and the raw size-limit report reaches the artifact.
 if grep -qxF '.agents/skills/*/scripts/' "${HERE}/../../templates/quality-gates/.semgrepignore" \
-  && grep -qF 'apps/web/size-limit.json' <(sed -n '/name: web-quality/,/retention-days/p' "${HERE}/../../templates/ci/app-ci-dotnet-next.yml"); then
+  && grep -qF 'WEB_DIRECTORY }}/size-limit.json' <(sed -n '/name: web-quality/,/retention-days/p' "${HERE}/../../templates/ci/app-ci-dotnet-next.yml"); then
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))
@@ -4789,10 +4789,10 @@ grep -qF 'pnpm --filter "$WEB_PACKAGE" run lint:fsd || status=$?' <<<"$fsd_step"
   && grep -qF 'exit "$status"' <<<"$fsd_step" \
   && grep -qF 'steiger ./src --reporter json > steiger-report.json' <<<"$fsd_step" \
   || arch_problems="$arch_problems the boundary step does not keep lint:fsd's verdict while writing Steiger's JSON;"
-grep -qF 'node scripts/check-architecture.mjs --report apps/web/steiger-report.json' "$ARCH_CI" \
+grep -qF 'node scripts/check-architecture.mjs --report "$WEB_DIRECTORY/steiger-report.json"' "$ARCH_CI" \
   || arch_problems="$arch_problems the web job does not run check-architecture.mjs;"
 web_quality=$(sed -n '/name: web-quality/,/retention-days/p' "$ARCH_CI")
-grep -qF 'apps/web/steiger-report.json' <<<"$web_quality" && grep -qF 'apps/web/steiger-version.txt' <<<"$web_quality" \
+grep -qF 'WEB_DIRECTORY }}/steiger-report.json' <<<"$web_quality" && grep -qF 'WEB_DIRECTORY }}/steiger-version.txt' <<<"$web_quality" \
   || arch_problems="$arch_problems the web-quality artifact misses Steiger's report or version;"
 grep -qF -- '--logger "trx;LogFileName=architecture.trx"' "$ARCH_CI" \
   && grep -qF 'name: architecture-tests' "$ARCH_CI" \

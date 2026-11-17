@@ -169,7 +169,7 @@ jobs:
           fi
           git fetch origin "$BASE_REF" --depth=1
           if git diff --name-only "origin/$BASE_REF" HEAD \
-              | grep -qE '^(apps/|scripts/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|quality\.config\.json$|knip\.json$|\.size-limit\.json$|\.github/workflows/app-ci\.yml$)'; then
+              | grep -qE "^(${API_WORKING_DIRECTORY}/|${WEB_DIRECTORY}/|scripts/|package\.json\$|pnpm-lock\.yaml\$|pnpm-workspace\.yaml\$|quality\.config\.json\$|knip\.json\$|\.size-limit\.json\$|\.github/workflows/app-ci\.yml\$)"; then
             echo "app=true" >> "$GITHUB_OUTPUT"
           else
             echo "app=false" >> "$GITHUB_OUTPUT"
@@ -318,14 +318,14 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Detect apps/web
+      - name: Detect the web app
         id: detect
         run: |
-          if [ -f apps/web/package.json ]; then
+          if [ -f "$WEB_DIRECTORY/package.json" ]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "apps/web not present yet, skipping web checks"
+            echo "$WEB_DIRECTORY not present yet, skipping web checks"
           fi
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         if: steps.detect.outputs.exists == 'true'
@@ -363,9 +363,9 @@ jobs:
         if: steps.detect.outputs.exists == 'true'
         run: |
           set -euo pipefail
-          node scripts/check-coverage.mjs --web apps/web/coverage/cobertura-coverage.xml | tee -a "$GITHUB_STEP_SUMMARY"
+          node scripts/check-coverage.mjs --web "$WEB_DIRECTORY/coverage/cobertura-coverage.xml" | tee -a "$GITHUB_STEP_SUMMARY"
       # Cyclomatic complexity per function, for the complexity gate below. ESLint runs with the
-      # `complexity` rule only (apps/web/eslint.complexity.config.mjs); Biome stays the linter.
+      # `complexity` rule only (the web app's eslint.complexity.config.mjs); Biome stays the linter.
       - name: Complexity report (ESLint)
         if: ${{ !cancelled() && steps.detect.outputs.exists == 'true' }}
         run: pnpm --filter "$WEB_PACKAGE" run complexity
@@ -375,9 +375,9 @@ jobs:
         with:
           name: web-coverage
           path: |
-            apps/web/coverage/cobertura-coverage.xml
-            apps/web/coverage/coverage-final.json
-            apps/web/eslint-complexity.json
+            ${{ env.WEB_DIRECTORY }}/coverage/cobertura-coverage.xml
+            ${{ env.WEB_DIRECTORY }}/coverage/coverage-final.json
+            ${{ env.WEB_DIRECTORY }}/eslint-complexity.json
           if-no-files-found: ignore
           retention-days: 7
       # Feature-Sliced Design boundaries: the app's `lint:fsd` (Steiger) decides this step, and any
@@ -390,12 +390,12 @@ jobs:
           set -uo pipefail
           status=0
           pnpm --filter "$WEB_PACKAGE" run lint:fsd || status=$?
-          (cd apps/web && pnpm exec steiger ./src --reporter json > steiger-report.json 2>/dev/null) || true
-          if node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' apps/web/steiger-report.json 2>/dev/null; then
-            (cd apps/web && pnpm exec steiger --version | head -n 1 > steiger-version.txt) || true
+          (cd "$WEB_DIRECTORY" && pnpm exec steiger ./src --reporter json > steiger-report.json 2>/dev/null) || true
+          if node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$WEB_DIRECTORY/steiger-report.json" 2>/dev/null; then
+            (cd "$WEB_DIRECTORY" && pnpm exec steiger --version | head -n 1 > steiger-version.txt) || true
           else
             echo "::notice::Steiger wrote no JSON report (--reporter json needs Steiger 0.10 or later); the architecture check has no web part."
-            rm -f apps/web/steiger-report.json
+            rm -f "$WEB_DIRECTORY/steiger-report.json"
           fi
           exit "$status"
       # Steiger warnings against quality.config.json `architecture`: `report` (the default) never fails;
@@ -405,7 +405,7 @@ jobs:
         if: ${{ !cancelled() && steps.detect.outputs.exists == 'true' && hashFiles('scripts/check-architecture.mjs') != '' }}
         run: |
           set -euo pipefail
-          node scripts/check-architecture.mjs --report apps/web/steiger-report.json | tee -a "$GITHUB_STEP_SUMMARY"
+          node scripts/check-architecture.mjs --report "$WEB_DIRECTORY/steiger-report.json" | tee -a "$GITHUB_STEP_SUMMARY"
       # Key parity between locales and no user-facing string literals in JSX (zero magic strings).
       - name: i18n check
         if: steps.detect.outputs.exists == 'true'
@@ -430,13 +430,13 @@ jobs:
             echo "::notice::Knip is not a root devDependency, so the dead-code check is skipped. Add it to turn the check on (report-only until quality.config.json says ratchet)."
             exit 0
           fi
-          pnpm exec knip --workspace "$WEB_PACKAGE" --reporter json --no-progress --no-exit-code > apps/web/knip-report.json
+          pnpm exec knip --workspace "$WEB_PACKAGE" --reporter json --no-progress --no-exit-code > "$WEB_DIRECTORY/knip-report.json"
           status=$?
           if [ "$status" -ne 0 ]; then
             echo "::warning::Knip exited $status without a report (see its errors above); the dead-code check has nothing to measure."
-            rm -f apps/web/knip-report.json
+            rm -f "$WEB_DIRECTORY/knip-report.json"
           fi
-          node scripts/check-dead-code.mjs --report apps/web/knip-report.json | tee -a "$GITHUB_STEP_SUMMARY"
+          node scripts/check-dead-code.mjs --report "$WEB_DIRECTORY/knip-report.json" | tee -a "$GITHUB_STEP_SUMMARY"
       # The static export's JavaScript (size-limit with @size-limit/file, root devDependencies, over
       # the root .size-limit.json) against quality.config.json `bundle`: the budget is the baseline
       # plus 10%. `report` (the default) never fails; `ratchet` fails a total over the budget.
@@ -448,12 +448,12 @@ jobs:
             echo "::notice::size-limit is not a root devDependency, so the bundle-size check is skipped. Add size-limit and @size-limit/file to turn it on (report-only until quality.config.json says ratchet)."
             exit 0
           fi
-          if ! pnpm exec size-limit --json > apps/web/size-limit.json; then
+          if ! pnpm exec size-limit --json > "$WEB_DIRECTORY/size-limit.json"; then
             echo "::warning::size-limit did not finish (a path that matches no file exits 1); the bundle-size check has nothing to measure."
-            rm -f apps/web/size-limit.json
+            rm -f "$WEB_DIRECTORY/size-limit.json"
           fi
-          node scripts/check-bundle-size.mjs --size-limit apps/web/size-limit.json \
-            --chunks apps/web/out/_next/static/chunks --out apps/web/bundle-report.json | tee -a "$GITHUB_STEP_SUMMARY"
+          node scripts/check-bundle-size.mjs --size-limit "$WEB_DIRECTORY/size-limit.json" \
+            --chunks "$WEB_DIRECTORY/out/_next/static/chunks" --out "$WEB_DIRECTORY/bundle-report.json" | tee -a "$GITHUB_STEP_SUMMARY"
       # The reports feed the hygiene, bundle and architecture facets in the engineering-excellence job.
       - name: Upload web quality reports
         if: ${{ !cancelled() && steps.detect.outputs.exists == 'true' }}
@@ -461,11 +461,11 @@ jobs:
         with:
           name: web-quality
           path: |
-            apps/web/knip-report.json
-            apps/web/bundle-report.json
-            apps/web/size-limit.json
-            apps/web/steiger-report.json
-            apps/web/steiger-version.txt
+            ${{ env.WEB_DIRECTORY }}/knip-report.json
+            ${{ env.WEB_DIRECTORY }}/bundle-report.json
+            ${{ env.WEB_DIRECTORY }}/size-limit.json
+            ${{ env.WEB_DIRECTORY }}/steiger-report.json
+            ${{ env.WEB_DIRECTORY }}/steiger-version.txt
           if-no-files-found: ignore
           retention-days: 7
 
@@ -526,7 +526,7 @@ jobs:
           api="$API_WORKING_DIRECTORY/$API_PROJECT"
           NEXT_PUBLIC_API_BASE_URL=/api/v1 pnpm --filter "$WEB_PACKAGE" run build
           rm -rf "$api/wwwroot"
-          cp -r apps/web/out "$api/wwwroot"
+          cp -r "$WEB_DIRECTORY/out" "$api/wwwroot"
       - name: Start the API
         env:
           SQL_PORT: ${{ job.services.sqlserver.ports['1433'] }}
@@ -564,8 +564,8 @@ jobs:
         with:
           name: e2e-report
           path: |
-            apps/web/playwright-report
-            apps/web/test-results
+            ${{ env.WEB_DIRECTORY }}/playwright-report
+            ${{ env.WEB_DIRECTORY }}/test-results
             api.log
           if-no-files-found: ignore
           retention-days: 7
