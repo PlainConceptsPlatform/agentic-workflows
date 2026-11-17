@@ -12,10 +12,11 @@ export const CONFIG_FILE = fileURLToPath(new URL('../../quality.config.json', im
 export const CHECK_MODES = ['report', 'ratchet'];
 
 const KEYS = {
-  root: ['$schema', 'bundle', 'coverage', 'deadCode', 'mutation'],
+  root: ['$schema', 'architecture', 'bundle', 'coverage', 'deadCode', 'mutation'],
   coverage: ['api', 'reportOnly', 'web'],
   deadCode: ['baseline', 'mode', 'since'],
   bundle: ['baselineBytes', 'limitBytes', 'mode', 'since'],
+  architecture: ['baseline', 'mode', 'since'],
 };
 
 const isRate = (value) => typeof value === 'number' && value >= 0 && value <= 1;
@@ -58,24 +59,31 @@ function checkSection(raw, name, problems) {
   return { section: raw, mode, since };
 }
 
-function deadCodeSection(raw, problems) {
-  const { section, mode, since } = checkSection(raw, 'deadCode', problems);
+// A baseline of counts per kind (a Knip issue type, a Steiger rule), required once the check is a ratchet.
+function countBaselineSection(raw, name, what, writeWith, problems) {
+  const { section, mode, since } = checkSection(raw, name, problems);
   let baseline = section.baseline ?? null;
   if (baseline !== null) {
     if (!isObject(baseline)) {
-      problems.push('deadCode.baseline must be an object of Knip issue type -> count');
+      problems.push(`${name}.baseline must be an object of ${what} -> count`);
       baseline = null;
     } else {
-      for (const [type, value] of Object.entries(baseline)) {
-        if (!isCount(value)) problems.push(`deadCode.baseline.${type} must be a whole number of findings, got ${JSON.stringify(value)}`);
+      for (const [key, value] of Object.entries(baseline)) {
+        if (!isCount(value)) problems.push(`${name}.baseline.${key} must be a whole number of findings, got ${JSON.stringify(value)}`);
       }
     }
   }
   if (mode === 'ratchet' && baseline === null) {
-    problems.push('deadCode.mode is ratchet but deadCode.baseline is missing: write it with `node scripts/check-dead-code.mjs --report <knip.json> --write-baseline` first');
+    problems.push(`${name}.mode is ratchet but ${name}.baseline is missing: write it with \`${writeWith}\` first`);
   }
   return { mode, since, baseline };
 }
+
+const deadCodeSection = (raw, problems) =>
+  countBaselineSection(raw, 'deadCode', 'Knip issue type', 'node scripts/check-dead-code.mjs --report <knip.json> --write-baseline', problems);
+
+const architectureSection = (raw, problems) =>
+  countBaselineSection(raw, 'architecture', 'Steiger rule', 'node scripts/check-architecture.mjs --report <steiger-report.json> --write-baseline', problems);
 
 function bundleSection(raw, problems) {
   const { section, mode, since } = checkSection(raw, 'bundle', problems);
@@ -112,8 +120,9 @@ export function parseQualityConfig(text, file = CONFIG_FILE) {
   const mutation = rates(raw.mutation, 'mutation', problems);
   const deadCode = deadCodeSection(raw.deadCode, problems);
   const bundle = bundleSection(raw.bundle, problems);
+  const architecture = architectureSection(raw.architecture, problems);
   if (problems.length > 0) throw new Error(`${file}:\n  ${problems.join('\n  ')}`);
-  return { coverage: { api, reportOnly, web: coverage.web ?? null }, mutation, deadCode, bundle };
+  return { coverage: { api, reportOnly, web: coverage.web ?? null }, mutation, deadCode, bundle, architecture };
 }
 
 export function loadQualityConfig(file = CONFIG_FILE) {

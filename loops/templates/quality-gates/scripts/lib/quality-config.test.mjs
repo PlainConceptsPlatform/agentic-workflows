@@ -10,6 +10,7 @@ import { loadCheckConfig, parseQualityConfig, writeCheckSection } from './qualit
 const CHECK_DEFAULTS = {
   deadCode: { mode: 'report', since: null, baseline: null },
   bundle: { mode: 'report', since: null, baselineBytes: null, limitBytes: null },
+  architecture: { mode: 'report', since: null, baseline: null },
 };
 
 test('parseQualityConfig_fullConfig_returnsFloors', () => {
@@ -41,9 +42,11 @@ test('parseQualityConfig_checkSections_readModeSinceAndBaselines', () => {
   const config = parseQualityConfig(JSON.stringify({
     deadCode: { mode: 'ratchet', since: '2026-11-16', baseline: { files: 2, exports: 40 } },
     bundle: { mode: 'report', since: '2026-11-16', baselineBytes: 412000, limitBytes: 453200 },
+    architecture: { mode: 'ratchet', since: '2026-11-17', baseline: { 'fsd/public-api': 3 } },
   }));
   assert.deepEqual(config.deadCode, { mode: 'ratchet', since: '2026-11-16', baseline: { files: 2, exports: 40 } });
   assert.deepEqual(config.bundle, { mode: 'report', since: '2026-11-16', baselineBytes: 412000, limitBytes: 453200 });
+  assert.deepEqual(config.architecture, { mode: 'ratchet', since: '2026-11-17', baseline: { 'fsd/public-api': 3 } });
 });
 
 test('parseQualityConfig_badCheckSections_listsEveryProblem', () => {
@@ -51,19 +54,23 @@ test('parseQualityConfig_badCheckSections_listsEveryProblem', () => {
     () => parseQualityConfig(JSON.stringify({
       deadCode: { mode: 'strict', since: '16/11/2026', baseline: { files: -1 }, budget: 3 },
       bundle: { mode: 'ratchet', baselineBytes: '400kB' },
+      architecture: { mode: 'report', baseline: { 'fsd/public-api': 1.5 }, errors: 0 },
     }), 'quality.config.json'),
     (err) => /deadCode\.mode must be one of report, ratchet/.test(err.message)
       && /deadCode\.since must be a date written YYYY-MM-DD/.test(err.message)
       && /deadCode\.baseline\.files must be a whole number/.test(err.message)
       && /deadCode\.budget is not a known setting/.test(err.message)
       && /bundle\.baselineBytes must be a whole number of bytes/.test(err.message)
-      && /bundle\.mode is ratchet but bundle\.limitBytes is missing/.test(err.message),
+      && /bundle\.mode is ratchet but bundle\.limitBytes is missing/.test(err.message)
+      && /architecture\.baseline\.fsd\/public-api must be a whole number/.test(err.message)
+      && /architecture\.errors is not a known setting/.test(err.message),
   );
 });
 
 // A ratchet with nothing to ratchet against would pass every build; it is refused instead.
 test('parseQualityConfig_ratchetWithoutBaseline_isRefused', () => {
   assert.throws(() => parseQualityConfig(JSON.stringify({ deadCode: { mode: 'ratchet' } })), /deadCode\.baseline is missing/);
+  assert.throws(() => parseQualityConfig(JSON.stringify({ architecture: { mode: 'ratchet' } })), /architecture\.baseline is missing: write it with `node scripts\/check-architecture\.mjs/);
 });
 
 test('loadCheckConfig_noConfigFile_isReportModeWithNoBaseline', () => {
