@@ -1,0 +1,25 @@
+# Complexity baseline for the lizard gate in .github/workflows/ci.yml: a function in cli/src or
+# loops/ (what the package ships and runs) with a cyclomatic complexity above 15 fails. These
+# functions were already over the limit when the gate was added, so they do not block; any other
+# function that crosses it does. The list only shrinks: when one of these is simplified below the
+# limit, delete its line. Never add a line to turn the job green.
+cli/src/catalog-installation.ts:installCatalog
+cli/src/index.ts:run
+cli/src/package-baseline.ts:extractTarball
+cli/src/template-bundles.ts:installBundle
+cli/src/tui.ts:onKeypress
+loops/actions/capture-evidence/capture.mjs:main
+loops/actions/capture-evidence/capture.mjs:parseCommand
+loops/actions/capture-evidence/capture.mjs:parseFind
+loops/actions/capture-evidence/capture.mjs:parseStep
+loops/actions/capture-evidence/capture.mjs:runStep
+loops/actions/capture-mockup/capture.mjs:mockupProblems
+loops/actions/merge-dependabot/merge-dependabot.mjs:decide
+loops/actions/merge-dependabot/merge-dependabot.mjs:run
+loops/actions/merge-dependabot/merge-dependabot.mjs:summarizeChecks
+loops/templates/platform-template/scripts/check-platform-conformance.mjs:checkConformance
+loops/templates/platform-template/scripts/check-platform-conformance.mjs:validateContract
+loops/templates/quality-gates/scripts/engineering-excellence.mjs:build
+loops/templates/quality-gates/scripts/engineering-excellence.mjs:summary
+loops/templates/quality-gates/scripts/lib/engineering-excellence.mjs:validate
+loops/templates/quality-gates/scripts/lib/engineering-excellence.mjs:webMethods

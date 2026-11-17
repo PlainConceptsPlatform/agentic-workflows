@@ -17,3 +17,8 @@ runners/scaler-app/publish/
 runners/scaler-app/publish.zip
 
 *.tgz
+
+# Gate reports: Stryker, jscpd.
+reports/
+.stryker-tmp/
+jscpd-report/

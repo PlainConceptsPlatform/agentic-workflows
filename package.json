@@ -11,5 +11,8 @@
     "pack": "pnpm verify && pnpm --filter @plainconceptsplatform/workflows pack --pack-destination ../../artifacts",
     "release": "pnpm verify && pnpm --filter @plainconceptsplatform/workflows release"
   },
+  "devDependencies": {
+    "jscpd": "4.3.0"
+  },
   "version": "1.27.1"
 }
