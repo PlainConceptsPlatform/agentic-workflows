@@ -31,9 +31,10 @@ The Kitchen-Sink gates, made app-neutral:
 | `scripts/check-dead-code.mjs` | The web dead-code check: Knip's JSON per issue type against `deadCode` in `quality.config.json` |
 | `scripts/check-bundle-size.mjs` | The web bundle-size check: size-limit's JSON for the static export's chunks against the `bundle` budget |
 | `scripts/check-architecture.mjs` | The web architecture check: Steiger's JSON warnings per rule against `architecture` in `quality.config.json` |
-| `scripts/engineering-excellence.mjs` | Builds the coverage, complexity, mutation, security, SBOM, hygiene, bundle and architecture facets Project-Health collects |
+| `scripts/check-patterns.mjs` | The .NET code-patterns check: the build's SARIF errors and warnings per analyzer rule against `patterns` in `quality.config.json` |
+| `scripts/engineering-excellence.mjs` | Builds the coverage, complexity, mutation, security, SBOM, hygiene, bundle, architecture and patterns facets Project-Health collects |
 | `scripts/engineering-excellence.schema.json` | The facet contract, vendored verbatim; `.md` beside it carries the header |
-| `scripts/lib/*.mjs` | Parsers, gate rules and the quality config loader, with their `node:test` suites |
+| `scripts/lib/*.mjs` | Parsers, gate rules, the quality config loader and `gate-cli.mjs` (what the report-then-ratchet scripts share: arguments, the mode line, baseline writes), with their `node:test` suites |
 | `scripts/dast-wait-stable.sh` | Waits until a deployed build is serving and stable before a ZAP scan |
 | `.semgrep/platform-hygiene.yml` | The empty-catch rules, `platform-hygiene-csharp-empty-catch` and `platform-hygiene-ts-empty-catch`, scoped to `apps/` |
 | `.jscpd.json` | The duplication scope; `.jscpd.json.md` beside it carries the header |
@@ -66,7 +67,8 @@ The numbers the gates enforce, at the repository root. Floors sit just under the
   "mutation": { "domain": 0.82, "web": 0.79 },
   "deadCode": { "mode": "report", "since": "2026-11-16", "baseline": { "exports": 120, "files": 3, "types": 45 } },
   "bundle": { "mode": "report", "since": "2026-11-16", "baselineBytes": 412000, "limitBytes": 453200 },
-  "architecture": { "mode": "report", "since": "2026-11-17", "baseline": { "fsd/public-api": 2 } }
+  "architecture": { "mode": "report", "since": "2026-11-17", "baseline": { "fsd/public-api": 2 } },
+  "patterns": { "mode": "report", "since": "2026-11-18", "baseline": { "MA0004": 14, "RCS1036": 3, "CA1822": 6 } }
 }
 ```
 
@@ -86,6 +88,9 @@ The numbers the gates enforce, at the repository root. Floors sit just under the
 | `architecture.mode` | `"report"` or `"ratchet"` | The web architecture check (Steiger warnings). `report`, the default, never fails CI; `ratchet` fails a Steiger rule with more warnings than its baseline. Steiger errors are not this setting's: the boundary step fails on any, in either mode. |
 | `architecture.since` | date, `YYYY-MM-DD` | The day the check was introduced. |
 | `architecture.baseline` | object, Steiger rule → count | Warnings allowed per rule (`fsd/public-api`, `fsd/insignificant-slice`, …). Required for `ratchet`. Errors are never baselined. |
+| `patterns.mode` | `"report"` or `"ratchet"` | The .NET code-patterns check (analyzer diagnostics from the build's SARIF). `report`, the default, never fails CI; `ratchet` fails a rule with more errors plus warnings than its baseline. |
+| `patterns.since` | date, `YYYY-MM-DD` | The day the check was introduced. |
+| `patterns.baseline` | object, rule id → count | Errors plus warnings allowed per rule (`MA0004`, `RCS1036`, `CA1822`, `CS8618`, …). Required for `ratchet`. Notes and findings suppressed in source are never counted. |
 | `$schema` | string | Optional, ignored. |
 
 A rate is a number from 0 to 1. Any other key, a percentage written as 94, or a string fails every gate with the list of problems, so a typo can never silently gate nothing. A `ratchet` without its baseline fails the same way.
@@ -99,6 +104,7 @@ Every check added from 1.27.0 on starts report-only: it measures, prints the ste
 | Web dead code | [Knip](https://github.com/webpro-nl/knip) 6, `knip --workspace <web package> --reporter json` | `Dead code (Knip)` in the web job, after the build | `hygiene.deadCode.web` |
 | Web bundle size | [size-limit](https://github.com/ai/size-limit) with `@size-limit/file`, `size-limit --json` | `Bundle size (size-limit)` in the web job, after the build | `bundle` (`engineering-excellence-bundle`) |
 | Web architecture warnings | [Steiger](https://github.com/feature-sliced/steiger) 0.10+, `steiger ./src --reporter json` in `apps/web` | `Architecture warnings (Steiger)` in the web job, after the boundary check | `architecture.web` (`engineering-excellence-architecture`) |
+| .NET code patterns | The compiler's SARIF error log (`-p:ErrorLog`), with the analyzers the app references ([Meziantou.Analyzer](https://github.com/meziantou/Meziantou.Analyzer), [Roslynator](https://github.com/dotnet/roslynator)) | `Code patterns (.NET analyzers)` in the engineering-excellence job | `patterns.dotnet` (`engineering-excellence-patterns`) |
 
 Both tools are root devDependencies of the app, so they run from its lockfile with no extra token or service: `pnpm add -Dw knip@6.44.2 size-limit@14.3.0 @size-limit/file@14.3.0`. Knip 6.44.2 is the newest 6.x older than the family's seven-day `minimumReleaseAge`. Until they are installed, both steps skip with a notice. Record the first baselines with `--write-baseline` (see each script's header) in a pull request, and the `since` date with them. `--update-baseline` lowers a baseline after an improvement and never raises it; once a check is a ratchet, `--write-baseline` refuses to raise it too, so a higher baseline is always a person's edit with its reason in the pull request.
 
@@ -112,6 +118,15 @@ The architecture facet (`engineering-excellence-architecture`, from 1.28.0) has 
 - **.NET, architecture tests.** `ARCHITECTURE_TEST_PROJECT` now writes `TestResults/architecture.trx`, uploaded as `architecture-tests` pass or fail. A failing rule fails the api job, as before. The facet's `dotnet` block reads the TRX, not the library, so NetArchTest, ArchUnitNET and plain reflection tests read the same: `rules`, `passed`, `failed`, `skipped`, the `failing` rule names (`Class.Method`, at most 50), the test `project`, and `tool` (`netarchtest` or `archunitnet`, from the test project's `PackageReference`, null otherwise).
 
 Either part may be null; with neither, the facet is not built. Steiger is already a devDependency of the web app, so there is nothing to install: update to 1.28.0, record the warning baseline from a CI run (download `web-quality`, then `node scripts/check-architecture.mjs --report steiger-report.json --write-baseline`) in a pull request, and switch `architecture.mode` to `ratchet` two weeks later.
+
+### Code patterns
+
+The patterns facet (`engineering-excellence-patterns`, from 1.29.0) has two parts:
+
+- **.NET, analyzers.** The api job's build passes `"-p:ErrorLog=dotnet-analyzers.sarif%2Cversion%3D2.1"`, so every project writes its compiler diagnostics as SARIF 2.1 to `dotnet-analyzers.sarif` beside its `.csproj` (the `%2C` and `%3D` escapes keep MSBuild from reading the comma as a second property). The api job uploads them all, pass or fail, as the `dotnet-analyzers` artifact (`<API_WORKING_DIRECTORY>/**/dotnet-analyzers.sarif`). The analyzers are the app's own: package references to `Meziantou.Analyzer` and `Roslynator.Analyzers` (a `Directory.Build.props` or `Directory.Packages.props` entry with `PrivateAssets="all"`), with a curated subset of their rules at `warning` in `.editorconfig` and the rest left at their defaults or `none`. The template never sets a severity and never turns a warning into an error; an app that builds with `TreatWarningsAsErrors` keeps that choice, and its analyzer warnings would then fail its build, so keep the analyzers out of it (`WarningsNotAsErrors`) while they are report-only. `check-patterns.mjs --sarif ee/dotnet-analyzers` counts errors plus warnings per rule against `patterns.baseline`; notes and findings suppressed in source (`#pragma warning disable`, `[SuppressMessage]`) are listed, never gated. A project that targets several frameworks reports a finding once. The facet's `dotnet` block has `tool` (`roslyn`), `compiler`, `logs` (projects read), `errors`, `warnings`, `notes`, `suppressed`, `byAnalyzer` (from the rule prefix: `meziantou`, `roslynator`, `netanalyzers`, `codestyle`, `compiler`, `xunit`, `other`), `byRule`, `baseline` and `gate`. Test projects are part of the build, so their diagnostics count too.
+- **Semgrep, the repository's own rules.** The blocking SAST scan already runs `--config .semgrep/` and fails on any finding. The facet's `semgrep` block records those rules' findings per rule from the scan's `semgrep.json` (the platform hygiene and mockup rules and any rule the app adds to `.semgrep/`): `version`, `rules` (how many `.semgrep/*.yml` defines), `errors`, `warnings`, `notes` and `byRule`, every rule listed, at zero too. It is never baselined, since the scan holds it at zero.
+
+Either part may be null; with neither, the facet is not built. To adopt it: add the two analyzer packages and the `.editorconfig` severities in a pull request, update to 1.29.0, record the baseline from that pull request's CI run (download `dotnet-analyzers`, then `node scripts/check-patterns.mjs --sarif <dir> --write-baseline`), and switch `patterns.mode` to `ratchet` two weeks later.
 
 ## The gates CI: app-ci-dotnet-next
 
@@ -132,7 +147,7 @@ Either part may be null; with neither, the facet is not built. Steiger is alread
 | `MARKDOWN_LINT_COMMAND`, `REPO_CHECK_COMMANDS` | The Markdown job and the app's own checks (Kitchen-Sink's `node scripts/check-demo-manifest.mjs`); empty skips the steps |
 | `SBOM_ARTIFACT_NAME`, `SEMGREP_EXCLUDES`, images and versions | Scanner settings |
 
-The web job runs `Dead code (Knip)` and `Bundle size (size-limit)` after the build, and `Architecture warnings (Steiger)` after the boundary check, and uploads the reports as `web-quality`; the api job uploads the architecture tests' TRX as `architecture-tests`. The engineering-excellence job folds Knip into the hygiene facet and builds the bundle and architecture facets from them. Neither step needs an `env:` value: they read `WEB_PACKAGE`, the root `knip.json` and `.size-limit.json`, and `quality.config.json`.
+The web job runs `Dead code (Knip)` and `Bundle size (size-limit)` after the build, and `Architecture warnings (Steiger)` after the boundary check, and uploads the reports as `web-quality`; the api job uploads the architecture tests' TRX as `architecture-tests` and the build's SARIF error logs as `dotnet-analyzers`. The engineering-excellence job folds Knip into the hygiene facet, builds the bundle, architecture and patterns facets from them, and runs `Code patterns (.NET analyzers)`. Neither step needs an `env:` value: they read `WEB_PACKAGE`, the root `knip.json` and `.size-limit.json`, and `quality.config.json`.
 
 The job names are the ones the apps' required checks and the merge train read (`Full CI`), and the last job, `dispatch-merge-gate`, hands a bot pull request's verdict to the router's merge train exactly as the apps' CI does. A deploy pipeline that calls the workflow with `uses:` must grant `actions: write`. The `Platform conformance` job runs the guard from [platform-contracts.md](platform-contracts.md) where the app declares a platform contract and passes everywhere else.
 

@@ -18,17 +18,10 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 import { budgetFor, bundleMeasurement, compressionOf, evaluate, lowerBudget, sizeLimitEntries } from './lib/bundle-gate.mjs';
+import { cliArgs, header, notMeasured, say } from './lib/gate-cli.mjs';
 import { loadCheckConfig, today, writeCheckSection } from './lib/quality-config.mjs';
 
-const args = process.argv.slice(2);
-const opt = (name) => {
-  const i = args.indexOf(`--${name}`);
-  return i === -1 ? undefined : args[i + 1];
-};
-const flag = (name) => args.includes(`--${name}`);
-// One line per argument: the step summary is Markdown, and a table needs its rows on their own lines.
-const say = (...lines) => console.log(lines.join('\n'));
-
+const { opt, flag } = cliArgs();
 const sizeLimitFile = opt('size-limit');
 const chunksDir = opt('chunks');
 if (!sizeLimitFile || !chunksDir) {
@@ -40,18 +33,11 @@ const sizeLimitConfig = opt('config') ?? fileURLToPath(new URL('../.size-limit.j
 const config = loadCheckConfig('bundle');
 const kb = (bytes) => `${(bytes / 1000).toFixed(1)} kB`;
 
-console.log('### Bundle size (size-limit)');
-say('');
-console.log(
-  config.mode === 'ratchet'
-    ? `Mode: ratchet${config.since ? ` (check introduced ${config.since})` : ''}. A total over the budget fails.`
-    : `Mode: report-only${config.since ? ` since ${config.since}` : ''}. Never fails CI; the switch to \`ratchet\` is a reviewed change to quality.config.json.`,
-);
+say(...header('Bundle size (size-limit)', config, 'A total over the budget fails.'));
 
 const missing = [sizeLimitFile, chunksDir].filter((p) => !existsSync(p));
 if (missing.length) {
-  say('', `Not measured: ${missing.join(' and ')} missing (the build or size-limit did not finish; see the step log).`);
-  process.exit(config.mode === 'ratchet' ? 1 : 0);
+  process.exit(notMeasured(config, `${missing.join(' and ')} missing (the build or size-limit did not finish; see the step log).`));
 }
 
 const entries = sizeLimitEntries(JSON.parse(readFileSync(sizeLimitFile, 'utf8')));

@@ -14,6 +14,7 @@ import { bundleFacetData } from './lib/bundle-gate.mjs';
 import { CC_MAX, CRAP_MAX, evaluate } from './lib/complexity-gate.mjs';
 import { deadCodeWebData } from './lib/dead-code-gate.mjs';
 import { evaluate as evaluateDuplication } from './lib/duplication-gate.mjs';
+import { patternsDotnetData, patternsFacetData, patternsSemgrepData, readSarifLogs, semgrepRuleIds } from './lib/patterns-gate.mjs';
 import { loadCheckConfig, loadQualityConfig } from './lib/quality-config.mjs';
 import { scopedSources } from './lib/source-files.mjs';
 import {
@@ -32,7 +33,7 @@ import {
   webMethods,
 } from './lib/engineering-excellence.mjs';
 
-const BUILT = ['coverage', 'complexity', 'mutation', 'security', 'sbom', 'hygiene', 'bundle', 'architecture'];
+const BUILT = ['coverage', 'complexity', 'mutation', 'security', 'sbom', 'hygiene', 'bundle', 'architecture', 'patterns'];
 const SCHEMA = JSON.parse(readFileSync(new URL('./engineering-excellence.schema.json', import.meta.url), 'utf8'));
 
 function parseArgs(argv) {
@@ -76,6 +77,13 @@ function mutationReports(dir) {
     else console.log(`· ${scope}: no mutation-report.json — scope omitted`);
   }
   return reports;
+}
+
+// The rule ids of the repository's own Semgrep rules (.semgrep/*.yml), or null without the directory.
+function semgrepRules(dir) {
+  if (!dir || !existsSync(dir)) return null;
+  const files = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f));
+  return semgrepRuleIds(files.map((f) => read(join(dir, f))));
 }
 
 function build(facet, opts) {
@@ -158,6 +166,17 @@ function build(facet, opts) {
         dotnet: trx && architectureDotnetData(trx, architectureLibrary(readOptional(opts['test-project']))),
       });
     }
+    // The compiler's SARIF logs from the api job (one per project) and the blocking Semgrep scan's
+    // JSON, read for the repository's own .semgrep/ rules; either may be absent, not both.
+    case 'patterns': {
+      const logs = opts.sarif ? readSarifLogs(opts.sarif).logs : [];
+      const semgrep = readOptional(opts.semgrep);
+      if (!logs.length && !semgrep) return usage('patterns needs --sarif <file.sarif | dir> with a SARIF log, or --semgrep <semgrep.json>');
+      return patternsFacetData({
+        dotnet: logs.length ? patternsDotnetData(logs, loadCheckConfig('patterns')) : null,
+        semgrep: semgrep && patternsSemgrepData(JSON.parse(semgrep), semgrepRules(opts['semgrep-rules'])),
+      });
+    }
     default:
       return usage(`unknown facet '${facet}'`);
   }
@@ -211,8 +230,22 @@ function summary(facet, d) {
     if (dotnet) {
       lines.push(`.NET (${dotnet.project ?? 'architecture tests'}${dotnet.tool ? `, ${dotnet.tool}` : ''}): ${dotnet.passed} of ${dotnet.rules} rules pass · ${dotnet.failed} failing${dotnet.failing.length ? `: ${dotnet.failing.slice(0, 10).join(', ')}` : ''}`);
     }
+  } else if (facet === 'patterns') {
+    lines.push(...patternsSummary(d));
   }
   return lines.join('\n');
+}
+
+function patternsSummary({ dotnet, semgrep }) {
+  const lines = [];
+  if (dotnet) {
+    const analyzers = Object.entries(dotnet.byAnalyzer).map(([a, c]) => `${a} ${c.errors + c.warnings}`).join(', ');
+    lines.push(`.NET analyzers (${dotnet.logs} projects, ${dotnet.gate.mode}${dotnet.gate.since ? ` since ${dotnet.gate.since}` : ''}): ${dotnet.errors} errors · ${dotnet.warnings} warnings · ${dotnet.notes} notes · ${dotnet.suppressed} suppressed · ${dotnet.gate.violations} over the baseline${analyzers ? ` (${analyzers})` : ''}`);
+  }
+  if (semgrep) {
+    lines.push(`Semgrep, the repository's own rules${semgrep.rules === null ? '' : ` (${semgrep.rules})`}: ${semgrep.errors} errors · ${semgrep.warnings} warnings · ${semgrep.notes} info`);
+  }
+  return lines;
 }
 
 const { facet, opts } = parseArgs(process.argv.slice(2));

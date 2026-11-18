@@ -261,6 +261,8 @@ are the app's, in `quality.config.json` at the repository root; the full key ref
 | FSD boundaries, web (Steiger) | the app's `lint:fsd` | any Steiger error, in every mode | none |
 | Architecture warnings, web (Steiger) | `check-architecture.mjs` | ratchet mode only: a Steiger rule with more warnings than its baseline | `architecture.mode`, `architecture.since`, `architecture.baseline` |
 | Architecture tests, .NET | `ARCHITECTURE_TEST_PROJECT` | any failing rule (NetArchTest, ArchUnitNET or plain tests) | none |
+| Code patterns, .NET (analyzers) | `check-patterns.mjs` | ratchet mode only: an analyzer rule with more errors plus warnings than its baseline | `patterns.mode`, `patterns.since`, `patterns.baseline` |
+| Semgrep, the repository's own rules | the blocking SAST scan (`--config .semgrep/`) | any finding, in every mode | none |
 
 **Report first, then ratchet.** A new check starts in `mode: "report"`: it measures, writes the
 step summary and the facet, and never fails CI. After two weeks the app switches it to
@@ -291,31 +293,45 @@ warning baseline from a CI run's `web-quality` artifact (or a local
 `node scripts/check-architecture.mjs --report apps/web/steiger-report.json --write-baseline` in a
 pull request, and switch `architecture.mode` to `"ratchet"` two weeks later.
 
+Turning on the code-patterns check (1.29.0): the template only collects. The api job's build
+writes each project's diagnostics to `dotnet-analyzers.sarif` (`-p:ErrorLog`) and uploads them as
+the `dotnet-analyzers` artifact; the engineering-excellence job runs `Code patterns (.NET analyzers)`
+and publishes `engineering-excellence-patterns` from main, with the findings of the `.semgrep/` rules
+beside them. The analyzers are the app's: reference `Meziantou.Analyzer` and `Roslynator.Analyzers`
+(`PrivateAssets="all"`, in `Directory.Build.props` or `Directory.Packages.props`) and set a curated
+subset of their rules to `warning` in `.editorconfig`. Never `error`, and keep them out of
+`TreatWarningsAsErrors` (`WarningsNotAsErrors`): the check never fails a build. Record the baseline
+from that pull request's CI run (download `dotnet-analyzers`, then
+`node scripts/check-patterns.mjs --sarif <dir> --write-baseline`) and switch `patterns.mode` to
+`"ratchet"` two weeks later.
+
 **Reading a failure.** Every gate prints what failed into the job's step summary: the method, file or
 Knip issue type, its current value and what the baseline allows. Fix the code: simplify or test the
 method, remove the clone, delete the unused file or export, remove or declare the dependency, shrink
 the bundle, fix the import or the slice's public API. A dead-code failure lists up to ten findings per
 type; a bundle failure names the total, the budget and the largest chunk; an architecture failure
 lists up to ten Steiger warnings per rule over its baseline, and a failing architecture test names
-the rule in the test output (the facet lists the failing rules too).
+the rule in the test output (the facet lists the failing rules too); a patterns failure lists up to
+ten analyzer findings (`file:line: message`) per rule over its baseline.
 
 **Updating a baseline.** A baseline records debt that already exists; it is never the way to make a
 red gate green.
 
 - After an improvement, ratchet it down: `check-complexity.mjs --prune`, `check-duplication.mjs
   --prune`, `check-dead-code.mjs --update-baseline`, `check-bundle-size.mjs --update-baseline`,
-  `check-architecture.mjs --update-baseline`.
+  `check-architecture.mjs --update-baseline`, `check-patterns.mjs --update-baseline`.
   These only ever lower a value.
 - `--write-baseline` re-records the current state. Use it for a first baseline or a deliberate
   reset, in its own pull request whose body says why; never in the pull request whose gate failed.
-  Once a check is a ratchet, the dead-code, bundle and architecture scripts refuse to raise any value
-  with it.
+  Once a check is a ratchet, the dead-code, bundle, architecture and patterns scripts refuse to raise
+  any value with it.
 - Unused and unlisted dependencies are never baselined: once dead code is a ratchet, remove or
   declare them. Steiger errors and failing architecture tests are never baselined either.
 - Raising the bundle budget is an edit of `bundle.limitBytes` by a person, with the reason in the
   pull request. An agent that hits a gate fixes the code or stops and reports; it does not raise a
   baseline, add a Knip `ignore`, turn a Steiger rule off or down to `warn`, skip an architecture test,
-  or switch a mode back to `report`.
+  lower an analyzer rule's severity or suppress it to pass the patterns check, or switch a mode back
+  to `report`.
 
 ## Compile and verify
 
