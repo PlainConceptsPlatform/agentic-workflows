@@ -12,11 +12,12 @@ export const CONFIG_FILE = fileURLToPath(new URL('../../quality.config.json', im
 export const CHECK_MODES = ['report', 'ratchet'];
 
 const KEYS = {
-  root: ['$schema', 'architecture', 'bundle', 'coverage', 'deadCode', 'mutation'],
+  root: ['$schema', 'architecture', 'bundle', 'coverage', 'deadCode', 'mutation', 'patterns'],
   coverage: ['api', 'reportOnly', 'web'],
   deadCode: ['baseline', 'mode', 'since'],
   bundle: ['baselineBytes', 'limitBytes', 'mode', 'since'],
   architecture: ['baseline', 'mode', 'since'],
+  patterns: ['baseline', 'mode', 'since'],
 };
 
 const isRate = (value) => typeof value === 'number' && value >= 0 && value <= 1;
@@ -59,7 +60,7 @@ function checkSection(raw, name, problems) {
   return { section: raw, mode, since };
 }
 
-// A baseline of counts per kind (a Knip issue type, a Steiger rule), required once the check is a ratchet.
+// A baseline of counts per kind (a Knip issue type, a Steiger rule, an analyzer rule), required once the check is a ratchet.
 function countBaselineSection(raw, name, what, writeWith, problems) {
   const { section, mode, since } = checkSection(raw, name, problems);
   let baseline = section.baseline ?? null;
@@ -84,6 +85,9 @@ const deadCodeSection = (raw, problems) =>
 
 const architectureSection = (raw, problems) =>
   countBaselineSection(raw, 'architecture', 'Steiger rule', 'node scripts/check-architecture.mjs --report <steiger-report.json> --write-baseline', problems);
+
+const patternsSection = (raw, problems) =>
+  countBaselineSection(raw, 'patterns', 'analyzer rule', 'node scripts/check-patterns.mjs --sarif <dir> --write-baseline', problems);
 
 function bundleSection(raw, problems) {
   const { section, mode, since } = checkSection(raw, 'bundle', problems);
@@ -121,8 +125,9 @@ export function parseQualityConfig(text, file = CONFIG_FILE) {
   const deadCode = deadCodeSection(raw.deadCode, problems);
   const bundle = bundleSection(raw.bundle, problems);
   const architecture = architectureSection(raw.architecture, problems);
+  const patterns = patternsSection(raw.patterns, problems);
   if (problems.length > 0) throw new Error(`${file}:\n  ${problems.join('\n  ')}`);
-  return { coverage: { api, reportOnly, web: coverage.web ?? null }, mutation, deadCode, bundle, architecture };
+  return { coverage: { api, reportOnly, web: coverage.web ?? null }, mutation, deadCode, bundle, architecture, patterns };
 }
 
 export function loadQualityConfig(file = CONFIG_FILE) {

@@ -12,7 +12,7 @@
 //   records how many rules passed and which failed. Read from the TRX, not from the test library, so
 //   NetArchTest and ArchUnitNET (or plain reflection tests) read the same.
 
-import { gateState, lowerBaseline } from './dead-code-gate.mjs';
+import { evaluateCounts, gateState, lowerBaseline, positiveCounts } from './dead-code-gate.mjs';
 import { parseTrx } from './test-timings.mjs';
 
 export { lowerBaseline };
@@ -38,26 +38,10 @@ const warningsByRule = (byRule) =>
   Object.fromEntries(Object.entries(byRule).map(([rule, r]) => [rule, r.warnings]));
 
 // `config` is quality.config.json's architecture section: { mode, since, baseline }.
-export function evaluate(byRule, config) {
-  const baseline = config.baseline ?? {};
-  const violations = [];
-  for (const [rule, count] of Object.entries(warningsByRule(byRule))) {
-    const allowed = baseline[rule] ?? 0;
-    if (count > allowed) violations.push({ rule, count, allowed, why: baseline[rule] === undefined ? 'new' : 'increased' });
-  }
-  const improved = Object.entries(baseline)
-    .filter(([rule, allowed]) => (byRule[rule]?.warnings ?? 0) < allowed)
-    .map(([rule]) => rule)
-    .sort();
-  const excess = violations.reduce((n, v) => n + v.count - v.allowed, 0);
-  const failed = config.mode === 'ratchet' && violations.length > 0;
-  return { violations, improved, excess, failed };
-}
+export const evaluate = (byRule, config) => evaluateCounts(warningsByRule(byRule), config);
 
 // Warnings per rule, only the rules that have any. Errors are never baselined.
-export function buildBaseline(byRule) {
-  return Object.fromEntries(Object.entries(warningsByRule(byRule)).filter(([, count]) => count > 0));
-}
+export const buildBaseline = (byRule) => positiveCounts(warningsByRule(byRule));
 
 // The architecture facet's web block: Steiger's counts, the baseline and the gate as evaluated here.
 export function architectureWebData(report, version, config) {

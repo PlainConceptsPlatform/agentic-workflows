@@ -4807,6 +4807,29 @@ else
   echo "FAIL: architecture facet wiring:$arch_problems" >&2
 fi
 
+# The patterns facet: the api build writes each project's SARIF error log (escaped so MSBuild does not
+# split it into a `version` property) and uploads it pass or fail, and the engineering-excellence job
+# runs the report-then-ratchet check, builds the facet with the Semgrep part and uploads it from main.
+patterns_problems=""
+grep -qF -- '"-p:ErrorLog=dotnet-analyzers.sarif%2Cversion%3D2.1"' "$ARCH_CI" \
+  || patterns_problems="$patterns_problems the api build does not write the escaped SARIF error log;"
+analyzers_upload=$(sed -n '/name: Upload analyzer SARIF/,/retention-days/p' "$ARCH_CI")
+grep -qF 'name: dotnet-analyzers' <<<"$analyzers_upload" && grep -qF '**/dotnet-analyzers.sarif' <<<"$analyzers_upload" \
+  && grep -qF '!cancelled()' <<<"$analyzers_upload" \
+  || patterns_problems="$patterns_problems the api job does not upload every project's SARIF as dotnet-analyzers;"
+grep -qF 'node scripts/check-patterns.mjs --sarif ee/dotnet-analyzers' "$ARCH_CI" \
+  || patterns_problems="$patterns_problems the engineering-excellence job does not run check-patterns.mjs;"
+grep -qF 'node scripts/engineering-excellence.mjs patterns --out ee/patterns.json' "$ARCH_CI" \
+  && grep -qF -- '--semgrep-rules .semgrep' "$ARCH_CI" \
+  && grep -qF 'name: engineering-excellence-patterns' "$ARCH_CI" \
+  || patterns_problems="$patterns_problems the engineering-excellence job does not build or upload the patterns facet;"
+if [ -z "$patterns_problems" ]; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: patterns facet wiring:$patterns_problems" >&2
+fi
+
 # The lockfile check installs gh-aw into a folder of its own: a shared self-hosted runner keeps
 # another repository's gh-aw version, and the pinned install then ran the wrong one.
 if grep -qF 'XDG_DATA_HOME: /tmp/gh-aw-checks-' "${HERE}/../../templates/agentics/agentics-checks.yml"; then

@@ -20,17 +20,10 @@ import {
   knipCounts,
   lowerBaseline,
 } from './lib/dead-code-gate.mjs';
-import { loadCheckConfig, today, writeCheckSection } from './lib/quality-config.mjs';
+import { cliArgs, closeCountCheck, header, notMeasured, say, updateCountBaseline, writeCountBaseline } from './lib/gate-cli.mjs';
+import { loadCheckConfig } from './lib/quality-config.mjs';
 
-const args = process.argv.slice(2);
-const opt = (name) => {
-  const i = args.indexOf(`--${name}`);
-  return i === -1 ? undefined : args[i + 1];
-};
-const flag = (name) => args.includes(`--${name}`);
-// One line per argument: the step summary is Markdown, and a table needs its rows on their own lines.
-const say = (...lines) => console.log(lines.join('\n'));
-
+const { opt, flag } = cliArgs();
 const report = opt('report');
 if (!report) {
   console.error('usage: node scripts/check-dead-code.mjs --report <knip.json> [--write-baseline | --update-baseline]');
@@ -38,51 +31,17 @@ if (!report) {
 }
 
 const config = loadCheckConfig('deadCode');
-const modeLine = config.mode === 'ratchet'
-  ? `Mode: ratchet${config.since ? ` (check introduced ${config.since})` : ''}. More findings than the baseline, or any unused or unlisted dependency, fails.`
-  : `Mode: report-only${config.since ? ` since ${config.since}` : ''}. Never fails CI; the switch to \`ratchet\` is a reviewed change to quality.config.json.`;
-
-console.log('### Dead code (Knip)');
-say('');
-console.log(modeLine);
+say(...header('Dead code (Knip)', config, 'More findings than the baseline, or any unused or unlisted dependency, fails.'));
 
 if (!existsSync(report)) {
-  say('', `Not measured: ${report} is missing (Knip did not run or did not finish; see the step log).`);
-  process.exit(config.mode === 'ratchet' ? 1 : 0);
+  process.exit(notMeasured(config, `${report} is missing (Knip did not run or did not finish; see the step log).`));
 }
 
 const knip = JSON.parse(readFileSync(report, 'utf8'));
 const byType = knipCounts(knip);
 
-if (flag('write-baseline')) {
-  // A ratchet's baseline is never raised by a script: that would turn a red gate green without a fix.
-  const raised = config.mode === 'ratchet'
-    ? Object.entries(buildBaseline(byType)).filter(([type, count]) => count > (config.baseline?.[type] ?? 0)).map(([type]) => type)
-    : [];
-  if (raised.length) {
-    console.error(`✗ deadCode is a ratchet and this would raise its baseline for ${raised.join(', ')}. Fix the findings, or lower the baseline with --update-baseline; raising it is a hand edit of quality.config.json with the reason in the pull request.`);
-    process.exit(2);
-  }
-  const written = writeCheckSection('deadCode', (s) => ({
-    ...s,
-    mode: s.mode ?? 'report',
-    since: s.since ?? today(),
-    baseline: buildBaseline(byType),
-  }));
-  say('', `· wrote deadCode.baseline to quality.config.json: ${JSON.stringify(written.baseline)}`);
-  process.exit(0);
-}
-
-if (flag('update-baseline')) {
-  if (!config.baseline) {
-    console.error('✗ deadCode.baseline does not exist yet; write it with --write-baseline');
-    process.exit(2);
-  }
-  const lowered = lowerBaseline(config.baseline, byType);
-  writeCheckSection('deadCode', (s) => ({ ...s, baseline: lowered }));
-  say('', `· deadCode.baseline ${JSON.stringify(config.baseline)} -> ${JSON.stringify(lowered)}`);
-  process.exit(0);
-}
+if (flag('write-baseline')) process.exit(writeCountBaseline('deadCode', config, buildBaseline(byType), { fix: 'Fix the findings' }));
+if (flag('update-baseline')) process.exit(updateCountBaseline('deadCode', config, (baseline) => lowerBaseline(baseline, byType)));
 
 const { violations, improved, failed } = evaluate(byType, config);
 const summary = deadCodeSummary(byType);
@@ -98,19 +57,17 @@ for (const [type, count] of Object.entries(byType)) {
 const namesOf = (type) =>
   knip.issues.flatMap((row) => (Array.isArray(row[type]) ? row[type].map((f) => `${row.file}${f?.name && f.name !== row.file ? `: ${f.name}` : ''}`) : [])).slice(0, 10);
 
-if (improved.length) {
-  say('', `Improved below the baseline: ${improved.join(', ')}. Run \`node scripts/check-dead-code.mjs --report ${report} --update-baseline\` to ratchet it down.`);
-}
-if (violations.length) {
-  say('', failed ? 'Violations — delete the dead code, or remove the dependency:' : 'Over the baseline (report-only, not failing):', '');
-  for (const v of violations) {
+process.exit(closeCountCheck({
+  config,
+  improved,
+  violations,
+  failed,
+  command: `node scripts/check-dead-code.mjs --report ${report}`,
+  fixHint: 'delete the dead code, or remove the dependency',
+  okLine: '✓ no Knip issue type over its baseline',
+  describe: (v, mark) => {
     const why = v.why === 'dependency' ? 'unused or unlisted dependencies are never baselined' : v.why === 'new' ? 'not in the baseline' : 'more than the baseline';
-    console.log(`- ${failed ? '✗' : '·'} ${v.type}: ${v.count} (allowed ${v.allowed}) — ${why}`);
+    console.log(`- ${mark} ${v.type}: ${v.count} (allowed ${v.allowed}) — ${why}`);
     for (const name of namesOf(v.type)) console.log(`  - \`${name}\``);
-  }
-}
-if (!config.baseline) {
-  say('', `No baseline yet. Record one in a pull request with \`node scripts/check-dead-code.mjs --report ${report} --write-baseline\`.`);
-}
-if (failed) process.exit(1);
-say('', violations.length ? '· report-only: nothing fails' : '✓ no Knip issue type over its baseline');
+  },
+}));

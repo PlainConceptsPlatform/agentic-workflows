@@ -60,6 +60,28 @@ export function evaluate(byType, config) {
   return { violations, improved, excess, failed };
 }
 
+// A plain count baseline, per key (a Steiger rule, an analyzer rule): a key may keep its baseline
+// count but never more, and a key outside the baseline may have none. Shared by the architecture and
+// patterns checks; dead code adds its zero-tolerance dependency types above.
+export function evaluateCounts(counts, config) {
+  const baseline = config.baseline ?? {};
+  const violations = [];
+  for (const [key, count] of Object.entries(counts)) {
+    const allowed = baseline[key] ?? 0;
+    if (count > allowed) violations.push({ rule: key, count, allowed, why: baseline[key] === undefined ? 'new' : 'increased' });
+  }
+  const improved = Object.entries(baseline)
+    .filter(([key, allowed]) => (counts[key] ?? 0) < allowed)
+    .map(([key]) => key)
+    .sort();
+  const excess = violations.reduce((n, v) => n + v.count - v.allowed, 0);
+  const failed = config.mode === 'ratchet' && violations.length > 0;
+  return { violations, improved, excess, failed };
+}
+
+// Counts per key, only the keys that have any: a first baseline.
+export const positiveCounts = (counts) => Object.fromEntries(Object.entries(counts).filter(([, count]) => count > 0));
+
 // The gate state the facet carries; one shape for every report-then-ratchet check.
 export const gateState = (config, excess, failed) => ({ mode: config.mode, since: config.since ?? null, violations: excess, failed });
 
