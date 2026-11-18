@@ -15,8 +15,10 @@ import {
   scannedBy,
   swallowFindings,
   validateFacet,
+  useLayout,
 } from './engineering-excellence.mjs';
 
+useLayout({ api: 'apps/api', web: 'apps/web' });
 const SCHEMA = JSON.parse(readFileSync(new URL('../engineering-excellence.schema.json', import.meta.url), 'utf8'));
 const JSCPD_CONFIG = JSON.parse(readFileSync(new URL('../../.jscpd.json', import.meta.url), 'utf8'));
 const doc = (data) => envelope('hygiene', data, { GITHUB_SHA: 'abc', GITHUB_RUN_ID: '1' }, new Date('2026-10-11T00:00:00Z'));

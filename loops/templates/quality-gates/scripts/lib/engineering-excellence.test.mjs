@@ -9,19 +9,24 @@ import {
   coverageFacetData,
   crap,
   envelope,
+  hygieneScopeOf,
   isGenerated,
+  layoutFromEnv,
   moduleOf,
   mutationFacetData,
   mutationScores,
+  repoPath,
   sbomFacetData,
   securityFacetData,
   semgrepSummary,
   tallyMutants,
   trivySummary,
   validateFacet,
+  useLayout,
   webMethods,
 } from './engineering-excellence.mjs';
 
+useLayout({ api: 'apps/api', web: 'apps/web' });
 const SCHEMA = JSON.parse(readFileSync(new URL('../engineering-excellence.schema.json', import.meta.url), 'utf8'));
 const ENV = { GITHUB_REPOSITORY: 'o/r', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: 'abc', GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '1' };
 const NOW = new Date('2026-10-11T00:00:00Z');
@@ -281,4 +286,29 @@ test('envelope_githubEnv_carriesProvenance', () => {
     { repo: e.repo, ref: e.ref, commitSha: e.commitSha, runId: e.runId, runAttempt: e.runAttempt, generatedAt: e.generatedAt, schemaVersion: e.schemaVersion },
     { repo: 'o/r', ref: 'refs/heads/main', commitSha: 'abc', runId: 42, runAttempt: 1, generatedAt: '2026-10-11T00:00:00.000Z', schemaVersion: 1 },
   );
+});
+
+test('repoPath_customLayout_followsTheWorkflowEnv', () => {
+  useLayout(layoutFromEnv({ API_WORKING_DIRECTORY: 'api', WEB_DIRECTORY: './app/' }));
+  try {
+    assert.equal(repoPath('/x/y/api/src/Program.cs'), 'api/src/Program.cs');
+    assert.equal(repoPath('C:\\work\\app\\src\\main.tsx'), 'app/src/main.tsx');
+    assert.equal(repoPath('src/main.tsx', 'web'), 'app/src/main.tsx');
+    assert.equal(repoPath(process.cwd() + '/app/src/api/client.ts'), 'app/src/api/client.ts');
+    assert.equal(hygieneScopeOf('app/src/main.tsx'), 'web');
+    assert.equal(hygieneScopeOf('api/src/Program.cs'), 'api');
+    assert.equal(hygieneScopeOf('apps/web/src/main.tsx'), null);
+  } finally {
+    useLayout({ api: 'apps/api', web: 'apps/web' });
+  }
+});
+
+test('repoPath_defaultLayout_keepsAppsApiAndAppsWeb', () => {
+  assert.equal(repoPath('/r/apps/web/src/a.ts'), 'apps/web/src/a.ts');
+  assert.equal(repoPath('src/a.ts', 'web'), 'apps/web/src/a.ts');
+});
+test('layoutFromEnv_unsetOrBlank_fallsBackToAppsApiAndAppsWeb', () => {
+  assert.deepEqual(layoutFromEnv({}), { api: 'apps/api', web: 'apps/web' });
+  assert.deepEqual(layoutFromEnv({ API_WORKING_DIRECTORY: ' ', WEB_DIRECTORY: '' }), { api: 'apps/api', web: 'apps/web' });
+  assert.deepEqual(layoutFromEnv({ API_WORKING_DIRECTORY: 'backend\\src/', WEB_DIRECTORY: 'frontend' }), { api: 'backend/src', web: 'frontend' });
 });

@@ -46,6 +46,8 @@ JSON cannot carry a comment, so a JSON file's header lives in a companion `<file
 
 The baselines (`scripts/complexity-baseline.json`, `scripts/duplication-baseline.json`) and `quality.config.json` are app files. The template never installs or touches them; the gate scripts write a baseline only when asked to (`--write-baseline`, `--prune`, `--update-baseline`).
 
+The gate scripts find the api and web projects through the workflow `env:`, the same `API_WORKING_DIRECTORY` and `WEB_DIRECTORY` the CI templates declare (defaults `apps/api` and `apps/web`). A repository with another layout sets those two values; `update` keeps them. `.jscpd.json`, `knip.json`, `.size-limit.json` and the Semgrep rules are static files that name `apps/...` themselves: such a repository takes them over (see each `.md` header).
+
 Adopting the template in an app that has its own copies:
 
 1. Install with `--force` so the package's copies replace the app's.

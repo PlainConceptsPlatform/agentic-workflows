@@ -28,12 +28,30 @@ const decode = (s) =>
 const ratio = (num, den) => (den === 0 ? null : num / den);
 const round = (n, d = 4) => (n === null ? null : Math.round(n * 10 ** d) / 10 ** d);
 
+// The api and web roots are the CI templates' own API_WORKING_DIRECTORY and WEB_DIRECTORY, so a
+// repository with another layout sets them once in the workflow `env:`, which `update` keeps.
+export const DEFAULT_LAYOUT = { api: 'apps/api', web: 'apps/web' };
+const normalizeRoot = (value, fallback) => (value?.trim() ? value.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '') : fallback);
+export const layoutFromEnv = (env = process.env) => ({
+  api: normalizeRoot(env.API_WORKING_DIRECTORY, DEFAULT_LAYOUT.api),
+  web: normalizeRoot(env.WEB_DIRECTORY, DEFAULT_LAYOUT.web),
+});
+let layout = layoutFromEnv();
+export const useLayout = (next = layoutFromEnv()) => {
+  layout = next;
+};
+
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // Repo-relative path, so a hotspot links to the same file on every runner.
 export function repoPath(file, scope) {
-  const f = file.replace(/\\/g, '/');
-  const m = f.match(/(apps\/(?:api|web)\/.*)$/);
+  let f = file.replace(/\\/g, '/');
+  const cwd = process.cwd().replace(/\\/g, '/').replace(/\/$/, '');
+  if (f.startsWith(`${cwd}/`)) f = f.slice(cwd.length + 1);
+  const roots = [layout.api, layout.web].map(escapeRegExp).join('|');
+  const m = f.match(new RegExp(`(?:^|/)((?:${roots})/.*)$`));
   if (m) return m[1];
-  return scope === 'web' ? `apps/web/${f.replace(/^\.?\//, '')}` : f;
+  return scope === 'web' ? `${layout.web}/${f.replace(/^\.?\//, '')}` : f;
 }
 
 // Compiler/source-generator output (obj/, *.g.cs — the [GeneratedRegex] matchers
@@ -484,7 +502,8 @@ export function scannedBy(cfg) {
 
 export const lineCount = (text) => text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
 
-export const hygieneScopeOf = (file) => file.match(/^apps\/(api|web)\//)?.[1] ?? null;
+export const hygieneScopeOf = (file) =>
+  file.startsWith(`${layout.api}/`) ? 'api' : file.startsWith(`${layout.web}/`) ? 'web' : null;
 
 export function duplicatedLinesByFile(report, lengthOf = () => Infinity) {
   const lines = new Map();
