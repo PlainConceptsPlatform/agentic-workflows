@@ -6,9 +6,9 @@
 # (`workflows add --template quality-gates`): Reqnroll acceptance tests, merged .NET + web coverage
 # floors from quality.config.json, the blocking complexity and duplication gates, the Semgrep
 # empty-catch rules, dead private members as build errors, the web dead-code (Knip), bundle-size
-# (size-limit) and architecture-warning (Steiger) checks, report-only until quality.config.json
-# switches them to a ratchet, and the
-# engineering-excellence-{coverage,complexity,security,sbom,hygiene,bundle,architecture} facets
+# (size-limit), architecture-warning (Steiger) and .NET code-pattern (analyzer SARIF) checks,
+# report-only until quality.config.json switches them to a ratchet, and the
+# engineering-excellence-{coverage,complexity,security,sbom,hygiene,bundle,architecture,patterns} facets
 # Project-Health collects. The facets upload from main only, which this workflow reaches through `App: Deploy` on
 # every push and through its own weekly schedule. The platform-conformance job runs the
 # platform-template guard where the app declares a platform contract.
@@ -215,10 +215,24 @@ jobs:
         run: dotnet tool restore
       - name: Restore solution
         run: dotnet restore "$DOTNET_SOLUTION"
+      # ErrorLog: every project also writes its compiler diagnostics (the analyzers the app references,
+      # such as Meziantou.Analyzer and Roslynator, the CA and IDE rules and the compiler's warnings) as
+      # SARIF 2.1 to dotnet-analyzers.sarif beside its project file, for the patterns check. %2C and %3D
+      # are MSBuild's escapes for `,` and `=`: an unescaped comma would split off a `version` property.
+      # It records the diagnostics only; their severities, and so the build's verdict, stay the app's.
       - name: Build (Release)
         run: |
           # shellcheck disable=SC2086 # DOTNET_BUILD_ARGS is a list of arguments.
-          dotnet build "$DOTNET_SOLUTION" --no-restore -c Release $DOTNET_BUILD_ARGS
+          dotnet build "$DOTNET_SOLUTION" --no-restore -c Release $DOTNET_BUILD_ARGS "-p:ErrorLog=dotnet-analyzers.sarif%2Cversion%3D2.1"
+      # Pass or fail, for the patterns check and facet in the engineering-excellence job.
+      - name: Upload analyzer SARIF
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dotnet-analyzers
+          path: ${{ env.API_WORKING_DIRECTORY }}/**/dotnet-analyzers.sarif
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Unit tests + coverage
         if: env.UNIT_TEST_PROJECT != ''
         run: dotnet test "$UNIT_TEST_PROJECT" --no-build -c Release
@@ -847,7 +861,10 @@ jobs:
       # The architecture tests' TRX from the api job; absent without ARCHITECTURE_TEST_PROJECT.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with: { pattern: architecture-tests, path: ee/architecture }
-      - name: Unit tests (facet builder, complexity, duplication, dead-code, bundle and architecture gates, quality config)
+      # The build's SARIF error logs from the api job, one per project.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with: { pattern: dotnet-analyzers, path: ee/dotnet-analyzers }
+      - name: Unit tests (facet builder, complexity, duplication, dead-code, bundle, architecture and patterns gates, quality config)
         run: |
           # shellcheck disable=SC2086 # EXTRA_NODE_TESTS is a list of files.
           node --test scripts/lib/*.test.mjs $EXTRA_NODE_TESTS
@@ -914,6 +931,20 @@ jobs:
             ${STEIGER:+--steiger "$STEIGER"} ${STEIGER_VERSION:+--steiger-version-file "$STEIGER_VERSION"} \
             ${TRX:+--trx "$TRX"} ${TEST_PROJECT:+--test-project "$TEST_PROJECT"} | tee -a "$GITHUB_STEP_SUMMARY"
           echo "built=true" >> "$GITHUB_OUTPUT"
+      # The .NET analyzers' SARIF (api job) and the repository's own Semgrep rules (.semgrep/, from the
+      # blocking scan's JSON); either part may be missing.
+      - name: Build patterns facet
+        id: patterns
+        run: |
+          set -euo pipefail
+          SEMGREP=$(find ee/semgrep -name semgrep.json 2>/dev/null | head -n 1 || true)
+          if [ -z "$(find ee/dotnet-analyzers -name '*.sarif' 2>/dev/null | head -n 1)" ] && [ -z "$SEMGREP" ]; then
+            echo "No analyzer SARIF from the api job and no Semgrep JSON; patterns facet not built."
+            exit 0
+          fi
+          node scripts/engineering-excellence.mjs patterns --out ee/patterns.json \
+            --sarif ee/dotnet-analyzers ${SEMGREP:+--semgrep "$SEMGREP"} --semgrep-rules .semgrep | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "built=true" >> "$GITHUB_OUTPUT"
       # BLOCKING: every method must satisfy CC <= 15 and CRAP <= 30 unless it is recorded backlog in
       # scripts/complexity-baseline.json, which may not get worse. Runs after the facets are built so
       # a red gate still records them.
@@ -935,6 +966,14 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/check-duplication.mjs --report jscpd-report/jscpd-report.json | tee -a "$GITHUB_STEP_SUMMARY"
+      # The .NET analyzers' errors and warnings per rule against quality.config.json `patterns`: `report`
+      # (the default) never fails; `ratchet` fails a rule with more than its committed baseline. Runs
+      # after the other gates failed too, so one red build reports every check.
+      - name: Code patterns (.NET analyzers)
+        if: ${{ !cancelled() && hashFiles('scripts/check-patterns.mjs') != '' }}
+        run: |
+          set -euo pipefail
+          node scripts/check-patterns.mjs --sarif ee/dotnet-analyzers | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Upload coverage facet
         if: ${{ !cancelled() && steps.inputs.outputs.ready == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -973,6 +1012,14 @@ jobs:
         with:
           name: engineering-excellence-architecture
           path: ee/architecture.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Upload patterns facet
+        if: ${{ !cancelled() && steps.patterns.outputs.built == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: engineering-excellence-patterns
+          path: ee/patterns.json
           if-no-files-found: error
           retention-days: 90
 

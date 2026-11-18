@@ -47,7 +47,8 @@
             "sbom",
             "hygiene",
             "bundle",
-            "architecture"
+            "architecture",
+            "patterns"
           ]
         },
         "repo": {
@@ -1205,6 +1206,180 @@
           "description": "The failing rules as Class.Method, at most 50.",
           "items": {
             "type": "string"
+          }
+        }
+      }
+    },
+    "patterns": {
+      "type": "object",
+      "description": "Code-pattern findings, each from a tool run in the repository's own CI: the .NET compiler's diagnostics (the analyzers the app references, such as Meziantou.Analyzer and Roslynator, the .NET CA analyzers, the IDE code-style rules and the compiler's own warnings) read from its SARIF error log, and the findings of the repository's own Semgrep rules (.semgrep/). The .NET errors and warnings per rule are held by a report-then-ratchet gate; the Semgrep scan already fails CI on any finding, so its part is recorded only. A part that did not run is null.",
+      "required": [
+        "dotnet",
+        "semgrep"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "dotnet": {
+          "$ref": "#/$defs/patternsDotnet"
+        },
+        "semgrep": {
+          "$ref": "#/$defs/patternsSemgrep"
+        }
+      }
+    },
+    "patternCounts": {
+      "type": "object",
+      "required": [
+        "errors",
+        "warnings",
+        "notes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "errors": {
+          "$ref": "#/$defs/count"
+        },
+        "warnings": {
+          "$ref": "#/$defs/count"
+        },
+        "notes": {
+          "$ref": "#/$defs/count"
+        }
+      },
+      "description": "Findings at error, warning and note severity (SARIF `none` counts as a note; Semgrep INFO as a note)."
+    },
+    "patternsDotnet": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The .NET build's compiler diagnostics from its SARIF error logs (`dotnet build -p:ErrorLog=...`, one per project), suppressed-in-source findings apart, duplicates from multi-targeting dropped. Severities are the repository's own (.editorconfig). Null when the api job wrote no SARIF.",
+      "required": [
+        "tool",
+        "compiler",
+        "logs",
+        "errors",
+        "warnings",
+        "notes",
+        "suppressed",
+        "byAnalyzer",
+        "byRule",
+        "baseline",
+        "gate"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "type": "string",
+          "enum": [
+            "roslyn"
+          ]
+        },
+        "compiler": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The compiler's version as the SARIF log names it."
+        },
+        "logs": {
+          "$ref": "#/$defs/count",
+          "description": "SARIF logs read: one per compiled project."
+        },
+        "errors": {
+          "$ref": "#/$defs/count"
+        },
+        "warnings": {
+          "$ref": "#/$defs/count"
+        },
+        "notes": {
+          "$ref": "#/$defs/count"
+        },
+        "suppressed": {
+          "$ref": "#/$defs/count",
+          "description": "Findings suppressed in source (#pragma, [SuppressMessage]): counted, never gated."
+        },
+        "byAnalyzer": {
+          "type": "object",
+          "description": "Findings per analyzer, from the rule id's prefix: meziantou (MA), roslynator (RCS), netanalyzers (CA), codestyle (IDE), compiler (CS), xunit (xUnit), other.",
+          "additionalProperties": {
+            "$ref": "#/$defs/patternCounts"
+          }
+        },
+        "byRule": {
+          "type": "object",
+          "description": "Findings per rule id (MA0004, RCS1036, CA1822, ...), every rule that reported something.",
+          "additionalProperties": {
+            "$ref": "#/$defs/patternCounts"
+          }
+        },
+        "baseline": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "The committed baseline of errors plus warnings per rule from quality.config.json `patterns.baseline`. Null before one is written.",
+          "additionalProperties": {
+            "$ref": "#/$defs/count"
+          }
+        },
+        "gate": {
+          "$ref": "#/$defs/checkGate"
+        }
+      }
+    },
+    "patternsSemgrep": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The repository's own Semgrep rules (.semgrep/: the platform family's hygiene rules and any the repository adds), from the blocking SAST scan's JSON. The scan fails CI on any finding, so these are normally zero on main. Null when the scan left no JSON.",
+      "required": [
+        "tool",
+        "version",
+        "rules",
+        "errors",
+        "warnings",
+        "notes",
+        "byRule"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "type": "string",
+          "enum": [
+            "semgrep"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Semgrep's version, from its JSON."
+        },
+        "rules": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Rules in .semgrep/; null when the rule files were not read."
+        },
+        "errors": {
+          "$ref": "#/$defs/count"
+        },
+        "warnings": {
+          "$ref": "#/$defs/count"
+        },
+        "notes": {
+          "$ref": "#/$defs/count"
+        },
+        "byRule": {
+          "type": "object",
+          "description": "Findings per rule id (without Semgrep's `.semgrep.` config prefix); every rule in .semgrep/, at zero too, when the rule files were read.",
+          "additionalProperties": {
+            "$ref": "#/$defs/patternCounts"
           }
         }
       }

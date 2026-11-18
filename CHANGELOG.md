@@ -2,6 +2,18 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.29.0
+
+### Added
+
+- **Code-patterns facet and check.** A new `engineering-excellence-patterns` facet, built by `engineering-excellence.mjs patterns` in the engineering-excellence job and uploaded from main like the others. Its `dotnet` part reads the compiler's SARIF error logs: the api job's build now passes `"-p:ErrorLog=dotnet-analyzers.sarif%2Cversion%3D2.1"`, so every project writes `dotnet-analyzers.sarif` beside its project file, and uploads them, pass or fail, as the `dotnet-analyzers` artifact. It counts errors, warnings and notes per rule and per analyzer (Meziantou, Roslynator, the .NET CA analyzers, IDE code style, the compiler), findings suppressed in source apart, and holds the gate. Its `semgrep` part records the findings of the repository's own `.semgrep/` rules from the blocking scan's JSON, every rule listed. Either part may be null. The analyzers are each app's own package references at the severities its `.editorconfig` sets; the template only collects their output and never changes the build's verdict.
+- **`check-patterns.mjs`**, the report-then-ratchet gate for the .NET analyzers' errors plus warnings per rule against `quality.config.json` `patterns.{mode, since, baseline}`: `report` (the default) never fails; `ratchet` fails a rule over its baseline and lists up to ten findings of it; no SARIF fails only in ratchet mode. `--write-baseline` refuses to raise a ratchet's baseline and `--update-baseline` only lowers, as for the other checks. It runs as `Code patterns (.NET analyzers)` in the engineering-excellence job.
+
+### Changed
+
+- **`scripts/lib/gate-cli.mjs`** holds what the report-then-ratchet scripts shared by copy: argument parsing, the heading and mode line, the not-measured verdict, the count-baseline writes (including the refusal to raise a ratchet) and the closing verdict. `check-dead-code.mjs`, `check-bundle-size.mjs`, `check-architecture.mjs` and `check-patterns.mjs` use it; their output is unchanged. The plain per-key ratchet (`evaluateCounts`) moved into `dead-code-gate.mjs` beside `gateState`, used by the architecture and patterns rules.
+- **The facet schema** gains `patterns`, matching project-health's canonical schema; the consumer skill's Quality gates section and `docs/family-templates.md` describe the check.
+
 ## 1.28.1
 
 ### Fixed
