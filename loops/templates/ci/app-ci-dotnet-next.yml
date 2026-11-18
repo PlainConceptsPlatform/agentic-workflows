@@ -5,10 +5,11 @@
 # Also the engineering gates from Foundations' ai/ENGINEERING.md, run by the quality-gates template
 # (`workflows add --template quality-gates`): Reqnroll acceptance tests, merged .NET + web coverage
 # floors from quality.config.json, the blocking complexity and duplication gates, the Semgrep
-# empty-catch rules, dead private members as build errors, the web dead-code (Knip) and bundle-size
-# (size-limit) checks, report-only until quality.config.json switches them to a ratchet, and the
-# engineering-excellence-{coverage,complexity,security,sbom,hygiene,bundle} facets Project-Health
-# collects. The facets upload from main only, which this workflow reaches through `App: Deploy` on
+# empty-catch rules, dead private members as build errors, the web dead-code (Knip), bundle-size
+# (size-limit) and architecture-warning (Steiger) checks, report-only until quality.config.json
+# switches them to a ratchet, and the
+# engineering-excellence-{coverage,complexity,security,sbom,hygiene,bundle,architecture} facets
+# Project-Health collects. The facets upload from main only, which this workflow reaches through `App: Deploy` on
 # every push and through its own weekly schedule. The platform-conformance job runs the
 # platform-template guard where the app declares a platform contract.
 #
@@ -225,9 +226,20 @@ jobs:
       - name: Parity tests
         if: env.PARITY_TEST_PROJECT != ''
         run: dotnet test "$PARITY_TEST_PROJECT" --no-build -c Release --results-directory TestResults --logger trx
+      # The architecture rules (NetArchTest, ArchUnitNET or plain tests: the TRX reads the same). A
+      # failing rule fails this job; its own TRX name lets the architecture facet find it.
       - name: Architecture tests
         if: env.ARCHITECTURE_TEST_PROJECT != ''
-        run: dotnet test "$ARCHITECTURE_TEST_PROJECT" --no-build -c Release --results-directory TestResults --logger trx
+        run: dotnet test "$ARCHITECTURE_TEST_PROJECT" --no-build -c Release --results-directory TestResults --logger "trx;LogFileName=architecture.trx"
+      # Pass or fail, for the architecture facet in the engineering-excellence job.
+      - name: Upload architecture test results
+        if: ${{ !cancelled() && env.ARCHITECTURE_TEST_PROJECT != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: architecture-tests
+          path: ${{ env.API_WORKING_DIRECTORY }}/TestResults/architecture.trx
+          if-no-files-found: ignore
+          retention-days: 7
       # Executable OpenSpec scenarios (Reqnroll). Each scenario is bound to a spec scenario by tag
       # and fails if that scenario disappears from openspec/.
       - name: Acceptance tests (Reqnroll) + coverage
@@ -365,9 +377,32 @@ jobs:
             apps/web/eslint-complexity.json
           if-no-files-found: ignore
           retention-days: 7
+      # Feature-Sliced Design boundaries: the app's `lint:fsd` (Steiger) decides this step, and any
+      # Steiger error fails it. A second pass writes Steiger's JSON (`--reporter json`, Steiger 0.10+)
+      # for the architecture check below and the architecture facet; it never changes the verdict, and
+      # an older Steiger leaves no report.
       - name: FSD boundary check (Steiger)
         if: steps.detect.outputs.exists == 'true'
-        run: pnpm --filter "$WEB_PACKAGE" run lint:fsd
+        run: |
+          set -uo pipefail
+          status=0
+          pnpm --filter "$WEB_PACKAGE" run lint:fsd || status=$?
+          (cd apps/web && pnpm exec steiger ./src --reporter json > steiger-report.json 2>/dev/null) || true
+          if node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' apps/web/steiger-report.json 2>/dev/null; then
+            (cd apps/web && pnpm exec steiger --version | head -n 1 > steiger-version.txt) || true
+          else
+            echo "::notice::Steiger wrote no JSON report (--reporter json needs Steiger 0.10 or later); the architecture check has no web part."
+            rm -f apps/web/steiger-report.json
+          fi
+          exit "$status"
+      # Steiger warnings against quality.config.json `architecture`: `report` (the default) never fails;
+      # `ratchet` fails a rule with more warnings than its committed baseline. Errors are the step
+      # above's. Runs after a failed boundary check too, so the report is never hidden.
+      - name: Architecture warnings (Steiger)
+        if: ${{ !cancelled() && steps.detect.outputs.exists == 'true' && hashFiles('scripts/check-architecture.mjs') != '' }}
+        run: |
+          set -euo pipefail
+          node scripts/check-architecture.mjs --report apps/web/steiger-report.json | tee -a "$GITHUB_STEP_SUMMARY"
       # Key parity between locales and no user-facing string literals in JSX (zero magic strings).
       - name: i18n check
         if: steps.detect.outputs.exists == 'true'
@@ -416,7 +451,7 @@ jobs:
           fi
           node scripts/check-bundle-size.mjs --size-limit apps/web/size-limit.json \
             --chunks apps/web/out/_next/static/chunks --out apps/web/bundle-report.json | tee -a "$GITHUB_STEP_SUMMARY"
-      # The two reports feed the hygiene and bundle facets in the engineering-excellence job.
+      # The reports feed the hygiene, bundle and architecture facets in the engineering-excellence job.
       - name: Upload web quality reports
         if: ${{ !cancelled() && steps.detect.outputs.exists == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -426,6 +461,8 @@ jobs:
             apps/web/knip-report.json
             apps/web/bundle-report.json
             apps/web/size-limit.json
+            apps/web/steiger-report.json
+            apps/web/steiger-version.txt
           if-no-files-found: ignore
           retention-days: 7
 
@@ -804,10 +841,13 @@ jobs:
       # A pattern download matches nothing (and does not fail) when the scan left no JSON.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with: { pattern: semgrep-json, path: ee/semgrep }
-      # Knip's and the bundle measurement from the web job; absent where the app runs neither.
+      # Knip's, Steiger's and the bundle measurement from the web job; absent where the app runs none.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with: { pattern: web-quality, path: ee/web-quality }
-      - name: Unit tests (facet builder, complexity, duplication, dead-code and bundle gates, quality config)
+      # The architecture tests' TRX from the api job; absent without ARCHITECTURE_TEST_PROJECT.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with: { pattern: architecture-tests, path: ee/architecture }
+      - name: Unit tests (facet builder, complexity, duplication, dead-code, bundle and architecture gates, quality config)
         run: |
           # shellcheck disable=SC2086 # EXTRA_NODE_TESTS is a list of files.
           node --test scripts/lib/*.test.mjs $EXTRA_NODE_TESTS
@@ -855,6 +895,24 @@ jobs:
             exit 0
           fi
           node scripts/engineering-excellence.mjs bundle --out ee/bundle.json --report "$BUNDLE" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+      # Steiger's report (web) and the architecture tests' TRX (.NET); either part may be missing.
+      - name: Build architecture facet
+        id: architecture
+        run: |
+          set -euo pipefail
+          STEIGER=$(find ee/web-quality -name steiger-report.json 2>/dev/null | head -n 1 || true)
+          STEIGER_VERSION=$(find ee/web-quality -name steiger-version.txt 2>/dev/null | head -n 1 || true)
+          TRX=$(find ee/architecture -name '*.trx' 2>/dev/null | head -n 1 || true)
+          if [ -z "$STEIGER" ] && [ -z "$TRX" ]; then
+            echo "No Steiger report from the web job and no architecture test results from the api job; architecture facet not built."
+            exit 0
+          fi
+          TEST_PROJECT=""
+          if [ -n "$ARCHITECTURE_TEST_PROJECT" ]; then TEST_PROJECT="$API_WORKING_DIRECTORY/$ARCHITECTURE_TEST_PROJECT"; fi
+          node scripts/engineering-excellence.mjs architecture --out ee/architecture.json \
+            ${STEIGER:+--steiger "$STEIGER"} ${STEIGER_VERSION:+--steiger-version-file "$STEIGER_VERSION"} \
+            ${TRX:+--trx "$TRX"} ${TEST_PROJECT:+--test-project "$TEST_PROJECT"} | tee -a "$GITHUB_STEP_SUMMARY"
           echo "built=true" >> "$GITHUB_OUTPUT"
       # BLOCKING: every method must satisfy CC <= 15 and CRAP <= 30 unless it is recorded backlog in
       # scripts/complexity-baseline.json, which may not get worse. Runs after the facets are built so
@@ -907,6 +965,14 @@ jobs:
         with:
           name: engineering-excellence-bundle
           path: ee/bundle.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Upload architecture facet
+        if: ${{ !cancelled() && steps.architecture.outputs.built == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: engineering-excellence-architecture
+          path: ee/architecture.json
           if-no-files-found: error
           retention-days: 90
 

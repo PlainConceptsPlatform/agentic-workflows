@@ -30,7 +30,8 @@ The Kitchen-Sink gates, made app-neutral:
 | `scripts/check-mutation.mjs` | The covered-code mutation floor per scope, for the weekly Stryker run |
 | `scripts/check-dead-code.mjs` | The web dead-code check: Knip's JSON per issue type against `deadCode` in `quality.config.json` |
 | `scripts/check-bundle-size.mjs` | The web bundle-size check: size-limit's JSON for the static export's chunks against the `bundle` budget |
-| `scripts/engineering-excellence.mjs` | Builds the coverage, complexity, mutation, security, SBOM, hygiene and bundle facets Project-Health collects |
+| `scripts/check-architecture.mjs` | The web architecture check: Steiger's JSON warnings per rule against `architecture` in `quality.config.json` |
+| `scripts/engineering-excellence.mjs` | Builds the coverage, complexity, mutation, security, SBOM, hygiene, bundle and architecture facets Project-Health collects |
 | `scripts/engineering-excellence.schema.json` | The facet contract, vendored verbatim; `.md` beside it carries the header |
 | `scripts/lib/*.mjs` | Parsers, gate rules and the quality config loader, with their `node:test` suites |
 | `scripts/dast-wait-stable.sh` | Waits until a deployed build is serving and stable before a ZAP scan |
@@ -64,7 +65,8 @@ The numbers the gates enforce, at the repository root. Floors sit just under the
   },
   "mutation": { "domain": 0.82, "web": 0.79 },
   "deadCode": { "mode": "report", "since": "2026-11-16", "baseline": { "exports": 120, "files": 3, "types": 45 } },
-  "bundle": { "mode": "report", "since": "2026-11-16", "baselineBytes": 412000, "limitBytes": 453200 }
+  "bundle": { "mode": "report", "since": "2026-11-16", "baselineBytes": 412000, "limitBytes": 453200 },
+  "architecture": { "mode": "report", "since": "2026-11-17", "baseline": { "fsd/public-api": 2 } }
 }
 ```
 
@@ -81,6 +83,9 @@ The numbers the gates enforce, at the repository root. Floors sit just under the
 | `bundle.since` | date, `YYYY-MM-DD` | The day the check was introduced. |
 | `bundle.baselineBytes` | whole number | The static export's JavaScript when the baseline was written, compressed as `.size-limit.json` says (brotli by default). |
 | `bundle.limitBytes` | whole number | The budget: the baseline plus 10%, written with it. Required for `ratchet`. Only a person raises it. |
+| `architecture.mode` | `"report"` or `"ratchet"` | The web architecture check (Steiger warnings). `report`, the default, never fails CI; `ratchet` fails a Steiger rule with more warnings than its baseline. Steiger errors are not this setting's: the boundary step fails on any, in either mode. |
+| `architecture.since` | date, `YYYY-MM-DD` | The day the check was introduced. |
+| `architecture.baseline` | object, Steiger rule → count | Warnings allowed per rule (`fsd/public-api`, `fsd/insignificant-slice`, …). Required for `ratchet`. Errors are never baselined. |
 | `$schema` | string | Optional, ignored. |
 
 A rate is a number from 0 to 1. Any other key, a percentage written as 94, or a string fails every gate with the list of problems, so a typo can never silently gate nothing. A `ratchet` without its baseline fails the same way.
@@ -93,10 +98,20 @@ Every check added from 1.27.0 on starts report-only: it measures, prints the ste
 |---|---|---|---|
 | Web dead code | [Knip](https://github.com/webpro-nl/knip) 6, `knip --workspace <web package> --reporter json` | `Dead code (Knip)` in the web job, after the build | `hygiene.deadCode.web` |
 | Web bundle size | [size-limit](https://github.com/ai/size-limit) with `@size-limit/file`, `size-limit --json` | `Bundle size (size-limit)` in the web job, after the build | `bundle` (`engineering-excellence-bundle`) |
+| Web architecture warnings | [Steiger](https://github.com/feature-sliced/steiger) 0.10+, `steiger ./src --reporter json` in `apps/web` | `Architecture warnings (Steiger)` in the web job, after the boundary check | `architecture.web` (`engineering-excellence-architecture`) |
 
 Both tools are root devDependencies of the app, so they run from its lockfile with no extra token or service: `pnpm add -Dw knip@6.44.2 size-limit@14.3.0 @size-limit/file@14.3.0`. Knip 6.44.2 is the newest 6.x older than the family's seven-day `minimumReleaseAge`. Until they are installed, both steps skip with a notice. Record the first baselines with `--write-baseline` (see each script's header) in a pull request, and the `since` date with them. `--update-baseline` lowers a baseline after an improvement and never raises it; once a check is a ratchet, `--write-baseline` refuses to raise it too, so a higher baseline is always a person's edit with its reason in the pull request.
 
 A Knip run that cannot load a config (exit code 2) and a size-limit path that matches nothing leave no report: report mode notes it, ratchet mode fails, because a gate that could not measure must not read as green.
+
+### Architecture
+
+The architecture facet (`engineering-excellence-architecture`, from 1.28.0) has two parts, each from a tool the app already runs:
+
+- **Web, Steiger.** The `FSD boundary check (Steiger)` step still runs the app's `lint:fsd` and fails on any Steiger error, as before. A second pass writes `apps/web/steiger-report.json` (`--reporter json`, Steiger 0.10 or later) and the version; an older Steiger leaves no report and a notice. `check-architecture.mjs` holds the *warnings* per rule to `architecture.baseline`, report first, then ratchet, like the other checks. The facet's `web` block has `tool`, `version`, `errors`, `warnings`, `byRule` (errors and warnings per rule), `baseline` and `gate`.
+- **.NET, architecture tests.** `ARCHITECTURE_TEST_PROJECT` now writes `TestResults/architecture.trx`, uploaded as `architecture-tests` pass or fail. A failing rule fails the api job, as before. The facet's `dotnet` block reads the TRX, not the library, so NetArchTest, ArchUnitNET and plain reflection tests read the same: `rules`, `passed`, `failed`, `skipped`, the `failing` rule names (`Class.Method`, at most 50), the test `project`, and `tool` (`netarchtest` or `archunitnet`, from the test project's `PackageReference`, null otherwise).
+
+Either part may be null; with neither, the facet is not built. Steiger is already a devDependency of the web app, so there is nothing to install: update to 1.28.0, record the warning baseline from a CI run (download `web-quality`, then `node scripts/check-architecture.mjs --report steiger-report.json --write-baseline`) in a pull request, and switch `architecture.mode` to `ratchet` two weeks later.
 
 ## The gates CI: app-ci-dotnet-next
 
@@ -117,7 +132,7 @@ A Knip run that cannot load a config (exit code 2) and a size-limit path that ma
 | `MARKDOWN_LINT_COMMAND`, `REPO_CHECK_COMMANDS` | The Markdown job and the app's own checks (Kitchen-Sink's `node scripts/check-demo-manifest.mjs`); empty skips the steps |
 | `SBOM_ARTIFACT_NAME`, `SEMGREP_EXCLUDES`, images and versions | Scanner settings |
 
-The web job runs `Dead code (Knip)` and `Bundle size (size-limit)` after the build and uploads both reports as `web-quality`; the engineering-excellence job folds Knip into the hygiene facet and builds the bundle facet from them. Neither step needs an `env:` value: they read `WEB_PACKAGE`, the root `knip.json` and `.size-limit.json`, and `quality.config.json`.
+The web job runs `Dead code (Knip)` and `Bundle size (size-limit)` after the build, and `Architecture warnings (Steiger)` after the boundary check, and uploads the reports as `web-quality`; the api job uploads the architecture tests' TRX as `architecture-tests`. The engineering-excellence job folds Knip into the hygiene facet and builds the bundle and architecture facets from them. Neither step needs an `env:` value: they read `WEB_PACKAGE`, the root `knip.json` and `.size-limit.json`, and `quality.config.json`.
 
 The job names are the ones the apps' required checks and the merge train read (`Full CI`), and the last job, `dispatch-merge-gate`, hands a bot pull request's verdict to the router's merge train exactly as the apps' CI does. A deploy pipeline that calls the workflow with `uses:` must grant `actions: write`. The `Platform conformance` job runs the guard from [platform-contracts.md](platform-contracts.md) where the app declares a platform contract and passes everywhere else.
 

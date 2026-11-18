@@ -14,7 +14,7 @@
 import { createHash } from 'node:crypto';
 
 export const SCHEMA_VERSION = 1;
-export const FACETS = ['coverage', 'complexity', 'mutation', 'security', 'sbom', 'hygiene', 'bundle'];
+export const FACETS = ['coverage', 'complexity', 'mutation', 'security', 'sbom', 'hygiene', 'bundle', 'architecture'];
 export const CC_THRESHOLD = 10;
 export const CRAP_THRESHOLD = 30;
 const HOTSPOT_LIMIT = 20;

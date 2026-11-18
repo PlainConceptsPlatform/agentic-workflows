@@ -2,6 +2,24 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.28.1
+
+### Fixed
+
+- **The lockfile check runs the gh-aw version it pins.** `agentics-checks` installed gh-aw into gh's shared extension folder. On a self-hosted runner another repository's job may have left a different gh-aw version there, and `gh extension install --pin` kept it: the check then failed with "gh aw reports v0.87.5, this workflow pins v1.2.2" on a correct pull request. The job now installs gh-aw into a folder of its own per run (`XDG_DATA_HOME`) and removes it at the end. `update` does not refresh this template: take it with `add --template agentics-checks --force`, keeping `GH_AW_VERSION`.
+
+## 1.28.0
+
+### Added
+
+- **Architecture facet and check.** A new `engineering-excellence-architecture` facet, built by `engineering-excellence.mjs architecture` in the engineering-excellence job and uploaded from main like the others. Its `web` part reads Steiger's JSON (`steiger ./src --reporter json`, Steiger 0.10+): `tool`, `version`, `errors`, `warnings`, `byRule` and the `gate`. Its `dotnet` part reads the architecture test project's TRX, so NetArchTest, ArchUnitNET and plain reflection tests read the same: rules, passed, failed, skipped and the failing rule names, with the library named from the test project's `PackageReference`. Either part may be null.
+- **`check-architecture.mjs`**, the report-then-ratchet gate for Steiger *warnings* per rule against `quality.config.json` `architecture.{mode, since, baseline}`: `report` (the default) never fails; `ratchet` fails a rule over its baseline; a missing report fails only in ratchet mode. `--write-baseline` refuses to raise a ratchet's baseline and `--update-baseline` only lowers, as for dead code.
+
+### Changed
+
+- **`app-ci-dotnet-next`:** the `FSD boundary check (Steiger)` step keeps the app's `lint:fsd` verdict (any Steiger error still fails it) and adds a JSON pass whose report and version go into the `web-quality` artifact; a new `Architecture warnings (Steiger)` step runs the gate. The architecture tests write `TestResults/architecture.trx` and upload it as `architecture-tests`, pass or fail.
+- **The facet schema** gains `architecture`, matching project-health's canonical schema; the consumer skill's Quality gates section and `docs/family-templates.md` describe the check.
+
 ## 1.27.1
 
 ### Fixed

@@ -4427,7 +4427,8 @@ rc 'side-checks\.sh' "${HERE}/../land-pull-request/land-pull-request.sh" 'land-p
 rc 'side-checks\.sh' "${HERE}/../merge-agent-pr/action.yml" 'merge-agent-pr must check the side workflows'
 rc 'land-pull-request/side-checks\.sh' "${HERE}/../merge-train/merge-train.sh" 'the merge train must hold a pull request whose side workflow is red'
 rc 'test-timings\.mjs' "$CI_DOTNET" 'the .NET template must summarise the test timings'
-[ -z "$CI_DOTNET" ] || { [ "$(grep -c -- '--logger trx' "$CI_DOTNET" 2>/dev/null)" -ge 5 ] || { RC_OK=0; echo "FAIL: required checks: every .NET test step must write a trx report" >&2; }; }
+# The architecture tests name their trx (architecture.trx) so the architecture facet can find it.
+[ -z "$CI_DOTNET" ] || { [ "$(grep -cE -- '--logger (trx|"trx;LogFileName=[a-z-]+\.trx")' "$CI_DOTNET" 2>/dev/null)" -ge 5 ] || { RC_OK=0; echo "FAIL: required checks: every .NET test step must write a trx report" >&2; }; }
 # The template sync installs copier on a runner whose Python cannot make a venv: the pinned uv it
 # falls back to must stay checked against its SHA-256, or the sync never runs (it never had).
 rc '^  UV_SHA256: [0-9a-f]{64}$' "$SYNC_YML" 'the template sync must pin uv by SHA-256'
@@ -4776,6 +4777,43 @@ if grep -qxF '.agents/skills/*/scripts/' "${HERE}/../../templates/quality-gates/
 else
   FAIL=$((FAIL + 1))
   echo "FAIL: .semgrepignore misses the vendored skill scripts, or the web-quality artifact misses size-limit.json" >&2
+fi
+
+# The architecture facet: the boundary step keeps the app's lint:fsd verdict and also writes Steiger's
+# JSON into web-quality, the architecture tests write their own TRX and upload it pass or fail, and
+# the engineering-excellence job builds the facet and uploads it from main like the others.
+ARCH_CI="${HERE}/../../templates/ci/app-ci-dotnet-next.yml"
+arch_problems=""
+fsd_step=$(sed -n '/name: FSD boundary check (Steiger)/,/- name: Architecture warnings (Steiger)/p' "$ARCH_CI")
+grep -qF 'pnpm --filter "$WEB_PACKAGE" run lint:fsd || status=$?' <<<"$fsd_step" \
+  && grep -qF 'exit "$status"' <<<"$fsd_step" \
+  && grep -qF 'steiger ./src --reporter json > steiger-report.json' <<<"$fsd_step" \
+  || arch_problems="$arch_problems the boundary step does not keep lint:fsd's verdict while writing Steiger's JSON;"
+grep -qF 'node scripts/check-architecture.mjs --report apps/web/steiger-report.json' "$ARCH_CI" \
+  || arch_problems="$arch_problems the web job does not run check-architecture.mjs;"
+web_quality=$(sed -n '/name: web-quality/,/retention-days/p' "$ARCH_CI")
+grep -qF 'apps/web/steiger-report.json' <<<"$web_quality" && grep -qF 'apps/web/steiger-version.txt' <<<"$web_quality" \
+  || arch_problems="$arch_problems the web-quality artifact misses Steiger's report or version;"
+grep -qF -- '--logger "trx;LogFileName=architecture.trx"' "$ARCH_CI" \
+  && grep -qF 'name: architecture-tests' "$ARCH_CI" \
+  || arch_problems="$arch_problems the architecture tests do not upload their own TRX;"
+grep -qF 'node scripts/engineering-excellence.mjs architecture --out ee/architecture.json' "$ARCH_CI" \
+  && grep -qF 'name: engineering-excellence-architecture' "$ARCH_CI" \
+  || arch_problems="$arch_problems the engineering-excellence job does not build or upload the architecture facet;"
+if [ -z "$arch_problems" ]; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: architecture facet wiring:$arch_problems" >&2
+fi
+
+# The lockfile check installs gh-aw into a folder of its own: a shared self-hosted runner keeps
+# another repository's gh-aw version, and the pinned install then ran the wrong one.
+if grep -qF 'XDG_DATA_HOME: /tmp/gh-aw-checks-' "${HERE}/../../templates/agentics/agentics-checks.yml"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: agentics-checks installs gh-aw into the runner's shared extension folder" >&2
 fi
 
 echo

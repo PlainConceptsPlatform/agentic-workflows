@@ -46,7 +46,8 @@
             "security",
             "sbom",
             "hygiene",
-            "bundle"
+            "bundle",
+            "architecture"
           ]
         },
         "repo": {
@@ -1057,6 +1058,154 @@
         },
         "gate": {
           "$ref": "#/$defs/checkGate"
+        }
+      }
+    },
+    "architecture": {
+      "type": "object",
+      "description": "Architecture rules, each run in the repository's own CI: Steiger's Feature-Sliced Design rules over the web app and the .NET architecture tests (NetArchTest, ArchUnitNET or any other library), read from their TRX. Steiger errors and failing architecture tests already fail CI in their own jobs; the facet records them. Steiger warnings are held by a report-then-ratchet gate. A part that did not run is null.",
+      "required": [
+        "web",
+        "dotnet"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "web": {
+          "$ref": "#/$defs/architectureWeb"
+        },
+        "dotnet": {
+          "$ref": "#/$defs/architectureDotnet"
+        }
+      }
+    },
+    "architectureWeb": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Steiger over the web app's src (steiger --reporter json, Steiger 0.10 or later). Null when the web job wrote no report.",
+      "required": [
+        "tool",
+        "version",
+        "errors",
+        "warnings",
+        "byRule",
+        "baseline",
+        "gate"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "type": "string",
+          "enum": [
+            "steiger"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Steiger's version, as `steiger --version` prints it."
+        },
+        "errors": {
+          "$ref": "#/$defs/count",
+          "description": "Diagnostics at error severity. Steiger exits non-zero on any, so the web job already fails on them; they are never baselined."
+        },
+        "warnings": {
+          "$ref": "#/$defs/count",
+          "description": "Diagnostics at warn severity, the ones the gate holds to their baseline."
+        },
+        "byRule": {
+          "type": "object",
+          "description": "Errors and warnings per Steiger rule (fsd/public-api, ...), every rule that reported something.",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "errors",
+              "warnings"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "errors": {
+                "$ref": "#/$defs/count"
+              },
+              "warnings": {
+                "$ref": "#/$defs/count"
+              }
+            }
+          }
+        },
+        "baseline": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "The committed warning baseline per Steiger rule from quality.config.json `architecture.baseline`. Null before one is written.",
+          "additionalProperties": {
+            "$ref": "#/$defs/count"
+          }
+        },
+        "gate": {
+          "$ref": "#/$defs/checkGate"
+        }
+      }
+    },
+    "architectureDotnet": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The .NET architecture test project's results from its VSTest TRX: one rule per test case. Null when the repository runs no architecture tests or the api job wrote no TRX.",
+      "required": [
+        "tool",
+        "project",
+        "rules",
+        "passed",
+        "failed",
+        "skipped",
+        "failing"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "archunitnet",
+            "netarchtest",
+            null
+          ],
+          "description": "The rules library the test project references; null when it is neither."
+        },
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The test assembly's name."
+        },
+        "rules": {
+          "$ref": "#/$defs/count"
+        },
+        "passed": {
+          "$ref": "#/$defs/count"
+        },
+        "failed": {
+          "$ref": "#/$defs/count"
+        },
+        "skipped": {
+          "$ref": "#/$defs/count",
+          "description": "Rules that neither passed nor failed (skipped, inconclusive)."
+        },
+        "failing": {
+          "type": "array",
+          "description": "The failing rules as Class.Method, at most 50.",
+          "items": {
+            "type": "string"
+          }
         }
       }
     }
