@@ -1,0 +1,43 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "Weekly mutation run (.github/workflows/quality-mutation.yml), never on an ordinary pull request. Mutates the CLI sources; tui.ts is left out because it drives an interactive terminal its tests barely reach. thresholds.break is the gate: the run fails below it. It sits just under the score measured when the gate was added and only moves up. inPlace: the catalog tests read ../loops, which a sandbox copy of cli/ does not have.",
+  "testRunner": "vitest",
+  "vitest": {
+    "configFile": "vitest.config.ts",
+    "dir": "src"
+  },
+  "plugins": [
+    "@stryker-mutator/vitest-runner"
+  ],
+  "coverageAnalysis": "perTest",
+  "mutate": [
+    "src/catalog-installation.ts",
+    "src/catalog-listing.ts",
+    "src/index.ts",
+    "src/package-baseline.ts",
+    "src/repository-inspection.ts",
+    "src/route-processing.ts",
+    "src/stack-defaults.ts",
+    "src/template-bundles.ts",
+    "src/worker-env.ts",
+    "src/workflow-catalog.ts"
+  ],
+  "ignoreStatic": true,
+  "concurrency": 4,
+  "timeoutMS": 60000,
+  "tempDirName": ".stryker-tmp",
+  "inPlace": true,
+  "reporters": [
+    "clear-text",
+    "progress",
+    "json"
+  ],
+  "jsonReporter": {
+    "fileName": "reports/mutation/mutation-report.json"
+  },
+  "thresholds": {
+    "high": 80,
+    "low": 60,
+    "break": null
+  }
+}

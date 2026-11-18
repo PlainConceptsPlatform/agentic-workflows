@@ -1,0 +1,12 @@
+{
+  "path": ["cli/src", "loops"],
+  "format": ["typescript", "javascript"],
+  "minLines": 10,
+  "minTokens": 70,
+  "mode": "mild",
+  "reporters": ["console"],
+  "gitignore": true,
+  "noTips": true,
+  "ignore": ["**/node_modules/**", "**/*.test.ts", "**/*.test.mjs", "**/*.test.js"],
+  "threshold": 0.25
+}

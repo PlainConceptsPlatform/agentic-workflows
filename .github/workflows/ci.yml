@@ -13,6 +13,9 @@ on:
 permissions:
   contents: read
 
+env:
+  TRUFFLEHOG_IMAGE: "ghcr.io/trufflesecurity/trufflehog:3.99.7"
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -32,9 +35,14 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # typecheck, build and vitest. The build has to pass before the checks below, because
-      # `loops/` is copied into the package payload by the same script the release runs.
-      - run: pnpm verify
+      # `pnpm verify`, step by step so the tests run once, with coverage: typecheck, build and
+      # vitest. The build has to pass before the checks below, because `loops/` is copied into
+      # the package payload by the same script the release runs.
+      - run: pnpm typecheck
+      - run: pnpm build
+      # BLOCKING: fails under the coverage floors in cli/vitest.config.ts.
+      - name: Tests with coverage
+        run: pnpm --filter @plainconceptsplatform/workflows run test --coverage
 
       # `loops/` is the payload consumers receive; `cli/loops/` is generated from it. A commit
       # that edits one and not the other ships a CLI whose files disagree with its own source.
@@ -279,6 +287,103 @@ jobs:
               --exclude-rule yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag \
               --exclude loops/actions/capture-evidence \
               loops/actions loops/templates/quality-gates/scripts loops/templates/platform-template/scripts
+
+  secret-scan:
+    name: Secret scan (TruffleHog, verified only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: TruffleHog filesystem scan
+        env:
+          WORKSPACE: ${{ github.workspace }}
+        run: |
+          docker run --rm -v "$WORKSPACE:/repo" "$TRUFFLEHOG_IMAGE" \
+            filesystem /repo --only-verified --fail --no-update
+
+  # vuln: pnpm-lock.yaml. secret: the whole tree. misconfig finds nothing it reads today: the
+  # runner infrastructure is Bicep and Packer, which Trivy does not parse. CRITICAL/HIGH only,
+  # unfixed advisories ignored so an unpatched upstream CVE cannot block every PR.
+  deps-and-iac-scan:
+    name: Dependencies & IaC (Trivy, blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln,misconfig,secret
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+  sbom:
+    name: SBOM (Syft, CycloneDX)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The action downloads the syft binary with a single non-retried GET, so a transient release
+      # CDN error fails it for no code reason. The first attempt may fail; the retry below runs only
+      # then, and if both fail the job fails.
+      - name: Generate SBOM
+        id: sbom
+        uses: anchore/sbom-action@fffec3d851af758d56fee099cf3fbf8aa8779843 # v0.24.3
+        continue-on-error: true
+        with:
+          format: cyclonedx-json
+          artifact-name: workflows-sbom.cyclonedx.json
+          syft-version: v1.57.0
+          upload-release-assets: false
+      - name: Retry SBOM on a transient download error
+        if: ${{ steps.sbom.outcome == 'failure' }}
+        uses: anchore/sbom-action@fffec3d851af758d56fee099cf3fbf8aa8779843 # v0.24.3
+        with:
+          format: cyclonedx-json
+          artifact-name: workflows-sbom.cyclonedx.json
+          syft-version: v1.57.0
+          upload-release-assets: false
+
+  # BLOCKING, over what the package ships and runs: cli/src and loops/. Complexity: a function with
+  # a cyclomatic complexity above 15 fails unless it is in whitelizard.txt, the backlog that
+  # predates the gate and only shrinks. Duplication (practice 11): jscpd fails when duplicated
+  # lines exceed the ceiling in .jscpd.json (`threshold`, percent), set just above the 0.15%
+  # measured when the gate was added.
+  complexity-and-duplication:
+    name: Complexity (lizard) and duplication (jscpd)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Complexity gate (lizard)
+        run: |
+          set -euo pipefail
+          pip install --disable-pip-version-check lizard==1.24.3
+          lizard -l typescript -l javascript -C 15 -w -W whitelizard.txt \
+            -x '*.test.*' -x '*/node_modules/*' \
+            cli/src loops
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v5.0.0
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Duplication gate (jscpd)
+        run: pnpm exec jscpd -c .jscpd.json
 
   runner-image-pins:
     name: Runner image pins
