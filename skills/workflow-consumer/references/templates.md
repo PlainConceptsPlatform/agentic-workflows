@@ -86,6 +86,8 @@ A full CI pipeline for a Node monorepo with web, desktop, mobile, and E2E testin
 - `pnpm install --frozen-lockfile`
 - Per-package builds
 - Vitest, Playwright E2E
+- A `Markdown` job running `MARKDOWN_LINT_COMMAND` (default `pnpm lint:md`, with only the root
+  package installed; empty skips it), required by `Full CI`
 - TruffleHog, Trivy, Semgrep, SBOM
 
 Read the template's `env:` block and job commands before enabling it. Tailor workspace paths, package

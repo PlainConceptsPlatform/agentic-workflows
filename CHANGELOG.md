@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.29.3
+
+### Added
+
+- **`app-ci-node-monorepo` lints Markdown.** A `Markdown` job, wired as in `app-ci-dotnet-next`: it installs only the root package (`ROOT_PACKAGE`, default `app`) and runs `MARKDOWN_LINT_COMMAND` (default `pnpm lint:md`; empty skips its steps). `Full CI` and the merge-train handoff need it, so a red Markdown lint stops a merge. A repository whose root has no `lint:md` script sets `MARKDOWN_LINT_COMMAND` to its own command or to empty when it takes the template (`add --template app-ci-node-monorepo --force`). The route matrix asserts `Full CI` needs `markdown` in both CI templates, and this repository's CI now actionlints the node template too.
+
 ## 1.29.2
 
 ### Fixed
