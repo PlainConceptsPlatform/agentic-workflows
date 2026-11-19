@@ -55,6 +55,11 @@ env:
   # The agent was asked to do the work and reported there was none. A decision, not a failure:
   # retrying it produces the same answer, so it is not flagged stalled and the janitor leaves it.
   NOOP_COMMENT: "The implementation ran and reported there was nothing to do. That is an answer rather than a failure, so the issue is not queued for another attempt. If it is wrong, say what is missing and label it `implement` again."
+  # The agent stopped and said why, with `report_incomplete`. Its reason is what a person needs,
+  # and it says nothing about the provider or the runner: a retry stops for the same reason, so it
+  # is parked for a person, not flagged stalled, and not repeated. It used to read as "produced
+  # nothing", lost the reason and spent the retry budget on it (#517). The reason follows it.
+  REPORTED_INCOMPLETE_COMMENT: "The implementation stopped and reported why, quoted below. A retry would stop for the same reason, so the issue is parked for a person: it keeps `review`, loses `implement` and is not flagged for a retry. Fix what the reason names, then label it `implement` again."
   # Said when the agent DID write the code and the push failed. gh-aw pushes through the GraphQL
   # signed-commits API, which rebases onto the current parent, so a `main` that moved under a long
   # run conflicts; gh-aw keeps the work by filing the patch as an issue rather than dropping it,
@@ -516,6 +521,72 @@ jobs:
             ${{ env.IMPLEMENT_MARKER }}
             ${{ env.PATCH_WITHOUT_REQUEST_COMMENT }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      # A run with no patch and no pull request may still have said why: the agent calls
+      # `report_incomplete` when the contract tells it to stop (a planner it cannot spawn, a tool
+      # that refused). That reason is a verdict, not an outage, so it is read from the agent's own
+      # output before the empty-run retry is decided, posted on the issue and parked for a person.
+      # Treated as "produced nothing" it lost the reason, was flagged stalled, and was retried up
+      # to three times into the same stop (#517).
+      - name: Download what the agent reported
+        id: reported_output
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true'
+        continue-on-error: true
+        uses: ./.github/actions/download-agent-output
+        with:
+          artifact-name: ${{ needs.activation.outputs.artifact_prefix }}agent
+      - name: Read the reason the agent gave for stopping
+        id: reported
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true'
+        env:
+          OUTPUT_FILE: ${{ steps.reported_output.outputs.output-file }}
+        run: |
+          set -euo pipefail
+          if [ -z "$OUTPUT_FILE" ] || [ ! -f "$OUTPUT_FILE" ] \
+            || ! jq -e 'any(.items[]?; .type == "report_incomplete")' "$OUTPUT_FILE" >/dev/null 2>&1; then
+            echo "incomplete=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          reason=$(jq -r '[.items[]? | select(.type == "report_incomplete") | (.reason // "" | tostring)
+            | select(test("[^[:space:]]"))] | unique | join("\n\n")' "$OUTPUT_FILE")
+          [ -n "$reason" ] || reason="(the agent gave no reason)"
+          # Quoted, and capped well under a comment's size limit.
+          quoted=$(printf '%s\n' "${reason:0:6000}" | sed 's/^/> /')
+          delimiter="REASON_$(openssl rand -hex 8)"
+          {
+            echo "incomplete=true"
+            echo "reason<<$delimiter"
+            printf '%s\n' "$quoted"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+          echo "The agent reported the run incomplete; its reason goes on the issue."
+      - name: Park an issue the agent stopped on
+        if: steps.reported.outputs.incomplete == 'true'
+        uses: ./.github/actions/add-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: |-
+            ${{ env.REVIEW_LABEL }}
+      - name: Take the implement label off an issue the agent stopped on
+        if: steps.reported.outputs.incomplete == 'true'
+        uses: ./.github/actions/remove-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          labels: ${{ env.IMPLEMENT_LABEL }}
+      - name: Say why the agent stopped
+        if: steps.reported.outputs.incomplete == 'true'
+        uses: ./.github/actions/create-issue-comment
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            ${{ env.IMPLEMENT_MARKER }}
+            ${{ env.REPORTED_INCOMPLETE_COMMENT }}
+
+            ${{ steps.reported.outputs.reason }}
+
+            [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       # A run that ends with nothing is not always the agent's verdict. The AI gateway can answer
       # nothing and end the engine one turn after it began, and the runner's VM can be taken away
       # mid-job; neither says the work was wrong, and parking them for the janitor cost up to six
@@ -523,7 +594,7 @@ jobs:
       # died young, within the attempt budget.
       - name: Decide whether an empty run is worth repeating
         id: empty_retry
-        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true'
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true' && steps.reported.outputs.incomplete != 'true'
         uses: ./.github/actions/decide-agent-retry
         with:
           token: ${{ github.token }}
@@ -557,7 +628,7 @@ jobs:
           gh workflow run work-router.yml --repo "$REPO" --ref "$REF"             -f operation=implement -f issue-number="$ISSUE_NUMBER" -f attempts_so_far="$NEXT"
           echo "Re-dispatched implement for #$ISSUE_NUMBER as attempt $NEXT."
       - name: Flag a run that produced nothing
-        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true' && steps.empty_retry.outputs.retry != 'true'
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true' && steps.empty_retry.outputs.retry != 'true' && steps.reported.outputs.incomplete != 'true'
         uses: ./.github/actions/add-issue-labels
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -566,7 +637,7 @@ jobs:
             ${{ env.REVIEW_LABEL }}
             ${{ env.STALLED_LABEL }}
       - name: Say the run produced nothing
-        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true' && steps.empty_retry.outputs.retry != 'true'
+        if: needs.safe_outputs.outputs.created_pr_number == '' && !contains(needs.agent.outputs.output_types, 'create_pull_request') && !contains(needs.agent.outputs.output_types, 'noop') && needs.agent.outputs.has_patch != 'true' && steps.empty_retry.outputs.retry != 'true' && steps.reported.outputs.incomplete != 'true'
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}

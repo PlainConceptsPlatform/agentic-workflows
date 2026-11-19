@@ -3343,7 +3343,7 @@ echo "── Ways a run ends with nothing ────────────�
 # green again while saying less.
 if worker_installed implement; then
   ENDINGS_OK=1
-  ENDING_MESSAGES="PUSH_CONFLICT_COMMENT OUTPUT_NOT_APPLIED_COMMENT NOOP_COMMENT PATCH_WITHOUT_REQUEST_COMMENT NO_OUTPUT_COMMENT"
+  ENDING_MESSAGES="PUSH_CONFLICT_COMMENT OUTPUT_NOT_APPLIED_COMMENT NOOP_COMMENT PATCH_WITHOUT_REQUEST_COMMENT NO_OUTPUT_COMMENT REPORTED_INCOMPLETE_COMMENT"
 
   for message in $ENDING_MESSAGES; do
     # Defined once in the env block and printed on exactly one path. Two usages means two
@@ -3385,6 +3385,45 @@ if worker_installed implement; then
     ENDINGS_OK=0
     echo "FAIL: implement flags a deliberate noop as stalled, so the janitor will retry a decision until it runs out of attempts" >&2
   fi
+
+  # The agent stopping with `report_incomplete` is a verdict with a reason (#517). The reason goes
+  # on the issue, the issue is parked for a person without `stalled`, and neither the empty-run
+  # retry nor the produced-nothing message fires for it.
+  reported_block=$(awk "/name: Say why the agent stopped/{found=1} found{print} found && /View this workflow run/{exit}" "$IMPLEMENT_WORKER_MD")
+  park_block=$(awk "/name: Park an issue the agent stopped on/{found=1} found{print} found && /REVIEW_LABEL/{exit}" "$IMPLEMENT_WORKER_MD")
+  if [ -z "$reported_block" ] || ! printf '%s' "$reported_block" | grep -qF 'steps.reported.outputs.reason'; then
+    ENDINGS_OK=0
+    echo "FAIL: implement does not post the reason the agent gave with report_incomplete" >&2
+  fi
+  if [ -z "$park_block" ] || printf '%s\n%s' "$park_block" "$reported_block" | grep -qF 'STALLED_LABEL'; then
+    ENDINGS_OK=0
+    echo "FAIL: implement must park a report_incomplete run for review without flagging it stalled" >&2
+  fi
+  for step in 'Decide whether an empty run is worth repeating' 'Flag a run that produced nothing' 'Say the run produced nothing'; do
+    if ! awk -v s="name: ${step}" 'index($0, s){f=1; next} f && /^ *if:/{print; exit}' "$IMPLEMENT_WORKER_MD" \
+      | grep -qF "steps.reported.outputs.incomplete != 'true'"; then
+      ENDINGS_OK=0
+      echo "FAIL: implement's '${step}' does not exclude a run the agent reported incomplete" >&2
+    fi
+  done
+  # The reason reader itself, run against the shapes it must tell apart.
+  reason_script=$(awk '/name: Read the reason the agent gave for stopping/{f=1} f&&/run: \|/{r=1;next} r&&/- name:/{exit} r{sub(/^          /,"");print}' "$IMPLEMENT_WORKER_MD")
+  reason_dir=$(mktemp -d)
+  printf '%s\n' '{"items":[{"type":"report_incomplete","reason":"Agent planner-sub cannot run as a subagent.\nStopping as the contract says."}]}' > "$reason_dir/incomplete.json"
+  printf '%s\n' '{"items":[{"type":"missing_tool","tool":"x"}]}' > "$reason_dir/other.json"
+  : > "$reason_dir/out-incomplete"; : > "$reason_dir/out-other"; : > "$reason_dir/out-none"
+  GITHUB_OUTPUT="$reason_dir/out-incomplete" OUTPUT_FILE="$reason_dir/incomplete.json" bash -c "$reason_script" >/dev/null 2>&1 || true
+  GITHUB_OUTPUT="$reason_dir/out-other" OUTPUT_FILE="$reason_dir/other.json" bash -c "$reason_script" >/dev/null 2>&1 || true
+  GITHUB_OUTPUT="$reason_dir/out-none" OUTPUT_FILE="" bash -c "$reason_script" >/dev/null 2>&1 || true
+  if ! grep -qx 'incomplete=true' "$reason_dir/out-incomplete" \
+    || ! grep -qxF '> Agent planner-sub cannot run as a subagent.' "$reason_dir/out-incomplete" \
+    || ! grep -qxF '> Stopping as the contract says.' "$reason_dir/out-incomplete" \
+    || ! grep -qx 'incomplete=false' "$reason_dir/out-other" \
+    || ! grep -qx 'incomplete=false' "$reason_dir/out-none"; then
+    ENDINGS_OK=0
+    echo "FAIL: implement's report_incomplete reader does not quote the agent's reason, or fires on a run that did not report incomplete" >&2
+  fi
+  rm -rf "$reason_dir"
 
   # The usage artifact carrying the token counts is uploaded by gh-aw's conclusion job, and that
   # job already depends on conclude. Naming it is a cycle and the worker stops compiling.
