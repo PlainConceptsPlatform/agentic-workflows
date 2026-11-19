@@ -4452,11 +4452,11 @@ if [ ! -d "${HERE}/../../templates" ]; then
     fi
   fi
 fi
-for job in sast-scan secret-scan deps-and-iac-scan platform-conformance engineering-excellence api web; do
+for job in sast-scan secret-scan deps-and-iac-scan platform-conformance engineering-excellence markdown api web; do
   [ -n "$CI_DOTNET" ] || break
   awk '/^  full-ci:$/{f=1} f&&/needs:/{print; exit}' "$CI_DOTNET" | grep -qE "[[ ]${job}[],]" || { RC_OK=0; echo "FAIL: required checks: the .NET template's Full CI does not need ${job}" >&2; }
 done
-for job in lint sast-scan secret-scan deps-and-iac-scan web; do
+for job in lint markdown sast-scan secret-scan deps-and-iac-scan web; do
   [ -n "$CI_NODE" ] || break
   awk '/^  full-ci:$/{f=1} f&&/needs:/{print; exit}' "$CI_NODE" | grep -qE "[[ ]${job}[],]" || { RC_OK=0; echo "FAIL: required checks: the node template's Full CI does not need ${job}" >&2; }
 done
