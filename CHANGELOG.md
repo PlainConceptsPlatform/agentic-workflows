@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.29.2
+
+### Fixed
+
+- **Implement says why the agent stopped.** A run that ended in `report_incomplete` (the contract tells the agent to stop when, for example, the planner cannot be spawned) read as "produced nothing": the issue got `NO_OUTPUT_COMMENT`, was flagged `stalled`, and was retried up to three times into the same stop, and the agent's reason never reached it. `conclude` now reads the agent's output on the empty-run path: when it holds `report_incomplete`, the reason is quoted on the issue under `REPORTED_INCOMPLETE_COMMENT`, the issue gets `review` and loses `implement`, and neither `stalled`, the empty-run retry nor the produced-nothing comment applies. The route matrix asserts the path and runs the reason reader against fixtures. Take it with `workflows update`.
+
 ## 1.29.1
 
 ### Fixed
