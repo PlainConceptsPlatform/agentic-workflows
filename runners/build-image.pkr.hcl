@@ -15,7 +15,7 @@
 // only needs to create swap, drop the VM token, and start the service.
 //
 // Required variables are in the variables block below; provide them via
-// -var-file or environment variables (PACKER_VAR_).
+// -var-file or environment variables (PKR_VAR_).
 
 packer {
   required_plugins {

@@ -175,11 +175,11 @@ cd runners
 az deployment group create -g agentrunner-pro-rg-01 -f gallery.bicep
 
 # 2. Authenticate Packer (service principal with Contributor on the RG)
-export PACKER_VAR_subscription_id="..."
-export PACKER_VAR_tenant_id="..."
-export PACKER_VAR_client_id="..."
-export PACKER_VAR_client_secret="..."
-export PACKER_VAR_image_version="1.0.0"   # bump for each rebuild
+export PKR_VAR_subscription_id="..."
+export PKR_VAR_tenant_id="..."
+export PKR_VAR_client_id="..."
+export PKR_VAR_client_secret="..."
+export PKR_VAR_image_version="1.0.0"   # bump for each rebuild
 
 # 3. Build and publish to the gallery
 packer init build-image.pkr.hcl
@@ -187,9 +187,8 @@ packer build build-image.pkr.hcl
 ```
 
 `.github/workflows/build-runner-image.yml` (this repository) builds on `workflow_dispatch` with
-an `image_version` input. It has no schedule: the image is published from a local Packer build,
-and the workflow's `AZ_RUNNER_IMAGE_*` secrets are not defined in this repository, so a dispatch
-fails at authentication until a service principal is set up for it. When it runs, it ends with a
+an `image_version` input. It has no schedule. It authenticates with the repository secrets
+`SUBSCRIPTION_ID`, `TENANT_ID`, `CLIENT_ID` and `SECRET_ID` (see `secrets.md`). When it runs, it ends with a
 **post-publish boot test**: a throwaway VM from the new version must reach `/opt/runner/.ready`
 and `/etc/runner-scaler.env` with a working `docker info`, every pre-pulled image present and
 the root disk under 60%. A failed build or boot test opens an issue labeled `runner-platform`

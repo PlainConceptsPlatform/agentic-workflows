@@ -36,10 +36,10 @@ jobs:
       - name: Validate template
         working-directory: runners
         env:
-          PACKER_VAR_subscription_id: ${{ secrets.AZ_SUBSCRIPTION_ID }}
-          PACKER_VAR_tenant_id: ${{ secrets.AZ_TENANT_ID }}
-          PACKER_VAR_client_id: ${{ secrets.AZ_RUNNER_IMAGE_CLIENT_ID }}
-          PACKER_VAR_client_secret: ${{ secrets.AZ_RUNNER_IMAGE_CLIENT_SECRET }}
+          PKR_VAR_subscription_id: ${{ secrets.SUBSCRIPTION_ID }}
+          PKR_VAR_tenant_id: ${{ secrets.TENANT_ID }}
+          PKR_VAR_client_id: ${{ secrets.CLIENT_ID }}
+          PKR_VAR_client_secret: ${{ secrets.SECRET_ID }}
         run: packer validate build-image.pkr.hcl
 
       - name: Determine image version
@@ -54,22 +54,26 @@ jobs:
       - name: Build and publish image
         working-directory: runners
         env:
-          PACKER_VAR_subscription_id: ${{ secrets.AZ_SUBSCRIPTION_ID }}
-          PACKER_VAR_tenant_id: ${{ secrets.AZ_TENANT_ID }}
-          PACKER_VAR_client_id: ${{ secrets.AZ_RUNNER_IMAGE_CLIENT_ID }}
-          PACKER_VAR_client_secret: ${{ secrets.AZ_RUNNER_IMAGE_CLIENT_SECRET }}
-          PACKER_VAR_image_version: ${{ steps.version.outputs.version }}
+          PKR_VAR_subscription_id: ${{ secrets.SUBSCRIPTION_ID }}
+          PKR_VAR_tenant_id: ${{ secrets.TENANT_ID }}
+          PKR_VAR_client_id: ${{ secrets.CLIENT_ID }}
+          PKR_VAR_client_secret: ${{ secrets.SECRET_ID }}
+          PKR_VAR_image_version: ${{ steps.version.outputs.version }}
         run: packer build build-image.pkr.hcl
 
       - name: Post-publish boot test (CUT-04)
         id: boottest
         env:
-          AZ_SUBSCRIPTION_ID: ${{ secrets.AZ_SUBSCRIPTION_ID }}
+          AZ_SUBSCRIPTION_ID: ${{ secrets.SUBSCRIPTION_ID }}
+          AZ_TENANT_ID: ${{ secrets.TENANT_ID }}
+          AZ_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          AZ_CLIENT_SECRET: ${{ secrets.SECRET_ID }}
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
           IMG="/subscriptions/${AZ_SUBSCRIPTION_ID}/resourceGroups/agentrunner-pro-rg-01/providers/Microsoft.Compute/galleries/agentrunner_gallery_01/images/agents-arc-runner/versions/${VERSION}"
-          az login --service-principal -u "${{ secrets.AZ_RUNNER_IMAGE_CLIENT_ID }}" -p "${{ secrets.AZ_RUNNER_IMAGE_CLIENT_SECRET }}" --tenant "${{ secrets.AZ_TENANT_ID }}"
+          az login --service-principal -u "$AZ_CLIENT_ID" -p "$AZ_CLIENT_SECRET" --tenant "$AZ_TENANT_ID" -o none
+          az account set --subscription "$AZ_SUBSCRIPTION_ID"
           sed "s/__VM_TOKEN__/boottest-dummy-token/" runners/cloud-init.yaml > /tmp/boottest-cloud-init.yaml
           # The pre-pulled images must survive generalization and be there on a fresh VM, and
           # the bake must leave the root disk well under job.sh's DISK_LIMIT of 85%.
@@ -82,7 +86,7 @@ jobs:
           script="if $checks; then echo BOOTTEST_PASS; else echo BOOTTEST_WAIT; fi; df -h / | tail -n 1"
           az vm create -g agentrunner-pro-rg-01 -n "vm-boottest-${{ github.run_number }}" \
             --image "$IMG" --size Standard_D4ads_v5 --admin-username azureuser \
-            --ssh-key-values ~/.ssh/id_rsa.pub --os-disk-size-gb 64 \
+            --generate-ssh-keys --os-disk-size-gb 64 \
             --custom-data "$(base64 -w0 /tmp/boottest-cloud-init.yaml)" \
             --nic-delete-option Delete --os-disk-delete-option Delete -o none
           ok=0
@@ -102,7 +106,7 @@ jobs:
       - name: Flip live VMSS to the new image
         if: ${{ inputs.flip_fleet == true }}
         env:
-          AZ_SUBSCRIPTION_ID: ${{ secrets.AZ_SUBSCRIPTION_ID }}
+          AZ_SUBSCRIPTION_ID: ${{ secrets.SUBSCRIPTION_ID }}
           VM_TOKEN: ${{ secrets.VM_TOKEN }}
         run: |
           set -euo pipefail
