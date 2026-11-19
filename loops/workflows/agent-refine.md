@@ -305,6 +305,7 @@ jobs:
     outputs:
       valid: ${{ steps.validate.outputs.valid }}
       outcome: ${{ steps.validate.outputs.outcome }}
+      reason: ${{ steps.validate.outputs.reason }}
     steps:
       - name: Checkout workflow actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -914,8 +915,16 @@ jobs:
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           ARTIFACT: ${{ needs.activation.outputs.artifact_prefix }}agent
+          REFUSED: ${{ needs.validate_output.outputs.reason }}
         run: |
           set -euo pipefail
+          # Why the validator refused the output, said on the issue whatever the token count:
+          # without it a refused run read the same as a lost one (#574).
+          if [ -n "$REFUSED" ]; then
+            echo "refused=The validator refused this output: ${REFUSED}." >> "$GITHUB_OUTPUT"
+          else
+            echo "refused=" >> "$GITHUB_OUTPUT"
+          fi
           output_tokens=""
           if gh run download "$RUN_ID" --repo "$REPO" --name "$ARTIFACT" --dir usage-read 2>/dev/null \
             && [ -f usage-read/agent_usage.json ]; then
@@ -932,7 +941,7 @@ jobs:
               item_count=$(jq '.items | length' usage-read/agent_output.json 2>/dev/null || echo 0)
             fi
             if [ "$item_count" -gt 0 ]; then
-              echo "truncated=This attempt consumed ${output_tokens} output tokens and produced ${item_count} item(s), but the validator could not recognise the outcome. The agent finished its work: check the run artifacts (agent_output.json, safeoutputs.jsonl) against the validator's expected shape before retrying." >> "$GITHUB_OUTPUT"
+              echo "truncated=This attempt consumed ${output_tokens} output tokens and produced ${item_count} item(s), but the validator could not recognise the outcome. The agent finished its work: the validator's reason is on the line below, and the run's agent_output.json holds the items it refused." >> "$GITHUB_OUTPUT"
             else
               echo "truncated=This attempt consumed ${output_tokens} output tokens and still produced no outcome. That is what provider output truncation looks like, not an outage: the model hit the single-response cap mid-generation and every call it was writing was lost. If this repeats, split the issue or tighten its body." >> "$GITHUB_OUTPUT"
             fi
@@ -951,6 +960,7 @@ jobs:
             Attempt ${{ steps.decide.outputs.next }} of ${{ env.MAX_ATTEMPTS }} ended after ${{ steps.decide.outputs.minutes }} minutes, before the run could produce an answer.
             ${{ env.RETRY_COMMENT }}
             ${{ steps.usage.outputs.truncated }}
+            ${{ steps.usage.outputs.refused }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Release the reservation for the retry
         if: steps.decide.outputs.retry == 'true'
@@ -1014,6 +1024,7 @@ jobs:
             ${{ env.REFINE_MARKER }}
             ${{ env.INCOMPLETE_COMMENT }}
             ${{ steps.usage.outputs.truncated }}
+            ${{ steps.usage.outputs.refused }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
 # `!failure()` is load-bearing, not decoration. `still_open` and `eligibility` skip
@@ -1088,7 +1099,14 @@ safe-outputs:
     target: "*"
     max: 3
     title:
+  # `*` with the agent naming the issue as item_number. The default, "triggering", resolves the
+  # target from the event, and a refine dispatched by the router (every retry, and every run since
+  # each agent became its own run) is a workflow_dispatch with no issue in its payload: add_comment
+  # was refused even with item_number given, the agent moved its questions into the body, and the
+  # validator refused the run, 50-82k output tokens each time (#574). The validator still requires
+  # every comment to name this issue.
   add-comment:
+    target: "*"
   # Split children. An oversized story becomes several implementable ones rather than
   # one issue nobody can land; the cap stops a runaway decomposition.
   create-issue:
@@ -1286,13 +1304,21 @@ timeout-minutes: 90
    A call that reports only about 20 argument bytes for a body of thousands did not carry the body.
    Do not repeat it in the same form: resend the whole payload with the number inside the JSON.
 
+   Send every `update_issue` body whole, with no `operation` field. The workflow applies each body
+   as the entire issue body, so an `append` replaces the story with the appended part and the run
+   is refused.
+
 8. Decide exactly one outcome:
 
     Labels are workflow-owned state. Do not call `add_labels` or `remove_labels`.
 
     **Questions remain.** You set aside one or more questions for the author that the codebase
     could not answer. Leave the partial work visible: first call `update_issue` with a
-    temporal draft, then call `add_comment` once with the questions.
+    temporal draft, then call `add_comment` once with the questions. The questions go in that
+    comment, never into the body: the workflow recognises this outcome by the comment, and a run
+    whose questions are only in the body is refused. If `add_comment` is refused, do not move the
+    questions into the body with another `update_issue`; call `report_incomplete` with what the tool
+    told you.
 
     The temporal draft is the replacement body your path would have written the story
     body from the standard path, the marker, summary and checklist from the trivial path —

@@ -2,6 +2,15 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.29.4
+
+### Fixed
+
+- **Refine can post its comment on a dispatched run.** Refine's `add-comment` safe output had no target, so it took gh-aw's default, `triggering`, which reads the issue from the event. A refine the router dispatches (every retry, and every run since each agent became its own run in 1.25.0) is a `workflow_dispatch` with no issue in its payload, so `add_comment` was refused even with `item_number` given. The agent then wrote its questions into the issue body instead, and the validator refused the run: 50-82k output tokens thrown away each time, then a retry from zero. `add-comment` now has `target: "*"`, as the triage, review and merge-gate workers already do; the validator still requires every comment to name the issue.
+- **The refine validator says why it refuses an output.** `validate-refine-output` printed only `invalid`. It now also gives the reason, on one line, naming the rule and the item and never the agent's text: no items, only run signals, an item of a type refine does not publish, an item aimed at another issue, an update with no body, a lone child, a draft without its questions comment, questions written into the body instead of a comment, an `update_issue` with `operation: append`, or a self-contradiction (questions with `report_incomplete`, "Refinement complete" over a pending body). The action exposes it as the `reason` output and in its warning annotation; the refine worker's `incomplete` job puts it in the issue comment on both the retry and the parked path, and the truncation note no longer sends a person to the run artifacts.
+- **`update_issue` targets are checked.** The prompt tells the agent to name the issue as `issue_number` on `update_issue`, and the validator read only `item_number`, so an update aimed at another issue passed the stays-on-its-own-issue rule. It now reads either.
+- **An appended body is refused.** The refine worker applies every `update_issue` body as the whole issue body, so an `operation: append` would have replaced the story with the fragment. The validator refuses it with that reason, and the prompt asks for whole bodies with no `operation`, and for `report_incomplete` rather than questions moved into the body when `add_comment` is refused.
+
 ## 1.29.3
 
 ### Added
