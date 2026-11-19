@@ -28,6 +28,9 @@ outputs:
   outcome:
     description: "Deterministic refinement outcome: complete, split, questions, or invalid."
     value: ${{ steps.validate.outputs.outcome }}
+  reason:
+    description: Why the output was refused (which rule, which item), on one line; empty unless the outcome is invalid.
+    value: ${{ steps.validate.outputs.reason }}
 runs:
   using: composite
   steps:
@@ -44,10 +47,14 @@ runs:
       run: |
         set -euo pipefail
 
-        outcome="$(bash "${{ github.action_path }}/validate-refine-output.sh" "$OUTPUT_FILE" "$MARKER" "$COMMENT_PREFIX" "$ISSUE_NUMBER" "$DRAFT_MARKER" "$QUESTIONS_LINE")"
+        reason_file="$(mktemp)"
+        outcome="$(REFINE_REASON_FILE="$reason_file" bash "${{ github.action_path }}/validate-refine-output.sh" "$OUTPUT_FILE" "$MARKER" "$COMMENT_PREFIX" "$ISSUE_NUMBER" "$DRAFT_MARKER" "$QUESTIONS_LINE")"
+        reason="$(head -n 1 "$reason_file" | tr -d '\r' | cut -c1-500)"
+        rm -f "$reason_file"
         echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
         echo "valid=$([ "$outcome" != 'invalid' ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        echo "reason=$reason" >> "$GITHUB_OUTPUT"
 
         if [ "$outcome" = 'invalid' ]; then
-          echo "::warning::Agent output has no usable refinement outcome. It will not be applied."
+          echo "::warning title=Refine output refused::${reason:-no reason recorded}. It will not be applied."
         fi

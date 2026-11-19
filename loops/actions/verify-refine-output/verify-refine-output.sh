@@ -112,6 +112,47 @@ assert_output 'only a run signal is invalid' invalid \
   '{"items":[{"type":"report_incomplete","reason":"gave up"}]}'
 
 
+# Why an output was refused (#574). A refusal used to print only "invalid", so a run that spent
+# 50-82k tokens was thrown away and nobody could tell which rule refused it without downloading
+# the artifacts. The reason names the rule and the item, never the agent's text.
+assert_reason() {
+  local label="$1"
+  local expected="$2"
+  local payload="$3"
+  local output_file="${TEMP_DIR}/agent_output.json"
+  local reason_file="${TEMP_DIR}/reason.txt"
+  local outcome reason
+
+  rm -f "$reason_file"
+  printf '%s' "$payload" > "$output_file"
+  outcome="$(REFINE_REASON_FILE="$reason_file" bash "$VALIDATOR" "$output_file" "$MARKER" "$PREFIX" 42 "$DRAFT_MARK")"
+  reason="$(cat "$reason_file" 2>/dev/null || true)"
+
+  if [ "$outcome" = invalid ] && [[ "$reason" == *"$expected"* ]]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    printf 'FAIL: %s\n  expected: invalid, reason containing: %s\n  actual:   %s, reason: %s\n' "$label" "$expected" "$outcome" "$reason" >&2
+  fi
+}
+
+assert_reason 'no items says so' 'no items' '{"items":[]}'
+assert_reason 'no items array says so' 'no items array' '{"result":"ok"}'
+assert_reason 'only a signal says so' 'only run signals (report_incomplete)' \
+  '{"items":[{"type":"report_incomplete","reason":"gave up"}]}'
+assert_reason 'an unexpected type is named' 'item 2: a type refine does not publish' \
+  '{"items":[{"type":"update_issue","issue_number":42,"body":"# Story"},{"type":"add_labels","item_number":42,"labels":["x"]}]}'
+assert_reason 'an update aimed at another issue is caught by issue_number too' 'item 1: not aimed at #42' \
+  '{"items":[{"type":"update_issue","issue_number":7,"body":"# Story"}]}'
+assert_reason 'a missing body is named' 'item 1: update_issue with no body text' \
+  '{"items":[{"type":"update_issue","issue_number":42},{"type":"add_comment","item_number":42,"body":"Refinement complete"}]}'
+assert_reason 'a lone child is named' 'at least two child issues' \
+  '{"items":[{"type":"update_issue","issue_number":42,"body":"# Parent"},{"type":"create_issue","title":"A","body":"child A"}]}'
+assert_reason 'a draft without its questions is named' 'no add_comment on #42 asks its questions' \
+  '{"items":[{"type":"update_issue","issue_number":42,"body":"<!-- agent-refine-draft -->\n_pending see questions below_"}]}'
+assert_reason 'a completion claim over a draft is self-contradictory' 'self-contradictory' \
+  '{"items":[{"type":"update_issue","issue_number":42,"body":"## Story\n_pending see questions below_"},{"type":"add_comment","item_number":42,"body":"<!-- agent-refine -->\nRefinement update\nRefinement complete."}]}'
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "Refine output validation: ${PASS} passed"
