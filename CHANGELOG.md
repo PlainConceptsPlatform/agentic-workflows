@@ -2,6 +2,12 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.29.1
+
+### Fixed
+
+- **The runner image build authenticates.** `build-runner-image.yml` read `AZ_SUBSCRIPTION_ID`, `AZ_TENANT_ID`, `AZ_RUNNER_IMAGE_CLIENT_ID` and `AZ_RUNNER_IMAGE_CLIENT_SECRET`, which this repository never had, so every dispatch authenticated as an empty service principal. It now reads the secrets that exist: `SUBSCRIPTION_ID`, `TENANT_ID`, `CLIENT_ID` and `SECRET_ID` (the client secret). It also passed them to Packer as `PACKER_VAR_*`, which Packer ignores (it reads `PKR_VAR_*`), so the template's placeholder defaults were used; the boot test's `az login` takes them from the step's `env:` instead of inlining them in the script, and the throwaway VM gets a generated SSH key, since the hosted runner has no `~/.ssh/id_rsa.pub`. `runners/secrets.md` and `runners/README.md` name the real secrets. Nothing in the published package changes.
+
 ## 1.29.0
 
 ### Added

@@ -17,8 +17,8 @@ declares.
 
 | Secret | Used by | Purpose |
 |---|---|---|
-| `AZ_SUBSCRIPTION_ID` / `AZ_TENANT_ID` | `build-runner-image.yml` (this repo) | the subscription and tenant the image build and boot test run against |
-| `AZ_RUNNER_IMAGE_CLIENT_ID` / `AZ_RUNNER_IMAGE_CLIENT_SECRET` | `build-runner-image.yml` (this repo) | service principal with Contributor on `agentrunner-pro-rg-01`, used by Packer and by the boot test / fleet flip |
+| `SUBSCRIPTION_ID` / `TENANT_ID` | `build-runner-image.yml` (this repo) | the subscription and tenant the image build and boot test run against |
+| `CLIENT_ID` / `SECRET_ID` | `build-runner-image.yml` (this repo) | client id and client secret of the service principal with Contributor on `agentrunner-pro-rg-01`, used by Packer and by the boot test / fleet flip |
 | `VM_TOKEN` | `build-runner-image.yml` flip step | same value as the scaler app setting; substituted into cloud-init when `flip_fleet` flips the VMSS |
 | `FORGE_API_KEY` | every agent run | the **Forge key** (forge.plainconcepts.com), the only stored LLM credential; per-repo value (each consumer holds its own) |
 
@@ -150,19 +150,21 @@ gh secret set FORGE_API_KEY --repo PlainConceptsPlatform/<consumer> --body "<for
 Consumers deliberately hold **different** key values. The router aliases this
 one secret into every name the locks expect (see above); no other LLM secret exists.
 
-### `AZ_RUNNER_IMAGE_CLIENT_ID` / `AZ_RUNNER_IMAGE_CLIENT_SECRET` (repo secrets, this repo)
+### `SUBSCRIPTION_ID` / `TENANT_ID` / `CLIENT_ID` / `SECRET_ID` (repo secrets, this repo)
 
 Packer and the boot test need a service principal with Contributor on the runner resource group
-(the scaler app's managed identity is bound to its App Service and cannot authenticate Packer from CI):
+(the scaler app's managed identity is bound to its App Service and cannot authenticate Packer from CI). `SECRET_ID` holds the client secret (the `password` the
+command below prints), not a secret's id. The workflow passes them to Packer as `PKR_VAR_*`
+and to `az login` through the step's `env:`, never inlined in a script:
 
 ```bash
 az ad sp create-for-rbac --name agentrunner-image-builder \
   --role Contributor --scopes /subscriptions/<sub>/resourceGroups/agentrunner-pro-rg-01 \
   --query '{appId: appId, tenant: tenant, secret: password}' -o json
-gh secret set AZ_SUBSCRIPTION_ID --repo PlainConceptsPlatform/agentic-workflows --body "<sub>"
-gh secret set AZ_TENANT_ID --repo PlainConceptsPlatform/agentic-workflows --body "<tenant>"
-gh secret set AZ_RUNNER_IMAGE_CLIENT_ID --repo PlainConceptsPlatform/agentic-workflows --body "<appId>"
-gh secret set AZ_RUNNER_IMAGE_CLIENT_SECRET --repo PlainConceptsPlatform/agentic-workflows --body "<secret>"
+gh secret set SUBSCRIPTION_ID --repo PlainConceptsPlatform/agentic-workflows --body "<sub>"
+gh secret set TENANT_ID --repo PlainConceptsPlatform/agentic-workflows --body "<tenant>"
+gh secret set CLIENT_ID --repo PlainConceptsPlatform/agentic-workflows --body "<appId>"
+gh secret set SECRET_ID --repo PlainConceptsPlatform/agentic-workflows --body "<secret>"
 ```
 
 ### Deleting the retired ones
