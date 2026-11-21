@@ -2,6 +2,18 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.30.0
+
+### Added
+
+- **The audit worklist** (phase 1 of [#582](https://github.com/PlainConceptsPlatform/agentic-workflows/issues/582); a new artifact only, no behaviour changes). `engineering-excellence.mjs worklist` writes `ee/worklist.json`: per check, the worst items with where they are, so the weekly audit can start from the app's own health data instead of exploring the repository. The facets say how much is wrong, several hold counts only, and the files and lines sit in raw reports kept one to seven days; the worklist folds both. It covers complexity (the facet's CRAP hotspots), coverage (scopes and modules under their floor and the least covered files, from Cobertura or lcov), mutation (when Stryker's reports or the facet are at hand), security (Trivy's critical and high vulnerabilities with the fixed version, and failed misconfigurations), Semgrep (findings per rule and file), dead code (Knip's unused files, exports and dependencies), duplication (jscpd's largest clone pairs), architecture (failing architecture tests from the TRX, Steiger's diagnostics), code patterns (analyzer findings from the SARIF, with the rules over their baseline marked) and bundle (the total over its budget). Each item has a stable id (the hash of check, rule, path and symbol, so it survives line shifts), its path and line, the measured value, the threshold or baseline and its mode (`report` or `ratchet`, read from `quality.config.json` as the gates read it). Items are capped per check (20; `--limit`), with the total beside them; the per-rule table of dead code, architecture and patterns is not capped. Every input is optional: a missing report leaves its check `null`, an unreadable one is named in `unreadable`, and neither fails. No source code and no secret enters it: Semgrep's matched lines, jscpd's clone text and Trivy's secret matches are dropped.
+- **`scripts/engineering-excellence-worklist.schema.json`**, the worklist's contract, with the facets' envelope and `facet: "worklist"`. A file of its own because the facet schema is vendored verbatim from project-health and the worklist is not a facet Project-Health collects. `scripts/lib/worklist.mjs` holds the rules, with its `node:test` suite.
+- **`app-ci-dotnet-next`: `Build audit worklist`** in the engineering-excellence job, after the facets, and `Upload audit worklist`, from main as `engineering-excellence-worklist` with 90 days of retention like the facets. The step cannot fail the job: it is skipped until the repository has the 1.30.0 `quality-gates` scripts, and a worklist that cannot be built is a warning. The job now also needs `deps-and-iac-report` and downloads `trivy-json`, for the vulnerabilities; that need does not skip the job when the report-only scan fails. Take it with `workflows update` (the scripts) and `workflows add --template app-ci-dotnet-next --force` (the workflow). `app-ci-node-monorepo` has no engineering-excellence job and is unchanged; the mutation workflow is unchanged too, so the worklist's `mutation` check is null until a later phase gives it the reports.
+
+### Changed
+
+- The route matrix asserts the worklist's wiring, and the consumer skill and `docs/family-templates.md` ("The audit worklist") describe the artifact.
+
 ## 1.29.4
 
 ### Fixed

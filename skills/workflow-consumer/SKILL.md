@@ -305,6 +305,21 @@ from that pull request's CI run (download `dotnet-analyzers`, then
 `node scripts/check-patterns.mjs --sarif <dir> --write-baseline`) and switch `patterns.mode` to
 `"ratchet"` two weeks later.
 
+The audit worklist (1.30.0): after the facets, the engineering-excellence job runs
+`node scripts/engineering-excellence.mjs worklist` and publishes `ee/worklist.json` from main as
+`engineering-excellence-worklist` (90 days). Per check (complexity, coverage, mutation, security,
+semgrep, deadCode, duplication, architecture, patterns, bundle) it lists the worst items with their
+path, line, measured value, threshold or baseline and mode, each with an id that survives line
+shifts, capped at 20 per check with the total beside them. It is what the weekly audit will start
+from (agentic-workflows#582); nothing reads it yet, it is not a facet, and Project-Health ignores it.
+There is nothing to configure: a check whose report is missing is `null`, the step never fails the
+job, and it is skipped until the repository has the 1.30.0 `quality-gates` scripts
+(`workflows update`). It holds no source code and no secrets, so do not add any by hand. To see
+where a number on the Engineering tab comes from, download the artifact from the latest main run
+(`gh run download <run-id> -n engineering-excellence-worklist`). The item shape is in
+`scripts/engineering-excellence-worklist.schema.json` and `docs/family-templates.md`, "The audit
+worklist".
+
 **Reading a failure.** Every gate prints what failed into the job's step summary: the method, file or
 Knip issue type, its current value and what the baseline allows. Fix the code: simplify or test the
 method, remove the clone, delete the unused file or export, remove or declare the dependency, shrink

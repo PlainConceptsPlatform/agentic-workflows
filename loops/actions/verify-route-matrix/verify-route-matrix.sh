@@ -4869,6 +4869,42 @@ else
   echo "FAIL: patterns facet wiring:$patterns_problems" >&2
 fi
 
+# The audit worklist (issue #582, phase 1): the engineering-excellence job builds ee/worklist.json after
+# the facets from them and the raw reports, in a step that cannot fail the job (a consumer without the
+# script skips it, a failed build is a warning), and uploads it from main for 90 days like the facets.
+# Trivy's JSON reaches the job as a need that does not skip it.
+worklist_problems=""
+worklist_step=$(sed -n '/- name: Build audit worklist/,/- name: Complexity gate/p' "$ARCH_CI")
+grep -qF 'node scripts/engineering-excellence.mjs worklist --out ee/worklist.json --facets ee' <<<"$worklist_step" \
+  || worklist_problems="$worklist_problems the engineering-excellence job does not build the worklist after the facets;"
+grep -qF "hashFiles('scripts/lib/worklist.mjs') != ''" <<<"$worklist_step" && grep -qF '!cancelled()' <<<"$worklist_step" \
+  && grep -qF 'set -uo pipefail' <<<"$worklist_step" && ! grep -qF 'set -euo pipefail' <<<"$worklist_step" \
+  && grep -qF '::warning::The audit worklist was not built' <<<"$worklist_step" \
+  || worklist_problems="$worklist_problems the worklist step can fail the job;"
+for input in '--api "$API"' '--web "$WEB_COBERTURA"' '--trivy "$TRIVY"' '--semgrep "$SEMGREP"' '--knip "$KNIP"' \
+  '--jscpd jscpd-report/jscpd-report.json' '--steiger "$STEIGER"' '--trx "$TRX"' '--sarif ee/dotnet-analyzers' \
+  '--bundle-report "$BUNDLE"' '--size-limit "$SIZE_LIMIT"'; do
+  grep -qF -- "$input" <<<"$worklist_step" || worklist_problems="$worklist_problems the worklist step does not pass $input;"
+done
+grep -qF 'needs: [depth, api, web, sast-scan, deps-and-iac-report]' "$ARCH_CI" \
+  && grep -qF 'with: { pattern: trivy-json, path: ee/trivy }' <(sed -n '/^  engineering-excellence:/,/^  engineering-excellence-security:/p' "$ARCH_CI") \
+  || worklist_problems="$worklist_problems the engineering-excellence job does not wait for or download Trivy's JSON;"
+worklist_upload=$(sed -n '/- name: Upload audit worklist/,/retention-days/p' "$ARCH_CI")
+grep -qF 'name: engineering-excellence-worklist' <<<"$worklist_upload" && grep -qF 'path: ee/worklist.json' <<<"$worklist_upload" \
+  && grep -qF 'retention-days: 90' <<<"$worklist_upload" && grep -qF "steps.worklist.outputs.built == 'true'" <<<"$worklist_upload" \
+  && grep -qF "github.ref == 'refs/heads/main' && github.event_name != 'pull_request'" <<<"$worklist_upload" \
+  || worklist_problems="$worklist_problems the worklist is not uploaded from main as engineering-excellence-worklist for 90 days;"
+WORKLIST_SCRIPTS="${HERE}/../../templates/quality-gates/scripts"
+[ -f "$WORKLIST_SCRIPTS/lib/worklist.mjs" ] && [ -f "$WORKLIST_SCRIPTS/engineering-excellence-worklist.schema.json" ] \
+  && grep -qF "./engineering-excellence-worklist.schema.json" "$WORKLIST_SCRIPTS/engineering-excellence.mjs" \
+  || worklist_problems="$worklist_problems the quality-gates template misses the worklist producer or its schema;"
+if [ -z "$worklist_problems" ]; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: audit worklist wiring:$worklist_problems" >&2
+fi
+
 # The lockfile check installs gh-aw into a folder of its own: a shared self-hosted runner keeps
 # another repository's gh-aw version, and the pinned install then ran the wrong one.
 if grep -qF 'XDG_DATA_HOME: /tmp/gh-aw-checks-' "${HERE}/../../templates/agentics/agentics-checks.yml"; then
