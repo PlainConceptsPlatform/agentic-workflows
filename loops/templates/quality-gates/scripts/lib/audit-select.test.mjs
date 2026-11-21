@@ -171,6 +171,10 @@ test('distanceOf_isBoundedAndFollowsTheBar', () => {
   assert.equal(distanceOf({ value: 3, target: 2, bar: 'baseline', direction: 'higher' }), 0.5);
   assert.equal(distanceOf({ value: 2, target: 2, bar: 'baseline', direction: 'higher' }), 0);
   assert.equal(distanceOf({ value: 'HIGH', target: null }), 1);
+  // A rate with its size beside it counts by the work, not by the percentage.
+  assert.equal(distanceOf({ check: 'coverage', value: 0, target: 0.7, bar: 'threshold', direction: 'lower', gap: 3 }), 0.03);
+  assert.equal(distanceOf({ check: 'coverage', value: 0.6, target: 0.7, bar: 'threshold', direction: 'lower', gap: 250 }), 1);
+  assert.equal(distanceOf({ check: 'mutation', value: 0.6, target: 0.8, bar: 'threshold', direction: 'lower', gap: 5 }), 0.25);
   assert.equal(distanceOf({ value: 4, target: null, bar: 'baseline' }), 0);
 });
 
@@ -214,8 +218,8 @@ test('selectAudit_fullWorklist_ranksCapsAndExplainsWhatItLeftOut', () => {
   ]);
   assert.deepEqual(selection.selected.map((u) => u.reasons), [['vulnerability'], ['failed-gate'], ['over-threshold']]);
   for (const unit of selection.selected) assert.deepEqual(markersIn(unit.marker).map((m) => m.id), [unit.id]);
-  // Over the cap, in rank order: the other file, the module, the rule over its baseline, the clone.
-  assert.deepEqual(selection.excluded.overCap.items.map((u) => u.check), ['complexity', 'coverage', 'patterns', 'duplication']);
+  // Over the cap, in rank order: the module, the other file, the rule over its baseline, the clone.
+  assert.deepEqual(selection.excluded.overCap.items.map((u) => [u.check, u.score]), [['coverage', 66.4], ['complexity', 62.67], ['patterns', 50], ['duplication', 27.5]]);
   assert.equal(selection.excluded.withinBar, 1);
   assert.equal(selection.excluded.folded, 2);
   // Report mode files no story: the whole dead-code check, the file with no floor, the advisory with no fix.

@@ -252,6 +252,14 @@ function groupedUnits(check, items, rules) {
   }));
 }
 
+// The work a rate hides: the lines still to cover to reach the floor, or the mutants that survived.
+// A module of four lines at 0% is further from its floor than a large one at 50%, and far less work.
+function gapOf(check, item) {
+  if (check === 'mutation') return isNumber(item.detail?.survived) ? item.detail.survived : null;
+  if (!isNumber(item.value) || !isNumber(item.threshold) || !isNumber(item.detail?.linesValid)) return null;
+  return Math.max(0, Math.ceil((item.threshold - item.value) * item.detail.linesValid));
+}
+
 // Coverage and mutation: a scope under its floor, the modules that hold the gap, the files in them.
 // A module is the story; its files go with it, and a scope with modules under the floor is told
 // through them. `folded` counts what was merged into another unit.
@@ -268,6 +276,7 @@ function rateUnits(check, items) {
     metric: item.kind === 'file' && check === 'mutation' ? 'survivors' : 'rate',
     direction: item.kind === 'file' && check === 'mutation' ? 'higher' : 'lower',
     bar: 'threshold',
+    gap: gapOf(check, item),
     files: item.path ? [fileOf(item)] : [],
     items: 1,
   });
@@ -350,12 +359,16 @@ export function severityOf(unit) {
   }
 }
 
-// How far past its bar, 0 to 1: five times a threshold, ten findings where none is allowed, a rate
-// at zero, or double a baseline all count as 1.
+// How far past its bar, 0 to 1: five times a threshold, ten findings where none is allowed, double a
+// baseline, a hundred lines short of a coverage floor or twenty surviving mutants all count as 1. A
+// rate with no size beside it counts by how far under its floor it is.
+const GAP_FULL = { coverage: 100, mutation: 20 };
+
 export function distanceOf(unit) {
   const { value, target, bar, direction } = unit;
   if (!isNumber(value)) return 1;
   if (!isNumber(target)) return 0;
+  if (direction === 'lower' && isNumber(unit.gap) && GAP_FULL[unit.check]) return value < target ? clamp(unit.gap / GAP_FULL[unit.check]) : 0;
   if (bar === 'baseline') return clamp((value - target) / Math.max(target, 1));
   if (target === 0) return clamp(value / 10);
   if (direction === 'lower') return clamp((target - value) / target);
