@@ -558,6 +558,8 @@ Creates work rather than consuming it. Read-only: it files a tracking report and
 flowchart TD
     auStart("Work Router<br/>audit route<br/>weekly cron, or dispatch") --> auSelect
     auSelect("select (rung 4, no model)<br/>audit-select.mjs reads the worklist,<br/>or the facets, from the default branch") --> auWork
+    auSelect -.->|"stories to close or reopen,<br/>a check to graduate"| auFollow
+    auFollow("follow_up (no model, after the agent)<br/>close, confirm or reopen on the numbers;<br/>clean-up story, graduation pull request") --> auLoop
     auWork{"Anything selected,<br/>or a risky file changed?"}
     auWork -.->|"no, and the data is sound"| auClean
     auWork -->|"yes, or no health data"| auBack
@@ -584,6 +586,7 @@ flowchart TD
     auQuiet(("Nothing to file<br/>the right outcome on a<br/>clean codebase"))
     auClean(("Clean<br/>the agent never starts,<br/>the summary says so"))
     auIdle(("Idle<br/>backlog already full"))
+    auLoop(("Loop closed<br/>graduation held<br/>for a person"))
 
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
     classDef action fill:#eef0ff,stroke:#554cff,stroke-width:2px,color:#172033
@@ -591,13 +594,15 @@ flowchart TD
     classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class auStart start
-    class auSelect,auFacts,auItems,auJudge,auRun,auScore,auFile,auMeasure action
+    class auSelect,auFollow,auFacts,auItems,auJudge,auRun,auScore,auFile,auMeasure action
     class auWork,auBack,auSource,auFilter,auDedupe decision
     class auIdle idle
-    class auReport,auQuiet,auClean success
+    class auReport,auQuiet,auClean,auLoop success
 ```
 
 `select` runs `scripts/audit-select.mjs` before any model: it picks, from the worklist the app's CI publishes, what is enforced and over its bar or worse than last week, ranks it by a fixed score and caps it at `AUDIT_MAX_STORIES`. With nothing selected and no risky file changed, the agent job does not start. The rules, the score and the selection file are in `docs/family-templates.md`, "The data-led audit".
+
+`follow_up` (1.32.0) carries out what `select` decided from the numbers, with the App token and no model, after the agent whether it ran or not: a story whose fix merged and is within its bar is closed with its before and after, one closed as done but still over its bar is reopened once, and an open story keeps its slot. A check two weeks in report mode gets one pull request that writes its baseline from the worklist and switches it to `ratchet`; it carries the merge train's hold label, so a person merges it. See "Closing the loop" and "Graduation of report-only checks" in `docs/family-templates.md`.
 
 The report never goes to refine: refine's size gate refused every audit filed as one issue of every finding and three stories, from 2026-09-21 until 1.12.1. Each story is filed on its own, labelled `refine`, linked under the report and listed in it, so `audit-close` closes the report once its stories are closed. A story already tracked by an open issue is listed against that issue instead of filed again: a measured item by the hidden `audit-item` marker in the story's body, anything else by its title.
 

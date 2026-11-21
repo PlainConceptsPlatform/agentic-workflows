@@ -335,8 +335,20 @@ tool measures. What to know when running it:
   does not start; the run is green and the summary of its `select` job says "The repository is
   clean". That is not a broken audit.
 - **Report-mode checks file no story.** They appear in the report's "Not yet enforced" section with
-  their count and trend. Switch a check to `ratchet` (with its baseline from CI) to get stories for
-  it.
+  their count and trend. From 1.32.0, after two weeks in report mode (`<check>.since`, or the day the
+  audit first saw it), the audit opens one pull request, `Quality gates: enforce <check> as a
+  ratchet`, that writes the baseline from CI's worklist and switches the mode. It carries the hold
+  label and is never merged automatically: review the baseline and merge it, or close it (the audit
+  then leaves the check alone for 90 days). When the baseline would freeze junk (unused or unlisted
+  dependencies, analyzer crash `AD0001`; `audit.junk` changes the list), a clean-up story comes
+  first and the pull request waits for it. `"audit": { "graduateAfterDays": 0 }` turns this off.
+- **Stories close and reopen on the numbers** (1.32.0). The audit's `follow_up` job closes a story
+  whose fix is merged and measured within its bar, with the numbers before and after; reopens one
+  closed as done that CI still measures over its bar (once: close it as "not planned" if the number
+  is acceptable); and an open story keeps its slot, so fewer new stories are filed while old ones
+  wait. The report ends with "Since last audit": fixed, still open and regressed, with the numbers.
+  The job uses the App token (`BOT_APP_ID`, `BOT_PRIVATE_KEY`) with issues, contents and
+  pull-requests write.
 - **Silencing a false positive** is a reviewed change to `quality.config.json`:
   `"audit": { "ignore": { "rules": ["MA0004"], "paths": ["apps/web/src/generated/**"] } }`. A whole
   check is switched off with `"audit": { "checks": { "duplication": false } }`. Closing a story as
@@ -352,7 +364,8 @@ tool measures. What to know when running it:
 - **Do not shorten artifact retention below the audit's interval by hand.** `cleanup-artifacts`
   keeps the newest worklist, facets and `audit-selection` whatever `ARTIFACT_RETENTION_DAYS` says.
 
-Settings and the scoring rule: `docs/family-templates.md`, "The data-led audit".
+Settings and the scoring rule: `docs/family-templates.md`, "The data-led audit", "Closing the loop"
+and "Graduation of report-only checks".
 
 **Reading a failure.** Every gate prints what failed into the job's step summary: the method, file or
 Knip issue type, its current value and what the baseline allows. Fix the code: simplify or test the

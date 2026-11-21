@@ -101,13 +101,15 @@ The numbers the gates enforce, at the repository root. Floors sit just under the
 | `audit.limit` | whole number, 1 to 200 | Items the worklist keeps per check (`engineering-excellence.mjs worklist --limit`). Default 20. |
 | `audit.riskFiles` | whole number, 0 to 20 | Files in the judgement pass's risk map. Default 5; 0 switches the judgement pass off. |
 | `audit.riskDays` | whole number, 1 to 365 | How recently a file must have changed to be in the risk map. Default 30. |
+| `audit.graduateAfterDays` | whole number, 0 to 365 | How long a check stays in `report` mode before the audit opens the pull request that makes it a `ratchet` (see "Graduation" below). Default 14; 0 switches graduation off. |
+| `audit.junk` | object, check → array of rule ids | What a graduating check's baseline must not freeze: the audit files one clean-up story for it first. Per check (`deadCode`, `architecture`, `patterns`, `bundle`), replacing that check's default; `[]` clears it. Default: `deadCode` the unused and unlisted dependency types (`dependencies`, `devDependencies`, `optionalPeerDependencies`, `unlisted`, `binaries`), which a ratchet holds at zero anyway; `patterns` `AD0001`, an analyzer that crashed. |
 | `$schema` | string | Optional, ignored. |
 
 A rate is a number from 0 to 1. Any other key, a percentage written as 94, or a string fails every gate with the list of problems, so a typo can never silently gate nothing. A `ratchet` without its baseline fails the same way.
 
 ### Report first, then ratchet
 
-Every check added from 1.27.0 on starts report-only: it measures, prints the step summary and publishes its facet, and never fails CI. After two weeks the app moves it to `ratchet` in a reviewed change to `quality.config.json`; nothing flips a mode automatically. From then on existing debt (the baseline) never blocks a pull request, and only getting worse does.
+Every check added from 1.27.0 on starts report-only: it measures, prints the step summary and publishes its facet, and never fails CI. After two weeks the app moves it to `ratchet` in a reviewed change to `quality.config.json`; from 1.32.0 the weekly audit opens that pull request itself (see "Graduation" below), and a person still merges it: nothing flips a mode automatically. From then on existing debt (the baseline) never blocks a pull request, and only getting worse does.
 
 | Check | Tool | CI step | Facet |
 |---|---|---|---|
@@ -206,7 +208,7 @@ score = 10 x severity + 10 x distance + 5 if regressed
 
 `severity` is the check's weight: a critical vulnerability 10, a high one 9; a misconfiguration 9 or 8; a failing architecture test, a Steiger error or a Semgrep `ERROR` 8; complexity, coverage and a Semgrep `WARNING` 6; mutation, the bundle, a dependency Knip tolerates none of, and an analyzer error 5; a Steiger warning, an analyzer warning and a Semgrep `INFO` 4; other dead code 3; duplication 2. `distance` runs from 0 to 1: five times a threshold, ten findings where none is allowed, double a baseline, a hundred lines short of a coverage floor or twenty surviving mutants all count as 1. The first `AUDIT_MAX_STORIES` (the worker's `env`, 3) are `selected`.
 
-**The marker.** Each selected unit carries `marker`, `<!-- audit-item: <id> value=<measured> target=<bar> -->`, which the agent copies to the end of the story. The filing step lifts it out before it measures and trims the body and puts it back after, so a trimmed story keeps it; it also refuses to file a second story for an id an open issue already carries. Do not edit it: the next audit finds the story by the id, and the value is what was measured when it was filed.
+**The marker.** Each selected unit carries `marker`, `<!-- audit-item: <id> value=<measured> target=<bar> check=<check> -->` (`check=` from 1.32.0), which the agent copies to the end of the story. The filing step lifts it out before it measures and trims the body and puts it back after, so a trimmed story keeps it; it also refuses to file a second story for an id an open issue already carries. Do not edit it: the next audit finds the story by the id, and the value is what was measured when it was filed.
 
 **The judgement pass** is for what no tool measures (an N+1 query, a missing authorization check, a test that asserts nothing, a comment that contradicts the code). It runs every week on the `riskMap`: up to `audit.riskFiles` files that hold a method over the CRAP threshold, are not fully covered, and changed in the last `audit.riskDays` days (when the checkout has no history, the last condition is dropped). `risk = 100 x (0.4 x complexity + 0.4 x uncovered + 0.2 x churn)`. It may file as many stories as the selection left free (`judgement.slots`); with none free there is no risk map. The worker's `AUDIT_FOCUS` still says what to look for, within what a tool does not already count.
 
@@ -222,7 +224,7 @@ The selection, shortened:
     { "id": "5f0c9a1b2c3d4e5f", "check": "complexity", "kind": "file", "rule": "crap", "path": "apps/api/Orders/Pricing.cs",
       "value": 186, "target": 30, "metric": "crap", "reasons": ["over-threshold"], "score": 70,
       "files": [{ "path": "apps/api/Orders/Pricing.cs", "line": 10, "symbol": "Pricing.Quote", "value": 186 }],
-      "marker": "<!-- audit-item: 5f0c9a1b2c3d4e5f value=186 target=30 -->" }
+      "marker": "<!-- audit-item: 5f0c9a1b2c3d4e5f value=186 target=30 check=complexity -->" }
   ],
   "judgement": { "slots": 2, "days": 30, "history": true },
   "riskMap": [{ "path": "apps/api/Billing/Invoice.cs", "crap": 62, "coverage": 0.2, "commits": 3, "score": 61, "methods": [{ "symbol": "Invoice.Total", "line": 10, "crap": 62, "cc": 18 }] }],
@@ -238,7 +240,40 @@ The selection, shortened:
 
 `checks` is the snapshot the next audit compares against. A tool's message never enters the selection: Semgrep's and an analyzer's can echo the code they matched, and a story is public text, so a unit carries the rule, the path and the line (a vulnerability keeps its advisory id and versions).
 
-The job needs `actions: read` and `issues: read` on the run's own token and nothing else. Any read that fails is listed in `problems` and the selection is built from the rest; a script that is missing or crashes gives `source: none`, so a selection that cannot be computed is never a reason to skip the audit. To see what a run would select, without the network: `node scripts/audit-select.mjs --offline --out selection.json --worklist ee/worklist.json`.
+The job needs `actions: read`, `issues: read` and `pull-requests: read` on the run's own token and nothing else; it writes nothing to GitHub. Any read that fails is listed in `problems` and the selection is built from the rest; a script that is missing or crashes gives `source: none`, so a selection that cannot be computed is never a reason to skip the audit. To see what a run would select, without the network: `node scripts/audit-select.mjs --offline --out selection.json --worklist ee/worklist.json`.
+
+### Closing the loop
+
+From 1.32.0 every data-led run also checks the stories earlier audits filed against what CI measures now, and carries the verdict out with no model. `select` decides; the audit's `follow_up` job (the `audit-follow-up` action, with the App token) acts. It runs after the agent, whether the agent ran, was skipped by the clean exit, or failed, and only when there is something to do.
+
+A story is matched to its unit by the id in its marker: the selection re-derives every unit from the newest worklist (the same grouping as above, plus a rule-level unit from `rules` where the worklist listed no item for a rule), never from a raw item id. A unit is **within its bar** when it is measured and not over its threshold or baseline, and **gone** when its check (from the marker's `check=`, or the last selection's snapshot) is measured, enforced and not truncated, and the unit is not in it. A truncated check cannot say a unit is gone.
+
+| The story | CI now | What happens |
+|---|---|---|
+| open, a pull request that closes it merged before the worklist was built | within its bar or gone | closed as completed, with a comment giving the number when filed, the number now and the target |
+| open | anything else | left open, and it **keeps its story slot**: `storySlots = AUDIT_MAX_STORIES - open audit stories`, so the audit files fewer new stories while old ones are unfinished. With every slot held nothing is selected and the agent does not start; the summary says so, and this is not reported as clean |
+| closed as completed in the last 30 days, before the worklist was built | within its bar or gone | confirmed once with the same numbers |
+| closed as completed in the last 30 days, before the worklist was built | still over its bar | **reopened** with the numbers, and the unit is not filed again as a new story. A story is reopened once: closed again, it is the team's answer, and the unit is treated like one closed as not planned while it is in reach |
+| closed after the worklist was built | | waits for the next worklist; the unit is not filed again meanwhile |
+| closed as not planned | | the team's answer, as before |
+
+Nothing is decided when the selection is read from the facets or when `quality.config.json` is not valid: stories are only tracked, and still hold their slots. The pull requests are read with GraphQL (`closedByPullRequestsReferences`), which is why `select` needs `pull-requests: read`. Each follow-up comment ends with `<!-- audit-follow-up: <close|verify|reopen> id=<id> check=<check> before=<b> after=<a|gone> target=<t> metric=<m> -->`: a re-run posts nothing twice, and a story already reopened once is left closed even if the last selection is lost.
+
+**In the report.** `file-audit-issues` appends a "Since last audit" section from the selection (`sinceLastAudit.markdown`), not from the model: fixed, still open and regressed counts, then one line per story with its check, unit, title and the numbers. It carries no issue number, because `audit-close` reads every `#N` in a report as work the report waits on. **`audit-close`**, when it closes a report whose stories are all closed, lists each measured story's number when filed and the number after (from the follow-up comment), or says it has not been measured since.
+
+In the selection: `storySlots`, `storiesHeld` (the open stories), `followUp` (`enabled`, `measuredAt`, `counts`, `rows`, `actions`, and `settled` and `reopened`, carried from run to run), `sinceLastAudit` and `graduation`.
+
+### Graduation of report-only checks
+
+A check in `report` mode (`deadCode`, `architecture`, `patterns`, `bundle`) for `audit.graduateAfterDays` days (14) gets **one pull request** from the audit that writes its baseline and switches it to `ratchet`. The age counts from the section's `since`; without one, from the day the audit first saw the check in report mode, which the selection records in `graduation.firstSeen` and carries forward (the pull request writes that date as `since`). Only a worklist selection with a valid `quality.config.json` graduates anything.
+
+- **The baseline is CI's**, from the worklist of the default branch, never a local run: `rules` counts for dead code (dependency types left out, as `--write-baseline` does), Steiger warnings and analyzer rules; `summary.totalJsBytes` for the bundle, with `limitBytes` the baseline plus 10%. A check with nothing to baseline (architecture measured from .NET tests only) is `no-data`.
+- **The pull request**: branch `audit/graduate-<check>`, one commit to `quality.config.json` that changes only that section (`mode`, the baseline, `since`), title `Quality gates: enforce <check> as a ratchet`, and a body with the age, the baseline table, the worklist's date, commit and run, and the marker `<!-- audit-graduation: <check> -->`. It is opened with the App token, so CI runs on it.
+- **Never merged automatically.** A ratchet can block merges, so a person decides. The pull request carries the merge train's hold label (`MERGE_TRAIN_HOLD_LABEL` as the repository's router names it, `hold` by default) and `quality-graduation`; the train skips a held pull request, and nothing in the audit merges one. A person approves and merges it, or closes it.
+- **A closed pull request is respected.** While one is open, or one from the branch was closed or merged in the last 90 days, no other is opened.
+- **Junk first.** When the baseline would freeze something on `audit.junk` (by default unused or unlisted dependencies, and `AD0001`), the audit files one clean-up story (`bug`, `refine`, marker `<!-- audit-graduation: <check> cleanup -->`) with the counts and the places the worklist names, and holds the pull request. Once the worklist counts none of them, the story is closed if still open and the pull request opens. Closed as done with the junk still there, the story is reopened once; closed as not planned, or closed again after that reopen, the baseline is written as CI measures it.
+
+`graduation.checks.<check>.state` says where each stands: `waiting` (with `readyOn`), `cleanup-filed`, `cleanup-open`, `cleanup-pending`, `cleanup-reopened`, `ready`, `no-data`, `off` or `enforced`.
 
 ## The gates CI: app-ci-dotnet-next
 
