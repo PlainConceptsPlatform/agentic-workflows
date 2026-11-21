@@ -314,49 +314,55 @@ const worse = (direction, now, before) => (direction === 'lower' ? now < before 
 // `previous` is the last run's { source, checks: { check: { truncated, units: { id: value } } } }.
 // A unit it does not hold is new only when that run saw the whole check from the same source.
 export function reasonsFor(unit, previous = null, source = previous?.source) {
-  const reasons = [];
-  const { value, target, bar, direction } = unit;
-  if (unit.kind === 'vulnerable-package' || unit.kind === 'vulnerability-count') reasons.push('vulnerability');
-  else if (!isNumber(value)) reasons.push('failed-gate');
-  else if (bar === 'threshold' && target === 0 && value > 0) reasons.push('failed-gate');
-  else if (bar === 'threshold' && isNumber(target) && worse(direction, value, target)) reasons.push('over-threshold');
-  else if (bar === 'baseline' && (unit.over === true || (isNumber(target) && value > target))) reasons.push('over-baseline');
-
-  const before = previous?.checks?.[unit.check];
-  if (before && isNumber(value)) {
-    const was = before.units?.[unit.id];
-    if (isNumber(was) ? worse(direction, value, was) : was === undefined && before.truncated === false && previous.source === source) reasons.push('regressed');
-  }
+  const reasons = [barReason(unit)].filter(Boolean);
+  if (gotWorse(unit, previous, source)) reasons.push('regressed');
   return reasons;
+}
+
+const ALWAYS = ['vulnerable-package', 'vulnerability-count'];
+
+// The unit against its own bar.
+function barReason(unit) {
+  const { value, target, bar } = unit;
+  if (ALWAYS.includes(unit.kind)) return 'vulnerability';
+  if (!isNumber(value)) return 'failed-gate';
+  if (bar === 'baseline') return unit.over === true || (isNumber(target) && value > target) ? 'over-baseline' : null;
+  if (bar !== 'threshold' || !isNumber(target)) return null;
+  if (target === 0) return value > 0 ? 'failed-gate' : null;
+  return worse(unit.direction, value, target) ? 'over-threshold' : null;
+}
+
+// The unit against the last audit.
+function gotWorse(unit, previous, source) {
+  const before = previous?.checks?.[unit.check];
+  if (!before || !isNumber(unit.value)) return false;
+  const was = before.units?.[unit.id];
+  if (isNumber(was)) return worse(unit.direction, unit.value, was);
+  return was === undefined && before.truncated === false && previous.source === source;
 }
 
 const SEMGREP_SEVERITY = { ERROR: 8, WARNING: 6, INFO: 4 };
 
 // How much the check matters, 0 to 10. Fixed, so two runs over the same data rank alike.
-export function severityOf(unit) {
-  switch (unit.check) {
-    case 'security':
-      if (unit.kind === 'misconfiguration') return unit.value === 'CRITICAL' ? 9 : 8;
-      if (unit.kind === 'vulnerability-count') return unit.critical > 0 ? 10 : 9;
-      return unit.value === 'CRITICAL' ? 10 : 9;
-    case 'architecture':
-      return unit.kind === 'steiger-warning' ? 4 : 8;
-    case 'semgrep':
-      return SEMGREP_SEVERITY[unit.severity] ?? 5;
-    case 'complexity':
-    case 'coverage':
-      return 6;
-    case 'mutation':
-    case 'bundle':
-      return 5;
-    case 'deadCode':
-      return unit.bar === 'threshold' ? 5 : 3;
-    case 'patterns':
-      return unit.severity === 'error' ? 5 : 4;
-    default:
-      return 2;
-  }
-}
+const critical = (unit) => unit.value === 'CRITICAL';
+const SEVERITY = {
+  security: (unit) => {
+    if (unit.kind === 'misconfiguration') return critical(unit) ? 9 : 8;
+    if (unit.kind === 'vulnerability-count') return unit.critical > 0 ? 10 : 9;
+    return critical(unit) ? 10 : 9;
+  },
+  architecture: (unit) => (unit.kind === 'steiger-warning' ? 4 : 8),
+  semgrep: (unit) => SEMGREP_SEVERITY[unit.severity] ?? 5,
+  complexity: () => 6,
+  coverage: () => 6,
+  mutation: () => 5,
+  bundle: () => 5,
+  deadCode: (unit) => (unit.bar === 'threshold' ? 5 : 3),
+  patterns: (unit) => (unit.severity === 'error' ? 5 : 4),
+  duplication: () => 2,
+};
+
+export const severityOf = (unit) => SEVERITY[unit.check]?.(unit) ?? 2;
 
 // How far past its bar, 0 to 1: five times a threshold, ten findings where none is allowed, double a
 // baseline, a hundred lines short of a coverage floor or twenty surviving mutants all count as 1. A
@@ -384,31 +390,36 @@ const byRank = (a, b) => b.score - a.score || CHECKS.indexOf(a.check) - CHECKS.i
 // is at hand, changed in the last `days`. `changes` is { path: commits } or null without history.
 // risk = 100 x (0.4 x complexity + 0.4 x uncovered + 0.2 x churn), each from 0 to 1.
 export function riskMap(checks, { changes = null, limit = 5, ignored = () => false } = {}) {
-  const files = new Map();
-  const entry = (path) => files.get(path) ?? files.set(path, { path, crap: null, threshold: null, coverage: null, methods: [] }).get(path);
-  for (const item of checks.complexity?.items ?? []) {
-    if (!item.path || !isNumber(item.value)) continue;
-    const file = entry(item.path);
-    file.crap = Math.max(file.crap ?? 0, item.value);
-    file.threshold = item.threshold;
-    if (isNumber(item.detail?.coverage)) file.coverage = Math.min(file.coverage ?? 1, item.detail.coverage);
-    if (file.methods.length < FILES_MAX) file.methods.push({ symbol: item.symbol, line: item.line, crap: item.value, cc: item.detail?.cc ?? null });
-  }
-  for (const item of checks.coverage?.items ?? []) {
-    if (item.kind === 'file' && item.path && files.has(item.path) && isNumber(item.value)) entry(item.path).coverage = item.value;
-  }
-  return [...files.values()]
-    .filter((f) => f.crap !== null && f.coverage !== null && f.coverage < 1 && !ignored(f.path))
+  return riskFiles(checks)
+    .filter((f) => f.coverage !== null && f.coverage < 1 && !ignored(f.path))
     .map((f) => ({ ...f, commits: changes ? (changes[f.path] ?? 0) : null }))
     .filter((f) => f.commits === null || f.commits > 0)
-    .map((f) => ({
-      ...f,
-      score: Math.round(100 * (0.4 * clamp(f.crap / (5 * (f.threshold || 30))) + 0.4 * (1 - f.coverage) + 0.2 * clamp((f.commits ?? 0) / 5))),
-    }))
+    .map(({ threshold, ...f }) => ({ ...f, score: riskScore(f, threshold) }))
     .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
-    .slice(0, limit)
-    .map(({ threshold, ...f }) => f);
+    .slice(0, limit);
 }
+
+const riskScore = (file, threshold) => Math.round(100 * (0.4 * clamp(file.crap / (5 * (threshold || 30))) + 0.4 * (1 - file.coverage) + 0.2 * clamp((file.commits ?? 0) / 5)));
+
+// Every file with a method over the CRAP threshold: its worst score, its methods, and how covered it
+// is (the file's own rate when the worklist has it, else its least covered hotspot).
+function riskFiles(checks) {
+  const files = new Map();
+  for (const item of checks.complexity?.items ?? []) {
+    if (!item.path || !isNumber(item.value)) continue;
+    const file = files.get(item.path) ?? { path: item.path, crap: 0, threshold: item.threshold, coverage: null, methods: [] };
+    file.crap = Math.max(file.crap, item.value);
+    file.coverage = leastCovered(file.coverage, item.detail?.coverage);
+    if (file.methods.length < FILES_MAX) file.methods.push({ symbol: item.symbol, line: item.line, crap: item.value, cc: item.detail?.cc ?? null });
+    files.set(item.path, file);
+  }
+  for (const item of checks.coverage?.items ?? []) {
+    if (item.kind === 'file' && files.has(item.path) && isNumber(item.value)) files.get(item.path).coverage = item.value;
+  }
+  return [...files.values()];
+}
+
+const leastCovered = (known, coverage) => (isNumber(coverage) ? Math.min(known ?? 1, coverage) : known);
 
 // ── The selection ────────────────────────────────────────────────────────────────────────────────
 function ignoreMatcher(ignore) {
@@ -441,12 +452,60 @@ const present = (unit) => {
 //   issues     [{ number, state, stateReason, body }]: open issues and those closed lately
 //   previous   the last run's selection document, or null
 //   changes    { path: commits in the last riskDays } or null when the history is not at hand
-export function selectAudit({ worklist = null, facets = {}, config, configValid = true, issues = [], previous = null, maxStories = DEFAULT_MAX_STORIES, changes = null, problems = [], now = new Date(), env = process.env }) {
+export function selectAudit(input) {
+  const { worklist, facets, config, configValid, previous, maxStories, changes, issues, now } = { ...INPUT_DEFAULTS, now: new Date(), ...input };
   const audit = config.audit;
   const limit = audit.limit ?? DEFAULT_LIMIT;
   const facetNames = SELECTION_FACETS.filter((name) => facets[name]);
-  const source = worklist ? 'worklist' : facetNames.length ? 'facets' : 'none';
-  const base = {
+  const base = baseDocument({ ...input, maxStories, now }, sourceOf(worklist, facetNames));
+  if (base.source === 'none') return { ...base, clean: false, runAgent: true, selected: [], riskMap: [] };
+
+  const about = worklistFacts(worklist, now);
+  const trustworthy = configValid && !about.unreadable.includes('config');
+  base.problems.push(...dataProblems(trustworthy, about.ageDays));
+
+  const checks = withMutationFacet(worklist ? worklist.data.checks : facetChecks(facets, config, limit), facets.mutation, limit);
+  const ignore = ignoreMatcher(audit.ignore);
+  const sorted = sortUnits(checks, { audit, ignore, source: base.source, previous, stories: storiesByUnit(issues) });
+  const selected = sorted.eligible.slice(0, Math.max(0, maxStories));
+  const overCap = sorted.eligible.slice(selected.length).map(({ id, check, score }) => ({ id, check, score }));
+
+  const slots = Math.max(0, maxStories - selected.length);
+  const risk = slots > 0 ? riskMap(checks, { changes, limit: audit.riskFiles, ignored: ignore.path }) : [];
+  const idle = selected.length === 0 && risk.length === 0;
+  return {
+    ...base,
+    trustworthy,
+    worklist: worklist ? about : null,
+    facets: facetNames,
+    notMeasured: CHECKS.filter((check) => !checks[check]),
+    // Nothing to work on and data that can be believed: the agent does not start.
+    clean: idle && trustworthy,
+    runAgent: !idle,
+    selected,
+    judgement: { slots, days: audit.riskDays, history: changes !== null },
+    riskMap: risk,
+    excluded: { ...sorted.excluded, ignored: listed(sorted.excluded.ignored), overCap: listed(overCap) },
+    checks: sorted.snapshot,
+  };
+}
+
+const INPUT_DEFAULTS = { worklist: null, facets: {}, configValid: true, previous: null, maxStories: DEFAULT_MAX_STORIES, changes: null, issues: [] };
+
+function dataProblems(trustworthy, ageDays) {
+  const problems = [];
+  if (!trustworthy) problems.push('quality.config.json is not valid: the modes, floors and baselines are unknown, so a check that depends on them reads as not enforced.');
+  if (ageDays !== null && ageDays > STALE_DAYS) problems.push(`The worklist is ${ageDays} days old: the default branch has not published one since.`);
+  return problems;
+}
+
+function sourceOf(worklist, facetNames) {
+  if (worklist) return 'worklist';
+  return facetNames.length ? 'facets' : 'none';
+}
+
+function baseDocument({ maxStories = DEFAULT_MAX_STORIES, problems = [], now = new Date(), env = process.env }, source) {
+  return {
     schemaVersion: SELECTION_VERSION,
     kind: 'audit-selection',
     repo: env.GITHUB_REPOSITORY ?? null,
@@ -457,74 +516,60 @@ export function selectAudit({ worklist = null, facets = {}, config, configValid 
     problems: [...problems],
     maxStories,
   };
-  if (source === 'none') return { ...base, clean: false, runAgent: true, selected: [], riskMap: [] };
+}
 
-  const unreadable = worklist?.data?.unreadable ?? [];
-  const trustworthy = configValid && !unreadable.includes('config');
-  if (!trustworthy) base.problems.push('quality.config.json is not valid: the modes, floors and baselines are unknown, so a check that depends on them reads as not enforced.');
-  const ageDays = worklist?.generatedAt ? Math.floor((now - new Date(worklist.generatedAt)) / 86400000) : null;
-  if (ageDays !== null && ageDays > STALE_DAYS) base.problems.push(`The worklist is ${ageDays} days old: the default branch has not published one since.`);
+function worklistFacts(worklist, now) {
+  const generatedAt = worklist?.generatedAt ?? null;
+  return {
+    runId: worklist?.runId ?? null,
+    commitSha: worklist?.commitSha ?? null,
+    generatedAt,
+    ageDays: generatedAt ? Math.floor((now - new Date(generatedAt)) / 86400000) : null,
+    unreadable: worklist?.data?.unreadable ?? [],
+  };
+}
 
-  const checks = withMutationFacet(worklist ? worklist.data.checks : facetChecks(facets, config, limit), facets.mutation, limit);
-  const ignore = ignoreMatcher(audit.ignore);
-  const { tracked, declined } = storiesByUnit(issues);
+// Every check's items sorted into what is eligible (ranked) and why the rest is not, with the
+// snapshot of every enforced unit's value for the next audit to compare against.
+function sortUnits(checks, { audit, ignore, source, previous, stories }) {
   const last = isObject(previous) ? { source: previous.source ?? null, checks: isObject(previous.checks) ? previous.checks : {} } : null;
-
-  const excluded = { notEnforced: {}, disabled: [], ignored: [], tracked: [], declined: [], withinBar: 0, folded: 0, overCap: [] };
+  const excluded = { notEnforced: {}, disabled: [], ignored: [], tracked: [], declined: [], withinBar: 0, folded: 0 };
   const snapshot = {};
   const eligible = [];
-  for (const check of CHECKS) {
+  for (const check of CHECKS.filter((name) => checks[name])) {
     const data = checks[check];
-    if (!data) continue;
     const reportItems = data.items.filter((i) => i.mode !== 'ratchet');
     if (data.mode === 'report' || reportItems.length) excluded.notEnforced[check] = notEnforced(data, reportItems, previous?.excluded?.notEnforced?.[check]);
     if (!audit.checks[check]) {
       excluded.disabled.push(check);
       continue;
     }
-    const kept = [];
-    for (const item of data.items) {
-      if (item.mode !== 'ratchet') continue;
-      const by = ignore.item(item);
-      if (by) excluded.ignored.push({ id: item.id, check, rule: item.rule, path: item.path, by });
-      else kept.push(item);
-    }
-    const { units, folded } = unitsOfCheck(check, kept, data.rules ?? null);
+    const { units, folded } = unitsOfCheck(check, enforcedItems(data.items, ignore, excluded.ignored), data.rules ?? null);
     excluded.folded += folded;
-    snapshot[check] = { truncated: data.truncated, units: {} };
-    for (const unit of units) {
-      if (isNumber(unit.value)) snapshot[check].units[unit.id] = unit.value;
-      if (tracked.has(unit.id)) excluded.tracked.push({ id: unit.id, check, issue: tracked.get(unit.id) });
-      else if (declined.has(unit.id)) excluded.declined.push({ id: unit.id, check, issue: declined.get(unit.id) });
-      else {
-        const reasons = reasonsFor(unit, last, source);
-        if (reasons.length === 0) excluded.withinBar += 1;
-        else eligible.push({ ...present(unit), reasons, score: scoreOf(unit, reasons), marker: markerFor(unit) });
-      }
-    }
+    snapshot[check] = { truncated: data.truncated, units: Object.fromEntries(units.filter((u) => isNumber(u.value)).map((u) => [u.id, u.value])) };
+    for (const unit of units) placeUnit(unit, { excluded, eligible, stories, last, source });
   }
-  eligible.sort(byRank);
-  const selected = eligible.slice(0, Math.max(0, maxStories));
-  excluded.overCap = eligible.slice(selected.length).map(({ id, check, score }) => ({ id, check, score }));
+  return { eligible: eligible.sort(byRank), excluded, snapshot };
+}
 
-  const slots = Math.max(0, maxStories - selected.length);
-  const risk = slots > 0 && audit.riskFiles > 0 ? riskMap(checks, { changes, limit: audit.riskFiles, ignored: ignore.path }) : [];
-  const idle = selected.length === 0 && risk.length === 0;
-  return {
-    ...base,
-    trustworthy,
-    worklist: worklist ? { runId: worklist.runId ?? null, commitSha: worklist.commitSha ?? null, generatedAt: worklist.generatedAt ?? null, ageDays, unreadable } : null,
-    facets: facetNames,
-    notMeasured: CHECKS.filter((check) => !checks[check]),
-    // Nothing to work on and data that can be believed: the agent does not start.
-    clean: idle && trustworthy,
-    runAgent: !idle,
-    selected,
-    judgement: { slots, days: audit.riskDays, history: changes !== null },
-    riskMap: risk,
-    excluded: { ...excluded, ignored: listed(excluded.ignored), overCap: listed(excluded.overCap) },
-    checks: snapshot,
-  };
+// The items CI enforces today, less the ones on the ignore list (recorded in `ignored`).
+function enforcedItems(items, ignore, ignored) {
+  const kept = [];
+  for (const item of items.filter((i) => i.mode === 'ratchet')) {
+    const by = ignore.item(item);
+    if (by) ignored.push({ id: item.id, check: item.check, rule: item.rule, path: item.path, by });
+    else kept.push(item);
+  }
+  return kept;
+}
+
+function placeUnit(unit, { excluded, eligible, stories, last, source }) {
+  const { id, check } = unit;
+  if (stories.tracked.has(id)) return excluded.tracked.push({ id, check, issue: stories.tracked.get(id) });
+  if (stories.declined.has(id)) return excluded.declined.push({ id, check, issue: stories.declined.get(id) });
+  const reasons = reasonsFor(unit, last, source);
+  if (reasons.length === 0) return (excluded.withinBar += 1);
+  return eligible.push({ ...present(unit), reasons, score: scoreOf(unit, reasons), marker: markerFor(unit) });
 }
 
 // ── The run summary ──────────────────────────────────────────────────────────────────────────────

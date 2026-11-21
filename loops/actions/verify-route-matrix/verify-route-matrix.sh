@@ -4909,6 +4909,7 @@ fi
 # data before any model starts, and every way this can be wrong is quiet: an agent that runs on a
 # clean repository, an audit that never runs because the selection could not be computed, a
 # selection the agent cannot read, or a prompt that still explores the whole repository.
+# shellcheck disable=SC2015
 if worker_installed audit; then
   AUDIT_WORKER_MD="${WORKFLOWS_DIR}/agent-audit.md"
   select_problems=""
