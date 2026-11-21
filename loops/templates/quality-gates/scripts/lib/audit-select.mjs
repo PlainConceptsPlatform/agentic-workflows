@@ -46,8 +46,7 @@ export function markerFor(unit) {
 export function markersIn(text) {
   const found = [];
   for (const match of String(text ?? '').matchAll(MARKER)) {
-    const attr = (name) => match[2].match(new RegExp(`\\b${name}=(\\S+)`))?.[1] ?? null;
-    found.push({ id: match[1], value: attr('value'), target: attr('target') });
+    found.push({ id: match[1], value: match[2].match(/\bvalue=(\S+)/)?.[1] ?? null, target: match[2].match(/\btarget=(\S+)/)?.[1] ?? null });
   }
   return found;
 }
