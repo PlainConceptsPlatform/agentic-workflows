@@ -337,8 +337,8 @@ tool measures. What to know when running it:
 - **Report-mode checks file no story.** They appear in the report's "Not yet enforced" section with
   their count and trend. From 1.32.0, after two weeks in report mode (`<check>.since`, or the day the
   audit first saw it), the audit opens one pull request, `Quality gates: enforce <check> as a
-  ratchet`, that writes the baseline from CI's worklist and switches the mode. It carries the hold
-  label and is never merged automatically: review the baseline and merge it, or close it (the audit
+  ratchet`, that writes the baseline from CI's worklist and switches the mode. It is a draft with
+  the hold label and is never merged automatically: review the baseline, mark it ready and merge it, or close it (the audit
   then leaves the check alone for 90 days). When the baseline would freeze junk (unused or unlisted
   dependencies, analyzer crash `AD0001`; `audit.junk` changes the list), a clean-up story comes
   first and the pull request waits for it. `"audit": { "graduateAfterDays": 0 }` turns this off.

@@ -152,10 +152,34 @@ function readIssues() {
   return [...open, ...(attempt('the closed issues', () => issueRows(`state=closed&since=${since}`, marked)) ?? [])];
 }
 
+// The last selection that was really computed: a run whose script failed left the fallback
+// (`source: none`), which carries no snapshot, follow-up or graduation state to build on.
 function readPrevious() {
   if (opts.previous) return attempt(opts.previous, () => json(opts.previous));
   if (offline) return null;
-  return fetchArtifact(SELECTION_ARTIFACT, { notRun: process.env.GITHUB_RUN_ID });
+  return attempt(`the ${SELECTION_ARTIFACT} artifact`, () => {
+    const { artifacts = [] } = JSON.parse(gh([`repos/${repo}/actions/artifacts?name=${SELECTION_ARTIFACT}&per_page=100`]));
+    const runs = artifacts
+      .filter((a) => !a.expired && String(a.workflow_run?.id) !== String(process.env.GITHUB_RUN_ID))
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+      .slice(0, 5);
+    for (const artifact of runs) {
+      const doc = artifactJson(artifact);
+      if (doc?.source && doc.source !== 'none') return doc;
+    }
+    return null;
+  });
+}
+
+// When the measured commit was made, from the checkout's history; null when it is not at hand.
+function commitTime(sha) {
+  if (!/^[0-9a-f]{7,40}$/.test(String(sha ?? ''))) return null;
+  try {
+    const out = execFileSync('git', ['-C', REPO_ROOT, 'show', '-s', '--format=%cI', sha], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return out ? new Date(out).toISOString() : null;
+  } catch {
+    return null;
+  }
 }
 
 // Commits per file over the last `days`, or null when the checkout has no history to read.
@@ -196,6 +220,7 @@ const selection = selectAudit({
   issues: readIssues(),
   previous: readPrevious(),
   maxStories,
+  commitTime: commitTime(worklist?.commitSha),
   changes: readChanges(config.audit.riskDays),
   problems,
 });

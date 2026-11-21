@@ -56,9 +56,15 @@ describe("audit-follow-up helpers", () => {
     const comment = "Closed.\n\n<!-- audit-follow-up: close id=0123456789abcdef check=complexity before=186 after=24 target=30 metric=crap -->";
     expect(lib.followUpsIn(comment)).toEqual([{ verdict: "close", id: "0123456789abcdef", check: "complexity", before: "186", after: "24", target: "30", metric: "crap" }]);
     expect(lib.alreadySaid([{ body: comment }], "close", comment)).toBe(true);
-    expect(lib.alreadySaid([{ body: comment }], "verify", comment)).toBe(false);
+    expect(lib.alreadySaid([{ body: comment }], "reopen", comment)).toBe(false);
     expect(lib.reopenedBefore([{ body: comment }])).toBe(false);
     expect(lib.reopenedBefore([{ body: comment.replace("close", "reopen") }])).toBe(true);
+    // A story the audit closed is not confirmed again.
+    expect(lib.alreadySaid([{ body: comment }], "verify", comment.replace("close id", "verify id"))).toBe(true);
+    expect(lib.cleanupReopenedBefore([{ body: "x\n<!-- audit-graduation-reopen: deadCode -->" }], "deadCode")).toBe(true);
+    expect(lib.cleanupReopenedBefore([{ body: "x\n<!-- audit-graduation-reopen: deadCode -->" }], "patterns")).toBe(false);
+    expect(lib.hasGraduationMarker("<!-- audit-graduation: deadCode cleanup -->", "deadCode", true)).toBe(true);
+    expect(lib.hasGraduationMarker("<!-- audit-graduation: deadCode cleanup -->", "deadCode", false)).toBe(false);
   });
 
   it("gives audit-close the before and after of every measured story", () => {
@@ -112,7 +118,7 @@ describe("file-audit-issues: the Since last audit section", () => {
 
 // ── The action, against an in-memory repository ──────────────────────────────────────────────────
 interface Issue { number: number; title: string; body: string; state: string; state_reason?: string | null; labels: string[]; comments: string[]; pull_request?: unknown }
-interface Pull { number: number; state: string; head: string; title: string; body: string; merged_at: string | null; closed_at: string | null; labels: string[] }
+interface Pull { number: number; state: string; head: string; title: string; body: string; merged_at: string | null; closed_at: string | null; labels: string[]; draft?: boolean }
 
 function fakeGitHub(seed: { issues?: Array<Partial<Issue> & { number: number }>; pulls?: Pull[]; config?: string | null } = {}) {
   const issues = new Map<number, Issue>();
@@ -159,10 +165,10 @@ function fakeGitHub(seed: { issues?: Array<Partial<Issue> & { number: number }>;
         createLabel: async () => { throw Object.assign(new Error("exists"), { status: 422 }); },
       },
       pulls: {
-        list: async ({ head }: any) => ({ data: pulls.filter((p) => `acme:${p.head}` === head) }),
-        create: async ({ title, head, body }: any) => {
+        list: async ({ head }: any) => ({ data: pulls.filter((p) => `acme:${p.head}` === head).map((p) => ({ ...p, labels: p.labels.map((name) => ({ name })) })) }),
+        create: async ({ title, head, body, draft }: any) => {
           next += 1;
-          const pr = { number: next, state: "open", head, title, body, merged_at: null, closed_at: null, labels: [] };
+          const pr = { number: next, state: "open", head, title, body, draft, merged_at: null, closed_at: null, labels: [] };
           pulls.push(pr);
           return { data: { number: next } };
         },
@@ -275,15 +281,17 @@ describe("audit-follow-up action", () => {
     expect(failures).toEqual([]);
     expect(repo.pulls).toHaveLength(1);
     const [pr] = repo.pulls;
-    expect(pr).toMatchObject({ head: "audit/graduate-dead-code", title: "Quality gates: enforce dead code (Knip) as a ratchet", state: "open" });
+    expect(pr).toMatchObject({ head: "audit/graduate-dead-code", title: "Quality gates: enforce dead code (Knip) as a ratchet", state: "open", draft: true });
     // The merge train skips a pull request with its hold label.
     expect(pr!.labels).toEqual(["parked", "quality-graduation"]);
     expect(repo.commits).toHaveLength(1);
     expect(JSON.parse(repo.commits[0]!.content)).toEqual({ deadCode: { mode: "ratchet", since: "2026-11-01", baseline: { exports: 7 } } });
     expect(repo.commits[0]!.message).toBe("chore(quality): enforce deadCode as a ratchet from CI's baseline");
-    // Open already: a second run opens nothing.
+    // Open already: a second run opens nothing, and puts back a hold label someone removed.
+    pr!.labels = ["quality-graduation"];
     await followUp(repo, selection);
     expect(repo.pulls).toHaveLength(1);
+    expect(pr!.labels).toEqual(["quality-graduation", "hold"]);
   });
 
   it("does not open a graduation pull request again within 90 days of a person closing one", async () => {
@@ -335,5 +343,18 @@ describe("agent-audit wiring", () => {
     expect(step.with["max-stories"]).toBe("${{ needs.select.outputs.story_slots || env.AUDIT_MAX_STORIES }}");
     expect(step.with["selection-file"]).toBe("${{ runner.temp }}/audit-selection/audit-selection.json");
     expect(front.jobs.conclude.needs).toContain("select");
+  });
+});
+
+describe("audit-follow-up action: clean-up stories", () => {
+  it("reopens a clean-up story once, never twice", async () => {
+    const reopen = { kind: "cleanup-reopen", check: "deadCode", issue: 80, comment: "Reopened.\n\n<!-- audit-graduation-reopen: deadCode -->" };
+    const repo = fakeGitHub({ issues: [{ number: 80, state: "closed" }] });
+    await followUp(repo, { graduation: { actions: [reopen] } });
+    expect(repo.issues.get(80)!.state).toBe("open");
+    repo.issues.get(80)!.state = "closed";
+    await followUp(repo, { graduation: { actions: [reopen] } });
+    expect(repo.issues.get(80)!).toMatchObject({ state: "closed" });
+    expect(repo.issues.get(80)!.comments).toHaveLength(1);
   });
 });

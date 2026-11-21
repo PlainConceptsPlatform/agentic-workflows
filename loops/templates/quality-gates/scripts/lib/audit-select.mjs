@@ -477,10 +477,17 @@ export function measuredUnits(checks) {
   const scope = {};
   for (const check of CHECKS.filter((name) => checks?.[name])) {
     const data = checks[check];
-    scope[check] = { truncated: data.truncated !== false, mode: data.mode };
-    if (data.mode === 'report') continue;
-    for (const unit of unitsOfCheck(check, data.items.filter((i) => i.mode === 'ratchet'), data.rules ?? null).units) units.set(unit.id, unit);
-    for (const unit of ruleUnits(check, data, units)) units.set(unit.id, unit);
+    // A report-mode check can still hold enforced items (architecture tests, Steiger errors): those
+    // are measured, and only there can a unit missing from a report-mode check be called gone.
+    scope[check] = { truncated: data.truncated !== false, gone: data.mode !== 'report' || check === 'architecture' };
+    const ratchet = data.items.filter((i) => i.mode === 'ratchet');
+    for (const unit of unitsOfCheck(check, ratchet, data.rules ?? null).units) units.set(unit.id, unit);
+    // A scope or file folded into a module is still measured on its own: a story filed for it is
+    // judged by its own number, never called gone because a module now speaks for it.
+    for (const item of ratchet.filter(() => check === 'coverage' || check === 'mutation')) {
+      if (!units.has(item.id)) units.set(item.id, unitsOfCheck(check, [item]).units[0]);
+    }
+    if (data.mode !== 'report') for (const unit of ruleUnits(check, data, units)) units.set(unit.id, unit);
   }
   return { units, scope };
 }
@@ -496,7 +503,7 @@ function standing(marker, measured, previous) {
   if (unit) return { state: 'measured', unit, check: unit.check, over: barReason(unit) !== null };
   const check = marker.check ?? CHECKS.find((name) => isObject(previous?.checks?.[name]?.units) && marker.id in previous.checks[name].units) ?? null;
   const scope = check ? measured.scope[check] : null;
-  if (!scope || scope.truncated || scope.mode === 'report') return { state: 'unknown', check };
+  if (!scope || scope.truncated || !scope.gone) return { state: 'unknown', check };
   return { state: 'gone', check };
 }
 
@@ -561,15 +568,19 @@ export function followUp(input = {}) {
   const ctx = followUpContext(input);
   const out = { tracked: new Map(), declined: new Map(), held: new Set(), actions: [], rows: [], settled: {}, reopened: [] };
   const inReach = new Set();
+  const issues = [...(input.issues ?? [])].sort((a, b) => a.number - b.number);
+  // Units an open story already tracks: a closed story for the same unit is never reopened beside it.
+  ctx.openIds = new Set(issues.filter((i) => i.state === 'open').flatMap((i) => markersIn(i.body).map((m) => m.id)));
 
-  for (const issue of [...(input.issues ?? [])].sort((a, b) => a.number - b.number)) {
+  for (const issue of issues) {
     const markers = markersIn(issue.body);
     if (markers.length === 0) continue;
     inReach.add(issue.number);
     const story = { issue, markers, track: (map) => markers.forEach((m) => map.set(m.id, issue.number)) };
     if (issue.state === 'open') followOpen(story, ctx, out);
     else if (issue.stateReason === 'not_planned') story.track(out.declined);
-    else followClosed(story, ctx, out);
+    // A duplicate points at the issue that tracks the work; that one is followed instead.
+    else if (issue.stateReason !== 'duplicate') followClosed(story, ctx, out);
   }
 
   out.reopened = [...new Set([...[...ctx.reopenedBefore].filter((n) => inReach.has(n)), ...out.reopened])].sort((a, b) => a - b);
@@ -585,6 +596,7 @@ function followUpContext({ checks = null, previous = null, measuredAt = null, no
     now,
     settledBefore: isObject(last.settled) ? last.settled : {},
     reopenedBefore: new Set(Array.isArray(last.reopened) ? last.reopened : []),
+    closedBefore: new Set((Array.isArray(last.actions) ? last.actions : []).filter((a) => a?.action === 'close').map((a) => a.issue)),
     measured: enabled && checks ? measuredUnits(checks) : null,
     measuredTime: issueTime(measuredAt),
   };
@@ -625,11 +637,17 @@ function followClosed({ issue, markers, track }, ctx, out) {
     track(out.tracked);
     out.rows.push(...rowsAs('pending'));
   } else if (where.some((w) => w.state === 'measured' && w.over)) {
+    if (markers.every((m) => ctx.openIds.has(m.id))) return;
     const rows = rowsAs('regressed');
     out.rows.push(...rows);
     reopenOnce(issue, rows, track, ctx, out);
   } else if (where.every((w) => w.state !== 'unknown')) {
     const rows = rowsAs('fixed');
+    if (ctx.closedBefore.has(issue.number)) {
+      // The audit closed it last run with these numbers already.
+      out.settled[issue.number] = { closedAt: issue.closedAt, verdict: 'fixed' };
+      return;
+    }
     out.rows.push(...rows);
     out.actions.push({ issue: issue.number, action: 'verify', comment: followUpComment('verify', rows, ctx.measuredAt) });
     out.settled[issue.number] = { closedAt: issue.closedAt, verdict: 'fixed' };
@@ -760,7 +778,7 @@ function graduationPullRequest(check, { patch, table }, { since, sinceSource, ag
       `**What changes:** \`quality.config.json\`: \`${check}.mode\` becomes \`ratchet\`, ${keys} as above, \`${check}.since\` ${sinceSource === 'config' ? 'kept' : `recorded as ${since}`}. Nothing else.`,
       ...(junkAccepted ? ['', `The clean-up story for this check was closed as not planned, so the baseline is written as CI measures it.`] : []),
       '',
-      '**Not merged automatically.** A ratchet can block merges, so a person decides: approve and merge it, or close it. It carries the merge train\'s hold label, so nothing merges it on its own. Closed without merging, the audit does not open it again for 90 days.',
+      '**Not merged automatically.** A ratchet can block merges, so a person decides: mark it ready, approve and merge it, or close it. It is opened as a draft with the merge train\'s hold label, so nothing merges it on its own. Closed without merging, the audit does not open it again for 90 days.',
       '',
       graduationMarker(check),
     ].join('\n'),
@@ -769,15 +787,22 @@ function graduationPullRequest(check, { patch, table }, { since, sinceSource, ag
 
 // `checks` are the worklist's; `issues` the audit's (clean-up stories carry a graduation marker).
 export function graduation({ checks = null, config, previous = null, issues = [], worklist = null, now = new Date(), enabled = true } = {}) {
-  const last = isObject(previous?.graduation) ? previous.graduation : {};
-  const seenBefore = isObject(last.firstSeen) ? last.firstSeen : {};
-  const reopenedBefore = new Set(Array.isArray(last.reopened) ? last.reopened : []);
-  const out = { firstSeen: {}, reopened: [], checks: {}, actions: [] };
-  if (!enabled || !checks) return { ...out, firstSeen: { ...seenBefore }, reopened: [...reopenedBefore] };
-  const ctx = { checks, config, issues, worklist, now, seenBefore, reopenedBefore, measuredTime: issueTime(worklist?.generatedAt), out };
+  const { seenBefore, reopenedBefore, declinedBefore } = graduationCarry(previous);
+  const out = { firstSeen: {}, reopened: [], declined: [], checks: {}, actions: [] };
+  if (!enabled || !checks) return { ...out, firstSeen: { ...seenBefore }, reopened: [...reopenedBefore], declined: [...declinedBefore] };
+  const ctx = { checks, config, issues, worklist, now, seenBefore, reopenedBefore, declinedBefore, measuredTime: issueTime(worklist?.measuredAt ?? worklist?.generatedAt), out };
   for (const check of GRADUATION_CHECKS) graduateCheck(check, ctx);
-  out.reopened = [...new Set([...reopenedBefore, ...out.reopened])].filter((check) => out.checks[check]?.state !== 'enforced').sort();
+  const live = (check) => out.checks[check]?.state !== 'enforced';
+  out.reopened = [...new Set([...reopenedBefore, ...out.reopened])].filter(live).sort();
+  out.declined = [...new Set([...declinedBefore, ...out.declined])].filter(live).sort();
   return out;
+}
+
+// What the last run recorded: first-seen dates, and the clean-up stories reopened or declined.
+function graduationCarry(previous) {
+  const last = isObject(previous?.graduation) ? previous.graduation : {};
+  const list = (value) => new Set(Array.isArray(value) ? value : []);
+  return { seenBefore: isObject(last.firstSeen) ? last.firstSeen : {}, reopenedBefore: list(last.reopened), declinedBefore: list(last.declined) };
 }
 
 // Where one check stands, and what to do about it this week.
@@ -807,7 +832,7 @@ function graduateCheck(check, ctx) {
     return;
   }
   const junk = junkOf(check, data, config);
-  const held = junkStep(check, junk, data, facts, ctx);
+  const held = blockedByJunk(check, junk, junkStep(check, junk, data, facts, ctx));
   if (held.state) {
     out.checks[check] = { ...held, ...facts, junk };
     return;
@@ -844,6 +869,13 @@ const cleanupStoryOf = (check, issues) =>
 
 const day = (value) => String(value ?? '').slice(0, 10);
 
+// Accepted junk a ratchet holds at zero whatever the baseline says (unused or unlisted
+// dependencies): a pull request would fail its own CI, so none is opened while any is left.
+function blockedByJunk(check, junk, step) {
+  if (!step.junkAccepted || check !== 'deadCode' || !Object.keys(junk).some((rule) => ZERO_TOLERANCE_TYPES.includes(rule))) return step;
+  return { state: 'blocked', reason: 'unused or unlisted dependencies are left, and a dead-code ratchet fails on any: clear them, then the audit opens the pull request' };
+}
+
 // The clean-up story before a baseline that would freeze junk. Returns { state } while the pull
 // request waits, or { junkAccepted } when it may open.
 function junkStep(check, junk, data, facts, ctx) {
@@ -853,12 +885,17 @@ function junkStep(check, junk, data, facts, ctx) {
     if (story?.state === 'open') out.actions.push({ kind: 'cleanup-close', check, issue: story.number, comment: `Closed by the audit: CI's worklist of ${day(worklist?.generatedAt)} counts none of these any more, so the ${GRADUATION_LABEL[check]} check can graduate.` });
     return { junkAccepted: false };
   }
+  if (!story && ctx.declinedBefore.has(check)) return { junkAccepted: true };
   if (!story) {
     out.actions.push({ kind: 'cleanup-story', check, ...cleanupStory(check, junk, data, facts.since, worklist?.generatedAt) });
     return { state: 'cleanup-filed' };
   }
   if (story.state === 'open') return { state: 'cleanup-open', issue: story.number };
-  if (story.stateReason === 'not_planned' || ctx.reopenedBefore.has(check)) return { junkAccepted: true };
+  if (story.stateReason === 'not_planned') {
+    out.declined.push(check);
+    return { junkAccepted: true };
+  }
+  if (ctx.reopenedBefore.has(check)) return { junkAccepted: true };
   const closedTime = issueTime(story.closedAt);
   if (closedTime !== null && ctx.measuredTime !== null && closedTime > ctx.measuredTime) return { state: 'cleanup-pending', issue: story.number };
   const counts = Object.entries(junk).map(([rule, count]) => `${rule} ${count}`).join(', ');
@@ -866,7 +903,7 @@ function junkStep(check, junk, data, facts, ctx) {
     kind: 'cleanup-reopen',
     check,
     issue: story.number,
-    comment: `Reopened by the audit: this was closed as done, but CI's worklist of ${day(worklist?.generatedAt)} still counts ${counts}. The ${GRADUATION_LABEL[check]} check graduates once they are gone. If they are acceptable, close this as not planned and the audit writes the baseline as it is.`,
+    comment: `Reopened by the audit: this was closed as done, but CI's worklist of ${day(worklist?.generatedAt)} still counts ${counts}. The ${GRADUATION_LABEL[check]} check graduates once they are gone. If they are acceptable, close this as not planned and the audit writes the baseline as it is.\n\n<!-- audit-graduation-reopen: ${check} -->`,
   });
   out.reopened.push(check);
   return { state: 'cleanup-reopened', issue: story.number };
@@ -911,7 +948,7 @@ export function selectAudit(input) {
   const base = baseDocument({ ...input, maxStories, now }, sourceOf(worklist, facetNames));
   if (base.source === 'none') return { ...base, clean: false, runAgent: true, storySlots: maxStories, storiesHeld: [], selected: [], riskMap: [] };
 
-  const about = worklistFacts(worklist, now);
+  const about = worklistFacts(worklist, now, input.commitTime);
   const trustworthy = configValid && !about.unreadable.includes('config');
   base.problems.push(...dataProblems(trustworthy, about.ageDays));
 
@@ -919,7 +956,7 @@ export function selectAudit(input) {
   // Verdicts on stories and graduation pull requests are taken on the worklist only, and only when
   // its settings could be read: a selection from the facets, or from a broken config, only tracks.
   const decides = base.source === 'worklist' && trustworthy;
-  const loop = followUp({ issues, checks, previous, measuredAt: about.generatedAt, now, enabled: decides });
+  const loop = followUp({ issues, checks, previous, measuredAt: about.measuredAt, now, enabled: decides });
   const graduating = graduation({ checks, config, previous, issues, worklist: about, now, enabled: decides });
   const ignore = ignoreMatcher(audit.ignore);
   const sorted = sortUnits(checks, { audit, ignore, source: base.source, previous, stories: { tracked: loop.tracked, declined: loop.declined } });
@@ -948,7 +985,7 @@ export function selectAudit(input) {
     riskMap: risk,
     excluded: { ...sorted.excluded, ignored: listed(sorted.excluded.ignored), overCap: listed(overCap) },
     checks: sorted.snapshot,
-    followUp: { enabled: decides, measuredAt: about.generatedAt, counts: followUpCounts(loop.rows), rows: loop.rows, actions: loop.actions, settled: loop.settled, reopened: loop.reopened },
+    followUp: { enabled: decides, measuredAt: about.measuredAt, counts: followUpCounts(loop.rows), rows: loop.rows, actions: loop.actions, settled: loop.settled, reopened: loop.reopened },
     sinceLastAudit: { markdown: sinceLastAudit(loop.rows) },
     graduation: graduating,
   };
@@ -982,9 +1019,13 @@ function baseDocument({ maxStories = DEFAULT_MAX_STORIES, problems = [], now = n
   };
 }
 
-function worklistFacts(worklist, now) {
+// `measuredAt` is when the measured commit was made (`commitTime`, from git), else when the worklist
+// was built: a change merged after the commit CI measured is not in the numbers, however late the
+// run finished.
+function worklistFacts(worklist, now, commitTime = null) {
   const generatedAt = worklist?.generatedAt ?? null;
   return {
+    measuredAt: commitTime ?? generatedAt,
     runId: worklist?.runId ?? null,
     commitSha: worklist?.commitSha ?? null,
     generatedAt,

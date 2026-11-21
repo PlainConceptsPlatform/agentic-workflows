@@ -793,11 +793,13 @@ test('graduation_junkInTheBaseline_filesOneCleanUpStoryFirstAndHoldsThePullReque
   const reopen = graduating({ exports: 7, dependencies: 2 }, { config: cfg, issues: [closed] });
   assert.deepEqual(reopen.graduation.actions.map((a) => [a.kind, a.issue]), [['cleanup-reopen', 80]]);
   assert.match(reopen.graduation.actions[0].comment, /still counts dependencies 2/);
+  // Closed again after that: accepted, but dependencies fail a dead-code ratchet, so it stays blocked.
   const accepted = graduating({ exports: 7, dependencies: 2 }, { config: cfg, issues: [closed], previous: reopen });
-  assert.deepEqual(accepted.graduation.actions.map((a) => a.kind), ['pull-request']);
-  // Closed as not planned: the team's answer, the baseline is written as CI measures it.
-  const declined = graduating({ exports: 7, dependencies: 2 }, { config: cfg, issues: [{ ...closed, stateReason: 'not_planned' }] });
-  assert.match(declined.graduation.actions[0].body, /closed as not planned/);
+  assert.equal(accepted.graduation.checks.deadCode.state, 'blocked');
+  assert.deepEqual(accepted.graduation.actions, []);
+  // Closed as not planned, for junk a ratchet can hold: the baseline is written as CI measures it.
+  const files = graduating({ exports: 7, files: 2 }, { config: config({ junk: { deadCode: ['files'] } }, { deadCode: { since: '2026-11-01' } }), issues: [{ ...closed, stateReason: 'not_planned' }] });
+  assert.match(files.graduation.actions[0].body, /closed as not planned/);
   // The junk went before anyone closed the story: it is closed with the pull request.
   const tidy = graduating({ exports: 7 }, { config: cfg, issues: [filed] });
   assert.deepEqual(tidy.graduation.actions.map((a) => a.kind), ['cleanup-close', 'pull-request']);
@@ -825,4 +827,73 @@ test('graduation_isDecidedOnTheWorklistOnly', () => {
   const facets = select({ facets: { hygiene: { deadCode: { web: { byType: { exports: 7 } } } } }, config: config({}, { deadCode: { since: '2026-11-01' } }) });
   assert.equal(facets.source, 'facets');
   assert.deepEqual(facets.graduation.actions, []);
+});
+
+// ── Review fixes ─────────────────────────────────────────────────────────────────────────────────
+test('followUp_foldedScope_isJudgedByItsOwnNumberNotCalledGone', () => {
+  const scope = (value) => item('coverage', 'scope', { symbol: 'App.Api', value, threshold: 0.7, detail: { scope: 'App.Api', linesValid: 100, uncoveredLines: 50 } });
+  const moduleItem = item('coverage', 'module', { path: 'apps/api/Orders', symbol: 'App.Api/Orders', value: 0.4, threshold: 0.7, detail: { scope: 'App.Api', module: 'Orders', linesValid: 50, uncoveredLines: 30 } });
+  const filed = select({ worklist: worklistOf({ coverage: check([scope(0.5)]) }) }).selected[0];
+  const closed = storyFor(filed, 90, { state: 'closed', stateReason: 'completed', closedAt: '2026-11-19T00:00:00Z' });
+  // A module of the scope is now listed and folds the scope: the scope is still at 50%, so it reopens.
+  const now = select({ worklist: worklistOf({ coverage: check([scope(0.5), moduleItem]) }), issues: [closed] });
+  assert.deepEqual(now.followUp.actions.map((a) => a.action), ['reopen']);
+  assert.match(now.followUp.actions[0].comment, /50% when filed, 50% now, target 70%/);
+});
+
+test('followUp_closedStory_isNotReopenedBesideAnOpenStoryForTheSameUnit', () => {
+  const filed = select({ worklist: pricing(186) }).selected[0];
+  const old = storyFor(filed, 3, { state: 'closed', stateReason: 'completed', closedAt: '2026-11-19T00:00:00Z' });
+  const selection = select({ worklist: pricing(186), issues: [old, storyFor(filed, 9)] });
+  assert.deepEqual(selection.followUp.actions, []);
+  assert.deepEqual(selection.storiesHeld, [9]);
+  // A duplicate is never followed.
+  assert.deepEqual(select({ worklist: pricing(186), issues: [{ ...old, stateReason: 'duplicate' }] }).followUp.actions, []);
+});
+
+test('followUp_storyTheAuditClosed_isNotConfirmedAgainTheWeekAfter', () => {
+  const filed = select({ worklist: pricing(186) }).selected[0];
+  const first = select({ worklist: pricing(20), issues: [storyFor(filed, 51, { pulls: mergedPr() })] });
+  assert.deepEqual(first.followUp.actions.map((a) => a.action), ['close']);
+  const closedNow = storyFor(filed, 51, { state: 'closed', stateReason: 'completed', closedAt: '2026-11-21T09:00:00Z' });
+  const second = select({ worklist: { ...pricing(20), generatedAt: '2026-11-22T08:00:00.000Z' }, issues: [closedNow], previous: first, now: new Date('2026-11-23T01:17:00Z') });
+  assert.deepEqual(second.followUp.actions, []);
+  assert.equal(second.followUp.settled[51].verdict, 'fixed');
+});
+
+test('followUp_measuresFromTheCommitCIMeasured_notWhenTheRunFinished', () => {
+  const filed = select({ worklist: pricing(186) }).selected[0];
+  // Merged and closed at 06:00; the worklist was built at 08:00 on a commit made at 05:00.
+  const closed = storyFor(filed, 52, { state: 'closed', stateReason: 'completed', closedAt: '2026-11-21T06:00:00Z' });
+  const late = select({ worklist: pricing(186), issues: [closed], commitTime: '2026-11-21T05:00:00.000Z' });
+  assert.deepEqual(late.followUp.actions, []);
+  assert.equal(late.followUp.rows[0].status, 'pending');
+  assert.equal(late.followUp.measuredAt, '2026-11-21T05:00:00.000Z');
+  const open = storyFor(filed, 53, { pulls: mergedPr('2026-11-21T06:00:00Z') });
+  assert.deepEqual(select({ worklist: pricing(20), issues: [open], commitTime: '2026-11-21T05:00:00.000Z' }).followUp.actions, []);
+});
+
+test('followUp_architectureTestInAReportModeCheck_isStillFollowed', () => {
+  const failing = item('architecture', 'architecture-test', { symbol: 'Layers.DomainHasNoInfra', value: 1, threshold: 0, detail: {} });
+  const filed = select({ worklist: worklistOf({ architecture: check([failing], { mode: 'report' }) }) }).selected[0];
+  assert.ok(filed);
+  const now = select({ worklist: worklistOf({ architecture: check([], { mode: 'report' }) }), issues: [storyFor(filed, 54, { pulls: mergedPr() })] });
+  assert.deepEqual(now.followUp.actions.map((a) => a.action), ['close']);
+});
+
+test('graduation_acceptedDependencyJunk_blocksThePullRequest_andADeclineIsRemembered', () => {
+  const cfg = config({}, { deadCode: { since: '2026-11-01' } });
+  const story = { number: 80, title: 'Clear', state: 'closed', stateReason: 'not_planned', closedAt: '2026-11-20T00:00:00Z', body: '<!-- audit-graduation: deadCode cleanup -->' };
+  const blocked = graduating({ exports: 7, dependencies: 2 }, { config: cfg, issues: [story] });
+  assert.equal(blocked.graduation.checks.deadCode.state, 'blocked');
+  assert.deepEqual(blocked.graduation.actions, []);
+  assert.deepEqual(blocked.graduation.declined, ['deadCode']);
+  // The story leaves the issue window: not filed again.
+  const later = graduating({ exports: 7, dependencies: 2 }, { config: cfg, issues: [], previous: blocked });
+  assert.deepEqual(later.graduation.actions, []);
+  // Patterns junk accepted graduates as measured.
+  const worklist = worklistOf({ patterns: check([], { mode: 'report', rules: { AD0001: { count: 1, baseline: null, over: false } } }) });
+  const accepted = select({ worklist, config: config({}, { patterns: { since: '2026-11-01' } }), issues: [{ ...story, body: '<!-- audit-graduation: patterns cleanup -->' }] });
+  assert.deepEqual(accepted.graduation.actions.map((a) => a.kind), ['pull-request']);
+  assert.match(accepted.graduation.actions[0].body, /opened as a draft/);
 });

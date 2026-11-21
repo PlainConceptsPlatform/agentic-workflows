@@ -5,8 +5,8 @@ description: >-
   fix is merged and measured within its bar, confirm one closed as done, reopen one closed as done
   that is still over its bar (once), and graduate a report-only check: one clean-up story when its
   baseline would freeze junk, then one pull request that writes the baseline from CI's worklist and
-  switches the check to ratchet. The pull request carries the merge train's hold label, so a person
-  merges it; one a person closed is not opened again for respect-days.
+  switches the check to ratchet. The pull request is a draft with the merge train's hold label, so
+  only a person merges it; one a person closed is not opened again for respect-days.
 inputs:
   selection-file:
     description: Path to audit-selection.json, as scripts/audit-select.mjs wrote it.
@@ -137,13 +137,25 @@ runs:
                 const issue = await getIssue(action.issue);
                 const reopen = action.kind === 'cleanup-reopen';
                 if (issue.state === (reopen ? 'open' : 'closed')) { say(`${action.check}: clean-up story #${action.issue} is already ${issue.state}.`); continue; }
+                if (reopen && lib.cleanupReopenedBefore(await commentsOf(action.issue), action.check)) { say(`${action.check}: clean-up story #${action.issue} was reopened once before; left closed.`); continue; }
                 await comment(action.issue, action.comment);
                 await setState(action.issue, reopen ? 'open' : 'closed');
                 say(`${action.check}: ${reopen ? 'reopened' : 'closed'} the clean-up story #${action.issue}.`);
               } else if (action.kind === 'pull-request') {
                 const pulls = await github.paginate(github.rest.pulls.list, { ...context.repo, state: 'all', head: `${context.repo.owner}:${action.branch}`, per_page: 100 });
                 const decision = lib.pullRequestDecision(pulls, Date.now(), respectDays);
+                if (decision.existing) {
+                  // An open graduation pull request always carries the hold label, even if an earlier run could not add it.
+                  const labels = (pulls.find((pr) => pr.number === decision.existing)?.labels ?? []).map((label) => (typeof label === 'string' ? label : label.name));
+                  const missing = prLabels.filter((label) => !labels.includes(label));
+                  if (missing.length) {
+                    await ensureLabels(missing);
+                    await github.rest.issues.addLabels({ ...context.repo, issue_number: decision.existing, labels: missing });
+                    say(`${action.check}: added ${missing.join(', ')} to the open graduation pull request #${decision.existing}.`);
+                  }
+                }
                 if (!decision.open) { say(`${action.check}: no graduation pull request, ${decision.reason}.`); continue; }
+                await ensureLabels(prLabels);
                 const { data: repo } = await github.rest.repos.get(context.repo);
                 const base = repo.default_branch;
                 const { data: baseRef } = await github.rest.git.getRef({ ...context.repo, ref: `heads/${base}` });
@@ -162,10 +174,10 @@ runs:
                   content: Buffer.from(lib.applyPatch(current.text, action.check, action.patch)).toString('base64'),
                   ...(current.sha ? { sha: current.sha } : {}),
                 });
-                const { data: pr } = await github.rest.pulls.create({ ...context.repo, title: action.title, head: action.branch, base, body: action.body });
-                await ensureLabels(prLabels);
+                // A draft, and held: the merge train takes neither, so a person marks it ready and merges it.
+                const { data: pr } = await github.rest.pulls.create({ ...context.repo, title: action.title, head: action.branch, base, body: action.body, draft: true });
                 await github.rest.issues.addLabels({ ...context.repo, issue_number: pr.number, labels: prLabels });
-                say(`${action.check}: opened the graduation pull request #${pr.number} (${prLabels.join(', ')}); a person merges it.`);
+                say(`${action.check}: opened the graduation pull request #${pr.number} as a draft (${prLabels.join(', ')}); a person merges it.`);
               }
               done += 1;
             } catch (error) {

@@ -259,7 +259,7 @@ function selectionAppendix(file) {
   try {
     const selection = JSON.parse(require('fs').readFileSync(file, 'utf8'));
     const text = String(selection?.sinceLastAudit?.markdown ?? '').trim();
-    return text.replace(/(^|[^A-Za-z0-9_/&])#(\d+)/g, '$1$2');
+    return text.replace(/(^|[^A-Za-z0-9_/])#(\d+)/g, '$1$2');
   } catch {
     return '';
   }

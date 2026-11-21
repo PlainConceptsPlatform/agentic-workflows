@@ -22,10 +22,17 @@ function followUpsIn(text) {
 }
 
 // Whether any of `comments` already says this verdict about these ids: a re-run posts nothing twice.
+// A story the audit closed already carries its numbers, so a later confirmation is not repeated.
+const SAYS = { close: ['close'], verify: ['verify', 'close'], reopen: ['reopen'] };
 function alreadySaid(comments, verdict, text) {
   const ids = new Set(followUpsIn(text).map((f) => f.id));
-  return (comments ?? []).some((comment) => followUpsIn(comment.body).some((f) => f.verdict === verdict && (ids.size === 0 || ids.has(f.id))));
+  const verdicts = SAYS[verdict] ?? [verdict];
+  return (comments ?? []).some((comment) => followUpsIn(comment.body).some((f) => verdicts.includes(f.verdict) && (ids.size === 0 || ids.has(f.id))));
 }
+
+// A clean-up story is reopened once, too.
+const cleanupReopenedBefore = (comments, check) =>
+  (comments ?? []).some((comment) => [...String(comment.body ?? '').matchAll(/<!--\s*audit-graduation-reopen:\s*([A-Za-z]+)\s*-->/g)].some((match) => match[1] === check));
 
 // A story is reopened once, ever: a comment from an earlier reopen is enough to leave it closed.
 const reopenedBefore = (comments) => (comments ?? []).some((comment) => followUpsIn(comment.body).some((f) => f.verdict === 'reopen'));
@@ -36,7 +43,7 @@ const reopenedBefore = (comments) => (comments ?? []).some((comment) => followUp
 function pullRequestDecision(pulls, now, respectDays = 90) {
   const list = [...(pulls ?? [])];
   const open = list.find((pr) => pr.state === 'open');
-  if (open) return { open: false, reason: `pull request #${open.number} is already open` };
+  if (open) return { open: false, existing: open.number, reason: `pull request #${open.number} is already open` };
   const latest = list.filter((pr) => pr.closed_at).sort((a, b) => Date.parse(b.closed_at) - Date.parse(a.closed_at))[0];
   if (latest && now - Date.parse(latest.closed_at) < respectDays * DAY) {
     const until = new Date(Date.parse(latest.closed_at) + respectDays * DAY).toISOString().slice(0, 10);
@@ -104,4 +111,4 @@ function beforeAfterLines(stories) {
   return lines;
 }
 
-module.exports = { alreadySaid, applyPatch, beforeAfterLines, followUpsIn, hasGraduationMarker, holdLabelFrom, itemMarkersIn, pullRequestDecision, reopenedBefore };
+module.exports = { alreadySaid, applyPatch, beforeAfterLines, cleanupReopenedBefore, followUpsIn, hasGraduationMarker, holdLabelFrom, itemMarkersIn, pullRequestDecision, reopenedBefore };
