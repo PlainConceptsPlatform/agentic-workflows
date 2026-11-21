@@ -14,8 +14,10 @@
 // What never leaves the worklist: a tool's message. Semgrep's and an analyzer's can echo the code
 // they matched, and a story is public-facing text; a unit carries the rule, the path and the line.
 
-import { ZERO_TOLERANCE_TYPES } from './dead-code-gate.mjs';
+import { budgetFor } from './bundle-gate.mjs';
+import { ZERO_TOLERANCE_TYPES, buildBaseline as deadCodeBaseline, positiveCounts } from './dead-code-gate.mjs';
 import { globToRegExp } from './engineering-excellence.mjs';
+import { GRADUATION_CHECKS, parseQualityConfig } from './quality-config.mjs';
 import { CHECKS, DEFAULT_LIMIT, buildWorklist, itemId, mutationCheck } from './worklist.mjs';
 
 export const SELECTION_VERSION = 1;
@@ -34,19 +36,24 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 
 // ── The marker ───────────────────────────────────────────────────────────────────────────────────
 // Hidden in the story's body. The id is what matches a story to its unit; the value and target are
-// what was measured when the story was filed, for the run that later checks whether it moved.
+// what was measured when the story was filed, for the run that later checks whether it moved, and
+// the check says where to look for the unit when CI no longer lists it.
 const MARKER = /<!--\s*audit-item:\s*([0-9a-f]{16})\b([^>]*?)-->/g;
 const markerValue = (value) => (value === null || value === undefined ? 'n/a' : String(value).replace(/[^\w.:+-]/g, '_'));
 
 export function markerFor(unit) {
-  return `<!-- audit-item: ${unit.id} value=${markerValue(unit.value)} target=${markerValue(unit.target)} -->`;
+  return `<!-- audit-item: ${unit.id} value=${markerValue(unit.value)} target=${markerValue(unit.target)}${unit.check ? ` check=${unit.check}` : ''} -->`;
 }
 
-// Every marker in a text: [{ id, value, target }].
+// `key=value` pairs separated by spaces, as a marker writes them.
+const fieldsOf = (text) => Object.fromEntries(String(text).trim().split(/\s+/).map((pair) => pair.split('=')).filter((pair) => pair.length === 2 && pair[0]));
+
+// Every marker in a text: [{ id, value, target, check }]. A marker written before 1.32.0 has no check.
 export function markersIn(text) {
   const found = [];
   for (const match of String(text ?? '').matchAll(MARKER)) {
-    found.push({ id: match[1], value: match[2].match(/\bvalue=(\S+)/)?.[1] ?? null, target: match[2].match(/\btarget=(\S+)/)?.[1] ?? null });
+    const field = fieldsOf(match[2]);
+    found.push({ id: match[1], value: field.value ?? null, target: field.target ?? null, check: field.check ?? null });
   }
   return found;
 }
@@ -421,6 +428,487 @@ function riskFiles(checks) {
 
 const leastCovered = (known, coverage) => (isNumber(coverage) ? Math.min(known ?? 1, coverage) : known);
 
+// ── Closing the loop ─────────────────────────────────────────────────────────────────────────────
+// Each run compares the stories it filed with what CI measures now, by the unit id in their marker
+// (re-derived from the worklist with unitsOfCheck, never a raw item id):
+//   open, its pull request merged before the worklist was built, and within its bar or gone: closed
+//     as completed with the numbers;
+//   closed as completed and within its bar or gone: confirmed with the numbers, once;
+//   closed as completed and still over its bar: reopened with the numbers, once. A story a person
+//     closes again after that is their answer, and the unit is not filed again while it is in reach;
+//   open otherwise: it keeps its story slot, so the audit files fewer new stories while old ones wait.
+// Nothing is decided on data that cannot be believed, or that was measured before the change landed.
+export const FOLLOW_UP_DAYS = 30;
+const DAY = 86400000;
+const FOLLOW_UP_MARKER = 'audit-follow-up';
+const ROWS_MAX = 20;
+
+// A check's rule counts as units where the worklist listed no item for the rule (cut by the limit,
+// or at zero), so a rule-level story can still be measured.
+function ruleUnits(check, data, known) {
+  if (!isObject(data.rules) || !['deadCode', 'patterns', 'architecture'].includes(check)) return [];
+  const units = [];
+  for (const [rule, row] of Object.entries(data.rules)) {
+    if (known.has(itemId({ check, rule })) || !isNumber(row?.count)) continue;
+    const zero = check === 'deadCode' && ZERO_TOLERANCE_TYPES.includes(rule);
+    const item = {
+      id: itemId({ check, rule }),
+      check,
+      kind: check === 'architecture' ? 'steiger-warning' : 'count',
+      rule,
+      path: null,
+      line: null,
+      symbol: null,
+      value: row.count,
+      threshold: zero ? 0 : null,
+      baseline: row.baseline ?? null,
+      mode: 'ratchet',
+      detail: {},
+    };
+    units.push(...groupedUnits(check, [item], data.rules));
+  }
+  return units;
+}
+
+// Every unit CI measures now, ignored ones included (an ignored unit is still measured), and per
+// check whether a unit it does not list can be called gone.
+export function measuredUnits(checks) {
+  const units = new Map();
+  const scope = {};
+  for (const check of CHECKS.filter((name) => checks?.[name])) {
+    const data = checks[check];
+    // A report-mode check can still hold enforced items (architecture tests, Steiger errors): those
+    // are measured, and only there can a unit missing from a report-mode check be called gone.
+    scope[check] = { truncated: data.truncated !== false, gone: data.mode !== 'report' || check === 'architecture' };
+    const ratchet = data.items.filter((i) => i.mode === 'ratchet');
+    for (const unit of unitsOfCheck(check, ratchet, data.rules ?? null).units) units.set(unit.id, unit);
+    // A scope or file folded into a module is still measured on its own: a story filed for it is
+    // judged by its own number, never called gone because a module now speaks for it.
+    for (const item of ratchet.filter(() => check === 'coverage' || check === 'mutation')) {
+      if (!units.has(item.id)) units.set(item.id, unitsOfCheck(check, [item]).units[0]);
+    }
+    if (data.mode !== 'report') for (const unit of ruleUnits(check, data, units)) units.set(unit.id, unit);
+  }
+  return { units, scope };
+}
+
+const fromMarker = (value) => {
+  if (value === null || value === undefined || value === 'n/a') return null;
+  return Number.isFinite(Number(value)) && value !== '' ? Number(value) : value;
+};
+
+// Where a story's unit stands now: measured (and whether it is over its bar), gone, or unknown.
+function standing(marker, measured, previous) {
+  const unit = measured.units.get(marker.id);
+  if (unit) return { state: 'measured', unit, check: unit.check, over: barReason(unit) !== null };
+  const check = marker.check ?? CHECKS.find((name) => isObject(previous?.checks?.[name]?.units) && marker.id in previous.checks[name].units) ?? null;
+  const scope = check ? measured.scope[check] : null;
+  if (!scope || scope.truncated || !scope.gone) return { state: 'unknown', check };
+  return { state: 'gone', check };
+}
+
+const PERCENT_METRICS = ['rate'];
+export function formatMeasure(value, metric = null) {
+  if (value === null || value === undefined) return 'n/a';
+  if (typeof value === 'number' && PERCENT_METRICS.includes(metric)) return `${round(value * 100, 1)}%`;
+  if (typeof value === 'number' && metric === 'bytes') return `${value} bytes`;
+  return String(value);
+}
+
+const shortTitle = (title) => {
+  const flat = String(title ?? '').replace(/#/g, '').replace(/\s+/g, ' ').trim();
+  return flat.length > 80 ? `${flat.slice(0, 79)}…` : flat;
+};
+
+// One unit of a story: its numbers then and now. `after` is null when CI no longer lists it.
+function rowOf(issue, marker, where, status) {
+  const metric = where.unit?.metric ?? null;
+  const target = where.unit ? where.unit.target : fromMarker(marker.target);
+  return {
+    issue: issue.number,
+    title: shortTitle(issue.title),
+    id: marker.id,
+    check: where.check ?? marker.check ?? null,
+    what: where.unit ? shown(where.unit) : null,
+    metric,
+    before: fromMarker(marker.value),
+    after: where.state === 'measured' ? where.unit.value : null,
+    gone: where.state === 'gone',
+    target,
+    status,
+  };
+}
+
+const numbersOf = (row) =>
+  `${formatMeasure(row.before, row.metric)} when filed, ${row.gone ? 'no longer listed by the check (within its bar)' : `${formatMeasure(row.after, row.metric)} now`}, target ${formatMeasure(row.target, row.metric)}`;
+
+const rowLine = (row) => `**${row.check ?? 'unknown check'}**${row.what ? ` \`${row.what}\`` : ''}: ${numbersOf(row)}`;
+
+const followUpMarker = (verdict, row) =>
+  `<!-- ${FOLLOW_UP_MARKER}: ${verdict} id=${row.id} check=${row.check ?? 'n/a'} before=${markerValue(row.before)} after=${row.gone ? 'gone' : markerValue(row.after)} target=${markerValue(row.target)} metric=${row.metric ?? 'n/a'} -->`;
+
+const COMMENT_LEAD = {
+  close: 'Closed by the audit: the fix is merged and CI now measures this within its bar.',
+  verify: 'Checked by the audit: CI now measures this within its bar.',
+  reopen:
+    'Reopened by the audit: this was closed as done, but CI still measures it over its bar. If the number is acceptable as it is, close this as not planned and the audit leaves it alone; it reopens a story only once.',
+};
+
+function followUpComment(verdict, rows, measuredAt) {
+  const when = measuredAt ? ` (worklist of ${String(measuredAt).slice(0, 10)})` : '';
+  return [COMMENT_LEAD[verdict], '', ...rows.map((row) => `- ${rowLine(row)}${when}`), '', ...rows.map((row) => followUpMarker(verdict, row))].join('\n');
+}
+
+const issueTime = (value) => (value ? Date.parse(value) : null);
+
+// `issues` are { number, title, state, stateReason, body, closedAt, pulls: [{ number, merged, mergedAt }] }.
+// `measuredAt` is when the worklist was built; `enabled` false only keeps track (no verdicts), for
+// data that cannot be believed or a selection read from the facets.
+export function followUp(input = {}) {
+  const ctx = followUpContext(input);
+  const out = { tracked: new Map(), declined: new Map(), held: new Set(), actions: [], rows: [], settled: {}, reopened: [] };
+  const inReach = new Set();
+  const issues = [...(input.issues ?? [])].sort((a, b) => a.number - b.number);
+  // Units an open story already tracks: a closed story for the same unit is never reopened beside it.
+  ctx.openIds = new Set(issues.filter((i) => i.state === 'open').flatMap((i) => markersIn(i.body).map((m) => m.id)));
+
+  for (const issue of issues) {
+    const markers = markersIn(issue.body);
+    if (markers.length === 0) continue;
+    inReach.add(issue.number);
+    const story = { issue, markers, track: (map) => markers.forEach((m) => map.set(m.id, issue.number)) };
+    if (issue.state === 'open') followOpen(story, ctx, out);
+    else if (issue.stateReason === 'not_planned') story.track(out.declined);
+    // A duplicate points at the issue that tracks the work; that one is followed instead.
+    else if (issue.stateReason !== 'duplicate') followClosed(story, ctx, out);
+  }
+
+  out.reopened = [...new Set([...[...ctx.reopenedBefore].filter((n) => inReach.has(n)), ...out.reopened])].sort((a, b) => a - b);
+  return out;
+}
+
+// What the last run settled and reopened, and what CI measures now (null when nothing is decided).
+function followUpContext({ checks = null, previous = null, measuredAt = null, now = new Date(), enabled = true }) {
+  const last = isObject(previous?.followUp) ? previous.followUp : {};
+  return {
+    previous,
+    measuredAt,
+    now,
+    settledBefore: isObject(last.settled) ? last.settled : {},
+    reopenedBefore: new Set(Array.isArray(last.reopened) ? last.reopened : []),
+    closedBefore: new Set((Array.isArray(last.actions) ? last.actions : []).filter((a) => a?.action === 'close').map((a) => a.issue)),
+    measured: enabled && checks ? measuredUnits(checks) : null,
+    measuredTime: issueTime(measuredAt),
+  };
+}
+
+const decidable = (ctx) => ctx.measured !== null && ctx.measuredTime !== null;
+const withinBar = (w) => w.state === 'gone' || (w.state === 'measured' && !w.over);
+const mergedBefore = (pulls, time) => (pulls ?? []).some((p) => p?.merged && issueTime(p.mergedAt) !== null && issueTime(p.mergedAt) <= time);
+
+// An open story tracks its unit and holds its slot, unless its fix is merged and measured within its bar.
+function followOpen({ issue, markers, track }, ctx, out) {
+  track(out.tracked);
+  out.held.add(issue.number);
+  if (!decidable(ctx)) return;
+  const where = markers.map((m) => standing(m, ctx.measured, ctx.previous));
+  const fixed = where.every(withinBar) && mergedBefore(issue.pulls, ctx.measuredTime);
+  const rows = markers.map((m, i) => rowOf(issue, m, where[i], fixed ? 'fixed' : 'open'));
+  out.rows.push(...rows);
+  if (!fixed) return;
+  out.actions.push({ issue: issue.number, action: 'close', comment: followUpComment('close', rows, ctx.measuredAt) });
+  out.held.delete(issue.number);
+}
+
+// A story closed as completed (or with no reason, as an older closing leaves it), checked once per closing.
+function followClosed({ issue, markers, track }, ctx, out) {
+  const prior = ctx.settledBefore[issue.number];
+  if (isObject(prior) && prior.closedAt === (issue.closedAt ?? null)) {
+    out.settled[issue.number] = prior;
+    if (prior.verdict === 'accepted') track(out.declined);
+    return;
+  }
+  const closedTime = issueTime(issue.closedAt);
+  if (!decidable(ctx) || closedTime === null || ctx.now - closedTime > FOLLOW_UP_DAYS * DAY) return;
+  const where = markers.map((m) => standing(m, ctx.measured, ctx.previous));
+  const rowsAs = (status) => markers.map((m, i) => rowOf(issue, m, where[i], status));
+  if (closedTime > ctx.measuredTime) {
+    // Closed after CI last measured: the next worklist says whether it worked. Not filed again meanwhile.
+    track(out.tracked);
+    out.rows.push(...rowsAs('pending'));
+  } else if (where.some((w) => w.state === 'measured' && w.over)) {
+    if (markers.every((m) => ctx.openIds.has(m.id))) return;
+    const rows = rowsAs('regressed');
+    out.rows.push(...rows);
+    reopenOnce(issue, rows, track, ctx, out);
+  } else if (where.every((w) => w.state !== 'unknown')) {
+    const rows = rowsAs('fixed');
+    if (ctx.closedBefore.has(issue.number)) {
+      // The audit closed it last run with these numbers already.
+      out.settled[issue.number] = { closedAt: issue.closedAt, verdict: 'fixed' };
+      return;
+    }
+    out.rows.push(...rows);
+    out.actions.push({ issue: issue.number, action: 'verify', comment: followUpComment('verify', rows, ctx.measuredAt) });
+    out.settled[issue.number] = { closedAt: issue.closedAt, verdict: 'fixed' };
+  }
+}
+
+// Reopened once; closed again by a person after that, it is their answer.
+function reopenOnce(issue, rows, track, ctx, out) {
+  if (ctx.reopenedBefore.has(issue.number)) {
+    out.settled[issue.number] = { closedAt: issue.closedAt, verdict: 'accepted' };
+    track(out.declined);
+    return;
+  }
+  out.actions.push({ issue: issue.number, action: 'reopen', comment: followUpComment('reopen', rows, ctx.measuredAt) });
+  out.reopened.push(issue.number);
+  track(out.tracked);
+  out.held.add(issue.number);
+}
+
+const STATUS_ORDER = ['fixed', 'regressed', 'open', 'pending'];
+const STATUS_LABEL = { fixed: 'Fixed', regressed: 'Regressed (closed as done, still over its bar: reopened)', open: 'Still open', pending: 'Closed, waiting for CI to measure it' };
+
+export function followUpCounts(rows) {
+  const stories = (status) => new Set(rows.filter((r) => r.status === status).map((r) => r.issue)).size;
+  return { fixed: stories('fixed'), open: stories('open'), regressed: stories('regressed'), pending: stories('pending') };
+}
+
+// The report's "Since last audit" section. No issue number: audit-close reads every `#N` in a
+// report as work it waits on.
+export function sinceLastAudit(rows) {
+  if (!rows.length) return '';
+  const counts = followUpCounts(rows);
+  const lines = ['## Since last audit', '', `Fixed ${counts.fixed}, still open ${counts.open}, regressed ${counts.regressed}${counts.pending ? `, waiting for CI ${counts.pending}` : ''} (stories the audit filed before, by the number CI measures now).`, ''];
+  const sorted = [...rows].sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) || a.issue - b.issue);
+  for (const row of sorted.slice(0, ROWS_MAX)) {
+    const numbers = row.after === null && !row.gone ? `${formatMeasure(row.before, row.metric)} when filed, not measured now, target ${formatMeasure(row.target, row.metric)}` : numbersOf(row);
+    lines.push(`- ${STATUS_LABEL[row.status]}: **${row.check ?? 'unknown check'}**${row.what ? ` \`${row.what}\`` : ''}${row.title ? ` ("${row.title}")` : ''}: ${numbers}`);
+  }
+  if (sorted.length > ROWS_MAX) lines.push(`- and ${sorted.length - ROWS_MAX} more.`);
+  return lines.join('\n');
+}
+
+// ── Graduation of report-only checks ─────────────────────────────────────────────────────────────
+// A check in `report` mode for `audit.graduateAfterDays` (quality.config.json `<check>.since`, or the
+// day the audit first saw it in report mode) gets ONE pull request that writes its baseline from the
+// worklist (CI's data, never a local run) and switches it to `ratchet`. Never merged automatically:
+// it carries the hold label, and a person decides. When the baseline would freeze junk
+// (`audit.junk`), one clean-up story is filed first and the pull request waits for it.
+const GRADUATION_LABEL = {
+  deadCode: 'dead code (Knip)',
+  architecture: 'architecture (Steiger warnings)',
+  patterns: 'code patterns (.NET analyzers)',
+  bundle: 'bundle size',
+};
+const JUNK_WHY = {
+  deadCode: 'unused and unlisted dependencies are never baselined, so a ratchet fails on the first build while any is left',
+  patterns: 'AD0001 means an analyzer crashed instead of reporting, so a baseline would freeze the crash and hide what it should have found',
+};
+const JUNK_LOCATIONS_MAX = 15;
+export const graduationMarker = (check, cleanup = false) => `<!-- audit-graduation: ${check}${cleanup ? ' cleanup' : ''} -->`;
+export const graduationBranch = (check) => `audit/graduate-${check.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+const GRADUATION_MARKER = /<!--\s*audit-graduation:\s*([A-Za-z]+)(\s+cleanup)?\s*-->/;
+
+const dateOf = (date) => date.toISOString().slice(0, 10);
+const daysBetween = (from, to) => Math.floor((to - Date.parse(`${from}T00:00:00Z`)) / DAY);
+
+// What the pull request writes into quality.config.json: the section's new keys, and the table.
+function graduationPatch(check, data, since) {
+  if (check === 'bundle') {
+    const total = data.summary?.totalJsBytes;
+    if (!isNumber(total)) return null;
+    return { patch: { mode: 'ratchet', since, baselineBytes: total, limitBytes: budgetFor(total) }, table: { 'total JavaScript bytes': total, 'limit (baseline + 10%)': budgetFor(total) } };
+  }
+  if (!isObject(data.rules)) return null;
+  const counts = Object.fromEntries(Object.entries(data.rules).filter(([, r]) => isNumber(r?.count)).map(([rule, r]) => [rule, r.count]));
+  const baseline = check === 'deadCode' ? deadCodeBaseline(counts) : positiveCounts(counts);
+  return { patch: { mode: 'ratchet', since, baseline }, table: baseline };
+}
+
+function cleanupStory(check, junk, data, since, measuredAt) {
+  const label = GRADUATION_LABEL[check];
+  const rules = Object.keys(junk);
+  const locations = data.items
+    .filter((i) => rules.includes(i.rule) && (i.path || i.symbol))
+    .slice(0, JUNK_LOCATIONS_MAX)
+    .map((i) => `- \`${i.path ?? ''}${i.line ? `:${i.line}` : ''}\`${i.symbol ? ` · \`${i.symbol}\`` : ''} (${i.rule})`);
+  return {
+    title: `Clear ${rules.join(', ')} before ${label} becomes a ratchet`,
+    body: [
+      `**As a** maintainer, **I want** the ${rules.join(', ')} findings of the ${label} check cleared, **so that** the check becomes a ratchet on a clean baseline.`,
+      '',
+      `The ${label} check has been in report mode since ${since}. Before the audit opens the pull request that records its baseline and switches it to \`ratchet\`, these findings go: ${JUNK_WHY[check] ?? 'a baseline would freeze them'}.`,
+      '',
+      '| Rule | Findings |',
+      '|---|--:|',
+      ...rules.map((rule) => `| ${rule} | ${junk[rule]} |`),
+      '',
+      `Where, from CI's worklist of ${String(measuredAt ?? '').slice(0, 10) || 'the default branch'}:`,
+      ...(locations.length ? locations : ['- The worklist lists the counts only; the check\'s own report on the default branch names them.']),
+      '',
+      '#### Acceptance criteria',
+      `- The default branch's worklist counts no ${rules.join(', ')} finding for this check.`,
+      '- No baseline is written here: the audit opens that pull request itself once this is closed.',
+      '',
+      graduationMarker(check, true),
+    ].join('\n'),
+  };
+}
+
+function graduationPullRequest(check, { patch, table }, { since, sinceSource, ageDays, afterDays, worklist, junkAccepted }) {
+  const label = GRADUATION_LABEL[check];
+  const from = sinceSource === 'config' ? `\`${check}.since\` in quality.config.json` : 'the day the audit first saw it in report mode';
+  const rows = Object.entries(table);
+  const keys = check === 'bundle' ? '`bundle.baselineBytes` and `bundle.limitBytes`' : `\`${check}.baseline\``;
+  return {
+    title: `Quality gates: enforce ${label} as a ratchet`,
+    branch: graduationBranch(check),
+    patch,
+    body: [
+      `The **${label}** check has been in report mode since ${since} (${from}): ${ageDays} days, and the audit graduates a check after ${afterDays}. This pull request records its baseline from CI's own measurement and switches it to \`ratchet\`, so from now on a build fails when it gets worse than today.`,
+      '',
+      `**Baseline**, from the worklist of the default branch built ${String(worklist?.generatedAt ?? 'n/a').slice(0, 10)}${worklist?.commitSha ? ` at commit ${String(worklist.commitSha).slice(0, 7)}` : ''}${worklist?.runId ? `, run ${worklist.runId}` : ''}:`,
+      '',
+      check === 'bundle' ? '| Measure | Bytes |' : '| Rule | Findings |',
+      '|---|--:|',
+      ...(rows.length ? rows.map(([key, value]) => `| ${key} | ${value} |`) : ['| (none) | 0 |']),
+      '',
+      `**What changes:** \`quality.config.json\`: \`${check}.mode\` becomes \`ratchet\`, ${keys} as above, \`${check}.since\` ${sinceSource === 'config' ? 'kept' : `recorded as ${since}`}. Nothing else.`,
+      ...(junkAccepted ? ['', `The clean-up story for this check was closed as not planned, so the baseline is written as CI measures it.`] : []),
+      '',
+      '**Not merged automatically.** A ratchet can block merges, so a person decides: mark it ready, approve and merge it, or close it. It is opened as a draft with the merge train\'s hold label, so nothing merges it on its own. Closed without merging, the audit does not open it again for 90 days.',
+      '',
+      graduationMarker(check),
+    ].join('\n'),
+  };
+}
+
+// `checks` are the worklist's; `issues` the audit's (clean-up stories carry a graduation marker).
+export function graduation({ checks = null, config, previous = null, issues = [], worklist = null, now = new Date(), enabled = true } = {}) {
+  const { seenBefore, reopenedBefore, declinedBefore } = graduationCarry(previous);
+  const out = { firstSeen: {}, reopened: [], declined: [], checks: {}, actions: [] };
+  if (!enabled || !checks) return { ...out, firstSeen: { ...seenBefore }, reopened: [...reopenedBefore], declined: [...declinedBefore] };
+  const ctx = { checks, config, issues, worklist, now, seenBefore, reopenedBefore, declinedBefore, measuredTime: issueTime(worklist?.measuredAt ?? worklist?.generatedAt), out };
+  for (const check of GRADUATION_CHECKS) graduateCheck(check, ctx);
+  const live = (check) => out.checks[check]?.state !== 'enforced';
+  out.reopened = [...new Set([...reopenedBefore, ...out.reopened])].filter(live).sort();
+  out.declined = [...new Set([...declinedBefore, ...out.declined])].filter(live).sort();
+  return out;
+}
+
+// What the last run recorded: first-seen dates, and the clean-up stories reopened or declined.
+function graduationCarry(previous) {
+  const last = isObject(previous?.graduation) ? previous.graduation : {};
+  const list = (value) => new Set(Array.isArray(value) ? value : []);
+  return { seenBefore: isObject(last.firstSeen) ? last.firstSeen : {}, reopenedBefore: list(last.reopened), declinedBefore: list(last.declined) };
+}
+
+// Where one check stands, and what to do about it this week.
+function graduateCheck(check, ctx) {
+  const { config, seenBefore, now, out } = ctx;
+  const data = ctx.checks[check];
+  const section = config[check];
+  if (!data) {
+    if (typeof seenBefore[check] === 'string' && section.mode !== 'ratchet') out.firstSeen[check] = seenBefore[check];
+    return;
+  }
+  if (section.mode === 'ratchet' || data.mode === 'ratchet') {
+    out.checks[check] = { state: 'enforced' };
+    return;
+  }
+  const since = section.since ?? (typeof seenBefore[check] === 'string' ? seenBefore[check] : dateOf(now));
+  if (!section.since) out.firstSeen[check] = since;
+  const facts = { since, sinceSource: section.since ? 'config' : 'first-seen', ageDays: daysBetween(since, now), afterDays: config.audit.graduateAfterDays };
+  const waiting = graduationWait(facts);
+  if (waiting) {
+    out.checks[check] = waiting;
+    return;
+  }
+  const built = validPatch(check, graduationPatch(check, data, since));
+  if (!built) {
+    out.checks[check] = { state: 'no-data', ...facts };
+    return;
+  }
+  const junk = junkOf(check, data, config);
+  const held = blockedByJunk(check, junk, junkStep(check, junk, data, facts, ctx));
+  if (held.state) {
+    out.checks[check] = { ...held, ...facts, junk };
+    return;
+  }
+  out.actions.push({ kind: 'pull-request', check, ...graduationPullRequest(check, built, { ...facts, worklist: ctx.worklist, junkAccepted: held.junkAccepted }) });
+  out.checks[check] = { state: 'ready', ...facts, ...(Object.keys(junk).length ? { junk } : {}) };
+}
+
+function graduationWait(facts) {
+  if (facts.afterDays === 0) return { state: 'off', ...facts };
+  if (facts.ageDays >= facts.afterDays) return null;
+  return { state: 'waiting', ...facts, readyOn: dateOf(new Date(Date.parse(`${facts.since}T00:00:00Z`) + facts.afterDays * DAY)) };
+}
+
+// The patch, when quality.config.json would accept it.
+function validPatch(check, built) {
+  if (!built) return null;
+  try {
+    parseQualityConfig(JSON.stringify({ [check]: built.patch }));
+    return built;
+  } catch {
+    return null;
+  }
+}
+
+const junkOf = (check, data, config) =>
+  Object.fromEntries((config.audit.junk[check] ?? []).filter((rule) => (data.rules?.[rule]?.count ?? 0) > 0).map((rule) => [rule, data.rules[rule].count]));
+
+const cleanupStoryOf = (check, issues) =>
+  [...issues].filter((i) => {
+    const match = GRADUATION_MARKER.exec(i.body ?? '');
+    return match?.[1] === check && Boolean(match[2]);
+  }).sort((a, b) => b.number - a.number)[0];
+
+const day = (value) => String(value ?? '').slice(0, 10);
+
+// Accepted junk a ratchet holds at zero whatever the baseline says (unused or unlisted
+// dependencies): a pull request would fail its own CI, so none is opened while any is left.
+function blockedByJunk(check, junk, step) {
+  if (!step.junkAccepted || check !== 'deadCode' || !Object.keys(junk).some((rule) => ZERO_TOLERANCE_TYPES.includes(rule))) return step;
+  return { state: 'blocked', reason: 'unused or unlisted dependencies are left, and a dead-code ratchet fails on any: clear them, then the audit opens the pull request' };
+}
+
+// The clean-up story before a baseline that would freeze junk. Returns { state } while the pull
+// request waits, or { junkAccepted } when it may open.
+function junkStep(check, junk, data, facts, ctx) {
+  const { out, worklist } = ctx;
+  const story = cleanupStoryOf(check, ctx.issues);
+  if (!Object.keys(junk).length) {
+    if (story?.state === 'open') out.actions.push({ kind: 'cleanup-close', check, issue: story.number, comment: `Closed by the audit: CI's worklist of ${day(worklist?.generatedAt)} counts none of these any more, so the ${GRADUATION_LABEL[check]} check can graduate.` });
+    return { junkAccepted: false };
+  }
+  if (!story && ctx.declinedBefore.has(check)) return { junkAccepted: true };
+  if (!story) {
+    out.actions.push({ kind: 'cleanup-story', check, ...cleanupStory(check, junk, data, facts.since, worklist?.generatedAt) });
+    return { state: 'cleanup-filed' };
+  }
+  if (story.state === 'open') return { state: 'cleanup-open', issue: story.number };
+  if (story.stateReason === 'not_planned') {
+    out.declined.push(check);
+    return { junkAccepted: true };
+  }
+  if (ctx.reopenedBefore.has(check)) return { junkAccepted: true };
+  const closedTime = issueTime(story.closedAt);
+  if (closedTime !== null && ctx.measuredTime !== null && closedTime > ctx.measuredTime) return { state: 'cleanup-pending', issue: story.number };
+  const counts = Object.entries(junk).map(([rule, count]) => `${rule} ${count}`).join(', ');
+  out.actions.push({
+    kind: 'cleanup-reopen',
+    check,
+    issue: story.number,
+    comment: `Reopened by the audit: this was closed as done, but CI's worklist of ${day(worklist?.generatedAt)} still counts ${counts}. The ${GRADUATION_LABEL[check]} check graduates once they are gone. If they are acceptable, close this as not planned and the audit writes the baseline as it is.\n\n<!-- audit-graduation-reopen: ${check} -->`,
+  });
+  out.reopened.push(check);
+  return { state: 'cleanup-reopened', issue: story.number };
+}
+
 // ── The selection ────────────────────────────────────────────────────────────────────────────────
 function ignoreMatcher(ignore) {
   const rules = new Set(ignore.rules);
@@ -458,19 +946,26 @@ export function selectAudit(input) {
   const limit = audit.limit ?? DEFAULT_LIMIT;
   const facetNames = SELECTION_FACETS.filter((name) => facets[name]);
   const base = baseDocument({ ...input, maxStories, now }, sourceOf(worklist, facetNames));
-  if (base.source === 'none') return { ...base, clean: false, runAgent: true, selected: [], riskMap: [] };
+  if (base.source === 'none') return { ...base, clean: false, runAgent: true, storySlots: maxStories, storiesHeld: [], selected: [], riskMap: [] };
 
-  const about = worklistFacts(worklist, now);
+  const about = worklistFacts(worklist, now, input.commitTime);
   const trustworthy = configValid && !about.unreadable.includes('config');
   base.problems.push(...dataProblems(trustworthy, about.ageDays));
 
   const checks = withMutationFacet(worklist ? worklist.data.checks : facetChecks(facets, config, limit), facets.mutation, limit);
+  // Verdicts on stories and graduation pull requests are taken on the worklist only, and only when
+  // its settings could be read: a selection from the facets, or from a broken config, only tracks.
+  const decides = base.source === 'worklist' && trustworthy;
+  const loop = followUp({ issues, checks, previous, measuredAt: about.measuredAt, now, enabled: decides });
+  const graduating = graduation({ checks, config, previous, issues, worklist: about, now, enabled: decides });
   const ignore = ignoreMatcher(audit.ignore);
-  const sorted = sortUnits(checks, { audit, ignore, source: base.source, previous, stories: storiesByUnit(issues) });
-  const selected = sorted.eligible.slice(0, Math.max(0, maxStories));
+  const sorted = sortUnits(checks, { audit, ignore, source: base.source, previous, stories: { tracked: loop.tracked, declined: loop.declined } });
+  // An open story keeps its slot: the audit files fewer new stories while old ones are unfinished.
+  const storySlots = Math.max(0, maxStories - loop.held.size);
+  const selected = sorted.eligible.slice(0, storySlots);
   const overCap = sorted.eligible.slice(selected.length).map(({ id, check, score }) => ({ id, check, score }));
 
-  const slots = Math.max(0, maxStories - selected.length);
+  const slots = Math.max(0, storySlots - selected.length);
   const risk = slots > 0 ? riskMap(checks, { changes, limit: audit.riskFiles, ignored: ignore.path }) : [];
   const idle = selected.length === 0 && risk.length === 0;
   return {
@@ -479,14 +974,20 @@ export function selectAudit(input) {
     worklist: worklist ? about : null,
     facets: facetNames,
     notMeasured: CHECKS.filter((check) => !checks[check]),
-    // Nothing to work on and data that can be believed: the agent does not start.
-    clean: idle && trustworthy,
+    // Nothing to work on and data that can be believed: the agent does not start. Work that waits
+    // only because open stories hold every slot is not clean.
+    clean: idle && trustworthy && sorted.eligible.length === 0,
     runAgent: !idle,
+    storySlots,
+    storiesHeld: [...loop.held].sort((a, b) => a - b),
     selected,
     judgement: { slots, days: audit.riskDays, history: changes !== null },
     riskMap: risk,
     excluded: { ...sorted.excluded, ignored: listed(sorted.excluded.ignored), overCap: listed(overCap) },
     checks: sorted.snapshot,
+    followUp: { enabled: decides, measuredAt: about.measuredAt, counts: followUpCounts(loop.rows), rows: loop.rows, actions: loop.actions, settled: loop.settled, reopened: loop.reopened },
+    sinceLastAudit: { markdown: sinceLastAudit(loop.rows) },
+    graduation: graduating,
   };
 }
 
@@ -518,9 +1019,13 @@ function baseDocument({ maxStories = DEFAULT_MAX_STORIES, problems = [], now = n
   };
 }
 
-function worklistFacts(worklist, now) {
+// `measuredAt` is when the measured commit was made (`commitTime`, from git), else when the worklist
+// was built: a change merged after the commit CI measured is not in the numbers, however late the
+// run finished.
+function worklistFacts(worklist, now, commitTime = null) {
   const generatedAt = worklist?.generatedAt ?? null;
   return {
+    measuredAt: commitTime ?? generatedAt,
     runId: worklist?.runId ?? null,
     commitSha: worklist?.commitSha ?? null,
     generatedAt,
@@ -580,23 +1085,51 @@ export function selectionSummary(selection) {
   if (selection.source === 'none') {
     lines.push('This repository publishes no engineering health data (no `engineering-excellence-worklist` and no facet on the default branch), so the audit explores the repository as before.');
   } else {
-    const from = selection.source === 'worklist' ? `the worklist of ${selection.worklist.generatedAt ?? 'an unknown date'}` : `the facets (${selection.facets.join(', ')}); this repository publishes no worklist yet`;
-    lines.push(`Read from ${from}.`, '');
-    if (selection.clean) lines.push('**The repository is clean:** nothing enforced is over its bar or got worse, and no risky file changed. The agent does not start and nothing is filed.');
-    else if (!selection.runAgent) lines.push('**Nothing could be selected, and the data cannot be trusted** (see below). The agent does not start; this is not a clean audit.');
-    if (selection.selected.length) {
-      lines.push('| # | Check | What | Measured | Target | Why | Score |', '|--:|---|---|---|---|---|--:|');
-      selection.selected.forEach((u, i) => lines.push(`| ${i + 1} | ${u.check} | \`${shown(u)}\` | ${u.value ?? 'n/a'} | ${u.target ?? 'n/a'} | ${u.reasons.join(', ')} | ${u.score} |`));
-    }
-    const e = selection.excluded;
-    lines.push(
-      '',
-      `Not selected: ${e.tracked.length} already tracked by an open story, ${e.declined.length} closed as not planned, ${e.ignored.count} on the ignore list, ${e.withinBar} within their bar, ${e.overCap.count} over the limit of ${selection.maxStories} stories${e.disabled.length ? `, checks switched off: ${e.disabled.join(', ')}` : ''}.`,
-    );
-    const pending = Object.entries(e.notEnforced).map(([check, n]) => `${check} ${n.count}${n.change ? ` (${n.change > 0 ? '+' : ''}${n.change})` : ''}`);
-    if (pending.length) lines.push(`Not yet enforced (measured, no story): ${pending.join(', ')}.`);
-    lines.push(`Judgement pass: ${selection.riskMap.length} file(s), ${selection.judgement.slots} story slot(s) free.`);
+    lines.push(...selectedLines(selection), ...excludedLines(selection), ...loopLines(selection));
   }
   for (const problem of selection.problems) lines.push('', `> ${problem}`);
   return lines.join('\n');
+}
+
+function verdictLine(selection) {
+  const held = selection.storiesHeld ?? [];
+  if (selection.clean) return ['**The repository is clean:** nothing enforced is over its bar or got worse, and no risky file changed. The agent does not start and nothing is filed.'];
+  if (selection.runAgent) return [];
+  if (selection.trustworthy && held.length && selection.storySlots === 0) return [`**Every story slot is held by an open audit story** (${held.length} of ${selection.maxStories}). The agent does not start; new stories wait until those are done.`];
+  return ['**Nothing could be selected, and the data cannot be trusted** (see below). The agent does not start; this is not a clean audit.'];
+}
+
+function selectedLines(selection) {
+  const from = selection.source === 'worklist' ? `the worklist of ${selection.worklist.generatedAt ?? 'an unknown date'}` : `the facets (${selection.facets.join(', ')}); this repository publishes no worklist yet`;
+  const lines = [`Read from ${from}.`, '', ...verdictLine(selection)];
+  if (selection.selected.length) {
+    lines.push('| # | Check | What | Measured | Target | Why | Score |', '|--:|---|---|---|---|---|--:|');
+    selection.selected.forEach((u, i) => lines.push(`| ${i + 1} | ${u.check} | \`${shown(u)}\` | ${u.value ?? 'n/a'} | ${u.target ?? 'n/a'} | ${u.reasons.join(', ')} | ${u.score} |`));
+  }
+  return lines;
+}
+
+function excludedLines(selection) {
+  const e = selection.excluded;
+  const lines = [
+    '',
+    `Not selected: ${e.tracked.length} already tracked by an open story, ${e.declined.length} closed as not planned, ${e.ignored.count} on the ignore list, ${e.withinBar} within their bar, ${e.overCap.count} over the limit of ${selection.maxStories} stories${e.disabled.length ? `, checks switched off: ${e.disabled.join(', ')}` : ''}.`,
+  ];
+  const pending = Object.entries(e.notEnforced).map(([check, n]) => `${check} ${n.count}${n.change ? ` (${n.change > 0 ? '+' : ''}${n.change})` : ''}`);
+  if (pending.length) lines.push(`Not yet enforced (measured, no story): ${pending.join(', ')}.`);
+  lines.push(`Judgement pass: ${selection.riskMap.length} file(s), ${selection.judgement.slots} story slot(s) free.`);
+  return lines;
+}
+
+// Closing the loop and graduation, when there is anything to say.
+function loopLines(selection) {
+  const lines = [];
+  const held = selection.storiesHeld ?? [];
+  if (held.length) lines.push(`Open audit stories holding a slot: ${held.length} of ${selection.maxStories}.`);
+  if (selection.sinceLastAudit?.markdown) lines.push('', selection.sinceLastAudit.markdown.replace(/^## /, '#### '));
+  const actions = selection.followUp?.actions ?? [];
+  if (actions.length) lines.push('', `Follow-up: ${actions.map((a) => `${a.action} story ${a.issue}`).join(', ')}.`);
+  const graduating = Object.entries(selection.graduation?.checks ?? {}).filter(([, g]) => g.state !== 'enforced');
+  if (graduating.length) lines.push('', `Graduation of report-only checks: ${graduating.map(([check, g]) => `${check} ${g.state}${g.state === 'waiting' ? ` until ${g.readyOn}` : ''}`).join(', ')}.`);
+  return lines;
 }

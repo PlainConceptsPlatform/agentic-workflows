@@ -2,6 +2,24 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.32.0
+
+### Changed
+
+- **The audit closes the loop on its own stories** (phase 3 of [#582](https://github.com/PlainConceptsPlatform/agentic-workflows/issues/582)). Every data-led run compares the stories earlier audits filed (by the `audit-item` marker, with the unit re-derived from the newest worklist, never a raw item id) with what CI measures now. A story whose fix is merged before the worklist was built and that is within its bar, or no longer listed, is closed as completed with a comment giving the number when filed, the number now and the target; one closed as done and within its bar is confirmed once; one closed as done but still over its bar is reopened with the numbers, once, and its unit is not filed again as a new story (closed again after that, it is the team's answer). Nothing is decided on facet data, on an invalid `quality.config.json`, or on a worklist whose measured commit predates the change.
+- **Open audit stories hold their slots.** The audit files `AUDIT_MAX_STORIES` less the open audit stories, so it files fewer new stories while old ones are unfinished; with every slot held the agent does not start, and the summary says why (not "clean"). `conclude` passes the reduced cap to `file-audit-issues`.
+- **The report gains "Since last audit"**: fixed, still open and regressed counts, then one line per story with its numbers. It is appended by `file-audit-issues` from the selection (new input `selection-file`), not written by the model, and carries no issue number. The data-led prompt tells the agent not to write it.
+- **`audit-close` closes a report with the numbers**: each measured story's value when filed and after the fix, from the follow-up comments.
+- **Report-only checks graduate.** A check in `report` mode (`deadCode`, `architecture`, `patterns`, `bundle`) for 14 days, counted from `<check>.since` or from the day the audit first saw it (recorded in the selection and carried forward), gets one pull request, `Quality gates: enforce <check> as a ratchet` on `audit/graduate-<check>`, that writes the baseline from the worklist's `rules` counts (the bundle's `totalJsBytes`, limit +10%) and switches the mode. No model. It is opened as a draft with the merge train's hold label (read from the router's `MERGE_TRAIN_HOLD_LABEL`) and `quality-graduation`, so it is never merged automatically; one a person closed or merged is not opened again for 90 days. When the baseline would freeze junk (default: unused and unlisted dependencies in dead code, `AD0001` in patterns), one clean-up story is filed first and the pull request waits for it; dependency junk a dead-code ratchet fails on blocks the pull request until it is gone.
+- **The item marker records its check**: `<!-- audit-item: <id> value= target= check= -->`, so a story's unit can be called gone when CI stops listing it. Markers without it still match; their check is looked up in the last selection.
+
+### Added
+
+- **`agent-audit` `follow_up` job** and the **`audit-follow-up` action**: carry out the selection's follow-up and graduation actions with the App token (issues, contents and pull-requests write), after the agent, whether it ran, was skipped by the clean exit, or failed. A re-run says nothing twice, a story is reopened at most once, and nothing is ever merged.
+- **`select` outputs** `story_slots` and `follow_up`, and reads the pull requests that close an open story (`pull-requests: read`).
+- **`quality.config.json` `audit.graduateAfterDays`** (0 to 365, default 14; 0 turns graduation off) and **`audit.junk`** (per graduating check, the rule ids a baseline must not freeze).
+- Tests: `node:test` cases for close-on-target, reopen-on-no-change, slot holding, graduation after 14 days, junk first, and a carried first-seen date; vitest cases for the action against an in-memory repository (closed-pull-request respect, hold label, idempotent re-runs) and for `audit-close`'s numbers; route-matrix assertions for the wiring.
+
 ## 1.31.0
 
 ### Changed

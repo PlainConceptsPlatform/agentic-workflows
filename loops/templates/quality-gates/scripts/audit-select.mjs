@@ -9,10 +9,13 @@
 // the `engineering-excellence-*` facets it finds (a repository whose own CI has not adopted the
 // worklist step); with neither, the selection says `source: none` and the audit explores as before.
 // The mutation facet is read either way: the worklist is built where Stryker's reports are not.
-// Open issues give what is already tracked (by the marker in a story's body), the last run's
-// selection gives what got worse, and `git log` gives the files that changed lately.
+// Open issues give what is already tracked (by the marker in a story's body) and, with the stories
+// closed lately and the pull requests that close them, what the follow-up closes, confirms or
+// reopens; the last run's selection gives what got worse, and `git log` the files that changed lately.
+// It writes nothing to GitHub: the selection lists the follow-up and graduation actions, and the
+// audit's `follow_up` job carries them out (actions/audit-follow-up).
 //
-// Needs `gh` with GH_TOKEN (actions: read, issues: read) and GITHUB_REPOSITORY. Every read is
+// Needs `gh` with GH_TOKEN (actions: read, issues: read, pull-requests: read) and GITHUB_REPOSITORY. Every read is
 // optional: one that fails is named in `problems` and the selection is built from the rest.
 // For a run without the network, give the inputs as files:
 //   [--worklist worklist.json] [--facets <dir of <facet>.json>] [--issues issues.json]
@@ -120,27 +123,63 @@ function readFacets(names, branch) {
 }
 
 const issueRows = (query, filter) =>
-  gh(['--paginate', `repos/${repo}/issues?${query}&per_page=100`, '--jq', `.[] | select(.pull_request | not) | ${filter} | {number, state, stateReason: .state_reason, body}`])
+  gh(['--paginate', `repos/${repo}/issues?${query}&per_page=100`, '--jq', `.[] | select(.pull_request | not) | ${filter} | {number, title, state, stateReason: .state_reason, closedAt: .closed_at, body}`])
     .split('\n')
     .filter(Boolean)
     .map((line) => JSON.parse(line));
 
-// Open issues, and the stories closed in the last months: one closed as not planned is not filed again.
+// The pull requests that close an open story, merged or not: a story is closed on the numbers only
+// once its fix is merged.
+const PULLS_QUERY = 'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { issue(number: $number) { closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number merged mergedAt } } } } }';
+function pullsOf(number) {
+  const [owner, name] = repo.split('/');
+  const out = JSON.parse(execFileSync('gh', ['api', 'graphql', '-f', `query=${PULLS_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${number}`], { encoding: 'utf8', maxBuffer: MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe'] }));
+  return out.data?.repository?.issue?.closedByPullRequestsReferences?.nodes ?? [];
+}
+
+// Open issues, and the stories closed in the last months: one closed as not planned is not filed
+// again, and one closed lately is checked against the numbers. Clean-up stories for a graduating
+// check carry their own marker.
 function readIssues() {
   if (opts.issues) return attempt(opts.issues, () => json(opts.issues)) ?? [];
   if (offline) return [];
-  const marked = 'select((.body // "") | contains("audit-item:"))';
+  const marked = 'select((.body // "") | (contains("audit-item:") or contains("audit-graduation:")))';
   const since = new Date(Date.now() - CLOSED_DAYS * 86400000).toISOString();
-  return [
-    ...(attempt('the open issues', () => issueRows('state=open', marked)) ?? []),
-    ...(attempt('the closed issues', () => issueRows(`state=closed&since=${since}`, marked)) ?? []),
-  ];
+  const open = attempt('the open issues', () => issueRows('state=open', marked)) ?? [];
+  for (const issue of open.filter((i) => String(i.body).includes('audit-item:'))) {
+    issue.pulls = attempt(`the pull requests of issue ${issue.number}`, () => pullsOf(issue.number)) ?? [];
+  }
+  return [...open, ...(attempt('the closed issues', () => issueRows(`state=closed&since=${since}`, marked)) ?? [])];
 }
 
+// The last selection that was really computed: a run whose script failed left the fallback
+// (`source: none`), which carries no snapshot, follow-up or graduation state to build on.
 function readPrevious() {
   if (opts.previous) return attempt(opts.previous, () => json(opts.previous));
   if (offline) return null;
-  return fetchArtifact(SELECTION_ARTIFACT, { notRun: process.env.GITHUB_RUN_ID });
+  return attempt(`the ${SELECTION_ARTIFACT} artifact`, () => {
+    const { artifacts = [] } = JSON.parse(gh([`repos/${repo}/actions/artifacts?name=${SELECTION_ARTIFACT}&per_page=100`]));
+    const runs = artifacts
+      .filter((a) => !a.expired && String(a.workflow_run?.id) !== String(process.env.GITHUB_RUN_ID))
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+      .slice(0, 5);
+    for (const artifact of runs) {
+      const doc = artifactJson(artifact);
+      if (doc?.source && doc.source !== 'none') return doc;
+    }
+    return null;
+  });
+}
+
+// When the measured commit was made, from the checkout's history; null when it is not at hand.
+function commitTime(sha) {
+  if (!/^[0-9a-f]{7,40}$/.test(String(sha ?? ''))) return null;
+  try {
+    const out = execFileSync('git', ['-C', REPO_ROOT, 'show', '-s', '--format=%cI', sha], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return out ? new Date(out).toISOString() : null;
+  } catch {
+    return null;
+  }
 }
 
 // Commits per file over the last `days`, or null when the checkout has no history to read.
@@ -181,6 +220,7 @@ const selection = selectAudit({
   issues: readIssues(),
   previous: readPrevious(),
   maxStories,
+  commitTime: commitTime(worklist?.commitSha),
   changes: readChanges(config.audit.riskDays),
   problems,
 });
@@ -193,6 +233,15 @@ if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMM
 if (process.env.GITHUB_OUTPUT) {
   appendFileSync(
     process.env.GITHUB_OUTPUT,
-    [`source=${selection.source}`, `data_led=${selection.source !== 'none'}`, `run_agent=${selection.runAgent}`, `clean=${selection.clean}`, `selected=${selection.selected.length}`, `risk_files=${selection.riskMap.length}`].join('\n') + '\n',
+    [
+      `source=${selection.source}`,
+      `data_led=${selection.source !== 'none'}`,
+      `run_agent=${selection.runAgent}`,
+      `clean=${selection.clean}`,
+      `selected=${selection.selected.length}`,
+      `risk_files=${selection.riskMap.length}`,
+      `story_slots=${selection.storySlots}`,
+      `follow_up=${(selection.followUp?.actions?.length ?? 0) + (selection.graduation?.actions?.length ?? 0) > 0}`,
+    ].join('\n') + '\n',
   );
 }
