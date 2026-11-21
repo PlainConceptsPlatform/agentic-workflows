@@ -1035,6 +1035,25 @@ steps:
         echo "CI run ID unavailable, cannot fetch logs" > /tmp/gh-aw/agent/failed-logs.txt
       fi
 
+# gh-aw 1.2 puts the patch and bundle the push tool writes into the agent artifact only when its
+# own safe_outputs job applies them (an unstaged push) or threat detection reads them. Here the
+# push is staged and conclude applies the bundle, so since the move to gh-aw 1.2.2 the bundle never
+# left the agent job: conclude found none, skipped the push without a word, and the run still
+# reported the repair as made. This step carries them out under a name download-agent-output
+# looks for. Nothing is uploaded when the agent pushed nothing.
+post-steps:
+  - name: Upload the agent's git bundle for conclude
+    if: always()
+    continue-on-error: true
+    uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+    with:
+      name: ${{ needs.activation.outputs.artifact_prefix }}agent-bundle
+      path: |
+        /tmp/gh-aw/aw-*.bundle
+        /tmp/gh-aw/aw-*.patch
+      if-no-files-found: ignore
+      retention-days: 7
+
 safe-outputs:
   # Path B. Without this, gh-aw's own safe_outputs job writes as well as the conclude job, and
   # it runs first: it pushed a flattened, single-parent commit with GITHUB_TOKEN while conclude
