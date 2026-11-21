@@ -8,13 +8,16 @@
 
 const DAY = 86400000;
 
+// `key=value` pairs separated by spaces, as the markers write them.
+const fieldsOf = (text) => Object.fromEntries(String(text).trim().split(/\s+/).map((pair) => pair.split('=')).filter((pair) => pair.length === 2 && pair[0]));
+
 // The verdict lines a follow-up comment carries: `<!-- audit-follow-up: <verdict> id=<id> ... -->`.
 const FOLLOW_UP = /<!--\s*audit-follow-up:\s*(close|verify|reopen)\s+id=([0-9a-f]{16})\b([^>]*?)-->/g;
 
 function followUpsIn(text) {
   return [...String(text ?? '').matchAll(FOLLOW_UP)].map((match) => {
-    const field = (name) => match[3].match(new RegExp(`\\b${name}=(\\S+)`))?.[1] ?? null;
-    return { verdict: match[1], id: match[2], check: field('check'), before: field('before'), after: field('after'), target: field('target'), metric: field('metric') };
+    const field = fieldsOf(match[3]);
+    return { verdict: match[1], id: match[2], check: field.check ?? null, before: field.before ?? null, after: field.after ?? null, target: field.target ?? null, metric: field.metric ?? null };
   });
 }
 
@@ -58,16 +61,17 @@ function holdLabelFrom(routerText, fallback = 'hold') {
   return match && match[1].trim() ? match[1].trim() : fallback;
 }
 
+const GRADUATION_MARKER = /<!--\s*audit-graduation:\s*([A-Za-z]+)(\s+cleanup)?\s*-->/g;
 const hasGraduationMarker = (body, check, cleanup) =>
-  new RegExp(`<!--\\s*audit-graduation:\\s*${check}${cleanup ? '\\s+cleanup' : ''}\\s*-->`).test(String(body ?? ''));
+  [...String(body ?? '').matchAll(GRADUATION_MARKER)].some((match) => match[1] === check && Boolean(match[2]) === Boolean(cleanup));
 
 // ── The numbers audit-close puts on a report it closes ──
 const ITEM_MARKER = /<!--\s*audit-item:\s*([0-9a-f]{16})\b([^>]*?)-->/g;
 
 function itemMarkersIn(text) {
   return [...String(text ?? '').matchAll(ITEM_MARKER)].map((match) => {
-    const field = (name) => match[2].match(new RegExp(`\\b${name}=(\\S+)`))?.[1] ?? null;
-    return { id: match[1], value: field('value'), target: field('target'), check: field('check') };
+    const field = fieldsOf(match[2]);
+    return { id: match[1], value: field.value ?? null, target: field.target ?? null, check: field.check ?? null };
   });
 }
 

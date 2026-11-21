@@ -45,12 +45,15 @@ export function markerFor(unit) {
   return `<!-- audit-item: ${unit.id} value=${markerValue(unit.value)} target=${markerValue(unit.target)}${unit.check ? ` check=${unit.check}` : ''} -->`;
 }
 
+// `key=value` pairs separated by spaces, as a marker writes them.
+const fieldsOf = (text) => Object.fromEntries(String(text).trim().split(/\s+/).map((pair) => pair.split('=')).filter((pair) => pair.length === 2 && pair[0]));
+
 // Every marker in a text: [{ id, value, target, check }]. A marker written before 1.32.0 has no check.
 export function markersIn(text) {
   const found = [];
   for (const match of String(text ?? '').matchAll(MARKER)) {
-    const field = (name) => match[2].match(new RegExp(`\\b${name}=(\\S+)`))?.[1] ?? null;
-    found.push({ id: match[1], value: field('value'), target: field('target'), check: field('check') });
+    const field = fieldsOf(match[2]);
+    found.push({ id: match[1], value: field.value ?? null, target: field.target ?? null, check: field.check ?? null });
   }
   return found;
 }
@@ -554,86 +557,96 @@ const issueTime = (value) => (value ? Date.parse(value) : null);
 // `issues` are { number, title, state, stateReason, body, closedAt, pulls: [{ number, merged, mergedAt }] }.
 // `measuredAt` is when the worklist was built; `enabled` false only keeps track (no verdicts), for
 // data that cannot be believed or a selection read from the facets.
-export function followUp({ issues = [], checks = null, previous = null, measuredAt = null, now = new Date(), enabled = true } = {}) {
-  const last = isObject(previous?.followUp) ? previous.followUp : {};
-  const settledBefore = isObject(last.settled) ? last.settled : {};
-  const reopenedBefore = new Set(Array.isArray(last.reopened) ? last.reopened : []);
-  const measured = enabled && checks ? measuredUnits(checks) : null;
-  const measuredTime = issueTime(measuredAt);
+export function followUp(input = {}) {
+  const ctx = followUpContext(input);
   const out = { tracked: new Map(), declined: new Map(), held: new Set(), actions: [], rows: [], settled: {}, reopened: [] };
   const inReach = new Set();
 
-  for (const issue of [...issues].sort((a, b) => a.number - b.number)) {
+  for (const issue of [...(input.issues ?? [])].sort((a, b) => a.number - b.number)) {
     const markers = markersIn(issue.body);
     if (markers.length === 0) continue;
     inReach.add(issue.number);
-    const ids = markers.map((m) => m.id);
-    const track = (map) => ids.forEach((id) => map.set(id, issue.number));
-
-    if (issue.state === 'open') {
-      track(out.tracked);
-      out.held.add(issue.number);
-      if (!measured || measuredTime === null) continue;
-      const where = markers.map((m) => standing(m, measured, previous));
-      const met = where.every((w) => w.state === 'gone' || (w.state === 'measured' && !w.over));
-      const merged = (issue.pulls ?? []).some((p) => p?.merged && issueTime(p.mergedAt) !== null && issueTime(p.mergedAt) <= measuredTime);
-      if (met && merged) {
-        const rows = markers.map((m, i) => rowOf(issue, m, where[i], 'fixed'));
-        out.rows.push(...rows);
-        out.actions.push({ issue: issue.number, action: 'close', comment: followUpComment('close', rows, measuredAt) });
-        out.held.delete(issue.number);
-      } else {
-        out.rows.push(...markers.map((m, i) => rowOf(issue, m, where[i], 'open')));
-      }
-      continue;
-    }
-
-    if (issue.stateReason === 'not_planned') {
-      track(out.declined);
-      continue;
-    }
-
-    // Closed as completed (or with no reason, as an older closing leaves it).
-    const prior = settledBefore[issue.number];
-    if (isObject(prior) && prior.closedAt === (issue.closedAt ?? null)) {
-      out.settled[issue.number] = prior;
-      if (prior.verdict === 'accepted') track(out.declined);
-      continue;
-    }
-    const closedTime = issueTime(issue.closedAt);
-    if (!measured || measuredTime === null || closedTime === null || now - closedTime > FOLLOW_UP_DAYS * DAY) continue;
-    const where = markers.map((m) => standing(m, measured, previous));
-    if (closedTime > measuredTime) {
-      // Closed after CI last measured: the next worklist says whether it worked. Not filed again meanwhile.
-      track(out.tracked);
-      out.rows.push(...markers.map((m, i) => rowOf(issue, m, where[i], 'pending')));
-      continue;
-    }
-    if (where.some((w) => w.state === 'measured' && w.over)) {
-      const rows = markers.map((m, i) => rowOf(issue, m, where[i], 'regressed'));
-      out.rows.push(...rows);
-      if (reopenedBefore.has(issue.number)) {
-        // Reopened once and closed again by a person: their answer.
-        out.settled[issue.number] = { closedAt: issue.closedAt, verdict: 'accepted' };
-        track(out.declined);
-      } else {
-        out.actions.push({ issue: issue.number, action: 'reopen', comment: followUpComment('reopen', rows, measuredAt) });
-        out.reopened.push(issue.number);
-        track(out.tracked);
-        out.held.add(issue.number);
-      }
-      continue;
-    }
-    if (where.every((w) => w.state === 'gone' || w.state === 'measured')) {
-      const rows = markers.map((m, i) => rowOf(issue, m, where[i], 'fixed'));
-      out.rows.push(...rows);
-      out.actions.push({ issue: issue.number, action: 'verify', comment: followUpComment('verify', rows, measuredAt) });
-      out.settled[issue.number] = { closedAt: issue.closedAt, verdict: 'fixed' };
-    }
+    const story = { issue, markers, track: (map) => markers.forEach((m) => map.set(m.id, issue.number)) };
+    if (issue.state === 'open') followOpen(story, ctx, out);
+    else if (issue.stateReason === 'not_planned') story.track(out.declined);
+    else followClosed(story, ctx, out);
   }
 
-  out.reopened = [...new Set([...[...reopenedBefore].filter((n) => inReach.has(n)), ...out.reopened])].sort((a, b) => a - b);
+  out.reopened = [...new Set([...[...ctx.reopenedBefore].filter((n) => inReach.has(n)), ...out.reopened])].sort((a, b) => a - b);
   return out;
+}
+
+// What the last run settled and reopened, and what CI measures now (null when nothing is decided).
+function followUpContext({ checks = null, previous = null, measuredAt = null, now = new Date(), enabled = true }) {
+  const last = isObject(previous?.followUp) ? previous.followUp : {};
+  return {
+    previous,
+    measuredAt,
+    now,
+    settledBefore: isObject(last.settled) ? last.settled : {},
+    reopenedBefore: new Set(Array.isArray(last.reopened) ? last.reopened : []),
+    measured: enabled && checks ? measuredUnits(checks) : null,
+    measuredTime: issueTime(measuredAt),
+  };
+}
+
+const decidable = (ctx) => ctx.measured !== null && ctx.measuredTime !== null;
+const withinBar = (w) => w.state === 'gone' || (w.state === 'measured' && !w.over);
+const mergedBefore = (pulls, time) => (pulls ?? []).some((p) => p?.merged && issueTime(p.mergedAt) !== null && issueTime(p.mergedAt) <= time);
+
+// An open story tracks its unit and holds its slot, unless its fix is merged and measured within its bar.
+function followOpen({ issue, markers, track }, ctx, out) {
+  track(out.tracked);
+  out.held.add(issue.number);
+  if (!decidable(ctx)) return;
+  const where = markers.map((m) => standing(m, ctx.measured, ctx.previous));
+  const fixed = where.every(withinBar) && mergedBefore(issue.pulls, ctx.measuredTime);
+  const rows = markers.map((m, i) => rowOf(issue, m, where[i], fixed ? 'fixed' : 'open'));
+  out.rows.push(...rows);
+  if (!fixed) return;
+  out.actions.push({ issue: issue.number, action: 'close', comment: followUpComment('close', rows, ctx.measuredAt) });
+  out.held.delete(issue.number);
+}
+
+// A story closed as completed (or with no reason, as an older closing leaves it), checked once per closing.
+function followClosed({ issue, markers, track }, ctx, out) {
+  const prior = ctx.settledBefore[issue.number];
+  if (isObject(prior) && prior.closedAt === (issue.closedAt ?? null)) {
+    out.settled[issue.number] = prior;
+    if (prior.verdict === 'accepted') track(out.declined);
+    return;
+  }
+  const closedTime = issueTime(issue.closedAt);
+  if (!decidable(ctx) || closedTime === null || ctx.now - closedTime > FOLLOW_UP_DAYS * DAY) return;
+  const where = markers.map((m) => standing(m, ctx.measured, ctx.previous));
+  const rowsAs = (status) => markers.map((m, i) => rowOf(issue, m, where[i], status));
+  if (closedTime > ctx.measuredTime) {
+    // Closed after CI last measured: the next worklist says whether it worked. Not filed again meanwhile.
+    track(out.tracked);
+    out.rows.push(...rowsAs('pending'));
+  } else if (where.some((w) => w.state === 'measured' && w.over)) {
+    const rows = rowsAs('regressed');
+    out.rows.push(...rows);
+    reopenOnce(issue, rows, track, ctx, out);
+  } else if (where.every((w) => w.state !== 'unknown')) {
+    const rows = rowsAs('fixed');
+    out.rows.push(...rows);
+    out.actions.push({ issue: issue.number, action: 'verify', comment: followUpComment('verify', rows, ctx.measuredAt) });
+    out.settled[issue.number] = { closedAt: issue.closedAt, verdict: 'fixed' };
+  }
+}
+
+// Reopened once; closed again by a person after that, it is their answer.
+function reopenOnce(issue, rows, track, ctx, out) {
+  if (ctx.reopenedBefore.has(issue.number)) {
+    out.settled[issue.number] = { closedAt: issue.closedAt, verdict: 'accepted' };
+    track(out.declined);
+    return;
+  }
+  out.actions.push({ issue: issue.number, action: 'reopen', comment: followUpComment('reopen', rows, ctx.measuredAt) });
+  out.reopened.push(issue.number);
+  track(out.tracked);
+  out.held.add(issue.number);
 }
 
 const STATUS_ORDER = ['fixed', 'regressed', 'open', 'pending'];
@@ -761,86 +774,102 @@ export function graduation({ checks = null, config, previous = null, issues = []
   const reopenedBefore = new Set(Array.isArray(last.reopened) ? last.reopened : []);
   const out = { firstSeen: {}, reopened: [], checks: {}, actions: [] };
   if (!enabled || !checks) return { ...out, firstSeen: { ...seenBefore }, reopened: [...reopenedBefore] };
-  const afterDays = config.audit.graduateAfterDays;
-  const measuredTime = issueTime(worklist?.generatedAt);
-  const today = dateOf(now);
-
-  for (const check of GRADUATION_CHECKS) {
-    const data = checks[check];
-    const section = config[check];
-    if (!data) {
-      if (typeof seenBefore[check] === 'string' && section.mode !== 'ratchet') out.firstSeen[check] = seenBefore[check];
-      continue;
-    }
-    if (section.mode === 'ratchet' || data.mode === 'ratchet') {
-      out.checks[check] = { state: 'enforced' };
-      continue;
-    }
-    const sinceSource = section.since ? 'config' : 'first-seen';
-    const since = section.since ?? (typeof seenBefore[check] === 'string' ? seenBefore[check] : today);
-    if (!section.since) out.firstSeen[check] = since;
-    const ageDays = daysBetween(since, now);
-    const facts = { since, sinceSource, ageDays, afterDays };
-    if (afterDays === 0) {
-      out.checks[check] = { state: 'off', ...facts };
-      continue;
-    }
-    if (ageDays < afterDays) {
-      out.checks[check] = { state: 'waiting', ...facts, readyOn: dateOf(new Date(Date.parse(`${since}T00:00:00Z`) + afterDays * DAY)) };
-      continue;
-    }
-    const built = graduationPatch(check, data, since);
-    let valid = Boolean(built);
-    try {
-      if (built) parseQualityConfig(JSON.stringify({ [check]: built.patch }));
-    } catch {
-      valid = false;
-    }
-    if (!valid) {
-      out.checks[check] = { state: 'no-data', ...facts };
-      continue;
-    }
-
-    const junkRules = config.audit.junk[check] ?? [];
-    const junk = Object.fromEntries(junkRules.filter((rule) => (data.rules?.[rule]?.count ?? 0) > 0).map((rule) => [rule, data.rules[rule].count]));
-    const story = [...issues]
-      .filter((i) => GRADUATION_MARKER.exec(i.body ?? '')?.[1] === check && GRADUATION_MARKER.exec(i.body ?? '')?.[2])
-      .sort((a, b) => b.number - a.number)[0];
-    let junkAccepted = false;
-    if (Object.keys(junk).length) {
-      if (!story) {
-        out.actions.push({ kind: 'cleanup-story', check, ...cleanupStory(check, junk, data, since, worklist?.generatedAt) });
-        out.checks[check] = { state: 'cleanup-filed', ...facts, junk };
-        continue;
-      }
-      if (story.state === 'open') {
-        out.checks[check] = { state: 'cleanup-open', ...facts, junk, issue: story.number };
-        continue;
-      }
-      if (story.stateReason === 'not_planned' || reopenedBefore.has(check)) junkAccepted = true;
-      else if (issueTime(story.closedAt) !== null && measuredTime !== null && issueTime(story.closedAt) > measuredTime) {
-        out.checks[check] = { state: 'cleanup-pending', ...facts, junk, issue: story.number };
-        continue;
-      } else {
-        const counts = Object.entries(junk).map(([rule, count]) => `${rule} ${count}`).join(', ');
-        out.actions.push({
-          kind: 'cleanup-reopen',
-          check,
-          issue: story.number,
-          comment: `Reopened by the audit: this was closed as done, but CI's worklist of ${String(worklist?.generatedAt ?? '').slice(0, 10)} still counts ${counts}. The ${GRADUATION_LABEL[check]} check graduates once they are gone. If they are acceptable, close this as not planned and the audit writes the baseline as it is.`,
-        });
-        out.reopened.push(check);
-        out.checks[check] = { state: 'cleanup-reopened', ...facts, junk, issue: story.number };
-        continue;
-      }
-    } else if (story?.state === 'open') {
-      out.actions.push({ kind: 'cleanup-close', check, issue: story.number, comment: `Closed by the audit: CI's worklist of ${String(worklist?.generatedAt ?? '').slice(0, 10)} counts none of these any more, so the ${GRADUATION_LABEL[check]} check can graduate.` });
-    }
-    out.actions.push({ kind: 'pull-request', check, ...graduationPullRequest(check, built, { ...facts, worklist, junkAccepted }) });
-    out.checks[check] = { state: 'ready', ...facts, ...(Object.keys(junk).length ? { junk } : {}) };
-  }
+  const ctx = { checks, config, issues, worklist, now, seenBefore, reopenedBefore, measuredTime: issueTime(worklist?.generatedAt), out };
+  for (const check of GRADUATION_CHECKS) graduateCheck(check, ctx);
   out.reopened = [...new Set([...reopenedBefore, ...out.reopened])].filter((check) => out.checks[check]?.state !== 'enforced').sort();
   return out;
+}
+
+// Where one check stands, and what to do about it this week.
+function graduateCheck(check, ctx) {
+  const { config, seenBefore, now, out } = ctx;
+  const data = ctx.checks[check];
+  const section = config[check];
+  if (!data) {
+    if (typeof seenBefore[check] === 'string' && section.mode !== 'ratchet') out.firstSeen[check] = seenBefore[check];
+    return;
+  }
+  if (section.mode === 'ratchet' || data.mode === 'ratchet') {
+    out.checks[check] = { state: 'enforced' };
+    return;
+  }
+  const since = section.since ?? (typeof seenBefore[check] === 'string' ? seenBefore[check] : dateOf(now));
+  if (!section.since) out.firstSeen[check] = since;
+  const facts = { since, sinceSource: section.since ? 'config' : 'first-seen', ageDays: daysBetween(since, now), afterDays: config.audit.graduateAfterDays };
+  const waiting = graduationWait(facts);
+  if (waiting) {
+    out.checks[check] = waiting;
+    return;
+  }
+  const built = validPatch(check, graduationPatch(check, data, since));
+  if (!built) {
+    out.checks[check] = { state: 'no-data', ...facts };
+    return;
+  }
+  const junk = junkOf(check, data, config);
+  const held = junkStep(check, junk, data, facts, ctx);
+  if (held.state) {
+    out.checks[check] = { ...held, ...facts, junk };
+    return;
+  }
+  out.actions.push({ kind: 'pull-request', check, ...graduationPullRequest(check, built, { ...facts, worklist: ctx.worklist, junkAccepted: held.junkAccepted }) });
+  out.checks[check] = { state: 'ready', ...facts, ...(Object.keys(junk).length ? { junk } : {}) };
+}
+
+function graduationWait(facts) {
+  if (facts.afterDays === 0) return { state: 'off', ...facts };
+  if (facts.ageDays >= facts.afterDays) return null;
+  return { state: 'waiting', ...facts, readyOn: dateOf(new Date(Date.parse(`${facts.since}T00:00:00Z`) + facts.afterDays * DAY)) };
+}
+
+// The patch, when quality.config.json would accept it.
+function validPatch(check, built) {
+  if (!built) return null;
+  try {
+    parseQualityConfig(JSON.stringify({ [check]: built.patch }));
+    return built;
+  } catch {
+    return null;
+  }
+}
+
+const junkOf = (check, data, config) =>
+  Object.fromEntries((config.audit.junk[check] ?? []).filter((rule) => (data.rules?.[rule]?.count ?? 0) > 0).map((rule) => [rule, data.rules[rule].count]));
+
+const cleanupStoryOf = (check, issues) =>
+  [...issues].filter((i) => {
+    const match = GRADUATION_MARKER.exec(i.body ?? '');
+    return match?.[1] === check && Boolean(match[2]);
+  }).sort((a, b) => b.number - a.number)[0];
+
+const day = (value) => String(value ?? '').slice(0, 10);
+
+// The clean-up story before a baseline that would freeze junk. Returns { state } while the pull
+// request waits, or { junkAccepted } when it may open.
+function junkStep(check, junk, data, facts, ctx) {
+  const { out, worklist } = ctx;
+  const story = cleanupStoryOf(check, ctx.issues);
+  if (!Object.keys(junk).length) {
+    if (story?.state === 'open') out.actions.push({ kind: 'cleanup-close', check, issue: story.number, comment: `Closed by the audit: CI's worklist of ${day(worklist?.generatedAt)} counts none of these any more, so the ${GRADUATION_LABEL[check]} check can graduate.` });
+    return { junkAccepted: false };
+  }
+  if (!story) {
+    out.actions.push({ kind: 'cleanup-story', check, ...cleanupStory(check, junk, data, facts.since, worklist?.generatedAt) });
+    return { state: 'cleanup-filed' };
+  }
+  if (story.state === 'open') return { state: 'cleanup-open', issue: story.number };
+  if (story.stateReason === 'not_planned' || ctx.reopenedBefore.has(check)) return { junkAccepted: true };
+  const closedTime = issueTime(story.closedAt);
+  if (closedTime !== null && ctx.measuredTime !== null && closedTime > ctx.measuredTime) return { state: 'cleanup-pending', issue: story.number };
+  const counts = Object.entries(junk).map(([rule, count]) => `${rule} ${count}`).join(', ');
+  out.actions.push({
+    kind: 'cleanup-reopen',
+    check,
+    issue: story.number,
+    comment: `Reopened by the audit: this was closed as done, but CI's worklist of ${day(worklist?.generatedAt)} still counts ${counts}. The ${GRADUATION_LABEL[check]} check graduates once they are gone. If they are acceptable, close this as not planned and the audit writes the baseline as it is.`,
+  });
+  out.reopened.push(check);
+  return { state: 'cleanup-reopened', issue: story.number };
 }
 
 // ── The selection ────────────────────────────────────────────────────────────────────────────────
@@ -1015,31 +1044,51 @@ export function selectionSummary(selection) {
   if (selection.source === 'none') {
     lines.push('This repository publishes no engineering health data (no `engineering-excellence-worklist` and no facet on the default branch), so the audit explores the repository as before.');
   } else {
-    const from = selection.source === 'worklist' ? `the worklist of ${selection.worklist.generatedAt ?? 'an unknown date'}` : `the facets (${selection.facets.join(', ')}); this repository publishes no worklist yet`;
-    lines.push(`Read from ${from}.`, '');
-    const held = selection.storiesHeld ?? [];
-    if (selection.clean) lines.push('**The repository is clean:** nothing enforced is over its bar or got worse, and no risky file changed. The agent does not start and nothing is filed.');
-    else if (!selection.runAgent && selection.trustworthy && held.length && selection.storySlots === 0) lines.push(`**Every story slot is held by an open audit story** (${held.length} of ${selection.maxStories}). The agent does not start; new stories wait until those are done.`);
-    else if (!selection.runAgent) lines.push('**Nothing could be selected, and the data cannot be trusted** (see below). The agent does not start; this is not a clean audit.');
-    if (selection.selected.length) {
-      lines.push('| # | Check | What | Measured | Target | Why | Score |', '|--:|---|---|---|---|---|--:|');
-      selection.selected.forEach((u, i) => lines.push(`| ${i + 1} | ${u.check} | \`${shown(u)}\` | ${u.value ?? 'n/a'} | ${u.target ?? 'n/a'} | ${u.reasons.join(', ')} | ${u.score} |`));
-    }
-    const e = selection.excluded;
-    lines.push(
-      '',
-      `Not selected: ${e.tracked.length} already tracked by an open story, ${e.declined.length} closed as not planned, ${e.ignored.count} on the ignore list, ${e.withinBar} within their bar, ${e.overCap.count} over the limit of ${selection.maxStories} stories${e.disabled.length ? `, checks switched off: ${e.disabled.join(', ')}` : ''}.`,
-    );
-    const pending = Object.entries(e.notEnforced).map(([check, n]) => `${check} ${n.count}${n.change ? ` (${n.change > 0 ? '+' : ''}${n.change})` : ''}`);
-    if (pending.length) lines.push(`Not yet enforced (measured, no story): ${pending.join(', ')}.`);
-    lines.push(`Judgement pass: ${selection.riskMap.length} file(s), ${selection.judgement.slots} story slot(s) free.`);
-    if (held.length) lines.push(`Open audit stories holding a slot: ${held.length} of ${selection.maxStories}.`);
-    if (selection.sinceLastAudit?.markdown) lines.push('', selection.sinceLastAudit.markdown.replace(/^## /, '#### '));
-    const actions = selection.followUp?.actions ?? [];
-    if (actions.length) lines.push('', `Follow-up: ${actions.map((a) => `${a.action} story ${a.issue}`).join(', ')}.`);
-    const graduating = Object.entries(selection.graduation?.checks ?? {}).filter(([, g]) => g.state !== 'enforced');
-    if (graduating.length) lines.push('', `Graduation of report-only checks: ${graduating.map(([check, g]) => `${check} ${g.state}${g.state === 'waiting' ? ` until ${g.readyOn}` : ''}`).join(', ')}.`);
+    lines.push(...selectedLines(selection), ...excludedLines(selection), ...loopLines(selection));
   }
   for (const problem of selection.problems) lines.push('', `> ${problem}`);
   return lines.join('\n');
+}
+
+function verdictLine(selection) {
+  const held = selection.storiesHeld ?? [];
+  if (selection.clean) return ['**The repository is clean:** nothing enforced is over its bar or got worse, and no risky file changed. The agent does not start and nothing is filed.'];
+  if (selection.runAgent) return [];
+  if (selection.trustworthy && held.length && selection.storySlots === 0) return [`**Every story slot is held by an open audit story** (${held.length} of ${selection.maxStories}). The agent does not start; new stories wait until those are done.`];
+  return ['**Nothing could be selected, and the data cannot be trusted** (see below). The agent does not start; this is not a clean audit.'];
+}
+
+function selectedLines(selection) {
+  const from = selection.source === 'worklist' ? `the worklist of ${selection.worklist.generatedAt ?? 'an unknown date'}` : `the facets (${selection.facets.join(', ')}); this repository publishes no worklist yet`;
+  const lines = [`Read from ${from}.`, '', ...verdictLine(selection)];
+  if (selection.selected.length) {
+    lines.push('| # | Check | What | Measured | Target | Why | Score |', '|--:|---|---|---|---|---|--:|');
+    selection.selected.forEach((u, i) => lines.push(`| ${i + 1} | ${u.check} | \`${shown(u)}\` | ${u.value ?? 'n/a'} | ${u.target ?? 'n/a'} | ${u.reasons.join(', ')} | ${u.score} |`));
+  }
+  return lines;
+}
+
+function excludedLines(selection) {
+  const e = selection.excluded;
+  const lines = [
+    '',
+    `Not selected: ${e.tracked.length} already tracked by an open story, ${e.declined.length} closed as not planned, ${e.ignored.count} on the ignore list, ${e.withinBar} within their bar, ${e.overCap.count} over the limit of ${selection.maxStories} stories${e.disabled.length ? `, checks switched off: ${e.disabled.join(', ')}` : ''}.`,
+  ];
+  const pending = Object.entries(e.notEnforced).map(([check, n]) => `${check} ${n.count}${n.change ? ` (${n.change > 0 ? '+' : ''}${n.change})` : ''}`);
+  if (pending.length) lines.push(`Not yet enforced (measured, no story): ${pending.join(', ')}.`);
+  lines.push(`Judgement pass: ${selection.riskMap.length} file(s), ${selection.judgement.slots} story slot(s) free.`);
+  return lines;
+}
+
+// Closing the loop and graduation, when there is anything to say.
+function loopLines(selection) {
+  const lines = [];
+  const held = selection.storiesHeld ?? [];
+  if (held.length) lines.push(`Open audit stories holding a slot: ${held.length} of ${selection.maxStories}.`);
+  if (selection.sinceLastAudit?.markdown) lines.push('', selection.sinceLastAudit.markdown.replace(/^## /, '#### '));
+  const actions = selection.followUp?.actions ?? [];
+  if (actions.length) lines.push('', `Follow-up: ${actions.map((a) => `${a.action} story ${a.issue}`).join(', ')}.`);
+  const graduating = Object.entries(selection.graduation?.checks ?? {}).filter(([, g]) => g.state !== 'enforced');
+  if (graduating.length) lines.push('', `Graduation of report-only checks: ${graduating.map(([check, g]) => `${check} ${g.state}${g.state === 'waiting' ? ` until ${g.readyOn}` : ''}`).join(', ')}.`);
+  return lines;
 }
