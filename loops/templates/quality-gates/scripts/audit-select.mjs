@@ -133,7 +133,7 @@ const issueRows = (query, filter) =>
 const PULLS_QUERY = 'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { issue(number: $number) { closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number merged mergedAt } } } } }';
 function pullsOf(number) {
   const [owner, name] = repo.split('/');
-  const out = JSON.parse(execFileSync('gh', ['api', 'graphql', '-f', `query=${PULLS_QUERY}`, '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `number=${number}`], { encoding: 'utf8', maxBuffer: MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe'] }));
+  const out = JSON.parse(execFileSync('gh', ['api', 'graphql', '-f', `query=${PULLS_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${number}`], { encoding: 'utf8', maxBuffer: MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe'] }));
   return out.data?.repository?.issue?.closedByPullRequestsReferences?.nodes ?? [];
 }
 
