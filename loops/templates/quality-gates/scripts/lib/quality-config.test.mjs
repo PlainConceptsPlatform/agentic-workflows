@@ -16,9 +16,11 @@ const CHECK_DEFAULTS = {
   audit: {
     checks: { complexity: true, coverage: true, mutation: true, security: true, semgrep: true, deadCode: true, duplication: true, architecture: true, patterns: true, bundle: true },
     ignore: { rules: [], paths: [] },
+    junk: { deadCode: ['dependencies', 'devDependencies', 'optionalPeerDependencies', 'unlisted', 'binaries'], patterns: ['AD0001'] },
     limit: null,
     riskFiles: 5,
     riskDays: 30,
+    graduateAfterDays: 14,
   },
 };
 
@@ -117,14 +119,16 @@ test('writeCheckSection_keepsEveryOtherKey_andRefusesAnInvalidWrite', () => {
 
 test('parseQualityConfig_auditSection_readsChecksIgnoreAndLimits', () => {
   const { audit } = parseQualityConfig(JSON.stringify({
-    audit: { checks: { duplication: false }, ignore: { rules: [' MA0004 '], paths: ['apps/web/src/generated/**'] }, limit: 40, riskFiles: 0, riskDays: 14 },
+    audit: { checks: { duplication: false }, ignore: { rules: [' MA0004 '], paths: ['apps/web/src/generated/**'] }, junk: { patterns: [] }, limit: 40, riskFiles: 0, riskDays: 14, graduateAfterDays: 0 },
   }));
   assert.deepEqual(audit, {
     checks: { ...CHECK_DEFAULTS.audit.checks, duplication: false },
     ignore: { rules: ['MA0004'], paths: ['apps/web/src/generated/**'] },
+    junk: { deadCode: CHECK_DEFAULTS.audit.junk.deadCode, patterns: [] },
     limit: 40,
     riskFiles: 0,
     riskDays: 14,
+    graduateAfterDays: 0,
   });
   assert.deepEqual(parseQualityConfig(JSON.stringify({ audit: {} })).audit, CHECK_DEFAULTS.audit);
 });
@@ -132,7 +136,7 @@ test('parseQualityConfig_auditSection_readsChecksIgnoreAndLimits', () => {
 test('parseQualityConfig_auditSection_listsEveryProblem', () => {
   assert.throws(
     () => parseQualityConfig(JSON.stringify({
-      audit: { checks: { lint: true, coverage: 'off' }, ignore: { rules: 'MA0004', globs: [] }, limit: 500, riskFiles: -1, riskDays: 0, cap: 3 },
+      audit: { checks: { lint: true, coverage: 'off' }, ignore: { rules: 'MA0004', globs: [] }, limit: 500, riskFiles: -1, riskDays: 0, cap: 3, junk: { coverage: [] }, graduateAfterDays: 400 },
     })),
     (err) => /audit\.checks\.lint is not a known check/.test(err.message)
       && /audit\.checks\.coverage must be true or false/.test(err.message)
@@ -141,7 +145,9 @@ test('parseQualityConfig_auditSection_listsEveryProblem', () => {
       && /audit\.limit must be a whole number from 1 to 200/.test(err.message)
       && /audit\.riskFiles must be a whole number from 0 to 20/.test(err.message)
       && /audit\.riskDays must be a whole number from 1 to 365/.test(err.message)
-      && /audit\.cap is not a known setting/.test(err.message),
+      && /audit\.cap is not a known setting/.test(err.message)
+      && /audit\.junk\.coverage is not a check the audit graduates/.test(err.message)
+      && /audit\.graduateAfterDays must be a whole number from 0 to 365/.test(err.message),
   );
   assert.throws(() => parseQualityConfig(JSON.stringify({ audit: [] })), /audit must be an object/);
   assert.throws(() => parseQualityConfig(JSON.stringify({ audit: { checks: [], ignore: [] } })), /audit\.checks must be an object[\s\S]*audit\.ignore must be an object/);

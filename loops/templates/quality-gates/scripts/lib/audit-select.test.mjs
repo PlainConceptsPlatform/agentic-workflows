@@ -91,7 +91,9 @@ function fullWorklist() {
 test('markerFor_roundTripsThroughMarkersIn', () => {
   const unit = { id: '0123456789abcdef', value: 186.5, target: 30 };
   assert.equal(markerFor(unit), '<!-- audit-item: 0123456789abcdef value=186.5 target=30 -->');
-  assert.deepEqual(markersIn(`story\n${markerFor(unit)}\n<!-- audit-report: 12 -->`), [{ id: '0123456789abcdef', value: '186.5', target: '30' }]);
+  assert.deepEqual(markersIn(`story\n${markerFor(unit)}\n<!-- audit-report: 12 -->`), [{ id: '0123456789abcdef', value: '186.5', target: '30', check: null }]);
+  assert.equal(markerFor({ ...unit, check: 'complexity' }), '<!-- audit-item: 0123456789abcdef value=186.5 target=30 check=complexity -->');
+  assert.deepEqual(markersIn(markerFor({ ...unit, check: 'complexity' })), [{ id: '0123456789abcdef', value: '186.5', target: '30', check: 'complexity' }]);
   assert.equal(markerFor({ id: 'a'.repeat(16), value: 'CRITICAL', target: '1.0.1 | 2.0.0 --> x' }), `<!-- audit-item: ${'a'.repeat(16)} value=CRITICAL target=1.0.1___2.0.0_--__x -->`);
   assert.deepEqual(markersIn('<!-- audit-item: nothex -->'), []);
 });
