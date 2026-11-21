@@ -5024,8 +5024,57 @@ if worker_installed audit; then
     grep -qx 'run_agent=true' "$select_tmp/none.out" && grep -qx 'data_led=false' "$select_tmp/none.out" && grep -qx 'source=none' "$select_tmp/none.out" \
       || sp "audit-select.mjs does not fall back to the exploratory audit when there is no health data"
     grep -q 'crashed=true' "$select_tmp"/*.out && sp "audit-select.mjs exits non-zero on an ordinary input"
+    grep -qx 'story_slots=3' "$select_tmp/work.out" && grep -qx 'follow_up=false' "$select_tmp/work.out" \
+      || sp "audit-select.mjs does not hand over story_slots and follow_up"
+    # An open story for the selected unit holds its slot: the next run files one story fewer.
+    work_marker=$(jq -r '.selected[0].marker' "$select_tmp/work.json" 2>/dev/null)
+    jq -n --arg body "$work_marker" '[{number: 7, title: "Story", state: "open", stateReason: null, closedAt: null, body: $body, pulls: []}]' > "$select_tmp/issues.json" 2>/dev/null
+    : > "$select_tmp/held.out"
+    printf '%s' "$(doc 1 "$finding")" > "$select_tmp/held.worklist.json"
+    GITHUB_REPOSITORY='' GITHUB_STEP_SUMMARY="$select_tmp/held.md" GITHUB_OUTPUT="$select_tmp/held.out" \
+      node "$AUDIT_SELECT_JS" --offline --out "$select_tmp/held.json" --max-stories 3 --changes "$select_tmp/changes.json" \
+      --worklist "$select_tmp/held.worklist.json" --issues "$select_tmp/issues.json" > /dev/null 2>&1 || echo "crashed=true" >> "$select_tmp/held.out"
+    grep -qx 'story_slots=2' "$select_tmp/held.out" && grep -qx 'selected=0' "$select_tmp/held.out" \
+      || sp "audit-select.mjs does not let an open audit story hold its slot"
     rm -rf "$select_tmp"
   fi
+
+  # Closing the loop (issue #582, phase 3). The follow-up runs on the selection with no model and
+  # whether or not the agent starts; it writes with the App token, never the run's own token; the
+  # report's Since last audit section and the story cap come from the selection; and a graduation
+  # pull request carries the merge train's hold label, so nothing but a person merges it.
+  follow_up_job=$(awk '/^  follow_up:$/{f=1; print; next} f && /^  [a-z_]+:$/{exit} f' <<<"$audit_front")
+  [ -n "$follow_up_job" ] || sp "has no follow_up job, so stories never close or reopen on the numbers"
+  # gh-aw makes the agent need every custom job that does not need the agent: a follow-up that
+  # needed only select would skip the audit whenever it was skipped or failed. So it needs the
+  # agent, and runs whatever the agent did.
+  grep -qxF '    needs: [select, agent]' <<<"$follow_up_job" \
+    && grep -qxF "    if: \${{ !cancelled() && needs.select.outputs.follow_up == 'true' }}" <<<"$follow_up_job" \
+    || sp "follow_up either becomes a dependency of the agent (a quiet week skips the audit) or does not run when the agent is skipped"
+  grep -qF "needs.agent.result" <<<"$follow_up_job" && sp "follow_up depends on the agent's result; a clean week never starts the agent"
+  grep -qF 'uses: ./.github/actions/audit-follow-up' <<<"$follow_up_job" && grep -qF 'token: ${{ steps.app-token.outputs.token }}' <<<"$follow_up_job" \
+    && grep -qF 'permission-pull-requests: write' <<<"$follow_up_job" && grep -qF 'permission-contents: write' <<<"$follow_up_job" \
+    || sp "follow_up does not write with the App token, so a graduation pull request would start no CI"
+  grep -qE '^      (contents|issues|pull-requests): write' <<<"$follow_up_job" && sp "follow_up gives the run's own token a write permission; the App token writes"
+  grep -qF 'follow_up: ${{ steps.select.outputs.follow_up }}' <<<"$select_job" && grep -qF 'story_slots: ${{ steps.select.outputs.story_slots }}' <<<"$select_job" \
+    && grep -qF 'echo "follow_up=false"' <<<"$select_job" \
+    || sp "select does not hand over follow_up and story_slots, or its fallback leaves them unset"
+  grep -qF 'max-stories: ${{ needs.select.outputs.story_slots || env.AUDIT_MAX_STORIES }}' <<<"$conclude_job" \
+    && grep -qF 'selection-file: ${{ runner.temp }}/audit-selection/audit-selection.json' <<<"$conclude_job" \
+    && grep -qE '^    needs: \[select, ' <<<"$conclude_job" \
+    || sp "conclude files more stories than open ones leave room for, or drops the Since last audit section"
+  FOLLOW_UP_YML="${HERE}/../audit-follow-up/action.yml"
+  FOLLOW_UP_CJS="${HERE}/../audit-follow-up/audit-follow-up.cjs"
+  grep -qF 'lib.holdLabelFrom(routerText)' "$FOLLOW_UP_YML" && grep -qF 'MERGE_TRAIN_HOLD_LABEL' "$FOLLOW_UP_CJS" \
+    && grep -qF 'lib.pullRequestDecision(pulls' "$FOLLOW_UP_YML" && grep -qF 'lib.reopenedBefore(comments)' "$FOLLOW_UP_YML" \
+    || sp "audit-follow-up may open a graduation pull request without the hold label, reopen one a person closed, or reopen a story twice"
+  grep -qiE 'merge(Pull|_pull|\.merge)|enablePullRequestAutoMerge|automerge' "$FOLLOW_UP_YML" && sp "audit-follow-up merges a pull request; graduation is a person's decision"
+  grep -qF "audit.selectionAppendix(process.env.SELECTION_FILE)" "${HERE}/../file-audit-issues/action.yml" \
+    || sp "file-audit-issues does not append the selection's Since last audit section"
+  grep -qF 'audit-follow-up/audit-follow-up.cjs' "${HERE}/../audit-close/action.yml" && grep -qF 'numbers.beforeAfterLines(measured)' "${HERE}/../audit-close/action.yml" \
+    || sp "audit-close closes a data-led report without its before and after numbers"
+  grep -qF 'audit-follow-up:' "$FOLLOW_UP_CJS" && [ -n "$AUDIT_SELECT_JS" ] && grep -qF "FOLLOW_UP_MARKER = 'audit-follow-up'" "$(dirname "$AUDIT_SELECT_JS")/lib/audit-select.mjs" \
+    || sp "the selection's follow-up comments and the parser audit-close reads disagree on the marker"
 
   if [ -z "$select_problems" ]; then
     PASS=$((PASS + 1))

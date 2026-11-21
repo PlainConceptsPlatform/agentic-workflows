@@ -320,8 +320,8 @@ describe("agent-audit wiring", () => {
 
   it("runs the follow-up after select, with the App token, whether or not the agent runs", () => {
     const job = front.jobs.follow_up;
-    expect(job.needs).toEqual(["select"]);
-    expect(job.if).toBe("needs.select.outputs.follow_up == 'true'");
+    expect(job.needs).toEqual(["select", "agent"]);
+    expect(job.if).toBe("${{ !cancelled() && needs.select.outputs.follow_up == 'true' }}");
     const token = job.steps.find((s: { id?: string }) => s.id === "app-token");
     expect(token.with).toMatchObject({ "permission-issues": "write", "permission-contents": "write", "permission-pull-requests": "write" });
     const step = job.steps.find((s: { uses?: string }) => s.uses === "./.github/actions/audit-follow-up");

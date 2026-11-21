@@ -240,9 +240,14 @@ jobs:
   # what was fixed). `select` decided from the numbers what to close, confirm or reopen, and which
   # report-only check graduates; this carries it out with the App token. A graduation pull request
   # carries the merge train's hold label, so nothing merges it but a person.
+  #
+  # It waits for the agent on purpose. gh-aw makes the agent job need every custom job that does not
+  # need it, so a follow-up that needed only `select` became a dependency of the agent: skipped on a
+  # quiet week, or failed, it would have skipped the audit with it. After the agent, `!cancelled()`
+  # runs it whether the agent ran, was skipped by the clean exit, or failed.
   follow_up:
-    needs: [select]
-    if: needs.select.outputs.follow_up == 'true'
+    needs: [select, agent]
+    if: ${{ !cancelled() && needs.select.outputs.follow_up == 'true' }}
     runs-on: agents-arc
     timeout-minutes: 10
     permissions:
