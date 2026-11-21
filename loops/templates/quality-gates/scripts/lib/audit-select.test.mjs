@@ -10,6 +10,10 @@ import { fileURLToPath } from 'node:url';
 import {
   distanceOf,
   facetChecks,
+  followUp,
+  formatMeasure,
+  graduation,
+  graduationBranch,
   markerFor,
   markersIn,
   reasonsFor,
@@ -18,6 +22,7 @@ import {
   selectAudit,
   selectionSummary,
   severityOf,
+  sinceLastAudit,
   storiesByUnit,
   unitsOfCheck,
 } from './audit-select.mjs';
@@ -546,7 +551,7 @@ test('auditSelectCli_offline_writesTheSelectionTheOutputsAndTheSummary', () => {
     assert.equal(selection.maxStories, 2);
     assert.ok(selection.excluded.overCap.items.some((u) => u.check === 'mutation'));
     assert.match(stdout, /### Audit selection/);
-    assert.equal(readFileSync(join(dir, 'output'), 'utf8'), 'source=worklist\ndata_led=true\nrun_agent=true\nclean=false\nselected=2\nrisk_files=0\n');
+    assert.equal(readFileSync(join(dir, 'output'), 'utf8'), 'source=worklist\ndata_led=true\nrun_agent=true\nclean=false\nselected=2\nrisk_files=0\nstory_slots=2\nfollow_up=false\n');
     assert.match(readFileSync(join(dir, 'summary'), 'utf8'), /\| 1 \| security \|/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -569,4 +574,255 @@ test('auditSelectCli_offlineWithNothing_isTheFallbackAndStillSucceeds', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ── Closing the loop ─────────────────────────────────────────────────────────────────────────────
+// A story as the audit filed it: its marker, and whatever GitHub says about it now.
+const STORY_FILED = '2026-11-02T09:00:00Z';
+const storyFor = (unit, number, fields = {}) => ({ number, title: `Story ${number}`, state: 'open', stateReason: null, closedAt: null, pulls: [], body: `Fix it.\n\n${unit.marker}`, ...fields });
+const mergedPr = (mergedAt = '2026-11-20T10:00:00Z') => [{ number: 700, merged: true, mergedAt }];
+const pricing = (crap) => worklistOf({ complexity: check([hotspot('apps/api/Orders/Pricing.cs', 'Pricing.Quote', crap)]) });
+
+test('followUp_mergedFixWithinItsBar_closesTheStoryWithTheNumbers', () => {
+  const filed = select({ worklist: pricing(186) }).selected[0];
+  assert.match(filed.marker, /value=186 target=30 check=complexity/);
+  // The method is now under the threshold, but CRAP 24 still lists it; and a file gone from the list.
+  const now = select({ worklist: pricing(24), issues: [storyFor(filed, 51, { pulls: mergedPr() })] });
+  assert.deepEqual(now.followUp.actions.map((a) => [a.issue, a.action]), [[51, 'close']]);
+  const [close] = now.followUp.actions;
+  assert.match(close.comment, /the fix is merged/);
+  assert.match(close.comment, /\*\*complexity\*\* `crap · apps\/api\/Orders\/Pricing\.cs`: 186 when filed, 24 now, target 30 \(worklist of 2026-11-21\)/);
+  assert.match(close.comment, /<!-- audit-follow-up: close id=[0-9a-f]{16} check=complexity before=186 after=24 target=30 metric=crap -->/);
+  assert.deepEqual(now.storiesHeld, []);
+  assert.deepEqual(now.followUp.counts, { fixed: 1, open: 0, regressed: 0, pending: 0 });
+  const gone = select({ worklist: worklistOf({ complexity: check([]) }), issues: [storyFor(filed, 51, { pulls: mergedPr() })] });
+  assert.match(gone.followUp.actions[0].comment, /186 when filed, no longer listed by the check \(within its bar\), target 30/);
+  assert.match(gone.followUp.actions[0].comment, /after=gone/);
+});
+
+test('followUp_closeNeedsAMergedFixMeasuredAfterItLanded', () => {
+  const filed = select({ worklist: pricing(186) }).selected[0];
+  // No pull request: the number met its bar, but the story stays open and keeps its slot.
+  const unmerged = select({ worklist: pricing(24), issues: [storyFor(filed, 51, { pulls: [{ number: 700, merged: false, mergedAt: null }] })] });
+  assert.deepEqual(unmerged.followUp.actions, []);
+  assert.deepEqual(unmerged.storiesHeld, [51]);
+  // Merged after the worklist was built: CI has not measured the fix yet.
+  const late = select({ worklist: pricing(24), issues: [storyFor(filed, 51, { pulls: mergedPr('2026-11-22T10:00:00Z') })] });
+  assert.deepEqual(late.followUp.actions, []);
+  // Still over its bar with the fix merged: open, and it says so in the report.
+  const over = select({ worklist: pricing(120), issues: [storyFor(filed, 51, { pulls: mergedPr() })] });
+  assert.deepEqual(over.followUp.actions, []);
+  assert.equal(over.followUp.rows[0].status, 'open');
+  // A truncated check cannot say a unit is gone.
+  const truncated = worklistOf({ complexity: check([], { truncated: true }) });
+  assert.deepEqual(select({ worklist: truncated, issues: [storyFor(filed, 51, { pulls: mergedPr() })] }).followUp.actions, []);
+});
+
+test('followUp_closedAsDoneButTheValueDidNotMove_reopensOnceAndFilesNoDuplicate', () => {
+  const filed = select({ worklist: pricing(186) }).selected[0];
+  const closed = storyFor(filed, 52, { state: 'closed', stateReason: 'completed', closedAt: '2026-11-19T12:00:00Z' });
+  const first = select({ worklist: pricing(186), issues: [closed] });
+  assert.deepEqual(first.followUp.actions.map((a) => [a.issue, a.action]), [[52, 'reopen']]);
+  assert.match(first.followUp.actions[0].comment, /186 when filed, 186 now, target 30/);
+  assert.match(first.followUp.actions[0].comment, /close this as not planned/);
+  // The unit is not filed again: the reopened story tracks it and holds its slot.
+  assert.ok(!first.selected.some((u) => u.id === filed.id));
+  assert.deepEqual(first.storiesHeld, [52]);
+  assert.deepEqual(first.followUp.counts, { fixed: 0, open: 0, regressed: 1, pending: 0 });
+  assert.deepEqual(first.followUp.reopened, [52]);
+  // A person closes it again: their answer. Not reopened twice, and not filed again.
+  const again = { ...closed, closedAt: '2026-11-20T12:00:00Z' };
+  const second = select({ worklist: pricing(186), issues: [again], previous: first });
+  assert.deepEqual(second.followUp.actions, []);
+  assert.ok(!second.selected.some((u) => u.id === filed.id));
+  assert.deepEqual(second.excluded.declined.map((d) => d.issue), [52]);
+  assert.equal(second.followUp.settled[52].verdict, 'accepted');
+  // ... and it stays settled on the run after.
+  const third = select({ worklist: pricing(186), issues: [again], previous: second });
+  assert.deepEqual(third.followUp.actions, []);
+  assert.deepEqual(third.excluded.declined.map((d) => d.issue), [52]);
+});
+
+test('followUp_closedAsDoneAndWithinItsBar_isConfirmedOnce', () => {
+  const filed = select({ worklist: pricing(186) }).selected[0];
+  const closed = storyFor(filed, 53, { state: 'closed', stateReason: 'completed', closedAt: '2026-11-19T12:00:00Z' });
+  const first = select({ worklist: pricing(20), issues: [closed] });
+  assert.deepEqual(first.followUp.actions.map((a) => [a.issue, a.action]), [[53, 'verify']]);
+  const second = select({ worklist: pricing(20), issues: [closed], previous: first });
+  assert.deepEqual(second.followUp.actions, []);
+  // Closed after CI last measured: waits, and the unit is not filed again meanwhile.
+  const pending = select({ worklist: pricing(186), issues: [{ ...closed, closedAt: '2026-11-22T00:00:00Z' }] });
+  assert.deepEqual(pending.followUp.actions, []);
+  assert.equal(pending.followUp.rows[0].status, 'pending');
+  assert.ok(!pending.selected.some((u) => u.id === filed.id));
+  // Closed long ago: out of reach, nothing said.
+  assert.deepEqual(select({ worklist: pricing(20), issues: [{ ...closed, closedAt: '2026-09-01T00:00:00Z' }] }).followUp.actions, []);
+});
+
+test('followUp_openStoriesHoldTheirSlots_soFewerNewStoriesAreFiled', () => {
+  const first = select({ worklist: fullWorklist() });
+  assert.equal(first.selected.length, 3);
+  const issues = first.selected.slice(0, 2).map((unit, i) => storyFor(unit, 60 + i));
+  const second = select({ worklist: fullWorklist(), issues });
+  assert.deepEqual(second.storiesHeld, [60, 61]);
+  assert.equal(second.storySlots, 1);
+  assert.equal(second.selected.length, 1);
+  assert.equal(second.judgement.slots, 0);
+  // Every slot held: no agent, and the summary says why. Not clean: work is waiting.
+  const third = select({ worklist: fullWorklist(), issues: [...issues, storyFor(first.selected[2], 62)] });
+  assert.equal(third.storySlots, 0);
+  assert.equal(third.runAgent, false);
+  assert.equal(third.clean, false);
+  assert.match(selectionSummary(third), /Every story slot is held by an open audit story\*\* \(3 of 3\)/);
+  // A story with two markers is one slot.
+  const double = { ...storyFor(first.selected[0], 63), body: `${first.selected[0].marker}\n${first.selected[1].marker}` };
+  assert.deepEqual(select({ worklist: fullWorklist(), issues: [double] }).storiesHeld, [63]);
+});
+
+test('followUp_untrustworthyOrFacetData_onlyTracks', () => {
+  const filed = select({ worklist: pricing(186) }).selected[0];
+  const issues = [storyFor(filed, 51, { pulls: mergedPr() })];
+  const broken = select({ worklist: pricing(24), issues, configValid: false });
+  assert.deepEqual(broken.followUp.actions, []);
+  assert.equal(broken.followUp.enabled, false);
+  assert.deepEqual(broken.storiesHeld, [51]);
+});
+
+test('followUp_ruleUnits_areMeasuredFromTheRulesTableWhenNoItemIsListed', () => {
+  const rules = (count) => worklistOf({
+    patterns: check(count > 2 ? [item('patterns', 'analyzer', { rule: 'MA0004', path: 'a.cs', line: 1, value: count, baseline: 2, detail: { level: 'warning', ruleCount: count, overBaseline: true } })] : [], {
+      truncated: true,
+      rules: { MA0004: { count, baseline: 2, over: count > 2 } },
+    }),
+  });
+  const filed = select({ worklist: rules(9) }).selected[0];
+  const closed = storyFor(filed, 54, { pulls: mergedPr() });
+  const now = select({ worklist: rules(2), issues: [closed] });
+  assert.deepEqual(now.followUp.actions.map((a) => a.action), ['close']);
+  assert.match(now.followUp.actions[0].comment, /9 when filed, 2 now, target 2/);
+});
+
+test('sinceLastAudit_countsAndNumbers_withNoIssueNumber', () => {
+  const filed = select({ worklist: fullWorklist() }).selected;
+  const issues = [
+    storyFor(filed[0], 70, { state: 'closed', stateReason: 'completed', closedAt: '2026-11-19T00:00:00Z' }),
+    storyFor(filed[1], 71, { title: 'Clear empty catch #2' }),
+    storyFor(filed[2], 72, { state: 'closed', stateReason: 'completed', closedAt: '2026-11-19T00:00:00Z' }),
+  ];
+  const selection = select({ worklist: fullWorklist(), issues });
+  const text = selection.sinceLastAudit.markdown;
+  assert.match(text, /^## Since last audit\n\nFixed 0, still open 1, regressed 2/);
+  assert.match(text, /- Still open: \*\*semgrep\*\* `platform-hygiene-csharp-empty-catch` \("Clear empty catch 2"\): 3 when filed, 3 now, target 0/);
+  assert.doesNotMatch(text, /#\d/);
+  assert.match(selectionSummary(selection), /#### Since last audit/);
+  assert.equal(sinceLastAudit([]), '');
+  assert.equal(formatMeasure(0.543, 'rate'), '54.3%');
+  assert.equal(formatMeasure(null), 'n/a');
+});
+
+// ── Graduation ───────────────────────────────────────────────────────────────────────────────────
+const deadCodeReport = (rules, extra = {}) =>
+  check(
+    Object.entries(rules).flatMap(([rule, count]) => (count > 0 ? [item('deadCode', rule === 'dependencies' ? 'unused-dependency' : 'unused-export', { rule, path: rule === 'dependencies' ? 'apps/web/package.json' : 'apps/web/src/a.ts', symbol: `${rule}-thing`, value: 1, mode: 'report', detail: { ruleCount: count } })] : [])),
+    { mode: 'report', total: 9, rules: Object.fromEntries(Object.entries(rules).map(([rule, count]) => [rule, { count, baseline: null, over: false }])), ...extra },
+  );
+const graduating = (rules, fields = {}) => select({ worklist: worklistOf({ deadCode: deadCodeReport(rules) }), ...fields });
+
+test('graduation_afterFourteenDaysInReportMode_opensOnePullRequestFromTheWorklist', () => {
+  const since = (date) => config({}, { deadCode: { mode: 'report', since: date } });
+  const waiting = graduating({ exports: 7, files: 2 }, { config: since('2026-11-15') });
+  assert.equal(waiting.graduation.checks.deadCode.state, 'waiting');
+  assert.equal(waiting.graduation.checks.deadCode.readyOn, '2026-11-29');
+  assert.deepEqual(waiting.graduation.actions, []);
+  const ready = graduating({ exports: 7, files: 2, unlisted: 0 }, { config: since('2026-11-01') });
+  assert.equal(ready.graduation.checks.deadCode.state, 'ready');
+  const [pr] = ready.graduation.actions;
+  assert.equal(pr.kind, 'pull-request');
+  assert.equal(pr.title, 'Quality gates: enforce dead code (Knip) as a ratchet');
+  assert.equal(pr.branch, 'audit/graduate-dead-code');
+  assert.equal(graduationBranch('patterns'), 'audit/graduate-patterns');
+  assert.deepEqual(pr.patch, { mode: 'ratchet', since: '2026-11-01', baseline: { exports: 7, files: 2 } });
+  assert.match(pr.body, /since 2026-11-01 \(`deadCode\.since` in quality\.config\.json\): 22 days/);
+  assert.match(pr.body, /\| exports \| 7 \|/);
+  assert.match(pr.body, /hold label/);
+  assert.match(pr.body, /does not open it again for 90 days/);
+  assert.match(pr.body, /<!-- audit-graduation: deadCode -->$/);
+  // The patch is what quality.config.json accepts.
+  assert.doesNotThrow(() => parseQualityConfig(JSON.stringify({ deadCode: pr.patch })));
+  // Switched off, or already a ratchet: nothing.
+  assert.deepEqual(graduating({ exports: 7 }, { config: config({ graduateAfterDays: 0 }, { deadCode: { since: '2026-11-01' } }) }).graduation.actions, []);
+  const enforced = graduating({ exports: 7 }, { config: config({}, { deadCode: { mode: 'ratchet', since: '2026-11-01', baseline: { exports: 7 } } }) });
+  assert.equal(enforced.graduation.checks.deadCode.state, 'enforced');
+});
+
+test('graduation_withoutSince_recordsTheFirstDayItWasSeenAndCarriesItForward', () => {
+  const first = graduating({ exports: 7 });
+  assert.deepEqual(first.graduation.firstSeen, { deadCode: '2026-11-23' });
+  assert.equal(first.graduation.checks.deadCode.state, 'waiting');
+  const later = graduating({ exports: 7 }, { now: new Date('2026-12-08T01:00:00Z'), previous: first });
+  assert.equal(later.graduation.checks.deadCode.sinceSource, 'first-seen');
+  assert.equal(later.graduation.checks.deadCode.state, 'ready');
+  assert.match(later.graduation.actions[0].body, /the day the audit first saw it in report mode/);
+  assert.equal(later.graduation.actions[0].patch.since, '2026-11-23');
+  // A week without the check measured keeps the date.
+  const gap = select({ worklist: worklistOf({}), previous: first });
+  assert.deepEqual(gap.graduation.firstSeen, { deadCode: '2026-11-23' });
+});
+
+test('graduation_junkInTheBaseline_filesOneCleanUpStoryFirstAndHoldsThePullRequest', () => {
+  const cfg = config({}, { deadCode: { since: '2026-11-01' } });
+  const first = graduating({ exports: 7, dependencies: 2 }, { config: cfg });
+  assert.equal(first.graduation.checks.deadCode.state, 'cleanup-filed');
+  assert.deepEqual(first.graduation.actions.map((a) => a.kind), ['cleanup-story']);
+  const [story] = first.graduation.actions;
+  assert.equal(story.title, 'Clear dependencies before dead code (Knip) becomes a ratchet');
+  assert.match(story.body, /\| dependencies \| 2 \|/);
+  assert.match(story.body, /- `apps\/web\/package\.json` · `dependencies-thing` \(dependencies\)/);
+  assert.match(story.body, /<!-- audit-graduation: deadCode cleanup -->$/);
+  const filed = { number: 80, title: story.title, state: 'open', stateReason: null, closedAt: null, body: story.body };
+  // While it is open the pull request waits, and no second story is filed.
+  const waiting = graduating({ exports: 7, dependencies: 2 }, { config: cfg, issues: [filed] });
+  assert.equal(waiting.graduation.checks.deadCode.state, 'cleanup-open');
+  assert.deepEqual(waiting.graduation.actions, []);
+  // Done: the junk is gone and the pull request opens.
+  const done = graduating({ exports: 7, dependencies: 0 }, { config: cfg, issues: [{ ...filed, state: 'closed', stateReason: 'completed', closedAt: '2026-11-20T00:00:00Z' }] });
+  assert.deepEqual(done.graduation.actions.map((a) => a.kind), ['pull-request']);
+  assert.deepEqual(done.graduation.actions[0].patch.baseline, { exports: 7 });
+  // Closed as done with the junk still there: reopened once; closed again, it graduates as it is.
+  const closed = { ...filed, state: 'closed', stateReason: 'completed', closedAt: '2026-11-20T00:00:00Z' };
+  const reopen = graduating({ exports: 7, dependencies: 2 }, { config: cfg, issues: [closed] });
+  assert.deepEqual(reopen.graduation.actions.map((a) => [a.kind, a.issue]), [['cleanup-reopen', 80]]);
+  assert.match(reopen.graduation.actions[0].comment, /still counts dependencies 2/);
+  const accepted = graduating({ exports: 7, dependencies: 2 }, { config: cfg, issues: [closed], previous: reopen });
+  assert.deepEqual(accepted.graduation.actions.map((a) => a.kind), ['pull-request']);
+  // Closed as not planned: the team's answer, the baseline is written as CI measures it.
+  const declined = graduating({ exports: 7, dependencies: 2 }, { config: cfg, issues: [{ ...closed, stateReason: 'not_planned' }] });
+  assert.match(declined.graduation.actions[0].body, /closed as not planned/);
+  // The junk went before anyone closed the story: it is closed with the pull request.
+  const tidy = graduating({ exports: 7 }, { config: cfg, issues: [filed] });
+  assert.deepEqual(tidy.graduation.actions.map((a) => a.kind), ['cleanup-close', 'pull-request']);
+});
+
+test('graduation_patternsAndBundle_useTheirOwnBaselines', () => {
+  const worklist = worklistOf({
+    patterns: check([], { mode: 'report', rules: { MA0004: { count: 5, baseline: null, over: false }, AD0001: { count: 1, baseline: null, over: false }, CA1822: { count: 0, baseline: null, over: false } } }),
+    bundle: check([], { mode: 'report', summary: { totalJsBytes: 400000, limitBytes: null, baselineBytes: null } }),
+  });
+  const cfg = config({}, { patterns: { since: '2026-11-01' }, bundle: { since: '2026-11-01' } });
+  const selection = select({ worklist, config: cfg });
+  assert.deepEqual(selection.graduation.actions.map((a) => [a.kind, a.check]), [['cleanup-story', 'patterns'], ['pull-request', 'bundle']]);
+  assert.match(selection.graduation.actions[0].body, /AD0001 means an analyzer crashed/);
+  assert.deepEqual(selection.graduation.actions[1].patch, { mode: 'ratchet', since: '2026-11-01', baselineBytes: 400000, limitBytes: 440000 });
+  // Without the junk list, the analyzer rule graduates with the rest.
+  const noJunk = select({ worklist, config: config({ junk: { patterns: [] } }, { patterns: { since: '2026-11-01' } }) });
+  assert.deepEqual(noJunk.graduation.actions.find((a) => a.check === 'patterns').patch.baseline, { MA0004: 5, AD0001: 1 });
+  // No rules table (an architecture check from .NET tests only): nothing to baseline.
+  const dotnet = select({ worklist: worklistOf({ architecture: check([], { mode: 'report' }) }), config: config({}, { architecture: { since: '2026-11-01' } }) });
+  assert.equal(dotnet.graduation.checks.architecture.state, 'no-data');
+});
+
+test('graduation_isDecidedOnTheWorklistOnly', () => {
+  const facets = select({ facets: { hygiene: { deadCode: { web: { byType: { exports: 7 } } } } }, config: config({}, { deadCode: { since: '2026-11-01' } }) });
+  assert.equal(facets.source, 'facets');
+  assert.deepEqual(facets.graduation.actions, []);
 });
