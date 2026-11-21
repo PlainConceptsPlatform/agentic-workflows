@@ -310,15 +310,49 @@ The audit worklist (1.30.0): after the facets, the engineering-excellence job ru
 `engineering-excellence-worklist` (90 days). Per check (complexity, coverage, mutation, security,
 semgrep, deadCode, duplication, architecture, patterns, bundle) it lists the worst items with their
 path, line, measured value, threshold or baseline and mode, each with an id that survives line
-shifts, capped at 20 per check with the total beside them. It is what the weekly audit will start
-from (agentic-workflows#582); nothing reads it yet, it is not a facet, and Project-Health ignores it.
-There is nothing to configure: a check whose report is missing is `null`, the step never fails the
+shifts, capped at 20 per check with the total beside them (`audit.limit` in `quality.config.json`
+changes the cap). It is what the weekly audit starts from since 1.31.0 (see "The data-led audit"
+below); it is not a facet, and Project-Health ignores it.
+A check whose report is missing is `null`, the step never fails the
 job, and it is skipped until the repository has the 1.30.0 `quality-gates` scripts
 (`workflows update`). It holds no source code and no secrets, so do not add any by hand. To see
 where a number on the Engineering tab comes from, download the artifact from the latest main run
 (`gh run download <run-id> -n engineering-excellence-worklist`). The item shape is in
 `scripts/engineering-excellence-worklist.schema.json` and `docs/family-templates.md`, "The audit
 worklist".
+
+The data-led audit (1.31.0): the `audit` worker no longer explores a repository that publishes
+health data. Its `select` job runs `node scripts/audit-select.mjs` (from `quality-gates`, no model),
+which reads the newest `engineering-excellence-worklist` of the default branch, or the facets when
+there is no worklist yet, and writes the week's selection: the enforced (`ratchet`) problems that are
+over their threshold or baseline, fail a gate, or got worse since the last audit, plus every critical
+or high vulnerability with a fix; ranked by a fixed score and capped at the worker's
+`AUDIT_MAX_STORIES`. The agent reads only the files those items name and writes one story each, with
+the measured value and its target, then a short judgement pass over a few risky files for what no
+tool measures. What to know when running it:
+
+- **A clean week costs nothing.** When nothing is selected and no risky file changed, the agent job
+  does not start; the run is green and the summary of its `select` job says "The repository is
+  clean". That is not a broken audit.
+- **Report-mode checks file no story.** They appear in the report's "Not yet enforced" section with
+  their count and trend. Switch a check to `ratchet` (with its baseline from CI) to get stories for
+  it.
+- **Silencing a false positive** is a reviewed change to `quality.config.json`:
+  `"audit": { "ignore": { "rules": ["MA0004"], "paths": ["apps/web/src/generated/**"] } }`. A whole
+  check is switched off with `"audit": { "checks": { "duplication": false } }`. Closing a story as
+  "not planned" also stops that item being filed again for six months.
+- **Do not edit or remove the `<!-- audit-item: ... -->` line** at the end of an audit story. It is
+  how the next audit knows the item is tracked; a story without it is filed again.
+- **Which data it used** is in the `select` job's summary and in the `audit-selection` artifact
+  (`source`: `worklist`, `facets` or `none`). `none` means the exploratory audit ran: the repository
+  has no `scripts/audit-select.mjs` (take `quality-gates` with `workflows update`) or publishes no
+  facet from its default branch. A repository with its own CI gets the full selection by running
+  `engineering-excellence.mjs worklist` there and uploading `engineering-excellence-worklist` from
+  main; until then it is audited on the facets it publishes (counts, with fewer file names).
+- **Do not shorten artifact retention below the audit's interval by hand.** `cleanup-artifacts`
+  keeps the newest worklist, facets and `audit-selection` whatever `ARTIFACT_RETENTION_DAYS` says.
+
+Settings and the scoring rule: `docs/family-templates.md`, "The data-led audit".
 
 **Reading a failure.** Every gate prints what failed into the job's step summary: the method, file or
 Knip issue type, its current value and what the baseline allows. Fix the code: simplify or test the

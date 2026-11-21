@@ -187,7 +187,7 @@ function build(facet, opts) {
 }
 
 // The worklist's inputs, each optional:
-//   node scripts/engineering-excellence.mjs worklist --out ee/worklist.json [--limit 20]
+//   node scripts/engineering-excellence.mjs worklist --out ee/worklist.json [--limit 20]   (default: quality.config.json audit.limit, else 20)
 //     [--facets ee]                        the facets already built (coverage, complexity, mutation, architecture, bundle)
 //     [--api Cobertura.xml] [--web cobertura-coverage.xml] [--lcov lcov.info ...]
 //     [--mutation-reports <dir of mutation-<scope>/mutation-report.json>]
@@ -247,7 +247,7 @@ function writeWorklist(opts) {
   const inputs = worklistInputs(opts);
   const { config, valid } = worklistConfig();
   if (!valid) inputs.unreadable.push('config');
-  const doc = envelope(WORKLIST, buildWorklist(inputs, config, { limit: normalizeLimit(opts.limit) }));
+  const doc = envelope(WORKLIST, buildWorklist(inputs, config, { limit: normalizeLimit(opts.limit ?? config.audit.limit) }));
   const errors = validateWorklist(doc, JSON.parse(read(new URL('./engineering-excellence-worklist.schema.json', import.meta.url))));
   if (errors.length) {
     console.error('✗ worklist violates scripts/engineering-excellence-worklist.schema.json');
