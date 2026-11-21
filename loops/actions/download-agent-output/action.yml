@@ -26,6 +26,18 @@ runs:
       with:
         name: ${{ inputs.artifact-name }}
         path: agent-artifact
+    # gh-aw 1.2 leaves the patch and bundle out of the agent artifact whenever the push handler
+    # is staged and threat detection is off, which is exactly how every worker here runs: the
+    # conclude job applies the bundle with the App token, so gh-aw's own safe_outputs job must
+    # not need it. A worker that pushes uploads them itself, from a post-step, under this name.
+    # A pattern that matches nothing downloads nothing and does not fail, so a worker with no
+    # push, or a run in which the agent made none, is unaffected.
+    - name: Download the agent's git bundle
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        pattern: ${{ inputs.artifact-name }}-bundle
+        path: agent-bundle
+        merge-multiple: true
     - name: Locate output and bundle
       id: download
       shell: bash
@@ -40,13 +52,15 @@ runs:
         if [ -f "agent-artifact/agent_output.json" ]; then
           OUTPUT_FILE="agent-artifact/agent_output.json"
           ITEM_COUNT=$(jq '.items | length' "$OUTPUT_FILE")
-          BUNDLE_FILE=$(ls agent-artifact/aw-*.bundle 2>/dev/null | head -1 || true)
+          # The newest bundle: the safe-outputs server rewrites it on every push call, and an
+          # older compiler put it in the agent artifact itself, so both places are searched.
+          BUNDLE_FILE=$(ls -t agent-bundle/aw-*.bundle agent-artifact/aw-*.bundle 2>/dev/null | head -1 || true)
         else
           echo "::error::Artifact '$ARTIFACT_NAME' contained no agent_output.json. Nothing the agent proposed will be applied."
           exit 1
         fi
 
-        echo "Artifact '$ARTIFACT_NAME' carries $ITEM_COUNT item(s)."
+        echo "Artifact '$ARTIFACT_NAME' carries $ITEM_COUNT item(s)${BUNDLE_FILE:+ and the bundle $BUNDLE_FILE}."
 
         echo "output-file=$OUTPUT_FILE" >> "$GITHUB_OUTPUT"
         echo "bundle-file=$BUNDLE_FILE" >> "$GITHUB_OUTPUT"

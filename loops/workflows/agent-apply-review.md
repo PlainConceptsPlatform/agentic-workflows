@@ -544,6 +544,25 @@ steps:
         --jq '.data.repository.pullRequest.reviewThreads.nodes' \
         > /tmp/gh-aw/agent/review-threads.json
 
+# gh-aw 1.2 puts the patch and bundle the push tool writes into the agent artifact only when its
+# own safe_outputs job applies them (an unstaged push) or threat detection reads them. Here the
+# push is staged and conclude applies the bundle, so since the move to gh-aw 1.2.2 the bundle never
+# left the agent job: conclude found none, skipped the push without a word, and the run still
+# reported the repair as made. This step carries them out under a name download-agent-output
+# looks for. Nothing is uploaded when the agent pushed nothing.
+post-steps:
+  - name: Upload the agent's git bundle for conclude
+    if: always()
+    continue-on-error: true
+    uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+    with:
+      name: ${{ needs.activation.outputs.artifact_prefix }}agent-bundle
+      path: |
+        /tmp/gh-aw/aw-*.bundle
+        /tmp/gh-aw/aw-*.patch
+      if-no-files-found: ignore
+      retention-days: 7
+
 safe-outputs:
   # Path B, like triage, refine and merge-gate. Without staging the framework's own
   # safe_outputs job writes as well as conclude: it pushed the fix with GITHUB_TOKEN and
@@ -642,7 +661,8 @@ timeout-minutes: 90
 7. Select one review outcome.
 
    - **implemented**: You made the requested change, verification passed, and you will propose
-     exactly one `push_to_pull_request_branch`.
+     exactly one `push_to_pull_request_branch`, once every commit is made. The workflow keeps
+     the first call and rejects any later one, so do not call it again for a follow-up commit.
    - **already-satisfied**: The current branch already satisfies the request. Do not push; the
      reviewer must confirm this assessment.
    - **needs-human**: The feedback is ambiguous, unsafe, or cannot be applied. Do not push.

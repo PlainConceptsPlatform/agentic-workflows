@@ -903,7 +903,7 @@ jobs:
           issue-number: ${{ needs.subject.outputs.pr }}
           body: |
             The merge gate stopped on this pull request and handed it to a person${{ needs.subject.outputs.issue != '' && format(' (#{0})', needs.subject.outputs.issue) || '' }}.
-            ${{ needs.validate_output.outputs.pushed == 'true' && 'The agent pushed a repair that was not applied because its report could not be read. The patch and bundle are in the `agent` artifact of the run below.' || '' }}
+            ${{ needs.validate_output.outputs.pushed == 'true' && 'The agent pushed a repair that was not applied because its report could not be read. The patch and bundle are in the `agent-bundle` artifact of the run below.' || '' }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Label the pull request for review
         if: steps.budget.outputs.park == 'true'
@@ -1034,6 +1034,25 @@ steps:
         echo "[]" > /tmp/gh-aw/agent/failed-jobs.json
         echo "CI run ID unavailable, cannot fetch logs" > /tmp/gh-aw/agent/failed-logs.txt
       fi
+
+# gh-aw 1.2 puts the patch and bundle the push tool writes into the agent artifact only when its
+# own safe_outputs job applies them (an unstaged push) or threat detection reads them. Here the
+# push is staged and conclude applies the bundle, so since the move to gh-aw 1.2.2 the bundle never
+# left the agent job: conclude found none, skipped the push without a word, and the run still
+# reported the repair as made. This step carries them out under a name download-agent-output
+# looks for. Nothing is uploaded when the agent pushed nothing.
+post-steps:
+  - name: Upload the agent's git bundle for conclude
+    if: always()
+    continue-on-error: true
+    uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+    with:
+      name: ${{ needs.activation.outputs.artifact_prefix }}agent-bundle
+      path: |
+        /tmp/gh-aw/aw-*.bundle
+        /tmp/gh-aw/aw-*.patch
+      if-no-files-found: ignore
+      retention-days: 7
 
 safe-outputs:
   # Path B. Without this, gh-aw's own safe_outputs job writes as well as the conclude job, and
@@ -1353,7 +1372,9 @@ timeout-minutes: 120
 
    - **`remediated`** something was wrong (CI failed, the branch conflicted, or the diff did
      not satisfy the acceptance criteria), you fixed it, you verified the fix, and you are
-     pushing it. Exactly one `push_to_pull_request_branch` goes with this word.
+     pushing it. Exactly one `push_to_pull_request_branch` goes with this word: make every
+     commit first and call it once, at the end. The workflow keeps the first call and rejects
+     any later one ("Too many items"), so a second call to push a follow-up commit is wasted.
    - **`assessed`** you reviewed the change and are reporting what you found. No push.
 
    These are the only two words the workflow accepts. You do not write `merge`, `review`,
