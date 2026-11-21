@@ -46,6 +46,14 @@ description: |
   not start: the repository is clean, and the run summary says so. A repository that publishes
   no health data keeps the exploratory audit: 5-7 problems found by reading the repository.
 
+  Every data-led run also closes the loop, with no model (`follow_up` job): a story whose fix is
+  merged and measured within its bar is closed with its before and after numbers, one closed as
+  done but still over its bar is reopened (once), and an open story keeps its slot, so fewer new
+  stories are filed while old ones are unfinished. The report gains a "Since last audit" section.
+  A check in report mode for two weeks gets one pull request that writes its baseline from the
+  worklist and switches it to ratchet, held for a person to merge; when that baseline would
+  freeze junk, one clean-up story is filed first.
+
   Either way it files a compact tracking report, labelled `audit` + `bug`, plus one story issue
   per finding up to AUDIT_MAX_STORIES, labelled `bug` + `refine` and linked to the report as
   sub-issues. Refine refines each story on its own; the report never goes to Refine. Every body
@@ -171,6 +179,8 @@ jobs:
       contents: read
       actions: read
       issues: read
+      # The pull requests that close an open story: one is closed on the numbers only once its fix merged.
+      pull-requests: read
     outputs:
       run_agent: ${{ steps.select.outputs.run_agent }}
       data_led: ${{ steps.select.outputs.data_led }}
@@ -178,6 +188,8 @@ jobs:
       clean: ${{ steps.select.outputs.clean }}
       selected: ${{ steps.select.outputs.selected }}
       risk_files: ${{ steps.select.outputs.risk_files }}
+      story_slots: ${{ steps.select.outputs.story_slots }}
+      follow_up: ${{ steps.select.outputs.follow_up }}
     steps:
       # The whole history without file contents, so the risk map can ask which files changed lately.
       - name: Checkout with history
@@ -213,6 +225,8 @@ jobs:
             echo "clean=false"
             echo "selected=0"
             echo "risk_files=0"
+            echo "story_slots=${MAX_STORIES}"
+            echo "follow_up=false"
           } >> "$GITHUB_OUTPUT"
       - name: Keep the selection for the agent and for next week
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -222,8 +236,49 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  # Closing the loop, with no model and whether or not the agent runs (a clean week still closes
+  # what was fixed). `select` decided from the numbers what to close, confirm or reopen, and which
+  # report-only check graduates; this carries it out with the App token. A graduation pull request
+  # carries the merge train's hold label, so nothing merges it but a person.
+  follow_up:
+    needs: [select]
+    if: needs.select.outputs.follow_up == 'true'
+    runs-on: agents-arc
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-issues: write
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Load this week's selection
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: audit-selection
+          path: ${{ runner.temp }}/audit-selection
+      - name: Close, reopen and graduate on the numbers
+        uses: ./.github/actions/audit-follow-up
+        with:
+          selection-file: ${{ runner.temp }}/audit-selection/audit-selection.json
+          token: ${{ steps.app-token.outputs.token }}
+          story-labels: |-
+            bug
+            refine
+          graduation-labels: quality-graduation
+
   conclude:
-    needs: [activation, agent, safe_outputs]
+    needs: [select, activation, agent, safe_outputs]
     if: >
       needs.agent.result == 'success' &&
       needs.safe_outputs.result == 'success' &&
@@ -252,6 +307,12 @@ jobs:
         uses: ./.github/actions/download-agent-output
         with:
           artifact-name: ${{ needs.activation.outputs.artifact_prefix }}agent
+      # The report's "Since last audit" section comes from the selection, not from the model.
+      - name: Load this week's selection
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: audit-selection
+          path: ${{ runner.temp }}/audit-selection
       - name: File the report and its stories
         uses: ./.github/actions/file-audit-issues
         with:
@@ -259,7 +320,9 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           max-body-chars: ${{ env.AUDIT_MAX_BODY_CHARS }}
           max-work-units: ${{ env.AUDIT_MAX_WORK_UNITS }}
-          max-stories: ${{ env.AUDIT_MAX_STORIES }}
+          # Open audit stories hold their slots, so this is AUDIT_MAX_STORIES less those.
+          max-stories: ${{ needs.select.outputs.story_slots || env.AUDIT_MAX_STORIES }}
+          selection-file: ${{ runner.temp }}/audit-selection/audit-selection.json
           run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           report-labels: |-
             audit
@@ -343,7 +406,9 @@ timeout-minutes: 90
       measured), `target` (the bar it is held to), `reasons`, `files` (each with `path`, `line`,
       `symbol`, sometimes `lines`) and `marker`.
     - `judgement.slots` and `riskMap`: how many more stories you may add in step 13, and the
-      only files you read for it.
+      only files you read for it. Open audit stories (`storiesHeld`) already hold their slots, so
+      `selected` and `judgement.slots` are smaller while they are unfinished; never file a story
+      for them.
     - `excluded.notEnforced`: checks that are measured and not enforced yet, for step 15.
     - `trustworthy` and `problems`: caveats about the data, for step 15.
 
@@ -403,7 +468,7 @@ timeout-minutes: 90
     - <check>: <count> (<+n or -n since the last audit, or "first reading">)
     ```
 
-    When `trustworthy` is false, start the report with one line saying that `quality.config.json` is not valid, so modes, floors and baselines were unknown to this audit. No bullet lists beyond that section, no Gherkin, no user stories, no reproduction walkthroughs. Do not write any issue number (`#123`) in the report: the workflow adds the links to the stories, and every number in it is read as work the report waits on.
+    Do not write a "Since last audit" section: the workflow appends it from the selection, with the numbers. When `trustworthy` is false, start the report with one line saying that `quality.config.json` is not valid, so modes, floors and baselines were unknown to this audit. No bullet lists beyond that section, no Gherkin, no user stories, no reproduction walkthroughs. Do not write any issue number (`#123`) in the report: the workflow adds the links to the stories, and every number in it is read as work the report waits on.
 
 16. File the stories: call skill("pc-plan-story") and write one user story per selected entry, then one per judgement finding you kept; that skill owns their shape. Call `create_issue` once per story, after the report, titled with the story's own title (never "Audit: ..."), no labels. Each story names the exact files, methods and lines, states the measured value and the target in words (for example "CRAP 186, target under 30" or "module at 54% line coverage, floor 70%"), and says what the fix looks like for this code. A story for a selected entry ends with that entry's `marker`, copied exactly, on a line of its own: it is how the next audit knows the item is tracked. A marker goes in exactly one story, and a judgement story carries none. Refine refines each story on its own, so each must stand alone: it names its own files and its own acceptance criteria, never "as above" or "see finding 2", and never mentions the other stories or the report. Keep each story well under ${{ env.AUDIT_MAX_BODY_CHARS }} characters and ${{ env.AUDIT_MAX_WORK_UNITS }} bullet lines: the workflow measures every issue against that limit before filing and cuts anything over it from the end.
 

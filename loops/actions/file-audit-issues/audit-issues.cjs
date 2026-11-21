@@ -209,7 +209,7 @@ function fitReport(title, body, suffix, limits, runUrl) {
 // others are stories. Returns bodies that pass `limits` once rendered with any issue
 // number, which is the refine guard's check run before filing instead of after.
 function planAuditIssues(items, options) {
-  const { limits, maxStories = 3, runUrl = '', reportPattern = /^audit\b/i } = options;
+  const { limits, maxStories = 3, runUrl = '', reportPattern = /^audit\b/i, appendix = '' } = options;
   const usable = items.filter((item) => item && String(item.title ?? '').trim());
   if (usable.length === 0) return null;
 
@@ -241,13 +241,28 @@ function planAuditIssues(items, options) {
   const reportTitle = cleanTitle(reportItem.title);
   const links = stories.map((story) => ({ number: PLACEHOLDER_NUMBER, title: story.title, tracked: true }));
   const suffix = renderReport('', links);
-  const fitted = fitReport(reportTitle, lifted.report.trim(), suffix, limits, runUrl);
+  const withAppendix = appendix ? `${lifted.report.trim()}\n\n${appendix.trim()}` : lifted.report.trim();
+  const fitted = fitReport(reportTitle, withAppendix, suffix, limits, runUrl);
 
   return {
     report: { title: reportTitle, body: fitted.body, trimmed: fitted.trimmed, lifted: lifted.stories.length },
     stories,
     dropped,
   };
+}
+
+// The "Since last audit" section of the audit's selection, or '' when there is none to read. An
+// issue number in it would be read by audit-close as work the report waits on, so any `#N` is
+// dropped: the selection writes none, and nothing else may slip one in.
+function selectionAppendix(file) {
+  if (!file) return '';
+  try {
+    const selection = JSON.parse(require('fs').readFileSync(file, 'utf8'));
+    const text = String(selection?.sinceLastAudit?.markdown ?? '').trim();
+    return text.replace(/(^|[^A-Za-z0-9_/&])#(\d+)/g, '$1$2');
+  } catch {
+    return '';
+  }
 }
 
 module.exports = {
@@ -258,6 +273,7 @@ module.exports = {
   renderReport,
   renderStory,
   reportMarker,
+  selectionAppendix,
   titleKey,
   trimLines,
 };

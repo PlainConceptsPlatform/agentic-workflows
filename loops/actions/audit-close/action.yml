@@ -18,6 +18,9 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         STALE_AFTER_DAYS: ${{ inputs.stale-after-days }}
+        # The before and after numbers of a data-led audit's stories, read from their markers and
+        # from the audit follow-up's comments.
+        FOLLOW_UP_LIB: ${{ github.action_path }}/../audit-follow-up/audit-follow-up.cjs
       with:
         github-token: ${{ inputs.token }}
         script: |
@@ -69,6 +72,7 @@ runs:
             return openPRs.some((pr) => pattern.test(pr.body ?? ''));
           };
 
+          const numbers = require(process.env.FOLLOW_UP_LIB);
           let closed = 0;
           let keptOpen = 0;
           let stale = 0;
@@ -100,17 +104,20 @@ runs:
 
             const stillOpen = [];
             const unknown = [];
+            const measured = [];
             let closedRefs = 0;
             let resolved = 0;
 
             for (const ref of refs) {
               let state;
+              let body;
 
               try {
-                ({ data: { state } } = await github.rest.issues.get({
+                ({ data: { state, body } } = await github.rest.issues.get({
                   ...context.repo,
                   issue_number: ref,
                 }));
+                if (numbers.itemMarkersIn(body).length > 0) measured.push({ number: ref, body });
               } catch (error) {
                 if (error.status === 404) {
                   core.info(`#${report.number}: ignoring #${ref}, not an issue in this repository`);
@@ -160,10 +167,20 @@ runs:
               continue;
             }
 
+            // A data-led audit's stories carry the number they were filed on, and the audit's
+            // follow-up comments the number CI measured after the fix: the report closes on both.
+            for (const story of measured) {
+              story.comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number: story.number, per_page: 100 })
+                .catch(() => []);
+            }
+            const lines = numbers.beforeAfterLines(measured);
             await github.rest.issues.createComment({
               ...context.repo,
               issue_number: report.number,
-              body: `Closed automatically by \`Work Router: audit-close\`. All ${closedRefs} referenced issue(s) are closed.`,
+              body: [
+                `Closed automatically by \`Work Router: audit-close\`. All ${closedRefs} referenced issue(s) are closed.`,
+                ...(lines.length ? ['', 'Before and after, as CI measured them:', ...lines] : []),
+              ].join('\n'),
             });
 
             await github.rest.issues.update({

@@ -1,0 +1,178 @@
+# Managed by @plainconceptsplatform/workflows. Source: loops/actions/audit-follow-up/action.yml. Update with workflows update --force; consumer edits may be overwritten.
+name: Audit follow-up
+description: >-
+  Carry out what the audit's selection decided from the numbers, with no model: close a story whose
+  fix is merged and measured within its bar, confirm one closed as done, reopen one closed as done
+  that is still over its bar (once), and graduate a report-only check: one clean-up story when its
+  baseline would freeze junk, then one pull request that writes the baseline from CI's worklist and
+  switches the check to ratchet. The pull request carries the merge train's hold label, so a person
+  merges it; one a person closed is not opened again for respect-days.
+inputs:
+  selection-file:
+    description: Path to audit-selection.json, as scripts/audit-select.mjs wrote it.
+    required: true
+  token:
+    description: >-
+      App token with issues, contents and pull-requests write. An App token, so the pull request
+      starts CI and the clean-up story's labels reach the router.
+    required: true
+  story-labels:
+    description: Labels for a clean-up story, one per line. The work label goes last.
+    required: false
+    default: |-
+      bug
+      refine
+  graduation-labels:
+    description: Labels for a graduation pull request besides the hold label, one per line.
+    required: false
+    default: quality-graduation
+  hold-label:
+    description: >-
+      The merge train's hold label. Empty reads MERGE_TRAIN_HOLD_LABEL from router-file, and falls
+      back to `hold`.
+    required: false
+    default: ''
+  router-file:
+    description: Where the repository's router declares MERGE_TRAIN_HOLD_LABEL.
+    required: false
+    default: .github/workflows/work-router.yml
+  respect-days:
+    description: How long a graduation pull request a person closed (or merged) keeps the audit from opening another.
+    required: false
+    default: '90'
+outputs:
+  done:
+    description: How many actions were carried out.
+    value: ${{ steps.follow-up.outputs.done }}
+runs:
+  using: composite
+  steps:
+    - name: Close, reopen and graduate on the numbers
+      id: follow-up
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        FOLLOW_UP_LIB: ${{ github.action_path }}/audit-follow-up.cjs
+        SELECTION_FILE: ${{ inputs.selection-file }}
+        STORY_LABELS: ${{ inputs.story-labels }}
+        GRADUATION_LABELS: ${{ inputs.graduation-labels }}
+        HOLD_LABEL: ${{ inputs.hold-label }}
+        ROUTER_FILE: ${{ inputs.router-file }}
+        RESPECT_DAYS: ${{ inputs.respect-days }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          const fs = require('fs');
+          const lib = require(process.env.FOLLOW_UP_LIB);
+          const list = (value) => String(value ?? '').split(/\r?\n|,/).map((label) => label.trim()).filter(Boolean);
+          const selection = JSON.parse(fs.readFileSync(process.env.SELECTION_FILE, 'utf8'));
+          const stories = selection.followUp?.actions ?? [];
+          const graduations = selection.graduation?.actions ?? [];
+          const lines = [];
+          const failures = [];
+          let done = 0;
+          const say = (line) => { core.info(line); lines.push(line); };
+
+          const getIssue = async (number) => (await github.rest.issues.get({ ...context.repo, issue_number: number })).data;
+          const commentsOf = (number) => github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number: number, per_page: 100 });
+          const comment = (number, body) => github.rest.issues.createComment({ ...context.repo, issue_number: number, body });
+          const setState = (number, state) => github.rest.issues.update({ ...context.repo, issue_number: number, state, ...(state === 'closed' ? { state_reason: 'completed' } : {}) });
+          const ensureLabels = async (names) => {
+            for (const name of names) {
+              await github.rest.issues.createLabel({ ...context.repo, name, color: 'ededed' })
+                .catch((error) => { if (error.status !== 422) throw error; });
+            }
+          };
+
+          // ── Stories, on the numbers ──
+          for (const action of stories) {
+            try {
+              const issue = await getIssue(action.issue);
+              const comments = await commentsOf(action.issue);
+              if (action.action === 'reopen') {
+                if (issue.state !== 'closed') { say(`#${action.issue}: already open, not reopened.`); continue; }
+                if (lib.reopenedBefore(comments)) { say(`#${action.issue}: reopened once before; left closed.`); continue; }
+                await comment(action.issue, action.comment);
+                await setState(action.issue, 'open');
+                say(`#${action.issue}: reopened, closed as done while still over its bar.`);
+              } else if (action.action === 'close') {
+                if (issue.state !== 'open') { say(`#${action.issue}: already closed.`); continue; }
+                if (!lib.alreadySaid(comments, 'close', action.comment)) await comment(action.issue, action.comment);
+                await setState(action.issue, 'closed');
+                say(`#${action.issue}: closed, its fix is merged and measured within its bar.`);
+              } else if (action.action === 'verify') {
+                if (lib.alreadySaid(comments, 'verify', action.comment)) { say(`#${action.issue}: already confirmed.`); continue; }
+                await comment(action.issue, action.comment);
+                say(`#${action.issue}: confirmed within its bar.`);
+              }
+              done += 1;
+            } catch (error) {
+              failures.push(`#${action.issue} (${action.action}): ${error.message}`);
+            }
+          }
+
+          // ── Graduation of report-only checks ──
+          const routerText = fs.existsSync(process.env.ROUTER_FILE) ? fs.readFileSync(process.env.ROUTER_FILE, 'utf8') : '';
+          const hold = process.env.HOLD_LABEL || lib.holdLabelFrom(routerText);
+          const prLabels = [...new Set([hold, ...list(process.env.GRADUATION_LABELS)])];
+          const storyLabels = list(process.env.STORY_LABELS);
+          const respectDays = Number(process.env.RESPECT_DAYS) || 90;
+          let openIssues = null;
+          const openIssuesWith = async (check) => {
+            openIssues ??= (await github.paginate(github.rest.issues.listForRepo, { ...context.repo, state: 'open', per_page: 100 })).filter((i) => !i.pull_request);
+            return openIssues.filter((i) => lib.hasGraduationMarker(i.body, check, true));
+          };
+
+          for (const action of graduations) {
+            try {
+              if (action.kind === 'cleanup-story') {
+                const existing = await openIssuesWith(action.check);
+                if (existing.length) { say(`${action.check}: clean-up story #${existing[0].number} is already open.`); continue; }
+                const { data: issue } = await github.rest.issues.create({ ...context.repo, title: action.title, body: action.body });
+                if (storyLabels.length) {
+                  await ensureLabels(storyLabels);
+                  await github.rest.issues.addLabels({ ...context.repo, issue_number: issue.number, labels: storyLabels });
+                }
+                say(`${action.check}: filed the clean-up story #${issue.number}; the graduation pull request waits for it.`);
+              } else if (action.kind === 'cleanup-reopen' || action.kind === 'cleanup-close') {
+                const issue = await getIssue(action.issue);
+                const reopen = action.kind === 'cleanup-reopen';
+                if (issue.state === (reopen ? 'open' : 'closed')) { say(`${action.check}: clean-up story #${action.issue} is already ${issue.state}.`); continue; }
+                await comment(action.issue, action.comment);
+                await setState(action.issue, reopen ? 'open' : 'closed');
+                say(`${action.check}: ${reopen ? 'reopened' : 'closed'} the clean-up story #${action.issue}.`);
+              } else if (action.kind === 'pull-request') {
+                const pulls = await github.paginate(github.rest.pulls.list, { ...context.repo, state: 'all', head: `${context.repo.owner}:${action.branch}`, per_page: 100 });
+                const decision = lib.pullRequestDecision(pulls, Date.now(), respectDays);
+                if (!decision.open) { say(`${action.check}: no graduation pull request, ${decision.reason}.`); continue; }
+                const { data: repo } = await github.rest.repos.get(context.repo);
+                const base = repo.default_branch;
+                const { data: baseRef } = await github.rest.git.getRef({ ...context.repo, ref: `heads/${base}` });
+                // The branch is the audit's own: a leftover from a pull request closed long ago is reset to the default branch.
+                const branchRef = await github.rest.git.getRef({ ...context.repo, ref: `heads/${action.branch}` }).catch((error) => { if (error.status === 404) return null; throw error; });
+                if (branchRef) await github.rest.git.updateRef({ ...context.repo, ref: `heads/${action.branch}`, sha: baseRef.object.sha, force: true });
+                else await github.rest.git.createRef({ ...context.repo, ref: `refs/heads/${action.branch}`, sha: baseRef.object.sha });
+                const current = await github.rest.repos.getContent({ ...context.repo, path: 'quality.config.json', ref: action.branch })
+                  .then(({ data }) => ({ sha: data.sha, text: Buffer.from(data.content, 'base64').toString('utf8') }))
+                  .catch((error) => { if (error.status === 404) return { sha: undefined, text: '' }; throw error; });
+                await github.rest.repos.createOrUpdateFileContents({
+                  ...context.repo,
+                  path: 'quality.config.json',
+                  branch: action.branch,
+                  message: `chore(quality): enforce ${action.check} as a ratchet from CI's baseline`,
+                  content: Buffer.from(lib.applyPatch(current.text, action.check, action.patch)).toString('base64'),
+                  ...(current.sha ? { sha: current.sha } : {}),
+                });
+                const { data: pr } = await github.rest.pulls.create({ ...context.repo, title: action.title, head: action.branch, base, body: action.body });
+                await ensureLabels(prLabels);
+                await github.rest.issues.addLabels({ ...context.repo, issue_number: pr.number, labels: prLabels });
+                say(`${action.check}: opened the graduation pull request #${pr.number} (${prLabels.join(', ')}); a person merges it.`);
+              }
+              done += 1;
+            } catch (error) {
+              failures.push(`${action.check} (${action.kind}): ${error.message}`);
+            }
+          }
+
+          core.setOutput('done', String(done));
+          await core.summary.addHeading('Audit follow-up', 2).addList(lines.length ? lines : ['Nothing to do.']).write();
+          if (failures.length) core.setFailed(`Some follow-up actions failed: ${failures.join('; ')}`);
