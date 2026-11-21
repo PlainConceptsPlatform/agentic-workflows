@@ -30,7 +30,22 @@ runs:
             per_page: 100,
           });
 
-          const expired = artifacts.filter((artifact) => new Date(artifact.created_at) < cutoff);
+          // The newest copy of what a later reader starts from is never deleted here, however old:
+          // the engineering health facets and the audit worklist (Project Health and the weekly
+          // audit read them from the default branch) and the audit's last selection (next week's
+          // audit compares against it). Each is uploaded with its own retention and GitHub expires
+          // it. Without this a repository with no push in the retention window had no worklist
+          // on audit day, and no audit ever saw the selection of the one before.
+          const LONG_LIVED = /^(engineering-excellence-.+|audit-selection)$/;
+          const newest = new Map();
+          for (const artifact of artifacts) {
+            if (artifact.expired || !LONG_LIVED.test(artifact.name)) continue;
+            const current = newest.get(artifact.name);
+            if (!current || new Date(artifact.created_at) > new Date(current.created_at)) newest.set(artifact.name, artifact);
+          }
+          const kept = new Set([...newest.values()].map((artifact) => artifact.id));
+
+          const expired = artifacts.filter((artifact) => new Date(artifact.created_at) < cutoff && !kept.has(artifact.id));
 
           let deleted = 0;
           const failed = [];
@@ -72,6 +87,7 @@ runs:
               `Deleted: ${deleted}`,
               `Failed to delete: ${failed.length}`,
               `Within retention: ${artifacts.length - expired.length}`,
+              `Kept as the newest of their kind: ${[...newest.values()].filter((artifact) => new Date(artifact.created_at) < cutoff).length}`,
             ])
             .write();
 

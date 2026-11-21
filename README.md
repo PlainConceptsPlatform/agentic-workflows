@@ -61,7 +61,7 @@ in `verify-route-matrix.sh` is the thing to run after changing any of them.
 | `implement` | `agent-implement.md` | the `implement` label is added | one branch, one pull request, one issue closed |
 | `merge-gate` | `agent-merge-gate.md` | the merge train hands it the oldest open pull request, the bot's or a writer's | one of `auto-merge`, `human-review`, `owner-review` or `blocked`, or a fix pushed to the same branch; a pull request parked for a person gets its screenshots before the decision |
 | `apply-review` | `agent-apply-review.md` | someone comments on a bot pull request or requests changes | the requested changes pushed to that pull request. An approval is not feedback: `merge-approved` merges the approved commit when the gate had parked it for a person, and the merge train does the same, or sends a change request to apply-review, when the review event never reached the router |
-| `audit` | `agent-audit.md` | Mondays, or on demand | a tracking report of every finding, labelled `audit`, and one story issue per top finding, labelled `refine` and linked under the report; every body is sized under refine's limit before it is filed |
+| `audit` | `agent-audit.md` | Mondays, or on demand | a tracking report of every finding, labelled `audit`, and one story issue per top finding, labelled `refine` and linked under the report; every body is sized under refine's limit before it is filed. It starts from the repository's engineering health data (the audit worklist, or the facets): a script picks the measured problems, the agent reads only the files they name, and when nothing is over its bar the agent does not start. A repository that publishes no health data is explored as before |
 | `docs-audit` | `agent-docs-audit.md` | days 1 and 15 of the month, or on demand. Optional: `workflows add docs-audit` | only when something is stale: a tracking report of every finding, labelled `docs-audit`, and one story issue per top finding, labelled `documentation` + `refine` and linked under the report; every body is sized under refine's limit before it is filed |
 | `release` | `agent-release.md` | on demand (`operation=release`), or the **Release to production** button (`release-to-production.yml`) | a `chore(release): vX.Y.Z` pull request with auto-merge; `release-tag.yml` tags it and publishes the GitHub Release once it merges, and deploys the tag to production when the button started it |
 
@@ -258,7 +258,7 @@ number you did not write, that is what it is.
 | `agent-merge-gate.md` | 120 | Reviews the diff for defects, and may fix failed CI and re-push. |
 | `agent-refine.md` | 60 | Reads the repository to ground a story, then rewrites one issue body. |
 | `agent-apply-review.md` | 45 | Applies review comments to an existing branch. |
-| `agent-audit.md` | 45 | Sweeps the repository and writes a findings report plus up to three stories. |
+| `agent-audit.md` | 45 | Writes a findings report plus up to three stories: from the selected health-data items and a short judgement pass, or by sweeping the repository where there is no health data. |
 | `agent-release.md` | 30 | Reads the commit log and writes release notes. |
 | `agent-triage.md` | 30 | Judges one issue and comments. |
 

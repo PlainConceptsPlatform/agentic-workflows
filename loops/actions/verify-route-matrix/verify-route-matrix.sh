@@ -4929,6 +4929,185 @@ else
   echo "FAIL: audit worklist wiring:$worklist_problems" >&2
 fi
 
+# The data-led audit (issue #582, phase 2). The `select` job picks the week's work from the health
+# data before any model starts, and every way this can be wrong is quiet: an agent that runs on a
+# clean repository, an audit that never runs because the selection could not be computed, a
+# selection the agent cannot read, or a prompt that still explores the whole repository.
+# shellcheck disable=SC2015
+if worker_installed audit; then
+  AUDIT_WORKER_MD="${WORKFLOWS_DIR}/agent-audit.md"
+  select_problems=""
+  sp() { select_problems="$select_problems $1;"; }
+  audit_fm_end=$(awk 'NR>1 && /^---[[:space:]]*$/{print NR; exit}' "$AUDIT_WORKER_MD")
+  audit_front=$(head -n "$audit_fm_end" "$AUDIT_WORKER_MD")
+  audit_prompt=$(tail -n "+$((audit_fm_end + 1))" "$AUDIT_WORKER_MD")
+  select_job=$(awk '/^  select:$/{f=1; print; next} f && /^  [a-z_]+:$/{exit} f' <<<"$audit_front")
+  agent_steps=$(awk '/^steps:$/{f=1; next} f && /^[a-z-]+:/{exit} f' <<<"$audit_front")
+
+  # The clean exit: the top-level if: reads the job's verdict, and activation waits for the job.
+  [ -n "$select_job" ] || sp "has no select job"
+  grep -qxF "if: needs.select.outputs.run_agent == 'true'" <<<"$audit_front" \
+    || sp "does not gate the agent on the selection, so it runs on a clean repository"
+  audit_on=$(awk '/^on:$/{f=1; next} f && /^[a-z-]+:/{exit} f' <<<"$audit_front")
+  grep -qxF '  needs: [select]' <<<"$audit_on" \
+    || sp "does not list select under on.needs, so activation reads an empty verdict and never runs"
+  grep -qE '^    needs:' <<<"$select_job" && sp "gives select a needs: of its own; it runs before activation and may not depend on it"
+  grep -qF 'run_agent: ${{ steps.select.outputs.run_agent }}' <<<"$select_job" \
+    && grep -qF 'data_led: ${{ steps.select.outputs.data_led }}' <<<"$select_job" \
+    || sp "select does not hand over run_agent and data_led"
+  for permission in 'contents: read' 'actions: read' 'issues: read'; do
+    grep -qF "      ${permission}" <<<"$select_job" || sp "select lacks ${permission}"
+  done
+  grep -qE '(contents|actions|issues|pull-requests): write' <<<"$select_job" && sp "select has a write permission; it only reads"
+
+  # A selection that cannot be computed falls back to exploring; it never skips the audit.
+  grep -qF 'set -uo pipefail' <<<"$select_job" && ! grep -qF 'set -euo pipefail' <<<"$select_job" \
+    && grep -qF 'if [ -f scripts/audit-select.mjs ]; then' <<<"$select_job" \
+    && grep -qF 'echo "run_agent=true"' <<<"$select_job" && grep -qF 'echo "source=none"' <<<"$select_job" \
+    || sp "select can fail or skip the audit when the script is missing or crashes"
+  grep -qF -- '--max-stories "$MAX_STORIES"' <<<"$select_job" && grep -qF 'MAX_STORIES: ${{ env.AUDIT_MAX_STORIES }}' <<<"$select_job" \
+    || sp "select does not cap the selection at AUDIT_MAX_STORIES"
+  grep -qF 'fetch-depth: 0' <<<"$select_job" && grep -qF 'filter: blob:none' <<<"$select_job" \
+    || sp "select checks out no history, so the risk map cannot tell what changed"
+
+  # One artifact name on both sides, and the janitor keeps it for next week's comparison.
+  grep -qF 'name: audit-selection' <<<"$select_job" && grep -qF 'retention-days: 90' <<<"$select_job" \
+    && grep -qF 'name: audit-selection' <<<"$agent_steps" && grep -qF 'path: /tmp/gh-aw/agent' <<<"$agent_steps" \
+    || sp "the selection select uploads is not the one the agent job downloads to /tmp/gh-aw/agent"
+  grep -qF 'audit-selection' "${HERE}/../cleanup-artifacts/action.yml" && grep -qF 'engineering-excellence-' "${HERE}/../cleanup-artifacts/action.yml" \
+    || sp "cleanup-artifacts deletes the last selection and the worklist before the next audit reads them"
+
+  # The backpressure and the filing jobs are as they were: a skipped agent skips both.
+  conclude_job=$(awk '/^  conclude:$/{f=1; next} f && /^  [a-z_]+:$/{exit} f' <<<"$audit_front")
+  empty_run_job=$(awk '/^  empty_run:$/{f=1; next} f && /^  [a-z_]+:$/{exit} f' <<<"$audit_front")
+  grep -qF "needs.agent.result == 'success'" <<<"$conclude_job" \
+    || sp "conclude no longer requires the agent to have succeeded"
+  grep -qF "needs.agent.result == 'success'" <<<"$empty_run_job" \
+    || sp "empty_run would fire on a clean exit, where the agent never started"
+  grep -qE '^ *query: ' <<<"$select_job" && sp "select carries a query: line, which the backpressure assertion would read instead of skip-if-match"
+
+  # Two prompts, one per source, and exactly one reaches the model.
+  led_open="{{#if needs.select.outputs.data_led == 'true' }}"
+  fallback_open="{{#if needs.select.outputs.data_led != 'true' }}"
+  [ "$(grep -cF "$led_open" <<<"$audit_prompt")" = 1 ] && [ "$(grep -cF "$fallback_open" <<<"$audit_prompt")" = 1 ] \
+    && [ "$(grep -c '^{{#if ' <<<"$audit_prompt")" = 2 ] && [ "$(grep -cx '{{/if}}' <<<"$audit_prompt")" = 2 ] \
+    || sp "prompt does not hold exactly one data-led and one exploratory branch"
+  led_prompt=$(awk -v open="$led_open" '$0 == open {f=1; next} f && $0 == "{{/if}}" {exit} f' <<<"$audit_prompt")
+  fallback_prompt=$(awk -v open="$fallback_open" '$0 == open {f=1; next} f && $0 == "{{/if}}" {exit} f' <<<"$audit_prompt")
+  grep -qF 'skill("pc-repo-audit")' <<<"$led_prompt" && sp "data-led prompt still runs the repository-wide audit skill"
+  grep -qF '/tmp/gh-aw/agent/audit-selection.json' <<<"$led_prompt" || sp "data-led prompt does not read the selection"
+  grep -qF 'skill("pc-plan-story")' <<<"$led_prompt" && grep -qF '`marker`' <<<"$led_prompt" \
+    || sp "data-led prompt does not write stories with the item marker"
+  grep -qF '`riskMap`' <<<"$led_prompt" && grep -qF '`judgement.slots`' <<<"$led_prompt" && grep -qF '${{ env.AUDIT_FOCUS }}' <<<"$led_prompt" \
+    || sp "data-led prompt lost the judgement pass, its slots or the repository's focus"
+  grep -qF '## Not yet enforced' <<<"$led_prompt" || sp "data-led report lost its Not yet enforced section"
+  grep -qF "Never paste a scanner's message" <<<"$led_prompt" || sp "data-led prompt may paste a scanner's message into a public issue"
+  grep -qF 'memory_smart_search' <<<"$led_prompt" && grep -qF 'memory_save' <<<"$led_prompt" && grep -qF 'open-issues.json' <<<"$led_prompt" \
+    || sp "data-led prompt lost the memory or open-issue rules"
+  grep -qF 'skill("pc-repo-audit")' <<<"$fallback_prompt" && grep -qF '${{ env.AUDIT_FOCUS }}' <<<"$fallback_prompt" && grep -qF '5 to 7 problems' <<<"$fallback_prompt" \
+    || sp "exploratory fallback is no longer the audit it was"
+  for fallback_step in 1 2 3 4 5 6 7; do
+    grep -qE "^${fallback_step}\. " <<<"$fallback_prompt" || sp "exploratory fallback lost step ${fallback_step}"
+  done
+
+  # The item marker is one format in three places: the selection writes it, the prompt copies it,
+  # and the filing step finds it again. A story trimmed from the end must keep it.
+  AUDIT_ISSUES_CJS="${HERE}/../file-audit-issues/audit-issues.cjs"
+  grep -qF 'audit-item:' "$AUDIT_ISSUES_CJS" && grep -qF 'audit.itemIds(issue.body)' "${HERE}/../file-audit-issues/action.yml" \
+    && grep -qF 'audit.renderStory(story.body, report.number, story.markers)' "${HERE}/../file-audit-issues/action.yml" \
+    || sp "filing step drops the item marker or files an item an open issue already tracks"
+
+  # The script itself, run as the job runs it, without the network: nothing over a bar is a clean
+  # exit, something is an agent run, and no data at all is the exploratory audit.
+  AUDIT_SELECT_JS=""
+  for candidate in "${HERE}/../../templates/quality-gates/scripts/audit-select.mjs" "${HERE}/../../../scripts/audit-select.mjs"; do
+    [ -f "$candidate" ] && { AUDIT_SELECT_JS="$candidate"; break; }
+  done
+  if [ -n "$AUDIT_SELECT_JS" ] && command -v node > /dev/null; then
+    select_tmp=$(mktemp -d)
+    select_run() { # <name> <worklist json | ''> -> the outputs file
+      : > "$select_tmp/$1.out"
+      [ -z "$2" ] || printf '%s' "$2" > "$select_tmp/$1.worklist.json"
+      GITHUB_REPOSITORY='' GITHUB_STEP_SUMMARY="$select_tmp/$1.md" GITHUB_OUTPUT="$select_tmp/$1.out" \
+        node "$AUDIT_SELECT_JS" --offline --out "$select_tmp/$1.json" --max-stories 3 --changes "$select_tmp/changes.json" \
+        ${2:+--worklist "$select_tmp/$1.worklist.json"} > /dev/null 2>&1 || echo "crashed=true" >> "$select_tmp/$1.out"
+    }
+    echo '{}' > "$select_tmp/changes.json"
+    empty_checks='"complexity":null,"coverage":null,"mutation":null,"security":null,"deadCode":null,"duplication":null,"architecture":null,"patterns":null,"bundle":null'
+    finding='{"id":"0123456789abcdef","check":"semgrep","kind":"finding","rule":"rule-a","path":"src/a.ts","line":3,"symbol":null,"value":1,"threshold":0,"baseline":null,"mode":"ratchet","message":null}'
+    doc() { printf '{"schemaVersion":1,"facet":"worklist","generatedAt":"%s","data":{"limit":20,"unreadable":[],"checks":{%s,"semgrep":{"mode":"ratchet","total":%s,"truncated":false,"sources":["semgrep"],"items":[%s]}}}}' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$empty_checks" "$1" "$2"; }
+    select_run clean "$(doc 0 '')"
+    select_run work "$(doc 1 "$finding")"
+    select_run none ''
+    grep -qx 'run_agent=false' "$select_tmp/clean.out" && grep -qx 'clean=true' "$select_tmp/clean.out" && grep -qx 'data_led=true' "$select_tmp/clean.out" \
+      && grep -qF 'The repository is clean' "$select_tmp/clean.md" \
+      || sp "audit-select.mjs starts the agent on a repository with nothing over a bar, or does not say it is clean"
+    grep -qx 'run_agent=true' "$select_tmp/work.out" && grep -qx 'selected=1' "$select_tmp/work.out" && grep -qx 'data_led=true' "$select_tmp/work.out" \
+      && grep -qF '<!-- audit-item: ' "$select_tmp/work.json" \
+      || sp "audit-select.mjs does not select a finding over its bar, or gives it no marker"
+    grep -qx 'run_agent=true' "$select_tmp/none.out" && grep -qx 'data_led=false' "$select_tmp/none.out" && grep -qx 'source=none' "$select_tmp/none.out" \
+      || sp "audit-select.mjs does not fall back to the exploratory audit when there is no health data"
+    grep -q 'crashed=true' "$select_tmp"/*.out && sp "audit-select.mjs exits non-zero on an ordinary input"
+    grep -qx 'story_slots=3' "$select_tmp/work.out" && grep -qx 'follow_up=false' "$select_tmp/work.out" \
+      || sp "audit-select.mjs does not hand over story_slots and follow_up"
+    # An open story for the selected unit holds its slot: the next run files one story fewer.
+    work_marker=$(jq -r '.selected[0].marker' "$select_tmp/work.json" 2>/dev/null)
+    jq -n --arg body "$work_marker" '[{number: 7, title: "Story", state: "open", stateReason: null, closedAt: null, body: $body, pulls: []}]' > "$select_tmp/issues.json" 2>/dev/null
+    : > "$select_tmp/held.out"
+    printf '%s' "$(doc 1 "$finding")" > "$select_tmp/held.worklist.json"
+    GITHUB_REPOSITORY='' GITHUB_STEP_SUMMARY="$select_tmp/held.md" GITHUB_OUTPUT="$select_tmp/held.out" \
+      node "$AUDIT_SELECT_JS" --offline --out "$select_tmp/held.json" --max-stories 3 --changes "$select_tmp/changes.json" \
+      --worklist "$select_tmp/held.worklist.json" --issues "$select_tmp/issues.json" > /dev/null 2>&1 || echo "crashed=true" >> "$select_tmp/held.out"
+    grep -qx 'story_slots=2' "$select_tmp/held.out" && grep -qx 'selected=0' "$select_tmp/held.out" \
+      || sp "audit-select.mjs does not let an open audit story hold its slot"
+    rm -rf "$select_tmp"
+  fi
+
+  # Closing the loop (issue #582, phase 3). The follow-up runs on the selection with no model and
+  # whether or not the agent starts; it writes with the App token, never the run's own token; the
+  # report's Since last audit section and the story cap come from the selection; and a graduation
+  # pull request carries the merge train's hold label, so nothing but a person merges it.
+  follow_up_job=$(awk '/^  follow_up:$/{f=1; print; next} f && /^  [a-z_]+:$/{exit} f' <<<"$audit_front")
+  [ -n "$follow_up_job" ] || sp "has no follow_up job, so stories never close or reopen on the numbers"
+  # gh-aw makes the agent need every custom job that does not need the agent: a follow-up that
+  # needed only select would skip the audit whenever it was skipped or failed. So it needs the
+  # agent, and runs whatever the agent did.
+  grep -qxF '    needs: [select, agent]' <<<"$follow_up_job" \
+    && grep -qxF "    if: \${{ !cancelled() && needs.select.outputs.follow_up == 'true' }}" <<<"$follow_up_job" \
+    || sp "follow_up either becomes a dependency of the agent (a quiet week skips the audit) or does not run when the agent is skipped"
+  grep -qF "needs.agent.result" <<<"$follow_up_job" && sp "follow_up depends on the agent's result; a clean week never starts the agent"
+  grep -qF 'uses: ./.github/actions/audit-follow-up' <<<"$follow_up_job" && grep -qF 'token: ${{ steps.app-token.outputs.token }}' <<<"$follow_up_job" \
+    && grep -qF 'permission-pull-requests: write' <<<"$follow_up_job" && grep -qF 'permission-contents: write' <<<"$follow_up_job" \
+    || sp "follow_up does not write with the App token, so a graduation pull request would start no CI"
+  grep -qE '^      (contents|issues|pull-requests): write' <<<"$follow_up_job" && sp "follow_up gives the run's own token a write permission; the App token writes"
+  grep -qF 'follow_up: ${{ steps.select.outputs.follow_up }}' <<<"$select_job" && grep -qF 'story_slots: ${{ steps.select.outputs.story_slots }}' <<<"$select_job" \
+    && grep -qF 'echo "follow_up=false"' <<<"$select_job" \
+    || sp "select does not hand over follow_up and story_slots, or its fallback leaves them unset"
+  grep -qF 'max-stories: ${{ needs.select.outputs.story_slots || env.AUDIT_MAX_STORIES }}' <<<"$conclude_job" \
+    && grep -qF 'selection-file: ${{ runner.temp }}/audit-selection/audit-selection.json' <<<"$conclude_job" \
+    && grep -qE '^    needs: \[select, ' <<<"$conclude_job" \
+    || sp "conclude files more stories than open ones leave room for, or drops the Since last audit section"
+  FOLLOW_UP_YML="${HERE}/../audit-follow-up/action.yml"
+  FOLLOW_UP_CJS="${HERE}/../audit-follow-up/audit-follow-up.cjs"
+  grep -qF 'lib.holdLabelFrom(routerText)' "$FOLLOW_UP_YML" && grep -qF 'MERGE_TRAIN_HOLD_LABEL' "$FOLLOW_UP_CJS" \
+    && grep -qF 'lib.pullRequestDecision(pulls' "$FOLLOW_UP_YML" && grep -qF 'lib.reopenedBefore(comments)' "$FOLLOW_UP_YML" \
+    || sp "audit-follow-up may open a graduation pull request without the hold label, reopen one a person closed, or reopen a story twice"
+  grep -qiE 'merge(Pull|_pull|\.merge)|enablePullRequestAutoMerge|automerge' "$FOLLOW_UP_YML" && sp "audit-follow-up merges a pull request; graduation is a person's decision"
+  grep -qF "audit.selectionAppendix(process.env.SELECTION_FILE)" "${HERE}/../file-audit-issues/action.yml" \
+    || sp "file-audit-issues does not append the selection's Since last audit section"
+  grep -qF 'audit-follow-up/audit-follow-up.cjs' "${HERE}/../audit-close/action.yml" && grep -qF 'numbers.beforeAfterLines(measured)' "${HERE}/../audit-close/action.yml" \
+    || sp "audit-close closes a data-led report without its before and after numbers"
+  grep -qF 'audit-follow-up:' "$FOLLOW_UP_CJS" && [ -n "$AUDIT_SELECT_JS" ] && grep -qF "FOLLOW_UP_MARKER = 'audit-follow-up'" "$(dirname "$AUDIT_SELECT_JS")/lib/audit-select.mjs" \
+    || sp "the selection's follow-up comments and the parser audit-close reads disagree on the marker"
+
+  if [ -z "$select_problems" ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: the data-led audit:$select_problems" >&2
+  fi
+fi
+
 # The lockfile check installs gh-aw into a folder of its own: a shared self-hosted runner keeps
 # another repository's gh-aw version, and the pinned install then ran the wrong one.
 if grep -qF 'XDG_DATA_HOME: /tmp/gh-aw-checks-' "${HERE}/../../templates/agentics/agentics-checks.yml"; then

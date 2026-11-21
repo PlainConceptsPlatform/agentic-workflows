@@ -12,7 +12,9 @@ export const CONFIG_FILE = fileURLToPath(new URL('../../quality.config.json', im
 export const CHECK_MODES = ['report', 'ratchet'];
 
 const KEYS = {
-  root: ['$schema', 'architecture', 'bundle', 'coverage', 'deadCode', 'mutation', 'patterns'],
+  root: ['$schema', 'architecture', 'audit', 'bundle', 'coverage', 'deadCode', 'mutation', 'patterns'],
+  audit: ['checks', 'graduateAfterDays', 'ignore', 'junk', 'limit', 'riskDays', 'riskFiles'],
+  auditIgnore: ['paths', 'rules'],
   coverage: ['api', 'reportOnly', 'web'],
   deadCode: ['baseline', 'mode', 'since'],
   bundle: ['baselineBytes', 'limitBytes', 'mode', 'since'],
@@ -101,6 +103,87 @@ function bundleSection(raw, problems) {
   return { mode, since, baselineBytes, limitBytes };
 }
 
+// What the weekly audit may select from (lib/audit-select.mjs): the worklist's checks, by name.
+export const AUDIT_CHECKS = ['complexity', 'coverage', 'mutation', 'security', 'semgrep', 'deadCode', 'duplication', 'architecture', 'patterns', 'bundle'];
+export const AUDIT_DEFAULTS = { limit: null, riskFiles: 5, riskDays: 30, graduateAfterDays: 14 };
+const AUDIT_MAX = { limit: 200, riskFiles: 20, riskDays: 365, graduateAfterDays: 365 };
+
+// The report-then-ratchet checks the audit graduates: after `audit.graduateAfterDays` in report mode
+// it opens one pull request that writes the baseline from CI's worklist and switches the mode.
+export const GRADUATION_CHECKS = ['deadCode', 'architecture', 'patterns', 'bundle'];
+// What a baseline must not freeze, per check: the audit files one clean-up story first. Unused and
+// unlisted dependencies are never baselined (a ratchet fails on any), and AD0001 is an analyzer
+// that crashed instead of reporting. `audit.junk.<check>` replaces a check's list; [] clears it.
+export const DEFAULT_JUNK = {
+  deadCode: ['dependencies', 'devDependencies', 'optionalPeerDependencies', 'unlisted', 'binaries'],
+  patterns: ['AD0001'],
+};
+
+function stringList(value, where, problems) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string' || entry.trim() === '')) {
+    problems.push(`${where} must be an array of non-empty strings`);
+    return [];
+  }
+  return value.map((entry) => entry.trim());
+}
+
+function boundedInt(raw, key, min, problems) {
+  const value = raw[key];
+  if (value === undefined || value === null) return AUDIT_DEFAULTS[key];
+  if (!Number.isInteger(value) || value < min || value > AUDIT_MAX[key]) {
+    problems.push(`audit.${key} must be a whole number from ${min} to ${AUDIT_MAX[key]}, got ${JSON.stringify(value)}`);
+    return AUDIT_DEFAULTS[key];
+  }
+  return value;
+}
+
+// The weekly audit's settings: which checks it files stories for, what it never files, how many
+// items per check the worklist keeps, and the size of the judgement pass's risk map.
+function auditSection(raw, problems) {
+  const checks = Object.fromEntries(AUDIT_CHECKS.map((name) => [name, true]));
+  const defaults = { checks, ignore: { rules: [], paths: [] }, junk: { ...DEFAULT_JUNK }, ...AUDIT_DEFAULTS };
+  if (raw === undefined) return defaults;
+  if (!isObject(raw)) {
+    problems.push('audit must be an object');
+    return defaults;
+  }
+  unknownKeys(raw, KEYS.audit, 'audit.', problems);
+  if (raw.checks !== undefined && !isObject(raw.checks)) problems.push('audit.checks must be an object of check -> true or false');
+  for (const [name, on] of Object.entries(isObject(raw.checks) ? raw.checks : {})) {
+    if (!AUDIT_CHECKS.includes(name)) problems.push(`audit.checks.${name} is not a known check (expected one of: ${AUDIT_CHECKS.join(', ')})`);
+    else if (typeof on !== 'boolean') problems.push(`audit.checks.${name} must be true or false, got ${JSON.stringify(on)}`);
+    else checks[name] = on;
+  }
+  if (raw.ignore !== undefined && !isObject(raw.ignore)) problems.push('audit.ignore must be an object with `rules` and `paths`');
+  const ignore = isObject(raw.ignore) ? raw.ignore : {};
+  unknownKeys(ignore, KEYS.auditIgnore, 'audit.ignore.', problems);
+  return {
+    checks,
+    ignore: { rules: stringList(ignore.rules, 'audit.ignore.rules', problems), paths: stringList(ignore.paths, 'audit.ignore.paths', problems) },
+    junk: junkSection(raw.junk, problems),
+    limit: boundedInt(raw, 'limit', 1, problems),
+    riskFiles: boundedInt(raw, 'riskFiles', 0, problems),
+    riskDays: boundedInt(raw, 'riskDays', 1, problems),
+    // 0 turns graduation off.
+    graduateAfterDays: boundedInt(raw, 'graduateAfterDays', 0, problems),
+  };
+}
+
+function junkSection(raw, problems) {
+  const junk = { ...DEFAULT_JUNK };
+  if (raw === undefined) return junk;
+  if (!isObject(raw)) {
+    problems.push('audit.junk must be an object of check -> rule ids');
+    return junk;
+  }
+  for (const [name, rules] of Object.entries(raw)) {
+    if (!GRADUATION_CHECKS.includes(name)) problems.push(`audit.junk.${name} is not a check the audit graduates (expected one of: ${GRADUATION_CHECKS.join(', ')})`);
+    else junk[name] = stringList(rules, `audit.junk.${name}`, problems);
+  }
+  return junk;
+}
+
 export function parseQualityConfig(text, file = CONFIG_FILE) {
   let raw;
   try {
@@ -126,8 +209,9 @@ export function parseQualityConfig(text, file = CONFIG_FILE) {
   const bundle = bundleSection(raw.bundle, problems);
   const architecture = architectureSection(raw.architecture, problems);
   const patterns = patternsSection(raw.patterns, problems);
+  const audit = auditSection(raw.audit, problems);
   if (problems.length > 0) throw new Error(`${file}:\n  ${problems.join('\n  ')}`);
-  return { coverage: { api, reportOnly, web: coverage.web ?? null }, mutation, deadCode, bundle, architecture, patterns };
+  return { coverage: { api, reportOnly, web: coverage.web ?? null }, mutation, deadCode, bundle, architecture, patterns, audit };
 }
 
 export function loadQualityConfig(file = CONFIG_FILE) {

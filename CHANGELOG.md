@@ -2,6 +2,51 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.32.0
+
+### Changed
+
+- **The audit closes the loop on its own stories** (phase 3 of [#582](https://github.com/PlainConceptsPlatform/agentic-workflows/issues/582)). Every data-led run compares the stories earlier audits filed (by the `audit-item` marker, with the unit re-derived from the newest worklist, never a raw item id) with what CI measures now. A story whose fix is merged before the worklist was built and that is within its bar, or no longer listed, is closed as completed with a comment giving the number when filed, the number now and the target; one closed as done and within its bar is confirmed once; one closed as done but still over its bar is reopened with the numbers, once, and its unit is not filed again as a new story (closed again after that, it is the team's answer). Nothing is decided on facet data, on an invalid `quality.config.json`, or on a worklist whose measured commit predates the change.
+- **Open audit stories hold their slots.** The audit files `AUDIT_MAX_STORIES` less the open audit stories, so it files fewer new stories while old ones are unfinished; with every slot held the agent does not start, and the summary says why (not "clean"). `conclude` passes the reduced cap to `file-audit-issues`.
+- **The report gains "Since last audit"**: fixed, still open and regressed counts, then one line per story with its numbers. It is appended by `file-audit-issues` from the selection (new input `selection-file`), not written by the model, and carries no issue number. The data-led prompt tells the agent not to write it.
+- **`audit-close` closes a report with the numbers**: each measured story's value when filed and after the fix, from the follow-up comments.
+- **Report-only checks graduate.** A check in `report` mode (`deadCode`, `architecture`, `patterns`, `bundle`) for 14 days, counted from `<check>.since` or from the day the audit first saw it (recorded in the selection and carried forward), gets one pull request, `Quality gates: enforce <check> as a ratchet` on `audit/graduate-<check>`, that writes the baseline from the worklist's `rules` counts (the bundle's `totalJsBytes`, limit +10%) and switches the mode. No model. It is opened as a draft with the merge train's hold label (read from the router's `MERGE_TRAIN_HOLD_LABEL`) and `quality-graduation`, so it is never merged automatically; one a person closed or merged is not opened again for 90 days. When the baseline would freeze junk (default: unused and unlisted dependencies in dead code, `AD0001` in patterns), one clean-up story is filed first and the pull request waits for it; dependency junk a dead-code ratchet fails on blocks the pull request until it is gone.
+- **The item marker records its check**: `<!-- audit-item: <id> value= target= check= -->`, so a story's unit can be called gone when CI stops listing it. Markers without it still match; their check is looked up in the last selection.
+
+### Added
+
+- **`agent-audit` `follow_up` job** and the **`audit-follow-up` action**: carry out the selection's follow-up and graduation actions with the App token (issues, contents and pull-requests write), after the agent, whether it ran, was skipped by the clean exit, or failed. A re-run says nothing twice, a story is reopened at most once, and nothing is ever merged.
+- **`select` outputs** `story_slots` and `follow_up`, and reads the pull requests that close an open story (`pull-requests: read`).
+- **`quality.config.json` `audit.graduateAfterDays`** (0 to 365, default 14; 0 turns graduation off) and **`audit.junk`** (per graduating check, the rule ids a baseline must not freeze).
+- Tests: `node:test` cases for close-on-target, reopen-on-no-change, slot holding, graduation after 14 days, junk first, and a carried first-seen date; vitest cases for the action against an in-memory repository (closed-pull-request respect, hold label, idempotent re-runs) and for `audit-close`'s numbers; route-matrix assertions for the wiring.
+
+## 1.31.0
+
+### Changed
+
+- **The weekly audit starts from the repository's health data instead of exploring it** (phase 2 of [#582](https://github.com/PlainConceptsPlatform/agentic-workflows/issues/582)). `agent-audit` gains a `select` job that runs `scripts/audit-select.mjs` with no model before the agent. It reads the newest `engineering-excellence-worklist` of the default branch and picks what the week's audit works on: what is enforced today (item mode `ratchet`) and over its threshold or baseline, failing a gate, or worse than in the last audit, plus every critical or high vulnerability with a fix. Items are grouped into units (a file with its methods, a module with its files, a rule with its findings, a package with its advisories), ranked by a fixed score (`10 x severity + 10 x distance + 5 if regressed`) and capped at `AUDIT_MAX_STORIES`. The agent no longer runs a repository-wide audit when a selection exists: it reads only the files the selection names and writes one story per unit with the exact files, methods and lines, the measured value and its target, and what the fix looks like. The report keeps its shape, with each finding's number and target.
+- **A clean repository costs no model tokens.** When nothing is selected and the risk map is empty, the agent job does not start, nothing is filed, and the run summary says the repository is clean. `conclude` and `empty_run` are skipped with the agent; the `skip-if-match` backpressure is unchanged.
+- **Report-mode checks file no story.** They are listed in the report's new "Not yet enforced" section with their count and the change since the last audit. The pull request that moves one to `ratchet` is phase 3.
+- **The judgement pass is bounded.** For what no tool measures (an N+1 query, a missing authorization check, a test that asserts nothing, documentation that contradicts the code), the agent reads only a risk map: up to five files that are complex, not fully covered and changed in the last 30 days. It runs every week and fills only the story slots the data left free; `AUDIT_FOCUS` still says what to look for.
+- **Stories are deduplicated by item, not by title.** Each data-led story ends with a hidden `<!-- audit-item: <id> value=<measured> target=<bar> -->` marker. The selection skips a unit an open issue carries, and one closed as not planned in the last 180 days; `file-audit-issues` keeps the marker when it trims a body and does not file a second story for an id that is already open.
+- **Fallbacks.** A repository that publishes facets and no worklist (its own CI, not the `app-ci` template) gets a reduced selection from the `engineering-excellence-` `complexity`, `coverage`, `mutation`, `security`, `hygiene`, `architecture` and `bundle` facets; one that publishes some facets is audited on those. Only a repository with no worklist and no facet, or without the `quality-gates` scripts, keeps the exploratory audit, whose prompt is unchanged. A selection that cannot be computed falls back to it too, never to a skipped audit. All stories still go to `refine`.
+- **`engineering-excellence.mjs worklist`** reads its per-check cap from `audit.limit` when `--limit` is not given.
+
+### Added
+
+- **`quality.config.json` `audit`**: `checks` (a check → `false` switches its stories off), `ignore.rules` and `ignore.paths` (rule ids and path globs the audit never files, for known false positives), `limit` (worklist items per check), `riskFiles` and `riskDays` (the judgement pass's risk map). Validated like every other section: an unknown key or a wrong type fails with the list of problems.
+- **`scripts/audit-select.mjs`** and `scripts/lib/audit-select.mjs` in `quality-gates`, with a `node:test` suite on synthetic fixtures (full and partial worklists, facets only, no data, an invalid config, deduplication, the ignore list, report-mode exclusion, ranking and the cap). `--offline --worklist <file>` runs it without the network.
+- **Mutation in the audit**: the worklist is built where Stryker's reports are not, so the selection reads the `engineering-excellence-mutation` facet: scopes and modules under their floor, never files or mutants.
+
+### Fixed
+
+- **`cleanup-artifacts` no longer deletes the data the audit and Project Health read.** It removed every artifact older than `ARTIFACT_RETENTION_DAYS` (3 by default), including the facets and the worklist, which are uploaded with 90 days of retention: a repository with no push to its default branch in that window had none left on audit day. The newest artifact of each `engineering-excellence-*` name and the newest `audit-selection` are now kept; older copies still go.
+
+### Upgrade
+
+- `workflows update` brings the worker, the actions and the `quality-gates` scripts; recompile the locks. The `select` job needs `actions: read` and `issues: read` on the run's own token, which it declares. A repository on `app-ci-dotnet-next` needs the 1.30.0 template for its first worklist; until a run on the default branch has published one, the audit uses the facets.
+- The `pc-repo-audit` skill in `agent-harness` is only used by the exploratory fallback now.
+
 ## 1.30.0
 
 ### Added

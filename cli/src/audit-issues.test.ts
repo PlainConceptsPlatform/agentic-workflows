@@ -212,6 +212,23 @@ describe("planAuditIssues", () => {
     expect(passes(huge.title, audit.renderStory(huge.body, audit.PLACEHOLDER_NUMBER), AUDIT)).toBe(true);
   });
 
+  it("keeps a story's item marker when the body is trimmed from the end", () => {
+    const marker = "<!-- audit-item: 0123456789abcdef value=186 target=30 -->";
+    const long = `**As a user**, I want it fixed.\n\n${"- a bullet\n".repeat(60)}\n${marker}\n`;
+    const plan = audit.planAuditIssues(
+      [{ title: "Audit: 2026-11-04", body: finding(1) }, { title: "Huge story", body: long }, { title: "Small story", body: `Fix it.\n\n${marker}` }],
+      { limits: AUDIT },
+    );
+    const [huge, small] = plan.stories;
+    expect(huge.trimmed).toBe(true);
+    expect(huge.body).not.toContain("audit-item");
+    expect(huge.items).toEqual(["0123456789abcdef"]);
+    const rendered = audit.renderStory(huge.body, audit.PLACEHOLDER_NUMBER, huge.markers);
+    expect(rendered.endsWith(marker)).toBe(true);
+    expect(passes(huge.title, rendered, AUDIT)).toBe(true);
+    expect(audit.renderStory(small.body, 7, small.markers)).toBe(`Fix it.\n\nFound by the audit report #7.\n<!-- audit-report: 7 -->\n${marker}`);
+  });
+
   it("compacts a verbose report so every finding stays listed", () => {
     const verbose = [1, 2, 3, 4, 5, 6, 7].map(finding).join("\n");
     expect(passes("Audit: 2026-11-04", verbose, AUDIT)).toBe(false);
@@ -273,6 +290,23 @@ describe("file-audit-issues", () => {
     expect(report.body).toContain(`- [ ] #${tracked.number} stop module 2 from writing stale totals (already tracked)`);
     expect(tracked.labels).toEqual(["bug"]);
     expect(outputs["story-numbers"]!.split(" ")).toHaveLength(1);
+  });
+
+  it("does not file a story whose measured item an open issue already tracks under another title", async () => {
+    const marker = "<!-- audit-item: 0123456789abcdef value=186 target=30 -->";
+    const repo = fakeRepository([{ title: "Split the quote method", body: `Filed last week.\n\n${marker}`, labels: ["bug", "refine"] }]);
+    const tracked = [...repo.issues.values()][0]!;
+    const { outputs } = await fileAudit(repo, [
+      { title: "Audit: 2026-11-04", body: [1, 2].map(finding).join("\n") },
+      { title: "Reduce the complexity of Pricing.Quote", body: `Another wording.\n\n${marker}` },
+      { title: "Stop module 2 from writing stale totals", body: `${story("B", 2).split("\n").slice(1).join("\n")}\n\n<!-- audit-item: fedcba9876543210 value=3 target=0 -->` },
+    ]);
+
+    const report = repo.issues.get(Number(outputs["report-number"]))!;
+    expect(repo.issues.size).toBe(3);
+    expect(report.body).toContain(`- [ ] #${tracked.number} Reduce the complexity of Pricing.Quote (already tracked)`);
+    const [filed] = outputs["story-numbers"]!.split(" ").map((n) => repo.issues.get(Number(n))!);
+    expect(filed!.body.endsWith("<!-- audit-item: fedcba9876543210 value=3 target=0 -->")).toBe(true);
   });
 
   it("files nothing for a noop", async () => {
