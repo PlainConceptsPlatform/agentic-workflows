@@ -552,16 +552,25 @@ before anything changes. Applying them one at a time produces contradictory comm
 
 ## agent-audit.md
 
-Creates work rather than consuming it. Read-only: it files a tracking report and one story issue per top finding, and changes nothing else.
+Creates work rather than consuming it. Read-only: it files a tracking report and one story issue per top finding, and changes nothing else. It starts from the repository's engineering health data; only a repository that publishes none is explored.
 
 ```mermaid
 flowchart TD
-    auStart("Work Router<br/>audit route<br/>weekly cron, or dispatch") --> auBack
+    auStart("Work Router<br/>audit route<br/>weekly cron, or dispatch") --> auSelect
+    auSelect("select (rung 4, no model)<br/>audit-select.mjs reads the worklist,<br/>or the facets, from the default branch") --> auWork
+    auWork{"Anything selected,<br/>or a risky file changed?"}
+    auWork -.->|"no, and the data is sound"| auClean
+    auWork -->|"yes, or no health data"| auBack
     auBack{"Backpressure (rung 1)<br/>Fewer than 3 open reports?"}
     auBack -.->|no| auIdle
     auBack -->|yes| auFacts
-    auFacts("Facts (rung 3)<br/>Every open issue's title<br/>and labels to disk") --> auRun
-    auRun("Audit (rung 5)<br/>/repo-audit over AUDIT_FOCUS,<br/>read-only throughout") --> auFilter
+    auFacts("Facts (rung 3)<br/>Open issues and the<br/>selection to disk") --> auSource
+    auSource{"Health data<br/>published?"}
+    auSource -->|"worklist or facets"| auItems
+    auSource -->|none| auRun
+    auItems("Selected items (rung 5)<br/>read only the files they name,<br/>value, target and the fix") --> auJudge
+    auJudge("Judgement pass<br/>risk-map files only, what no<br/>tool measures, free slots only") --> auDedupe
+    auRun("Exploratory audit (rung 5)<br/>/repo-audit over AUDIT_FOCUS,<br/>read-only throughout") --> auFilter
     auFilter{"Each finding: specific,<br/>reproducible, real impact,<br/>fixable without more digging?"}
     auFilter -->|keeps some| auScore
     auFilter -.->|keeps none| auQuiet
@@ -569,10 +578,11 @@ flowchart TD
     auDedupe{"Already tracked, or<br/>previously rejected?"}
     auDedupe -.->|"all of them"| auQuiet
     auDedupe -->|"some are new"| auFile
-    auFile("Report of every finding,<br/>plus one story per top 3") --> auMeasure
+    auFile("Report of every finding,<br/>plus one story each, up to 3,<br/>measured ones with their marker") --> auMeasure
     auMeasure("conclude (rung 6)<br/>each body measured with<br/>refine's rule, trimmed to fit") --> auReport
     auReport(("Filed<br/>report: audit, not refine<br/>stories: refine, sub-issues"))
     auQuiet(("Nothing to file<br/>the right outcome on a<br/>clean codebase"))
+    auClean(("Clean<br/>the agent never starts,<br/>the summary says so"))
     auIdle(("Idle<br/>backlog already full"))
 
     classDef start fill:#ffffff,stroke:#172033,stroke-width:2px,color:#172033
@@ -581,17 +591,19 @@ flowchart TD
     classDef idle fill:#202c40,stroke:#738198,stroke-width:2px,color:#ffffff
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class auStart start
-    class auFacts,auRun,auScore,auFile,auMeasure action
-    class auBack,auFilter,auDedupe decision
+    class auSelect,auFacts,auItems,auJudge,auRun,auScore,auFile,auMeasure action
+    class auWork,auBack,auSource,auFilter,auDedupe decision
     class auIdle idle
-    class auReport,auQuiet success
+    class auReport,auQuiet,auClean success
 ```
 
-The report never goes to refine: refine's size gate refused every audit filed as one issue of every finding and three stories, from 2026-09-21 until 1.12.1. Each story is filed on its own, labelled `refine`, linked under the report and listed in it, so `audit-close` closes the report once its stories are closed. A story already tracked by an open issue is listed against that issue instead of filed again.
+`select` runs `scripts/audit-select.mjs` before any model: it picks, from the worklist the app's CI publishes, what is enforced and over its bar or worse than last week, ranks it by a fixed score and caps it at `AUDIT_MAX_STORIES`. With nothing selected and no risky file changed, the agent job does not start. The rules, the score and the selection file are in `docs/family-templates.md`, "The data-led audit".
 
-Memory matters here: open issues only cover what is still open, so a finding reported weeks ago and
-consciously not acted on would come back every single run. The audit records its dispositions and
-reads them next time.
+The report never goes to refine: refine's size gate refused every audit filed as one issue of every finding and three stories, from 2026-09-21 until 1.12.1. Each story is filed on its own, labelled `refine`, linked under the report and listed in it, so `audit-close` closes the report once its stories are closed. A story already tracked by an open issue is listed against that issue instead of filed again: a measured item by the hidden `audit-item` marker in the story's body, anything else by its title.
+
+Memory matters here: open issues only cover what is still open, so a judgement finding reported weeks
+ago and consciously not acted on would come back every single run. The audit records its dispositions
+and reads them next time.
 
 ---
 

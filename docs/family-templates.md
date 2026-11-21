@@ -225,7 +225,7 @@ The selection, shortened:
       "marker": "<!-- audit-item: 5f0c9a1b2c3d4e5f value=186 target=30 -->" }
   ],
   "judgement": { "slots": 2, "days": 30, "history": true },
-  "riskMap": [{ "path": "apps/api/Billing/Invoice.cs", "crap": 62, "coverage": 0.2, "commits": 3, "score": 57, "methods": [{ "symbol": "Invoice.Total", "line": 10, "crap": 62, "cc": 18 }] }],
+  "riskMap": [{ "path": "apps/api/Billing/Invoice.cs", "crap": 62, "coverage": 0.2, "commits": 3, "score": 61, "methods": [{ "symbol": "Invoice.Total", "line": 10, "crap": 62, "cc": 18 }] }],
   "excluded": {
     "notEnforced": { "deadCode": { "mode": "report", "count": 12, "previous": 10, "change": 2, "rules": { "exports": 9 } } },
     "disabled": [], "ignored": { "count": 0, "items": [] }, "tracked": [{ "id": "…", "check": "security", "issue": 31 }],
