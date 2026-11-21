@@ -554,7 +554,7 @@ post-steps:
   - name: Upload the agent's git bundle for conclude
     if: always()
     continue-on-error: true
-    uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+    uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
     with:
       name: ${{ needs.activation.outputs.artifact_prefix }}agent-bundle
       path: |
@@ -661,7 +661,8 @@ timeout-minutes: 90
 7. Select one review outcome.
 
    - **implemented**: You made the requested change, verification passed, and you will propose
-     exactly one `push_to_pull_request_branch`.
+     exactly one `push_to_pull_request_branch`, once every commit is made. The workflow keeps
+     the first call and rejects any later one, so do not call it again for a follow-up commit.
    - **already-satisfied**: The current branch already satisfies the request. Do not push; the
      reviewer must confirm this assessment.
    - **needs-human**: The feedback is ambiguous, unsafe, or cannot be applied. Do not push.

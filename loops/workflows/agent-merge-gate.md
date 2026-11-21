@@ -903,7 +903,7 @@ jobs:
           issue-number: ${{ needs.subject.outputs.pr }}
           body: |
             The merge gate stopped on this pull request and handed it to a person${{ needs.subject.outputs.issue != '' && format(' (#{0})', needs.subject.outputs.issue) || '' }}.
-            ${{ needs.validate_output.outputs.pushed == 'true' && 'The agent pushed a repair that was not applied because its report could not be read. The patch and bundle are in the `agent` artifact of the run below.' || '' }}
+            ${{ needs.validate_output.outputs.pushed == 'true' && 'The agent pushed a repair that was not applied because its report could not be read. The patch and bundle are in the `agent-bundle` artifact of the run below.' || '' }}
             [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
       - name: Label the pull request for review
         if: steps.budget.outputs.park == 'true'
@@ -1045,7 +1045,7 @@ post-steps:
   - name: Upload the agent's git bundle for conclude
     if: always()
     continue-on-error: true
-    uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+    uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
     with:
       name: ${{ needs.activation.outputs.artifact_prefix }}agent-bundle
       path: |
@@ -1372,7 +1372,9 @@ timeout-minutes: 120
 
    - **`remediated`** something was wrong (CI failed, the branch conflicted, or the diff did
      not satisfy the acceptance criteria), you fixed it, you verified the fix, and you are
-     pushing it. Exactly one `push_to_pull_request_branch` goes with this word.
+     pushing it. Exactly one `push_to_pull_request_branch` goes with this word: make every
+     commit first and call it once, at the end. The workflow keeps the first call and rejects
+     any later one ("Too many items"), so a second call to push a follow-up commit is wasted.
    - **`assessed`** you reviewed the change and are reporting what you found. No push.
 
    These are the only two words the workflow accepts. You do not write `merge`, `review`,

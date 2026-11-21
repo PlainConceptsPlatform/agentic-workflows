@@ -2377,6 +2377,30 @@ if worker_installed merge-gate; then
   else
     PASS=$((PASS + 1))
   fi
+  # gh-aw 1.2 leaves the push tool's patch and bundle out of the agent artifact when the push is
+  # staged and threat detection is off, which is how every pushing worker here runs. Conclude then
+  # found no bundle, skipped the push in silence and the gate posted "remediated" on a branch that
+  # never moved. A staged worker that pushes must upload the bundle itself, download-agent-output
+  # must fetch that artifact, and a push request without a bundle must fail rather than skip.
+  BUNDLE_OK=1
+  for worker_md in "${WORKFLOWS_DIR}"/agent-*.md; do
+    if grep -qE '^  push-to-pull-request-branch:' "$worker_md" && grep -qE '^  staged: true' "$worker_md"; then
+      if ! sed -n '/^post-steps:/,/^[a-z-]*:/p' "$worker_md" | grep -qF 'artifact_prefix }}agent-bundle'; then
+        BUNDLE_OK=0; echo "FAIL: $(basename "$worker_md") stages its push but no post-step uploads /tmp/gh-aw/aw-*.bundle as the agent-bundle artifact" >&2
+      fi
+    fi
+  done
+  DOWNLOAD_ACTION="${HERE}/../download-agent-output/action.yml"
+  if [ -f "$DOWNLOAD_ACTION" ] && ! grep -qF 'pattern: ${{ inputs.artifact-name }}-bundle' "$DOWNLOAD_ACTION"; then
+    BUNDLE_OK=0; echo "FAIL: download-agent-output must download the <prefix>agent-bundle artifact the pushing workers upload" >&2
+  fi
+  if [ -f "$PUSH_ACTION" ] && grep -qF "inputs.bundle-file != ''" "$PUSH_ACTION"; then
+    BUNDLE_OK=0; echo "FAIL: push-agent-branch skips a requested push when the bundle is missing; it must fail instead" >&2
+  fi
+  if [ -f "$PUSH_ACTION" ] && ! grep -qF 'carries no git bundle' "${HERE}/../push-agent-branch/read-push-request.sh"; then
+    BUNDLE_OK=0; echo "FAIL: push-agent-branch must fail a push request that has no bundle" >&2
+  fi
+  if [ "$BUNDLE_OK" -eq 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
   # A conclude that dies leaves no verdict and no attempt comment unless `incomplete` records it,
   # and the train then reads the run as a gate that did nothing and never offers the pull request
   # again.
