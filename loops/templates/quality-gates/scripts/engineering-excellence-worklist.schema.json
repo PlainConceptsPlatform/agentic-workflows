@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PlainConceptsPlatform/agentic-workflows/loops/templates/quality-gates/scripts/engineering-excellence-worklist.schema.json",
+  "title": "Engineering Excellence worklist",
+  "description": "One artifact `engineering-excellence-worklist` containing `worklist.json`, uploaded by a repo's main-branch CI and read by the weekly audit. Per check, the worst items with where they are. Same envelope as the facets (engineering-excellence.schema.json) with `facet: \"worklist\"`. Rates and scores are 0..1 fractions. It never holds source code or secrets.",
+  "$ref": "#/$defs/envelope",
+  "$defs": {
+    "envelope": {
+      "type": "object",
+      "required": ["schemaVersion", "facet", "repo", "ref", "commitSha", "runId", "generatedAt", "data"],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": { "type": "integer", "enum": [1] },
+        "facet": { "type": "string", "enum": ["worklist"] },
+        "repo": { "type": ["string", "null"] },
+        "ref": { "type": ["string", "null"] },
+        "commitSha": { "type": ["string", "null"] },
+        "runId": { "type": ["integer", "null"] },
+        "runAttempt": { "type": ["integer", "null"] },
+        "generatedAt": { "type": "string" },
+        "data": { "$ref": "#/$defs/worklist" }
+      }
+    },
+    "worklist": {
+      "type": "object",
+      "required": ["limit", "checks", "unreadable"],
+      "additionalProperties": false,
+      "properties": {
+        "limit": { "type": "integer", "minimum": 1, "description": "The cap on `items` per check for this run." },
+        "checks": {
+          "type": "object",
+          "description": "Every check is present. null means the check was not measured in this run: its report was absent or could not be read.",
+          "required": ["complexity", "coverage", "mutation", "security", "semgrep", "deadCode", "duplication", "architecture", "patterns", "bundle"],
+          "additionalProperties": false,
+          "properties": {
+            "complexity": { "$ref": "#/$defs/checkOrNull" },
+            "coverage": { "$ref": "#/$defs/checkOrNull" },
+            "mutation": { "$ref": "#/$defs/checkOrNull" },
+            "security": { "$ref": "#/$defs/checkOrNull" },
+            "semgrep": { "$ref": "#/$defs/checkOrNull" },
+            "deadCode": { "$ref": "#/$defs/checkOrNull" },
+            "duplication": { "$ref": "#/$defs/checkOrNull" },
+            "architecture": { "$ref": "#/$defs/checkOrNull" },
+            "patterns": { "$ref": "#/$defs/checkOrNull" },
+            "bundle": { "$ref": "#/$defs/checkOrNull" }
+          }
+        },
+        "unreadable": {
+          "type": "array",
+          "description": "Checks with a report that was present but could not be read, and `config` when quality.config.json is not valid (the defaults are used). A check with nothing else to read is null in `checks`.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "checkOrNull": {
+      "type": ["object", "null"],
+      "required": ["mode", "total", "truncated", "sources", "items"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "$ref": "#/$defs/mode", "description": "The check's mode: the quality.config.json section's for dead code, bundle, architecture and patterns; `ratchet` for the checks that are always enforced. An item may differ (see item.mode)." },
+        "total": { "type": "integer", "minimum": 0, "description": "Items the check has, before the cap." },
+        "truncated": { "type": "boolean", "description": "true when `total` is more than `items` holds." },
+        "sources": { "type": "array", "items": { "type": "string" }, "description": "What the check was read from: `facet:<name>` or a report (`cobertura:api`, `cobertura:web`, `lcov`, `stryker`, `trivy`, `semgrep`, `knip`, `jscpd`, `steiger`, `trx`, `sarif`, `bundle-report`, `size-limit`)." },
+        "summary": { "type": "object", "description": "The check's headline numbers." },
+        "rules": {
+          "type": "object",
+          "description": "Dead code, architecture and patterns: per Knip issue type, Steiger rule (warnings) or analyzer rule, how many it has, how many its baseline allows (null without one) and whether it is over. Not capped.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["count", "baseline", "over"],
+            "additionalProperties": false,
+            "properties": {
+              "count": { "type": "integer", "minimum": 0 },
+              "baseline": { "type": ["integer", "null"], "minimum": 0 },
+              "over": { "type": "boolean" }
+            }
+          }
+        },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/item" }, "description": "Worst first within each kind; at most `limit`." }
+      }
+    },
+    "mode": { "type": "string", "enum": ["report", "ratchet"] },
+    "item": {
+      "type": "object",
+      "required": ["id", "check", "kind", "rule", "path", "line", "symbol", "value", "threshold", "baseline", "mode", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "description": "sha256 of check, rule, path and symbol, first 16 hex characters. It does not change when line numbers or values do." },
+        "check": { "type": "string", "enum": ["complexity", "coverage", "mutation", "security", "semgrep", "deadCode", "duplication", "architecture", "patterns", "bundle"] },
+        "kind": {
+          "type": "string",
+          "enum": ["method", "scope", "module", "file", "vulnerability", "misconfiguration", "finding", "unused-file", "unused-export", "unused-dependency", "unlisted-dependency", "other", "clone", "steiger-error", "steiger-warning", "architecture-test", "analyzer", "total", "entry"]
+        },
+        "rule": { "type": ["string", "null"], "description": "The tool's rule: `crap`, a CVE or misconfiguration id, a Semgrep check id, a Knip issue type, a Steiger rule, an analyzer rule id." },
+        "path": { "type": ["string", "null"], "description": "Repository-relative, forward slashes. null where the source names none (a scope, a failing architecture test, the bundle total)." },
+        "line": { "type": ["integer", "null"], "description": "The first line the item is on, when the report gives one." },
+        "symbol": { "type": ["string", "null"], "description": "A method, `scope/module`, a package, an export, the other file of a clone, a test, a bundle entry." },
+        "value": { "type": ["number", "string", "null"], "description": "The item's own measure: a CRAP score, a line rate or mutation score (0..1), surviving mutants, a severity (CRITICAL, HIGH), findings of the rule at this path, duplicated lines, bytes." },
+        "threshold": { "type": ["number", "null"], "description": "The fixed bar `value` is judged against: the CRAP maximum, the scope's floor, 0 where none is tolerated, jscpd's minimum clone, the byte budget. null without one." },
+        "baseline": { "type": ["number", "null"], "description": "The recorded baseline the item's rule ratchets against, in the rule's unit: findings the rule may have (compare with detail.ruleCount), or the bundle's baseline bytes. null without one." },
+        "mode": { "$ref": "#/$defs/mode", "description": "`ratchet` when CI enforces this item today, `report` when it only measures it." },
+        "message": { "type": ["string", "null"], "description": "The tool's message on one line, at most 200 characters. Never source code." },
+        "detail": { "type": "object", "description": "Small extras per kind: scope, module, cc, coverage, lines (up to 10), severity, level, analyzer, fixedVersion, installedVersion, fixable, ruleCount, overBaseline, otherPath, otherLine, clones." }
+      }
+    }
+  }
+}

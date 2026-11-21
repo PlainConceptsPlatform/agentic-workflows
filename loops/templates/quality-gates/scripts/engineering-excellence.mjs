@@ -15,7 +15,7 @@ import { CC_MAX, CRAP_MAX, evaluate } from './lib/complexity-gate.mjs';
 import { deadCodeWebData } from './lib/dead-code-gate.mjs';
 import { evaluate as evaluateDuplication } from './lib/duplication-gate.mjs';
 import { patternsDotnetData, patternsFacetData, patternsSemgrepData, readSarifLogs, semgrepRuleIds } from './lib/patterns-gate.mjs';
-import { loadCheckConfig, loadQualityConfig } from './lib/quality-config.mjs';
+import { CONFIG_FILE, loadCheckConfig, loadQualityConfig, parseQualityConfig } from './lib/quality-config.mjs';
 import { scopedSources } from './lib/source-files.mjs';
 import {
   apiMethods,
@@ -32,18 +32,22 @@ import {
   validateFacet,
   webMethods,
 } from './lib/engineering-excellence.mjs';
+import { buildWorklist, normalizeLimit, validateWorklist, worklistSummary } from './lib/worklist.mjs';
 
 const BUILT = ['coverage', 'complexity', 'mutation', 'security', 'sbom', 'hygiene', 'bundle', 'architecture', 'patterns'];
 const SCHEMA = JSON.parse(readFileSync(new URL('./engineering-excellence.schema.json', import.meta.url), 'utf8'));
+// Not a facet: the audit's worklist, built from the facets in ee/ and the raw reports (see lib/worklist.mjs).
+const WORKLIST = 'worklist';
+const REPEATABLE = ['job', 'lcov'];
 
 function parseArgs(argv) {
   const [facet, ...rest] = argv;
-  const opts = { job: [] };
+  const opts = { job: [], lcov: [] };
   for (let i = 0; i < rest.length; i += 2) {
     const key = rest[i]?.replace(/^--/, '');
     const value = rest[i + 1];
     if (!key || value === undefined) usage(`missing value for ${rest[i]}`);
-    if (key === 'job') opts.job.push(value);
+    if (REPEATABLE.includes(key)) opts[key].push(value);
     else opts[key] = value;
   }
   return { facet, opts };
@@ -51,7 +55,7 @@ function parseArgs(argv) {
 
 function usage(msg) {
   if (msg) console.error(`✗ ${msg}`);
-  console.error(`usage: node scripts/engineering-excellence.mjs <${BUILT.join('|')}> --out <file> [inputs] — see the header of this file`);
+  console.error(`usage: node scripts/engineering-excellence.mjs <${[...BUILT, WORKLIST].join('|')}> --out <file> [inputs] — see the header of this file`);
   process.exit(2);
 }
 
@@ -182,6 +186,78 @@ function build(facet, opts) {
   }
 }
 
+// The worklist's inputs, each optional:
+//   node scripts/engineering-excellence.mjs worklist --out ee/worklist.json [--limit 20]
+//     [--facets ee]                        the facets already built (coverage, complexity, mutation, architecture, bundle)
+//     [--api Cobertura.xml] [--web cobertura-coverage.xml] [--lcov lcov.info ...]
+//     [--mutation-reports <dir of mutation-<scope>/mutation-report.json>]
+//     [--trivy trivy.json] [--semgrep semgrep.json] [--knip knip-report.json] [--jscpd jscpd-report.json]
+//     [--steiger steiger-report.json] [--trx architecture.trx] [--sarif <file.sarif | dir>]
+//     [--bundle-report bundle-report.json] [--size-limit size-limit.json]
+// A file that is not there is skipped; one that is there and cannot be parsed is named in `unreadable`
+// by its check. Neither fails the run: a repository that publishes some reports still gets a worklist.
+function worklistInputs(opts) {
+  const unreadable = [];
+  const attempt = (check, file, parse) => {
+    if (!file || !existsSync(file)) return null;
+    try {
+      return parse(file);
+    } catch {
+      console.log(`· ${file} could not be read: ${check} recorded as null`);
+      unreadable.push(check);
+      return null;
+    }
+  };
+  const json = (file) => JSON.parse(read(file).replace(/^\uFEFF/, ''));
+  const facet = (name) => attempt(name, opts.facets && join(opts.facets, `${name}.json`), (file) => json(file).data ?? null);
+  const jscpdConfig = attempt('duplication', join(REPO_ROOT, '.jscpd.json'), json);
+  return {
+    facets: Object.fromEntries(['coverage', 'complexity', 'mutation', 'architecture', 'bundle'].map((name) => [name, facet(name)])),
+    apiCoverage: attempt('coverage', opts.api, read),
+    webCoverage: attempt('coverage', opts.web, read),
+    lcov: opts.lcov.map((file) => attempt('coverage', file, read)).filter(Boolean),
+    mutationReports: attempt('mutation', opts['mutation-reports'], mutationReports),
+    trivy: attempt('security', opts.trivy, json),
+    semgrep: attempt('semgrep', opts.semgrep, json),
+    knip: attempt('deadCode', opts.knip, json),
+    jscpd: attempt('duplication', opts.jscpd, json),
+    jscpdMinLines: jscpdConfig?.minLines ?? null,
+    steiger: attempt('architecture', opts.steiger, json),
+    trx: attempt('architecture', opts.trx, read),
+    sarifLogs: attempt('patterns', opts.sarif, (path) => readSarifLogs(path).logs),
+    bundleReport: attempt('bundle', opts['bundle-report'], json),
+    sizeLimit: attempt('bundle', opts['size-limit'], json),
+    unreadable: [...new Set(unreadable)],
+  };
+}
+
+// The modes, floors and baselines the gates read. A quality.config.json the gates would reject is
+// their failure to report; the worklist falls back to the defaults (every check in report mode).
+function worklistConfig() {
+  try {
+    return { config: parseQualityConfig(existsSync(CONFIG_FILE) ? read(CONFIG_FILE) : '{}', CONFIG_FILE), valid: true };
+  } catch {
+    console.log('· quality.config.json is not valid (the gates say why): the worklist uses the default modes and no floors');
+    return { config: parseQualityConfig('{}', CONFIG_FILE), valid: false };
+  }
+}
+
+function writeWorklist(opts) {
+  const out = required(opts, 'out');
+  const inputs = worklistInputs(opts);
+  const { config, valid } = worklistConfig();
+  if (!valid) inputs.unreadable.push('config');
+  const doc = envelope(WORKLIST, buildWorklist(inputs, config, { limit: normalizeLimit(opts.limit) }));
+  const errors = validateWorklist(doc, JSON.parse(read(new URL('./engineering-excellence-worklist.schema.json', import.meta.url))));
+  if (errors.length) {
+    console.error('✗ worklist violates scripts/engineering-excellence-worklist.schema.json');
+    for (const e of errors.slice(0, 20)) console.error(`  ${e}`);
+    process.exit(1);
+  }
+  writeFileSync(out, `${JSON.stringify(doc, null, 2)}\n`);
+  console.log(worklistSummary(doc.data));
+}
+
 const pct = (r) => (r === null || r === undefined ? 'n/a' : `${(r * 100).toFixed(2)}%`);
 
 // A short Markdown digest for $GITHUB_STEP_SUMMARY, so the numbers are readable on
@@ -249,6 +325,10 @@ function patternsSummary({ dotnet, semgrep }) {
 }
 
 const { facet, opts } = parseArgs(process.argv.slice(2));
+if (facet === WORKLIST) {
+  writeWorklist(opts);
+  process.exit(0);
+}
 if (!BUILT.includes(facet)) usage(`unknown facet '${facet}'`);
 const out = required(opts, 'out');
 const doc = envelope(facet, build(facet, opts));

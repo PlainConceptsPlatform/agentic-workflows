@@ -38,6 +38,8 @@ const QUALITY_GATES = [
   "scripts/check-mutation.mjs",
   "scripts/check-patterns.mjs",
   "scripts/dast-wait-stable.sh",
+  "scripts/engineering-excellence-worklist.schema.json",
+  "scripts/engineering-excellence-worklist.schema.json.md",
   "scripts/engineering-excellence.mjs",
   "scripts/engineering-excellence.schema.json",
   "scripts/engineering-excellence.schema.json.md",
@@ -63,6 +65,8 @@ const QUALITY_GATES = [
   "scripts/lib/source-files.mjs",
   "scripts/lib/test-timings.mjs",
   "scripts/lib/test-timings.test.mjs",
+  "scripts/lib/worklist.mjs",
+  "scripts/lib/worklist.test.mjs",
   "scripts/test-timings.mjs",
 ];
 

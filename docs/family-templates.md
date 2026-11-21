@@ -32,8 +32,9 @@ The Kitchen-Sink gates, made app-neutral:
 | `scripts/check-bundle-size.mjs` | The web bundle-size check: size-limit's JSON for the static export's chunks against the `bundle` budget |
 | `scripts/check-architecture.mjs` | The web architecture check: Steiger's JSON warnings per rule against `architecture` in `quality.config.json` |
 | `scripts/check-patterns.mjs` | The .NET code-patterns check: the build's SARIF errors and warnings per analyzer rule against `patterns` in `quality.config.json` |
-| `scripts/engineering-excellence.mjs` | Builds the coverage, complexity, mutation, security, SBOM, hygiene, bundle, architecture and patterns facets Project-Health collects |
+| `scripts/engineering-excellence.mjs` | Builds the coverage, complexity, mutation, security, SBOM, hygiene, bundle, architecture and patterns facets Project-Health collects, and the audit worklist (`worklist`) |
 | `scripts/engineering-excellence.schema.json` | The facet contract, vendored verbatim; `.md` beside it carries the header |
+| `scripts/engineering-excellence-worklist.schema.json` | The contract of the audit worklist (`engineering-excellence.mjs worklist`); `.md` beside it carries the header |
 | `scripts/lib/*.mjs` | Parsers, gate rules, the quality config loader and `gate-cli.mjs` (what the report-then-ratchet scripts share: arguments, the mode line, baseline writes), with their `node:test` suites |
 | `scripts/dast-wait-stable.sh` | Waits until a deployed build is serving and stable before a ZAP scan |
 | `.semgrep/platform-hygiene.yml` | The empty-catch rules, `platform-hygiene-csharp-empty-catch` and `platform-hygiene-ts-empty-catch`, scoped to `apps/` |
@@ -130,6 +131,38 @@ The patterns facet (`engineering-excellence-patterns`, from 1.29.0) has two part
 
 Either part may be null; with neither, the facet is not built. To adopt it: add the two analyzer packages and the `.editorconfig` severities in a pull request, update to 1.29.0, record the baseline from that pull request's CI run (download `dotnet-analyzers`, then `node scripts/check-patterns.mjs --sarif <dir> --write-baseline`), and switch `patterns.mode` to `ratchet` two weeks later.
 
+### The audit worklist
+
+The facets say how much is wrong; several hold counts only (dead code, patterns, architecture, Semgrep), and the files and lines sit in raw tool reports that are kept one to seven days. From 1.30.0 the engineering-excellence job also runs `engineering-excellence.mjs worklist` after the facets and uploads `ee/worklist.json` from main as `engineering-excellence-worklist`, for 90 days like the facets. It is what the weekly audit will start from instead of exploring the repository ([#582](https://github.com/PlainConceptsPlatform/agentic-workflows/issues/582)); in 1.30.0 nothing reads it yet. It is not a facet: Project-Health reads facets by name and never this artifact, and its contract is a file of its own, `scripts/engineering-excellence-worklist.schema.json`, with the facets' envelope and `facet: "worklist"`.
+
+`data.checks` has every check, each `null` when it was not measured in that run:
+
+| Check | Items | Read from |
+|---|---|---|
+| `complexity` | methods over the CRAP threshold | the complexity facet's `hotspots` (`ee/complexity.json`) |
+| `coverage` | scopes and modules under their floor, the least covered files | the coverage facet, and the merged Cobertura (`api-coverage-merged`) and the web Cobertura (`web-coverage`); `--lcov` for a repository whose CI writes lcov |
+| `mutation` | scopes and modules under their floor, the files with most surviving mutants | Stryker's reports (`--mutation-reports`), else the mutation facet; neither is in this job, so the check is null here |
+| `security` | critical and high vulnerabilities with the fixed version, failed critical and high misconfigurations | `trivy.json` (`trivy-json`) |
+| `semgrep` | findings per rule and file | `semgrep.json` (`semgrep-json`) |
+| `deadCode` | unused files, exports and dependencies, unlisted dependencies | Knip's report (`web-quality`) |
+| `duplication` | the largest clone pairs | this job's jscpd report |
+| `architecture` | failing architecture tests, Steiger errors and warnings | the TRX (`architecture-tests`), Steiger's JSON (`web-quality`) |
+| `patterns` | analyzer errors and warnings per rule and file | the SARIF logs (`dotnet-analyzers`) |
+| `bundle` | the total over its budget, entries over a limit of their own | the bundle measurement and `size-limit.json` (`web-quality`) |
+
+A check is `{ mode, total, truncated, sources, items }`, with `summary` (headline numbers) or `rules` where it has them. `items` holds at most `data.limit` (20; `--limit` changes it, up to 200), worst first, each kind of item taking its turn; `total` is the count before the cap, so `truncated` shows what was cut. `rules` (dead code, architecture, patterns) is not capped: per Knip issue type, Steiger rule or analyzer rule, `{ count, baseline, over }`.
+
+An item is `{ id, check, kind, rule, path, line, symbol, value, threshold, baseline, mode, message, detail? }`:
+
+- `id` is the first 16 hex characters of the SHA-256 of check, rule, path and symbol. Line numbers and values are not in it, so a finding keeps its id while the code above it moves; several findings of one rule in one file are one item, with the lines in `detail.lines`.
+- `path` is repository-relative with forward slashes; `line` is the first line, when the report gives one.
+- `value` is the item's own measure (a CRAP score, a rate from 0 to 1, surviving mutants, a severity, findings of the rule at that path, duplicated lines, bytes); `threshold` is the fixed bar it is judged against (the CRAP maximum, the scope's floor, 0 where none is tolerated, the byte budget); `baseline` is the count the item's rule may have under its ratchet, to compare with `detail.ruleCount` (`detail.overBaseline` says whether the rule is over).
+- `mode` is `ratchet` when CI enforces the item today and `report` when it only measures it: the `quality.config.json` section's mode for dead code, bundle, Steiger warnings and patterns; `ratchet` for complexity, duplication, Semgrep, Steiger errors, failing architecture tests, a floor that exists and a vulnerability with a fix; `report` for a file in a scope with no floor and a vulnerability with no fix, which the blocking scan ignores.
+
+It never holds source code or secrets: Semgrep's matched lines, jscpd's clone text and Stryker's replacements are dropped, a message is the tool's own, on one line and at most 200 characters, and Trivy's secret findings are counted (`security.summary.secrets`) and never listed.
+
+Every input is optional. A report that is not there leaves its check `null`; one that is there and cannot be parsed does too and is named in `data.unreadable` (`config` there means `quality.config.json` is not valid and the default modes were used). The step never fails the job: a worklist that cannot be built is a warning, and a repository that has not updated the `quality-gates` template skips it. A repository with its own CI runs the same command with whatever it has, for example `node scripts/engineering-excellence.mjs worklist --out ee/worklist.json --facets ee --lcov coverage/lcov.info --semgrep semgrep.json`, and uploads `ee/worklist.json` from main under the same artifact name.
+
 ## The gates CI: app-ci-dotnet-next
 
 `.github/workflows/app-ci.yml` for a family app, reconciled from the four apps' own CI with Kitchen-Sink's as the base. Everything that differed between them is a top-level `env:` value or a floor in `quality.config.json`:
@@ -149,7 +182,7 @@ Either part may be null; with neither, the facet is not built. To adopt it: add 
 | `MARKDOWN_LINT_COMMAND`, `REPO_CHECK_COMMANDS` | The Markdown job and the app's own checks (Kitchen-Sink's `node scripts/check-demo-manifest.mjs`); empty skips the steps |
 | `SBOM_ARTIFACT_NAME`, `SEMGREP_EXCLUDES`, images and versions | Scanner settings |
 
-The web job runs `Dead code (Knip)` and `Bundle size (size-limit)` after the build, and `Architecture warnings (Steiger)` after the boundary check, and uploads the reports as `web-quality`; the api job uploads the architecture tests' TRX as `architecture-tests` and the build's SARIF error logs as `dotnet-analyzers`. The engineering-excellence job folds Knip into the hygiene facet, builds the bundle, architecture and patterns facets from them, and runs `Code patterns (.NET analyzers)`. Neither step needs an `env:` value: they read `WEB_PACKAGE`, the root `knip.json` and `.size-limit.json`, and `quality.config.json`.
+The web job runs `Dead code (Knip)` and `Bundle size (size-limit)` after the build, and `Architecture warnings (Steiger)` after the boundary check, and uploads the reports as `web-quality`; the api job uploads the architecture tests' TRX as `architecture-tests` and the build's SARIF error logs as `dotnet-analyzers`. The engineering-excellence job folds Knip into the hygiene facet, builds the bundle, architecture and patterns facets from them, and runs `Code patterns (.NET analyzers)`. It then builds the audit worklist (`Build audit worklist`) from the facets and those reports plus Trivy's JSON (`trivy-json`, for which the job now also waits for `deps-and-iac-report`), and uploads it from main as `engineering-excellence-worklist`. Neither step needs an `env:` value: they read `WEB_PACKAGE`, the root `knip.json` and `.size-limit.json`, and `quality.config.json`.
 
 The job names are the ones the apps' required checks and the merge train read (`Full CI`), and the last job, `dispatch-merge-gate`, hands a bot pull request's verdict to the router's merge train exactly as the apps' CI does. A deploy pipeline that calls the workflow with `uses:` must grant `actions: write`. The `Platform conformance` job runs the guard from [platform-contracts.md](platform-contracts.md) where the app declares a platform contract and passes everywhere else.
 
