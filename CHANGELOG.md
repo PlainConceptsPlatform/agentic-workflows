@@ -2,6 +2,22 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.32.1
+
+### Fixed
+
+- **The merge gate's and apply-review's repairs reach the pull request again.** Since the move to gh-aw 1.2.2 (workflows 1.26.8) no repair the agent pushed was ever applied. gh-aw 1.2 puts the push tool's patch and bundle (`/tmp/gh-aw/aw-*.patch`, `aw-*.bundle`) into the agent artifact only when its own `safe_outputs` job applies them (an unstaged push) or threat detection reads them; gh-aw 0.87.5 always did. Both workers stage their safe outputs so that `conclude` writes with the App token, and both turn threat detection off, so the bundle never left the agent job. `download-agent-output` found none, `push-agent-branch` skipped the push without a word, and the gate went on to post **Verdict: remediated** and release the issue on a branch that had not moved, so CI stayed red and the belt offered the same pull request again. Measured on the consumers: every `remediated` conclude since the move had an empty bundle and pushed nothing.
+  - `agent-merge-gate` and `agent-apply-review` gain a `post-steps:` upload of `/tmp/gh-aw/aw-*.bundle` and `aw-*.patch` as the `<prefix>agent-bundle` artifact (nothing is uploaded when the agent pushed nothing).
+  - `download-agent-output` also downloads `<artifact-name>-bundle` (a pattern, so a run without one is unaffected) and takes the newest bundle from it or from the agent artifact, where older compilers put it.
+- **A requested push that cannot be applied fails the run instead of passing as done.** `push-agent-branch` reads the request in a new script, `read-push-request.sh`, which fails the step with "this run carries no git bundle, so the repair could not be applied" when the agent asked for a push and no bundle arrived, and when the request names no branch and the caller expects none. `conclude` stops there, so no `remediated` comment is posted and the issue is not released; the gate's `incomplete` job records the failed attempt as for any conclude that dies. The first push item is the one applied when the agent's output carries more than one.
+- **The agents are told to push once.** gh-aw keeps one `push_to_pull_request_branch` (max 1) and drops later calls as "Too many items"; the merge-gate and apply-review prompts now say to make every commit first and call it once, at the end. The parked-PR note names the `agent-bundle` artifact as where an unapplied repair is kept.
+
+### Changed
+
+- The route matrix asserts that every worker that stages a push uploads its bundle from a post-step, that `download-agent-output` fetches it, and that `push-agent-branch` fails rather than skips a push with no bundle. `.github/tests/push-agent-branch.test.mjs` covers the request reader (CI step "Push request read by conclude").
+
+Consumers that run the merge gate or apply-review take it with `workflows update` and a recompile (the post-step lives in the compiled lock).
+
 ## 1.32.0
 
 ### Changed
