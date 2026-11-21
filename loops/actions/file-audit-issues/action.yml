@@ -100,7 +100,7 @@ runs:
           const widest = audit.PLACEHOLDER_NUMBER;
           const checks = [
             { title: plan.report.title, body: audit.renderReport(plan.report.body, plan.stories.map((s) => ({ number: widest, title: s.title, tracked: true }))) },
-            ...plan.stories.map((s) => ({ title: s.title, body: audit.renderStory(s.body, widest) })),
+            ...plan.stories.map((s) => ({ title: s.title, body: audit.renderStory(s.body, widest, s.markers) })),
           ];
           for (const check of checks) {
             const verdict = sizeVerdict(measureIssue(check.title, check.body), limits);
@@ -113,6 +113,8 @@ runs:
           const open = (await github.paginate(github.rest.issues.listForRepo, { ...context.repo, state: 'open', per_page: 100 }))
             .filter((issue) => !issue.pull_request);
           const byTitle = new Map(open.map((issue) => [audit.titleKey(issue.title), issue]));
+          // A measured item is tracked by the marker in its story, whatever the story is called.
+          const byItem = new Map(open.flatMap((issue) => audit.itemIds(issue.body).map((id) => [id, issue])));
           const labelNames = (issue) => issue.labels.map((label) => (typeof label === 'string' ? label : label.name));
 
           for (const name of new Set([...reportLabels, ...storyLabels])) {
@@ -140,7 +142,7 @@ runs:
           const links = [];
           const marker = audit.reportMarker(report.number);
           for (const story of plan.stories) {
-            const existing = byTitle.get(audit.titleKey(story.title));
+            const existing = byTitle.get(audit.titleKey(story.title)) ?? story.items.map((id) => byItem.get(id)).find(Boolean);
             if (existing && !(existing.body ?? '').includes(marker)) {
               // Already tracked by an issue this audit did not file: point at it, file nothing.
               core.info(`"${story.title}" is already tracked by #${existing.number}.`);
@@ -152,7 +154,7 @@ runs:
               ({ data: issue } = await github.rest.issues.create({
                 ...context.repo,
                 title: story.title,
-                body: audit.renderStory(story.body, report.number),
+                body: audit.renderStory(story.body, report.number, story.markers),
               }));
               core.info(`Filed #${issue.number}: ${story.title}${story.trimmed ? ' (trimmed)' : ''}`);
             }

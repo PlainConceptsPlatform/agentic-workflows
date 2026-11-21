@@ -29,8 +29,25 @@ function reportMarker(number) {
   return `<!-- audit-report: ${number} -->`;
 }
 
-function renderStory(body, reportNumber) {
-  return `${body.replace(/\s+$/, '')}\n\nFound by the audit report #${reportNumber}.\n${reportMarker(reportNumber)}`;
+// A data-led story names the measured item it is about in a hidden marker (written by
+// scripts/audit-select.mjs, copied by the agent). The next audit finds the story by that id, so the
+// marker is lifted out of the body before it is measured and trimmed, and put back after: a body cut
+// from the end must not lose it.
+const ITEM_MARKER = /<!--\s*audit-item:\s*([0-9a-f]{16})\b[^>]*?-->/g;
+
+function itemMarkers(text) {
+  return [...new Map([...String(text ?? '').matchAll(ITEM_MARKER)].map((match) => [match[1], match[0]])).values()];
+}
+
+const itemIds = (text) => [...String(text ?? '').matchAll(ITEM_MARKER)].map((match) => match[1]);
+
+function withoutItemMarkers(text) {
+  return String(text ?? '').replace(ITEM_MARKER, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function renderStory(body, reportNumber, markers = []) {
+  const items = markers.length > 0 ? `\n${markers.join('\n')}` : '';
+  return `${body.replace(/\s+$/, '')}\n\nFound by the audit report #${reportNumber}.\n${reportMarker(reportNumber)}${items}`;
 }
 
 function renderReport(body, links) {
@@ -204,7 +221,7 @@ function planAuditIssues(items, options) {
 
   // Separate stories win; the lifted section is only used when the agent filed the old shape.
   const candidates = (separate.length > 0 ? separate : lifted.stories)
-    .map((story) => ({ title: cleanTitle(story.title), body: story.body }))
+    .map((story) => ({ title: cleanTitle(story.title), body: withoutItemMarkers(story.body), markers: itemMarkers(story.body) }))
     .filter((story) => story.title && story.body);
   const seen = new Set();
   const unique = candidates.filter((story) => {
@@ -216,9 +233,9 @@ function planAuditIssues(items, options) {
   const dropped = unique.slice(maxStories).map((story) => story.title);
 
   const stories = unique.slice(0, maxStories).map((story) => {
-    const suffix = renderStory('', PLACEHOLDER_NUMBER);
+    const suffix = renderStory('', PLACEHOLDER_NUMBER, story.markers);
     const fitted = fitBody(story.title, story.body, suffix, limits, runUrl);
-    return { title: story.title, body: fitted.body, trimmed: fitted.trimmed };
+    return { title: story.title, body: fitted.body, trimmed: fitted.trimmed, markers: story.markers, items: story.markers.flatMap(itemIds) };
   });
 
   const reportTitle = cleanTitle(reportItem.title);
@@ -236,6 +253,7 @@ function planAuditIssues(items, options) {
 module.exports = {
   PLACEHOLDER_NUMBER,
   extractStorySection,
+  itemIds,
   planAuditIssues,
   renderReport,
   renderStory,
