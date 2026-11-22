@@ -325,9 +325,12 @@ Tokens are split on purpose:
   workflows. A repository that deploys to production on `v*` tags therefore does not deploy
   because a release was cut, exactly as before the release became a pull request.
 - A merge into the default branch also posts a `repository_dispatch` of type
-  `agentic-post-merge`, with the merge commit in `client_payload.sha`. GitHub does not always create
-  a push run for a merge the App performs, so a consumer that deploys on push adds that event to its
-  deploy workflow's triggers.
+  `agentic-post-merge`. GitHub does not always create a push run for a merge the App performs, so a
+  consumer that deploys on push adds that event to its deploy workflow's triggers. The payload
+  carries `sha` (the head commit that was judged), `landed_sha` (the commit the merge created on the
+  base branch), `base_sha` (the commit it landed on), `pr` and `base`. A consumer that stages work
+  on a path filter diffs from `base_sha` to `landed_sha`, because `github.event.before` is empty on
+  a dispatch.
 
 `version-bump` accepts `auto`, `patch`, `minor`, or `major`. The worker needs `OPENAI_API_KEY`,
 `BOT_APP_ID` and `BOT_PRIVATE_KEY`. Auto-merge must be allowed on the repository
