@@ -14,14 +14,38 @@ set -euo pipefail
 out() { echo "landed=$1" >> "${GITHUB_OUTPUT:-/dev/null}"; }
 
 # GitHub does not always create a push run for a merge the App performs. A consumer that deploys on
-# push listens for this dispatch instead, so the merge still deploys.
+# push listens for this dispatch instead, so the merge still deploys. The payload names the commit
+# the merge created and the commit it landed on: `github.event.before` is empty on a dispatch, so a
+# consumer that stages its pipeline on what changed has nothing to diff without them.
 dispatch_post_merge() {
   [ "$base" = "${DEFAULT_BRANCH:-}" ] || return 0
-  gh api -X POST "repos/$REPO/dispatches" \
-    -f event_type="${POST_MERGE_EVENT:-agentic-post-merge}" \
-    -f "client_payload[sha]=$HEAD_SHA" \
-    -f "client_payload[pr]=$PR" \
-    -f "client_payload[base]=$base" >/dev/null ||
+
+  # The merge commit: a squash creates one, and a queue or stack merge reports its own. The branch
+  # tip is the fallback for the moment the commit is not reported yet.
+  local landed_sha
+  landed_sha=$(gh pr view "$PR" --repo "$REPO" --json mergeCommit --jq '.mergeCommit.oid // ""' 2>/dev/null || true)
+  if [ -z "$landed_sha" ]; then
+    landed_sha=$(gh api "repos/$REPO/branches/$base" --jq .commit.sha 2>/dev/null || true)
+  fi
+
+  local payload=(
+    -f event_type="${POST_MERGE_EVENT:-agentic-post-merge}"
+    -f "client_payload[sha]=$HEAD_SHA"
+    -f "client_payload[pr]=$PR"
+    -f "client_payload[base]=$base"
+  )
+  if [ -n "$landed_sha" ]; then
+    # Its first parent is the base commit it sat on, which is exact even when another merge landed
+    # while the queue was building this one.
+    local base_sha
+    base_sha=$(gh api "repos/$REPO/commits/$landed_sha" --jq '.parents[0].sha // ""' 2>/dev/null || true)
+    payload+=(-f "client_payload[landed_sha]=$landed_sha")
+    if [ -n "$base_sha" ]; then
+      payload+=(-f "client_payload[base_sha]=$base_sha")
+    fi
+  fi
+
+  gh api -X POST "repos/$REPO/dispatches" "${payload[@]}" >/dev/null ||
     echo "::warning::The merge landed, but the ${POST_MERGE_EVENT:-agentic-post-merge} dispatch failed; a consumer that deploys on it did not start."
 }
 

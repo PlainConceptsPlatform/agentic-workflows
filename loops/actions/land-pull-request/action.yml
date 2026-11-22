@@ -27,7 +27,9 @@ inputs:
     description: >-
       repository_dispatch event type posted after a merge lands on the default branch. GitHub does
       not always create a push run for a merge the App performs, so a consumer that deploys on push
-      opts into this event instead of relying on that run.
+      opts into this event instead of relying on that run. The payload carries `sha` (the head
+      commit that was judged), `landed_sha` (the commit the merge created on the base branch),
+      `base_sha` (the commit it landed on), `pr` and `base`.
     required: false
     default: agentic-post-merge
 
