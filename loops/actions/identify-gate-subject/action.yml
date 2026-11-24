@@ -52,6 +52,9 @@ outputs:
   human-author:
     description: Whether a person with write access opened the pull request, rather than a trusted bot.
     value: ${{ steps.identify.outputs.human-author }}
+  head-sha:
+    description: The head commit this gate run assesses. Conclude acts only while the pull request is still open on this commit, and lands only this commit.
+    value: ${{ steps.identify.outputs.head-sha }}
 runs:
   using: composite
   steps:
@@ -76,7 +79,7 @@ runs:
         }
 
         pr="$(gh pr view "$PR_NUMBER" --repo "$REPO" \
-          --json state,author,closingIssuesReferences,body,isCrossRepository,headRefName)"
+          --json state,author,closingIssuesReferences,body,isCrossRepository,headRefName,headRefOid)"
 
         [ "$(jq -r '.state' <<<"$pr")" = "OPEN" ] || none "PR #$PR_NUMBER is not open"
 
@@ -194,6 +197,7 @@ runs:
           echo "issue=$issue"
           echo "record=${issue:-$PR_NUMBER}"
           echo "head-ref=$(jq -r '.headRefName' <<<"$pr")"
+          echo "head-sha=$(jq -r '.headRefOid' <<<"$pr")"
           if [ -n "$issue" ]; then echo "closes=closes issue #$issue"; else echo "closes=closes no issue"; fi
           echo "conclusion=$ci_conclusion"
           echo "run-id=$ci_run_id"

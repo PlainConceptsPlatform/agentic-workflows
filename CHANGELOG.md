@@ -2,6 +2,24 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.33.0
+
+### Fixed
+
+- **The merge gate acts only on the commit it assessed, on a pull request that is still open.** The agent works for minutes, and the pull request can move under it: its author pushes, or merges it by hand. `conclude` then labelled and commented on whatever was there. Bots #1798 and #1801 were labelled `blocked` after their authors had pushed the fix, Bots #1832 and Odyssey #591 got verdicts after a person merged them, and Numa #837 got "Attempt 0 of 6" two minutes after its merge. Worse, the landing step read the head at merge time, so a commit pushed during the run could land without the gate ever reading it.
+  - `identify-gate-subject` outputs `head-sha`, the commit the run assesses, and the gate's `subject` job carries it as `head_sha`.
+  - A new `still_current` job, after the agent, compares the pull request's state and head with it. When the pull request is closed or merged, or its head moved, `conclude` and `incomplete` do not run, and a new `superseded` job releases the issue's `bot-working` label and writes the reason to the run summary: no verdict, no attempt, no label. When the check cannot be made, the gate concludes as before.
+  - The landing step merges the assessed commit (`--match-head-commit`), so a push after `still_current` looked makes the merge fail instead of landing unread code.
+- **A pull request the merge gate gave up on gets a fresh try when the gate is updated.** The train's budgets (attempts, a silent gate, `remediated` twice without a push) counted from the head commit, and the head of a pull request the gate cannot repair never moves, so those skips were permanent. Numa #870 and #880 were skipped for good after `remediated` verdicts that pushed nothing, and 1.32.1, which fixed that, was never tried on them. The budgets now count from the latest of the head commit, a verdict the train is retrying, and the last commit on the default branch that touched `.github/workflows/agent-merge-gate.lock.yml` (`budget_since`, `GATE_LOCK_PATH`). Only a gate update resets them, so the retries are bounded by how often the loop changes.
+- **A stranded pull request says so.** When the train stops offering a pull request because its gate left nothing or said `remediated` twice without pushing, it comments once on the pull request (`<!-- merge-train-stranded -->`) and adds `review`. Housekeeping's digest lists it under "Pull requests parked by the gate" as stranded, rather than as a `remediated` verdict that reads like a repair in progress. A spent attempt budget is not announced again: the gate's `incomplete` job already parks it.
+- **A gate run that dropped its verdict is not a silent gate.** The train ignores runs whose `superseded` job succeeded, so an author's push during a gate run (with a commit made before the run started) does not strand the new head.
+
+### Changed
+
+- The route matrix covers `stranded` on the two silent skips and not on a spent budget, `budget_since` with and without a gate update, the gate's `still_current`/`superseded` wiring and assessed-commit landing, the train's exclusion of superseded runs, and the digest's stranded entry.
+
+Consumers that run the merge gate take it with `workflows update` and a recompile (`still_current` and `superseded` live in the compiled lock).
+
 ## 1.32.1
 
 ### Fixed

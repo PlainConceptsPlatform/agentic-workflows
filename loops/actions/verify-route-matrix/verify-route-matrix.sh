@@ -2479,6 +2479,21 @@ if worker_installed merge-gate; then
     # Reviews submitted through the API do not always reach the router: the train answers them.
     assert "a second remediated verdict on one head stops the repairs" skip "$(move REMEDIATED_ON_HEAD=2 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
     assert "one remediated verdict newer than its head is a real repair" gate "$(move REMEDIATED_ON_HEAD=1 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
+    # The two skips the gate never announces are marked stranded, so the train says so once on the
+    # pull request. A spent budget is not: the gate's own incomplete job already parked it.
+    stranded() { env "$@" bash -c "source '$TRAIN_SH'; train_move" | sed -n 's/^stranded=//p'; }
+    assert "remediated twice without a push is stranded" true "$(stranded REMEDIATED_ON_HEAD=2 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
+    assert "a silent gate is stranded" true "$(stranded SILENT_GATE=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
+    assert "a spent budget is not stranded: the gate parked it itself" false "$(stranded ATTEMPTS=6 MAX_ATTEMPTS=6 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
+    assert "a gate move is not stranded" false "$(stranded MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
+    # Budgets count from the latest of the head, a retried verdict and the gate's last update, so an
+    # updated gate gets one fresh try on a head it gave up on (Numa #870, #880).
+    since() { bash -c "source '$TRAIN_SH'; budget_since \"\$@\"" _ "$@"; }
+    assert "the budget counts from the head" 2026-11-16T10:13:00Z "$(since 2026-11-16T10:13:00Z "" "")"
+    assert "an updated gate starts a fresh budget" 2026-11-21T11:20:00Z "$(since 2026-11-16T10:13:00Z "" 2026-11-21T11:20:00Z)"
+    assert "a gate updated before the head changes nothing" 2026-11-22T08:00:00Z "$(since 2026-11-22T08:00:00Z "" 2026-11-21T11:20:00Z)"
+    assert "a retried verdict newer than both wins" 2026-11-23T09:00:00Z "$(since 2026-11-22T08:00:00Z 2026-11-23T09:00:00Z 2026-11-21T11:20:00Z)"
+    assert "no dates count from the epoch" 1970-01-01T00:00:00Z "$(since "" "" "")"
     assert "a parked auto-merge verdict whose merge did not happen is landed" land "$(move PARK=held VERDICT=auto-merge MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
     assert "a stack root's auto-merge verdict still waits for a person" skip "$(move PARK=held VERDICT=auto-merge STACK_ROOT=true MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=success)"
     assert "a parked auto-merge verdict with red CI is not landed" skip "$(move PARK=held VERDICT=auto-merge MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure)"
@@ -3765,6 +3780,36 @@ if grep -qF 'gh-aw-opencode-agent-merge-gate-${{ inputs.pr-number }}' "${WORKFLO
 else
   FAIL=$((FAIL + 1))
   echo "FAIL: merge gate agents share one repository-wide concurrency group" >&2
+fi
+# The gate acts only on the commit it assessed, on a pull request that is still open. Bots #1798,
+# #1801 and #1832 and Odyssey #591 got labels and verdicts after their authors pushed or merged.
+gate_md="${WORKFLOWS_DIR}/agent-merge-gate.md"
+if grep -qF 'head_sha: ${{ steps.subject.outputs.head-sha }}' "$gate_md" \
+  && grep -qF 'echo "head-sha=$(jq -r '"'"'.headRefOid'"'"' <<<"$pr")"' "${HERE}/../identify-gate-subject/action.yml" \
+  && grep -qE '^  still_current:$' "$gate_md" && grep -qE '^  superseded:$' "$gate_md" \
+  && grep -qF 'needs: [activation, subject, protected_changes, agent, safe_outputs, validate_output, still_current]' "$gate_md" \
+  && [ "$(grep -cF "needs.still_current.outputs.current != 'false'" "$gate_md")" -ge 2 ] \
+  && grep -qF "needs.still_current.outputs.current == 'false'" "$gate_md" \
+  && grep -qF 'ASSESSED: ${{ needs.subject.outputs.head_sha }}' "$gate_md"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the merge gate must drop its verdict when the pull request closed or moved, and land only the commit it assessed" >&2
+fi
+# A run that dropped its verdict is not a silent gate, or the author's next head would be stranded.
+if grep -qF '(^|/ )superseded$' "${HERE}/../merge-train/merge-train.sh"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the merge train counts a gate run that dropped its verdict as a silent gate" >&2
+fi
+# A stranded pull request is listed as stranded, not as a remediation in progress.
+if grep -qF "kind: 'pr-stranded'" "${HERE}/../housekeeping/action.yml" \
+  && grep -qF '<!-- merge-train-stranded -->' "${HERE}/../merge-train/merge-train.sh"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: the digest does not list pull requests the merge train stranded" >&2
 fi
 # The gate resolves conflicts by taking hunks apart, not by keeping one side or both.
 if grep -qF 'A conflict is not always two additions.' "${WORKFLOWS_DIR}/agent-merge-gate.md"; then
