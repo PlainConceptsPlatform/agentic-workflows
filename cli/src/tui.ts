@@ -2,7 +2,7 @@ import * as readline from "node:readline";
 import { createInterface } from "node:readline/promises";
 
 import { formatCatalog, listCatalog, type CatalogEntry } from "./catalog-listing.js";
-import { catalogSourcePath, installCatalog, installTemplate, isTemplateName, removeRouteFiles } from "./catalog-installation.js";
+import { catalogSourcePath, installCatalog, installTemplate, isTemplateName, removeRouteFiles, type CatalogInstallResult } from "./catalog-installation.js";
 import { normalizeRoot, persistLayout, resolveLayout, type LayoutRoot, type ProjectLayout, type ResolvedLayout } from "./project-layout.js";
 import { inspectRepository } from "./repository-inspection.js";
 import { layoutNeeded } from "./template-bundles.js";
@@ -330,12 +330,20 @@ async function installSelected(
     return 1;
   }
 
-  const persisted = asked ? await persistLayout(repositoryPath, layout, ["api", "web"]) : [];
+  reportInstall(result, allRemoved, templates);
+  if (asked) {
+    const persisted = await persistLayout(repositoryPath, layout, ["api", "web"]);
+    console.log(`Project layout: api ${layout.api}, web ${layout.web}${persisted.length > 0 ? ` (written to ${persisted.join(", ")})` : ""}`);
+  }
 
+  return 0;
+}
+
+function reportInstall(result: CatalogInstallResult, removed: readonly string[], templates: readonly CatalogEntry[]): void {
   const changed = result.changes.filter((change) => change.status === "added" || change.status === "updated" || change.status === "removed");
   const skipped = result.changes.filter((change) => change.status === "skipped");
   console.log(`Package ${result.packageVersion}${result.installedVersions.length > 0 ? ` (was ${result.installedVersions.join(", ")})` : ""}`);
-  if (changed.length === 0 && allRemoved.length === 0 && templates.length === 0) {
+  if (changed.length === 0 && removed.length === 0 && templates.length === 0) {
     console.log("Everything is up to date.");
   }
   for (const change of changed) {
@@ -345,17 +353,12 @@ async function installSelected(
   for (const change of skipped) {
     console.log(`  skipped  ${change.target} (${change.reason ?? "consumer-owned"})`);
   }
-  for (const file of allRemoved) {
+  for (const file of removed) {
     console.log(`  removed  ${file}`);
   }
   for (const template of templates) {
     console.log(`  template ${template.name}`);
   }
-  if (asked) {
-    console.log(`Project layout: api ${layout.api}, web ${layout.web}${persisted.length > 0 ? ` (written to ${persisted.join(", ")})` : ""}`);
-  }
-
-  return 0;
 }
 
 /** Asks for each project root, proposing the resolved one; an empty answer accepts the proposal. */

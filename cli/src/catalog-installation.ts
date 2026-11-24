@@ -456,23 +456,9 @@ export async function installTemplate(
       companion: true as const,
     })),
   ];
-  // A CI template names the project roots in its `env:`; it is written with the repository's layout,
-  // which is then where `update` reads that layout back from.
-  const layout = options.layout;
-  const rendered = async (entry: { source: string; companion: boolean }): Promise<string | undefined> =>
-    layout !== undefined && !entry.companion && layoutBoundTemplates.includes(template)
-      ? renderLayout(await readFile(entry.source, "utf8"), layout)
-      : undefined;
+  const rendered = (entry: TemplateDestination): Promise<string | undefined> => renderedTemplate(template, entry, options.layout);
   const conflicts = (
-    await Promise.all(destinations.map(async (entry) => {
-      const destination = join(repositoryPath, entry.target);
-      if (!(await exists(destination)) || !(await exists(entry.source))) return undefined;
-      const content = await rendered(entry);
-      const same = content === undefined
-        ? await filesMatch(entry.source, destination)
-        : normalizeEol(content) === normalizeEol(await readFile(destination, "utf8"));
-      return same ? undefined : entry.target;
-    }))
+    await Promise.all(destinations.map(async (entry) => await templateConflicts(repositoryPath, entry, rendered) ? entry.target : undefined))
   ).filter((file): file is string => file !== undefined);
 
   if (conflicts.length > 0 && !options.force) return { installed: [], conflicts };
@@ -499,6 +485,32 @@ export async function installTemplate(
   }
 
   return { installed: (await Promise.all(destinations.map(async (entry) => await exists(entry.source) ? entry.target : undefined))).filter((file): file is string => file !== undefined), conflicts };
+}
+
+interface TemplateDestination {
+  readonly source: string;
+  readonly target: string;
+  readonly companion: boolean;
+}
+
+// A CI template names the project roots in its `env:`; it is written with the repository's layout,
+// which is then where `update` reads that layout back from. Undefined means "copy the file as is".
+async function renderedTemplate(template: TemplateName, entry: TemplateDestination, layout: ProjectLayout | undefined): Promise<string | undefined> {
+  if (layout === undefined || entry.companion || !layoutBoundTemplates.includes(template)) return undefined;
+  return renderLayout(await readFile(entry.source, "utf8"), layout);
+}
+
+// Whether the consumer's copy differs from what this install would write.
+async function templateConflicts(
+  repositoryPath: string,
+  entry: TemplateDestination,
+  rendered: (entry: TemplateDestination) => Promise<string | undefined>,
+): Promise<boolean> {
+  const destination = join(repositoryPath, entry.target);
+  if (!(await exists(destination)) || !(await exists(entry.source))) return false;
+  const content = await rendered(entry);
+  if (content === undefined) return !(await filesMatch(entry.source, destination));
+  return normalizeEol(content) !== normalizeEol(await readFile(destination, "utf8"));
 }
 
 export async function installedRoutes(repositoryPath: string): Promise<RouteName[]> {

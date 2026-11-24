@@ -301,76 +301,78 @@ type ParsedAddOptions =
 
 const TEMPLATE_NAMES = templateNames.join("|");
 
+// Options that take the next argument, with what the help calls that argument.
+const VALUE_OPTIONS: Readonly<Record<string, string>> = {
+  "--baseline": "a path",
+  "--template": "a name",
+  "--api-dir": "a path",
+  "--web-dir": "a path",
+};
+
+interface AddOptionState {
+  routes: RouteName[];
+  template: TemplateName | undefined;
+  templateSeen: boolean;
+  force: boolean;
+  dryRun: boolean;
+  baseline: string | undefined;
+  layout: { api?: string; web?: string };
+}
+
 function parseAddOptions(options: readonly string[]): ParsedAddOptions {
-  const routes: RouteName[] = [];
-  let template: TemplateName | undefined;
-  let templateSeen = false;
-  let force = false;
-  let dryRun = false;
-  let baseline: string | undefined;
-  const layout: { api?: string; web?: string } = {};
+  const state: AddOptionState = { routes: [], template: undefined, templateSeen: false, force: false, dryRun: false, baseline: undefined, layout: {} };
   let i = 0;
 
   while (i < options.length) {
     const token = options[i]!;
-
+    let problem: string | undefined;
     if (token === "--force") {
-      force = true;
+      state.force = true;
+    } else if (token === "--dry-run") {
+      state.dryRun = true;
+    } else if (Object.hasOwn(VALUE_OPTIONS, token)) {
+      if (i + 1 >= options.length) return invalid(`${token} requires ${VALUE_OPTIONS[token]}.`);
+      problem = applyValueOption(state, token, options[i + 1]!);
       i++;
-      continue;
+    } else {
+      problem = addRoute(state, token);
     }
-
-    if (token === "--dry-run") {
-      dryRun = true;
-      i++;
-      continue;
-    }
-
-    if (token === "--baseline") {
-      if (i + 1 >= options.length) return invalid("--baseline requires a path.");
-      baseline = options[i + 1]!;
-      i += 2;
-      continue;
-    }
-
-    if (token === "--api-dir" || token === "--web-dir") {
-      const root: LayoutRoot = token === "--api-dir" ? "api" : "web";
-      if (layout[root] !== undefined) return invalid(`${token} can only be specified once.`);
-      if (i + 1 >= options.length) return invalid(`${token} requires a path.`);
-      const value = normalizeRoot(options[i + 1]!);
-      if (value === undefined) return invalid(`${token} must be a relative path inside the repository, such as api or apps/web (. for the root).`);
-      layout[root] = value;
-      i += 2;
-      continue;
-    }
-
-    if (token === "--template") {
-      if (templateSeen) return invalid("--template can only be specified once.");
-      templateSeen = true;
-      if (i + 1 >= options.length) return invalid("--template requires a name.");
-      const name = options[i + 1]!;
-      if (!isTemplateName(name)) return invalid(`--template must be one of: ${TEMPLATE_NAMES}.`);
-      template = name;
-      i += 2;
-      continue;
-    }
-
-    if (token.startsWith("--")) {
-      return invalid(`Unknown option: ${token}`);
-    }
-
-    if (routeNames.includes(token as RouteName)) {
-      const route = token as RouteName;
-      if (routes.includes(route)) return invalid(`Duplicate route: ${route}.`);
-      routes.push(route);
-      i++;
-      continue;
-    }
-
-    return invalid(`Unknown route: ${token}. Valid routes: ${routeNames.join(", ")}.`);
+    if (problem !== undefined) return invalid(problem);
+    i++;
   }
 
+  const { routes, template, force, dryRun, baseline, layout } = state;
   return { kind: "ok", routes, template, force, dryRun, baseline, layout };
+}
+
+// Records one option that takes a value; returns why it is invalid, if it is.
+function applyValueOption(state: AddOptionState, token: string, value: string): string | undefined {
+  if (token === "--baseline") {
+    state.baseline = value;
+    return undefined;
+  }
+  if (token === "--template") {
+    if (state.templateSeen) return "--template can only be specified once.";
+    state.templateSeen = true;
+    if (!isTemplateName(value)) return `--template must be one of: ${TEMPLATE_NAMES}.`;
+    state.template = value;
+    return undefined;
+  }
+  const root: LayoutRoot = token === "--api-dir" ? "api" : "web";
+  if (state.layout[root] !== undefined) return `${token} can only be specified once.`;
+  const normalized = normalizeRoot(value);
+  if (normalized === undefined) return `${token} must be a relative path inside the repository, such as api or apps/web (. for the root).`;
+  state.layout[root] = normalized;
+  return undefined;
+}
+
+function addRoute(state: AddOptionState, token: string): string | undefined {
+  if (token.startsWith("--")) return `Unknown option: ${token}`;
+  if (!routeNames.includes(token as RouteName)) return `Unknown route: ${token}. Valid routes: ${routeNames.join(", ")}.`;
+  const route = token as RouteName;
+  if (state.routes.includes(route)) return `Duplicate route: ${route}.`;
+  state.routes.push(route);
+  return undefined;
 }
 
 function invalid(message: string): ParsedAddOptions {
