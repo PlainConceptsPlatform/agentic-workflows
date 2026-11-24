@@ -192,6 +192,8 @@ jobs:
       # Where verdicts, attempts and labels go: the issue, or the pull request when it closes none.
       record: ${{ steps.subject.outputs.record }}
       head_ref: ${{ steps.subject.outputs.head-ref }}
+      # The commit this run assesses. Conclude acts only while the pull request is open on it.
+      head_sha: ${{ steps.subject.outputs.head-sha }}
       closes: ${{ steps.subject.outputs.closes }}
       conclusion: ${{ steps.subject.outputs.conclusion }}
       run-id: ${{ steps.subject.outputs.run-id }}
@@ -553,8 +555,100 @@ jobs:
           confidence-threshold: ${{ env.CONFIDENCE_THRESHOLD }}
           code-rules: ${{ needs.code_rules.outputs.result }}
           unattended: ${{ env.UNATTENDED }}
+  # The pull request can move while the agent works: its author pushes, or merges it by hand. A
+  # verdict on the commit the gate read is no verdict on another, and labels and comments on a
+  # merged pull request are noise. Bots #1798 and #1801 were labelled `blocked` after their authors
+  # had pushed the fix; Bots #1832 and Odyssey #591 got verdicts after a person merged them; and the
+  # landing step read the head at merge time, so a commit pushed during the run could land without
+  # the gate ever reading it. Measured once, after the agent: `current` is false only when the pull
+  # request is no longer open, or no longer on the commit `subject` read. When the check cannot be
+  # made it says true, and the gate concludes as before.
+  still_current:
+    needs: [subject, validate_output]
+    if: always() && needs.subject.outputs.found == 'true'
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      current: ${{ steps.check.outputs.current }}
+      reason: ${{ steps.check.outputs.reason }}
+    steps:
+      - name: Confirm the pull request is still the one the gate assessed
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.subject.outputs.pr }}
+          ASSESSED: ${{ needs.subject.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          now=""
+          for _ in 1 2 3; do
+            if now=$(gh pr view "$PR" --repo "$REPO" --json state,headRefOid --jq '[.state, .headRefOid] | @tsv'); then
+              break
+            fi
+            now=""
+            sleep 5
+          done
+          state=$(cut -f1 <<<"$now")
+          head=$(cut -f2 <<<"$now")
+          current=true
+          reason=""
+          if [ -z "$now" ] || [ -z "$ASSESSED" ]; then
+            echo "::warning::Could not compare PR #$PR with the commit this run assessed; concluding as before."
+          elif [ "$state" != OPEN ]; then
+            current=false
+            reason="PR #$PR is $(tr '[:upper:]' '[:lower:]' <<<"$state")"
+          elif [ "$head" != "$ASSESSED" ]; then
+            current=false
+            reason="PR #$PR moved from ${ASSESSED:0:7} to ${head:0:7} while the gate ran"
+          fi
+          [ -z "$reason" ] || echo "::notice::$reason; this run's verdict is dropped and nothing is posted."
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+  # A dropped verdict still holds the reservation. It is released here and nothing else happens: no
+  # verdict, no attempt, no label. A moved head is a new head the merge train hands over again, and
+  # a closed pull request has nothing left to gate.
+  superseded:
+    needs: [subject, still_current]
+    if: always() && needs.subject.outputs.found == 'true' && needs.still_current.outputs.current == 'false'
+    runs-on: agents-arc
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-issues: write
+          permission-pull-requests: write
+      - name: Release the reservation
+        uses: ./.github/actions/remove-issue-labels
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          issue-number: ${{ needs.subject.outputs.record }}
+          labels: ${{ env.WORKING_LABEL }}
+      - name: Say why nothing was posted
+        env:
+          REASON: ${{ needs.still_current.outputs.reason }}
+        run: |
+          {
+            echo "### Merge gate verdict dropped"
+            echo ""
+            echo "$REASON. The verdict was about a commit that is no longer this pull request's open head, so nothing was posted or labelled."
+          } >> "$GITHUB_STEP_SUMMARY"
   conclude:
-    needs: [activation, subject, protected_changes, agent, safe_outputs, validate_output]
+    needs: [activation, subject, protected_changes, agent, safe_outputs, validate_output, still_current]
     # `protected_changes.result == 'success'` is stated rather than relied on. GitHub skips a job
     # whose needs failed, so this condition was never reached on that path, but every clause in
     # it read as safe on a job that never ran: `requires_review` is '' when protected_changes
@@ -565,6 +659,7 @@ jobs:
         needs.safe_outputs.result == 'success' &&
         needs.protected_changes.result == 'success' &&
         needs.validate_output.outputs.valid == 'true' &&
+        needs.still_current.outputs.current != 'false' &&
        (needs.protected_changes.outputs.requires_review != 'true' || needs.validate_output.outputs.outcome != 'auto-merge')
     runs-on: agents-arc
     permissions:
@@ -647,6 +742,9 @@ jobs:
             ${{ needs.subject.outputs.issue != '' && format('Findings and verification on the linked issue: #{0}.', needs.subject.outputs.issue) || 'Findings and verification are in the review comment above.' }} [View this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
             ${{ env.EVIDENCE_BEFORE_REVIEW == 'true' && contains(fromJson('["human-review","owner-review"]'), needs.validate_output.outputs.outcome) && 'Screenshots of this head follow in their own comment if it carries a verification plan.' || '' }}
             ${{ contains(fromJson('["human-review","owner-review"]'), needs.validate_output.outputs.outcome) && 'Anyone with write access can review it: approving the pull request merges it.' || '' }}
+      # The commit the gate assessed, not whatever the head is now. `land-pull-request` merges with
+      # --match-head-commit, so a commit pushed after `still_current` looked makes the merge fail
+      # rather than land code the gate never read.
       - name: Read the head to land
         id: landing_head
         if: needs.validate_output.outputs.outcome == 'auto-merge' && (needs.subject.outputs.stack_root != 'true' || needs.subject.outputs.root_complete == 'true')
@@ -654,7 +752,12 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR: ${{ needs.subject.outputs.pr }}
-        run: echo "sha=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq '.headRefOid')" >> "$GITHUB_OUTPUT"
+          ASSESSED: ${{ needs.subject.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          sha="$ASSESSED"
+          [ -n "$sha" ] || sha=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq '.headRefOid')
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       # Into the base branch's merge queue when it has one (approved first, so a ruleset's required
       # approval is the gate's), otherwise merged as before.
       - name: Merge approved pull request
@@ -776,11 +879,14 @@ jobs:
   # did nothing and never offers the pull request again: Pliny-Bot #716 sat stranded that way after
   # its repair was computed and then lost to a rejected git fetch in conclude.
   incomplete:
-    needs: [subject, protected_changes, agent, safe_outputs, validate_output, conclude]
+    needs: [subject, protected_changes, agent, safe_outputs, validate_output, still_current, conclude]
+    # Not for a pull request that closed or moved while the gate ran: an attempt on a head that is
+    # gone counts against nothing, and Numa #837 got "Attempt 0 of 6" two minutes after its merge.
     if: >
        always() &&
        needs.subject.outputs.found == 'true' &&
        needs.protected_changes.outputs.holds_review != 'true' &&
+       needs.still_current.outputs.current != 'false' &&
        (
          needs.safe_outputs.result != 'success' ||
          needs.validate_output.outputs.valid != 'true' ||

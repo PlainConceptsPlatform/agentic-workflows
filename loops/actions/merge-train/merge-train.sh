@@ -60,7 +60,7 @@ set -euo pipefail
 #                      landing spent a runner on a "blocked: the other children are missing" verdict
 #                      each time (a consumer's six roots took dozens of gate runs in a day)
 train_move() {
-  local move="" reason=""
+  local move="" reason="" stranded=false
 
   if [ "${HOLD:-false}" = true ]; then
     move=skip; reason="it carries the hold label"
@@ -100,12 +100,12 @@ train_move() {
   elif [ "${ATTEMPTS:-0}" -ge "${MAX_ATTEMPTS:-6}" ]; then
     move=skip; reason="its gate attempt budget on this head is spent"
   elif [ "${SILENT_GATE:-false}" = true ]; then
-    move=skip; reason="its gate already ran on this head and left no verdict or attempt"
+    move=skip; reason="its gate already ran on this head and left no verdict or attempt"; stranded=true
   elif [ "${REMEDIATED_ON_HEAD:-0}" -ge 2 ]; then
     # The gate answered remediated and pushed nothing, more than once: asking again repeats it.
     # A consumer's pull request was repaired about every fifteen minutes for hours this way, and
     # held the only repair slot while another pull request waited.
-    move=skip; reason="its gate said remediated ${REMEDIATED_ON_HEAD} times on this head without pushing a fix"
+    move=skip; reason="its gate said remediated ${REMEDIATED_ON_HEAD} times on this head without pushing a fix"; stranded=true
   elif [ "${MERGEABLE:-UNKNOWN}" = CONFLICTING ]; then
     # A conflicting pull request has no merge ref, so CI can never run on it: waiting for a
     # verdict would wait forever. Resolving the conflict is the gate's job.
@@ -154,7 +154,26 @@ train_move() {
 
   printf 'move=%s
 reason=%s
-' "$move" "$reason"
+stranded=%s
+' "$move" "$reason" "$stranded"
+}
+
+# The moment the gate's budgets on a head start counting. A budget spent on a head stays spent until
+# the head moves, and the head of a pull request the gate cannot repair never moves: Numa #870 and
+# #880 were skipped for good after their gates said remediated twice without pushing, and the
+# release that fixed that (1.32.1) reached the repository three days later and was never tried on
+# them. So the latest of the head commit, a verdict the train is retrying, and the last change to
+# the gate's own workflow on the default branch: an updated gate gets a fresh budget on every head
+# it gave up on, and only an update does, so the reset is bounded by how often the loop changes.
+# ISO 8601 UTC timestamps compare as strings. Empty arguments are ignored.
+#   budget_since HEAD_COMMITTED [VERDICT_AT] [GATE_CHANGED_AT]
+budget_since() {
+  local latest="" t
+  for t in "$@"; do
+    [ -n "$t" ] || continue
+    if [ -z "$latest" ] || [ "$t" \> "$latest" ]; then latest="$t"; fi
+  done
+  echo "${latest:-1970-01-01T00:00:00Z}"
 }
 
 # A standing verdict holds the pull request when it is newer than the head commit. Two verdicts
@@ -200,6 +219,8 @@ fi
 : "${REPO:?}" "${DEFAULT_BRANCH:?}" "${CI_WORKFLOW_NAME:?}"
 TRUSTED_BOTS="${TRUSTED_BOTS:-}"
 HOLD_LABEL="${HOLD_LABEL:-hold}"
+REVIEW_LABEL="${REVIEW_LABEL:-review}"
+STRANDED_MARKER="<!-- merge-train-stranded -->"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-6}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
 MAX_REPAIRS="${MAX_REPAIRS:-1}"
@@ -218,6 +239,8 @@ GATE_WORKFLOWS="agentics-merge-belt.yml work-router.yml"
 ROUTER_WORKFLOW="work-router.yml"
 APPLY_REVIEW_WORKFLOWS="work-router.yml agent-apply-review.lock.yml"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
+# The compiled gate. A commit that touches it on the default branch is a new gate (budget_since).
+GATE_LOCK_PATH="${GATE_LOCK_PATH:-.github/workflows/agent-merge-gate.lock.yml}"
 
 now_epoch=$(date -u +%s)
 HUMAN_REVIEW_TIMEOUT_HOURS="${HUMAN_REVIEW_TIMEOUT_HOURS:-0}"
@@ -408,9 +431,13 @@ gate_run_count() {
   for workflow in $GATE_WORKFLOWS; do
     for id in $(gh api --paginate "repos/$REPO/actions/workflows/$workflow/runs?event=workflow_dispatch&per_page=100" \
       --jq ".workflow_runs[] | select(.display_title == \"$GATE_TITLE_PREFIX$pr\" or .display_title == \"$GATE_TITLE_PREFIX$pr (repair)\") | select(.created_at > \"$since\") | .id" 2>/dev/null); do
+      # A run whose `superseded` job ran dropped its verdict on purpose: the pull request moved or
+      # closed under it. That is no gate that did nothing, and counting it would strand the new
+      # head whenever the author's commit is older than the run (committed locally, pushed later).
       if gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" \
-      --jq '[.jobs[] | select(((.name | endswith("/ agent")) and .conclusion != null and .conclusion != "skipped")
-        or ((.name | test("/ (pre_)?activation$")) and .conclusion == "failure"))] | length > 0' \
+      --jq '([.jobs[] | select(((.name | endswith("/ agent")) and .conclusion != null and .conclusion != "skipped")
+        or ((.name | test("/ (pre_)?activation$")) and .conclusion == "failure"))] | length > 0)
+        and ([.jobs[] | select((.name | test("(^|/ )superseded$")) and .conclusion == "success")] | length == 0)' \
         2>/dev/null | grep -qx true; then
         ran=$((ran + 1))
       fi
@@ -476,6 +503,21 @@ summary ""
 # behind it may merge or be brought up to date: the oldest merges first, and one at a time.
 merge_blocked=false
 [ "$live_merge" -eq 0 ] || merge_blocked=true
+
+# One call per tick. When it cannot be read the budgets count from the head, as before.
+gate_changed_at=$(gh api "repos/$REPO/commits?sha=$DEFAULT_BRANCH&path=$GATE_LOCK_PATH&per_page=1" \
+  --jq '.[0].commit.committer.date // ""' 2>/dev/null || true)
+[ -z "$gate_changed_at" ] || echo "The gate last changed on $DEFAULT_BRANCH at $gate_changed_at."
+
+# shellcheck disable=SC2317 # called through act
+announce_stranded() {
+  local pr="$1" reason="$2"
+  gh api "repos/$REPO/issues/$pr/comments" --method POST -f body="$STRANDED_MARKER
+The merge train stopped offering this pull request to the merge gate: $reason.
+Nothing will retry it on this commit until the gate itself is updated. A person can push a fix, merge it, or close it.
+[View the merge train run](${GITHUB_SERVER_URL:-https://github.com}/$REPO/actions/runs/$SELF_RUN_ID)" >/dev/null
+  gh api "repos/$REPO/issues/$pr/labels" --method POST -f "labels[]=$REVIEW_LABEL" >/dev/null 2>&1 || true
+}
 
 base_head_date=""
 base_head_date_for() {
@@ -543,7 +585,8 @@ for line in "${candidates[@]}"; do
   retries=$(awk -F'\t' -v since="$head_committed" '$1 > since && ($2 == "blocked" || $2 == "auto-merge")' <<<"$verdicts" | grep -c . || true)
   # A real remediation pushes a commit, so exactly one remediated verdict is newer than the head
   # it produced. A second one on the same head is a gate that said it pushed and did not.
-  remediated_on_head=$(awk -F'\t' -v since="$head_committed" '$1 > since && $2 == "remediated"' <<<"$verdicts" | grep -c . || true)
+  head_since=$(budget_since "$head_committed" "$gate_changed_at")
+  remediated_on_head=$(awk -F'\t' -v since="$head_since" '$1 > since && $2 == "remediated"' <<<"$verdicts" | grep -c . || true)
 
   base_moved=false
   if [ "$verdict_newer" = true ]; then
@@ -573,11 +616,14 @@ for line in "${candidates[@]}"; do
     RETRIES="$retries" MAX_RETRIES="$MAX_RETRIES" STACK_ROOT="$stack_root" STACK_ROOT_READY="$stack_root_ready" train_park)
 
   attempts=0
+  horizon=""
   silent_gate=false
   if [ "$park" = none ]; then
-    horizon="${head_committed:-1970-01-01T00:00:00Z}"
-    # A retried verdict starts a fresh budget from the verdict it retries, not from the head.
-    [ "$verdict_newer" = true ] && horizon="$verdict_at"
+    # A retried verdict starts a fresh budget from the verdict it retries, not from the head, and a
+    # gate updated since then starts one from its update.
+    retried_at=""
+    [ "$verdict_newer" = true ] && retried_at="$verdict_at"
+    horizon=$(budget_since "$head_committed" "$retried_at" "$gate_changed_at")
     attempts=$(attempt_count "$pr" "$horizon")
     if [ -n "$linked_issue" ]; then
       attempts=$((attempts + $(attempt_count "$linked_issue" "$horizon")))
@@ -766,6 +812,21 @@ for line in "${candidates[@]}"; do
     VERDICT="$verdict" REVIEW_TIMED_OUT="$review_timed_out" STACK_ROOT="$stack_root" train_move)
   move=$(sed -n 's/^move=//p' <<<"$decision")
   reason=$(sed -n 's/^reason=//p' <<<"$decision")
+  stranded=$(sed -n 's/^stranded=//p' <<<"$decision")
+
+  # The skips the gate never announces itself: it left nothing, or it said it pushed and did not.
+  # Said once on the pull request per budget, so it reads as waiting for a person rather than in
+  # progress, and the digest lists it with the review label.
+  if [ "$move" = skip ] && [ "$stranded" = true ]; then
+    # shellcheck disable=SC2016 # $since is jq's, not the shell's
+    told=$(gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" 2>/dev/null |
+      jq -s --arg since "${horizon:-$head_since}" --arg marker "$STRANDED_MARKER" \
+        '[(add // [])[] | select((.body | contains($marker)) and .created_at > $since)] | length' 2>/dev/null || echo 1)
+    if [ "${told:-1}" = 0 ]; then
+      act "Telling #$pr it is stranded: $reason." announce_stranded "$pr" "$reason" ||
+        echo "::warning::Could not tell #$pr it is stranded."
+    fi
+  fi
 
   # A repair gate dispatched for red CI is moot once CI on the head is green: its job was to make
   # that run pass. Left alone it keeps the pull request marked as having a gate, so the train

@@ -447,7 +447,11 @@ flowchart TD
     gateProtected{"protected_changes (rung 4b)<br/>blast radius from paths, CODEOWNERS<br/>and the size of the code that ships"}
     gateProtected -.->|".github/ path"| gateOwner
     gateProtected -->|"measured low, medium or high"| gateAssess
-    gateAssess("Agent (rung 5)<br/>find defects, verify them,<br/>rate recoverability") --> gateDisposition
+    gateAssess("Agent (rung 5)<br/>find defects, verify them,<br/>rate recoverability") --> gateStill
+    gateStill{"still_current<br/>PR still open, on the<br/>commit the gate read?"}
+    gateStill -->|yes| gateDisposition
+    gateStill -.->|"merged, closed<br/>or pushed meanwhile"| gateDropped
+    gateDropped(("DROPPED<br/>bot-working released,<br/>nothing posted; the train<br/>gates the new head"))
     gateDisposition{"Disposition<br/>computed in shell from<br/>the facts and the report"}
     gateDisposition -->|"no verified blocker,<br/>radius low or recoverable medium"| gateRootCheck
     gateRootCheck{"PR base is a<br/>stack feature branch<br/>and this PR is the root?"}
@@ -475,8 +479,8 @@ flowchart TD
     classDef success fill:#e8f8ec,stroke:#18883c,stroke-width:2px,color:#145a32
     class gateStart start
     class gateBranch,gateFacts,gateFix,gateAssess,gatePreview action
-    class gateSubject,gateCi,gateProtected,gateDisposition,gateRootCheck decision
-    class gateIdle idle
+    class gateSubject,gateCi,gateProtected,gateStill,gateDisposition,gateRootCheck decision
+    class gateIdle,gateDropped idle
     class gateHuman,gateOwner,gateBlocked failure
     class gateMerge,gatePush,gateApproved success
 ```

@@ -570,7 +570,14 @@ runs:
             // Only the first needs nobody. The character class has to allow the hyphen or every
             // disposition reads as the bare word "auto" or "human" and nothing matches.
             if (parsed) dispositions[parsed] = (dispositions[parsed] ?? 0) + 1;
-            if (parsed && parsed !== 'auto-merge') {
+            // The merge train says so on the pull request when it stops offering it to the gate
+            // (merge-train.sh, announce_stranded). Listed as what it is: a `remediated` verdict
+            // otherwise reads as the gate still working on it, which is how Numa #870 and #880
+            // sat for a week.
+            const stranded = [...comments].reverse().find((c) => (c.body ?? '').includes('<!-- merge-train-stranded -->'));
+            if (stranded && (!verdict || stranded.created_at > verdict.created_at)) {
+              needsHuman.push({ kind: 'pr-stranded', pull, waited: age(stranded.created_at) });
+            } else if (parsed && parsed !== 'auto-merge') {
               needsHuman.push({ kind: 'pr-parked', pull, verdict: parsed, waited: age(verdict.created_at) });
             } else if (!verdict && age(pull.created_at) > stalePrMs) {
               needsHuman.push({ kind: 'pr-stale', pull, waited: age(pull.created_at) });
@@ -622,6 +629,7 @@ runs:
 
           const line = (entry) => {
             if (entry.kind === 'pr-parked') return `- PR #${entry.pull.number} · parked ${days(entry.waited)}d · gate verdict \`${entry.verdict}\` · ${entry.pull.title}`;
+            if (entry.kind === 'pr-stranded') return `- PR #${entry.pull.number} · stranded ${days(entry.waited)}d · the merge train stopped offering it to the gate on this commit · ${entry.pull.title}`;
             if (entry.kind === 'pr-stale') return `- PR #${entry.pull.number} · ${days(entry.waited)}d old · no gate verdict yet · ${entry.pull.title}`;
             if (entry.kind === 'stack-ready') return `- PR #${entry.pull.number} · stack finished ${days(entry.waited)}d ago, never announced · human merge needed · ${entry.pull.title}`;
             if (entry.kind === 'stack-held') return `- PR #${entry.pull.number} · stack ready and waiting on a human merge for ${days(entry.waited)}d · ${entry.pull.title}`;
@@ -667,7 +675,7 @@ runs:
             `_Updated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC. This issue is rewritten by the housekeeping job; edits to it are lost._`,
             section('Waiting on a decision', ['decided']),
             section('Stacked features waiting on a human', ['stack-ready', 'stack-held', 'stack-root-conflict', 'stack-root-missing', 'stack-root-closed', 'stack-orphaned']),
-            section('Pull requests parked by the gate', ['pr-parked', 'pr-stale']),
+            section('Pull requests parked by the gate', ['pr-stranded', 'pr-parked', 'pr-stale']),
             section('Stalled beyond the retry budget', ['retries-exhausted', 'no-work-label']),
             section('Audit reports nobody actioned', ['stale-audit']),
             retryingSection(),
