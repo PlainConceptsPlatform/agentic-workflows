@@ -29,6 +29,7 @@ folder.
 | `cli/src/stack-defaults.ts` | Stack detection defaults: `VERIFY_COMMANDS` on first install, the shared CI steps and the OpenCode config on every install |
 | `cli/src/workflow-catalog.ts` | Route names, worker files, template names, package-owned targets |
 | `cli/src/repository-inspection.ts` | Inspects the repository stack and visibility |
+| `cli/src/project-layout.ts` | Resolves where the api and web projects live, renders layout-bound files, writes the roots back to the workflows' `env:` |
 | `cli/src/tui.ts` | The interactive selection screen |
 | `cli/scripts/copy-loops.mjs` | Refreshes package payload before packing |
 | `cli/loops/` | Generated payload. Edit `loops/` source instead, then refresh |
@@ -157,6 +158,23 @@ selection). The `--template opencode.ci.json` command is an advanced option for 
 isolation without the rest of the catalog.
 
 Bundle templates (`bundle: true` in `catalogTemplates`: `quality-gates`, `platform-template`) are the exception. `cli/src/template-bundles.ts` installs every file under `loops/templates/<directory>/` at the same path in the repository, stamps the version like the catalog, and skips a file whose header was removed unless `--force`. A JSON file's header lives in a companion `<file>.md`; the JSON is the consumer's when that note is missing or headerless. `installedBundles()` counts a bundle as installed only when one of its files carries our header, and `add`/`update` refresh exactly those, so a repository with its own headerless copies of the same paths never receives a bundle. `list` uses the same detection.
+
+## Project layout
+
+`project-layout.ts` resolves the api and web roots per root: `--api-dir` / `--web-dir` (or the TUI
+answer), else `API_WORKING_DIRECTORY` / `WEB_DIRECTORY` in the top-level `env:` of the installed
+`.github/workflows/*.yml` (empty values and expressions ignored), else one candidate folder found,
+else `apps/api` / `apps/web` with a warning when missing. Workflows that disagree or two candidate
+folders are an error, fatal only when `add`/`update` is about to write a layout-bound file
+(`layoutNeeded()` in `template-bundles.ts`).
+
+`renderLayout()` rewrites `apps/api` and `apps/web` (a `.` root drops the prefix) and expands the
+Semgrep `- "/apps/"` include into one entry per root. It applies to `layoutBoundBundleFiles` in a
+bundle, to the whole of a `layoutBoundTemplates` CI template, and to a worker's `MOCKUP_PATHS` line
+(through the env merge, so a consumer's own glob is kept). With the default layout the text is
+returned unchanged. A root given as an option is written back by `persistLayout()` into every
+workflow `env:` that declares it with another non-empty value. The `add`/`update` JSON reports the
+resolved `layout`, its `sources`, the files it was `persisted` to and its `warnings`.
 
 Single-file template copies are consumer-owned after installation and must not be silently updated as managed
 loops. A second `add --template <name>` on an existing template reports a conflict unless `--force`

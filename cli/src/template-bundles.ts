@@ -7,7 +7,8 @@ import { dirname, join, relative } from "node:path";
 
 import type { FileChange } from "./catalog-installation.js";
 import { hasOwnershipHeader, installedVersion, packageVersion, stampVersion } from "./package-baseline.js";
-import { bundleTemplateNames, catalogTemplates, type TemplateName } from "./workflow-catalog.js";
+import { renderLayout, type ProjectLayout } from "./project-layout.js";
+import { bundleTemplateNames, catalogTemplates, layoutBoundTemplates, type TemplateName } from "./workflow-catalog.js";
 
 export interface BundleInstallOptions {
   /** Also overwrite files whose ownership header was removed. */
@@ -17,6 +18,8 @@ export interface BundleInstallOptions {
   readonly sourcePath?: string;
   /** The version stamped into headers. Defaults to this package's. */
   readonly packageVersion?: string;
+  /** Where the api and web projects live; renders the layout-bound files. Defaults to `apps/api` and `apps/web`. */
+  readonly layout?: ProjectLayout;
 }
 
 export interface BundleInstallResult {
@@ -30,8 +33,35 @@ const CONSUMER_OWNED = "consumer-owned: the ownership header was removed; pass -
 const carriesHeader = (target: string): boolean => /\.(ya?ml|md|sh|mjs|cjs|tsv)$/.test(target);
 const normalizeEol = (text: string): string => text.replaceAll("\r\n", "\n");
 
+// Bundle files that name the api and web roots and cannot read them from the workflow `env:` at run
+// time: tool config read as a static file, a Semgrep rule's path scope, and usage comments. The
+// installer renders them from the project layout (project-layout.ts).
+export const layoutBoundBundleFiles: ReadonlySet<string> = new Set([
+  ".jscpd.json",
+  ".semgrep/platform-hygiene.yml",
+  ".size-limit.json",
+  "knip.json",
+  "scripts/check-architecture.mjs",
+  "scripts/check-bundle-size.mjs",
+  "scripts/check-dead-code.mjs",
+]);
+
 export function isBundleTemplate(template: TemplateName): boolean {
   return bundleTemplateNames.includes(template);
+}
+
+/** Whether installing this bundle writes files rendered from the project layout. */
+export async function bundleNeedsLayout(template: TemplateName, sourcePath: string): Promise<boolean> {
+  return (await bundleTargets(sourcePath, template)).some((target) => layoutBoundBundleFiles.has(target));
+}
+
+/** Whether installing any of these templates writes a file rendered from the project layout. */
+export async function layoutNeeded(templates: readonly TemplateName[], sourcePath: string): Promise<boolean> {
+  for (const name of templates) {
+    if (layoutBoundTemplates.includes(name)) return true;
+    if (isBundleTemplate(name) && await bundleNeedsLayout(name, sourcePath)) return true;
+  }
+  return false;
 }
 
 /** The bundles whose files carry our ownership header in this repository. */
@@ -64,7 +94,9 @@ export async function installBundle(
 
   for (const { source, target } of files) {
     const current = await readOptional(join(repositoryPath, target));
-    const text = stampVersion(normalizeEol(await readFile(source, "utf8")), version);
+    const packaged = normalizeEol(await readFile(source, "utf8"));
+    const rendered = options.layout !== undefined && layoutBoundBundleFiles.has(target) ? renderLayout(packaged, options.layout) : packaged;
+    const text = stampVersion(rendered, version);
     const recorded = current === undefined ? undefined : installedVersion(current);
     const base = recorded === undefined ? { target } : { target, installedVersion: recorded };
 

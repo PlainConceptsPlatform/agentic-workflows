@@ -1,8 +1,11 @@
 import * as readline from "node:readline";
+import { createInterface } from "node:readline/promises";
 
 import { formatCatalog, listCatalog, type CatalogEntry } from "./catalog-listing.js";
-import { installCatalog, installTemplate, isTemplateName, removeRouteFiles } from "./catalog-installation.js";
+import { catalogSourcePath, installCatalog, installTemplate, isTemplateName, removeRouteFiles } from "./catalog-installation.js";
+import { normalizeRoot, persistLayout, resolveLayout, type LayoutRoot, type ProjectLayout, type ResolvedLayout } from "./project-layout.js";
 import { inspectRepository } from "./repository-inspection.js";
+import { layoutNeeded } from "./template-bundles.js";
 import { routeNames, type RouteName } from "./workflow-catalog.js";
 
 export type SelectionStatus = "selecting" | "submitting" | "cancelled";
@@ -302,15 +305,22 @@ async function installSelected(
 
   const inspection = await inspectRepository(repositoryPath);
 
+  // The project layout is asked only when a selected template writes files rendered from it. The
+  // proposal is what the installed workflows declare, else the folders found; Enter accepts it.
+  const resolved = await resolveLayout(repositoryPath);
+  const selectedTemplates = templates.map((entry) => entry.name).filter(isTemplateName);
+  const asked = await layoutNeeded(selectedTemplates, catalogSourcePath());
+  const layout = asked ? await askLayout(resolved) : resolved.layout;
+
   // Desired state: the checked routes are the target set. Installing it also refreshes every
   // package-managed file that is already there, so Enter on an unchanged selection is an update.
-  const result = await installCatalog(repositoryPath, { force, selectedRoutes: checkedRoutes, inspection });
+  const result = await installCatalog(repositoryPath, { force, selectedRoutes: checkedRoutes, inspection, layout });
   allInstalled.push(...result.installed);
   const allRemoved = await removeRouteFiles(repositoryPath, removedRoutes);
 
   for (const template of templates) {
     if (!isTemplateName(template.name)) continue;
-    const templateResult = await installTemplate(repositoryPath, template.name, { force, inspection });
+    const templateResult = await installTemplate(repositoryPath, template.name, { force, inspection, layout });
     allConflicts.push(...templateResult.conflicts);
     allInstalled.push(...templateResult.installed);
   }
@@ -319,6 +329,8 @@ async function installSelected(
     console.error(`Template conflicts found. Re-run with --force to overwrite:\n${allConflicts.join("\n")}`);
     return 1;
   }
+
+  const persisted = asked ? await persistLayout(repositoryPath, layout, ["api", "web"]) : [];
 
   const changed = result.changes.filter((change) => change.status === "added" || change.status === "updated" || change.status === "removed");
   const skipped = result.changes.filter((change) => change.status === "skipped");
@@ -339,6 +351,39 @@ async function installSelected(
   for (const template of templates) {
     console.log(`  template ${template.name}`);
   }
+  if (asked) {
+    console.log(`Project layout: api ${layout.api}, web ${layout.web}${persisted.length > 0 ? ` (written to ${persisted.join(", ")})` : ""}`);
+  }
 
   return 0;
+}
+
+/** Asks for each project root, proposing the resolved one; an empty answer accepts the proposal. */
+export async function askLayout(
+  resolved: ResolvedLayout,
+  ask: (question: string) => Promise<string> = questionOnTerminal,
+): Promise<ProjectLayout> {
+  const layout: Record<LayoutRoot, string> = { ...resolved.layout };
+  for (const root of ["api", "web"] as const) {
+    for (;;) {
+      const answer = (await ask(`Where does the ${root} project live? [${resolved.layout[root]}] `)).trim();
+      if (answer === "") break;
+      const value = normalizeRoot(answer);
+      if (value !== undefined) {
+        layout[root] = value;
+        break;
+      }
+      console.log("  Give a path relative to the repository, such as api or apps/web (. for the root).");
+    }
+  }
+  return layout;
+}
+
+async function questionOnTerminal(question: string): Promise<string> {
+  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await terminal.question(question);
+  } finally {
+    terminal.close();
+  }
 }

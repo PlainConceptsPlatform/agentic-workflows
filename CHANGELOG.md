@@ -2,6 +2,19 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.34.0
+
+### Added
+
+- **The installer writes the layout-bound files for the repository's project layout** ([#572](https://github.com/PlainConceptsPlatform/agentic-workflows/issues/572)). The platform family assumes `apps/api` and `apps/web`. A repository with another layout, such as Capacity's `api/` and `app/`, got a `.jscpd.json` that scanned nothing (so the duplication gate and the hygiene facet passed without measuring), a `knip.json`, a `.size-limit.json` and Semgrep hygiene rules aimed at folders it does not have, and no supported way out except taking each file over.
+  - `add` and `update` take `--api-dir <path>` and `--web-dir <path>` (`.` for the repository root). The interactive TUI asks for both when a selected template needs them, proposing the resolved values.
+  - Each root comes from the option, else from `API_WORKING_DIRECTORY` / `WEB_DIRECTORY` in the top-level `env:` of the installed workflows (the values the CI templates and the gate scripts already use), else from the one candidate folder found, else from the default. A root given as an option is written back to those `env:` values, so `update` renders the same files without being told.
+  - Rendered: `.jscpd.json`, `knip.json`, `.size-limit.json`, `.semgrep/platform-hygiene.yml` (one `paths.include` entry per root) and the usage comments of `check-architecture.mjs`, `check-bundle-size.mjs` and `check-dead-code.mjs` in `quality-gates`; the whole of `app-ci-dotnet-next`, `app-ci-node-monorepo` and `quality-mutation` when installed; and refine's `MOCKUP_PATHS`, through the env merge, so a glob the consumer chose is kept and the shipped `apps/web/**` follows the layout.
+  - Workflows that disagree on a root, or two candidate folders, stop `add`/`update` with a message naming the files and the option to pass, instead of writing `apps/...`. This happens only when a layout-bound file is about to be written. A root that does not exist is a warning. The JSON result reports `layout` (the roots, their `sources`, where they were `persisted`, and the `warnings`).
+  - A file whose ownership header was removed stays the consumer's. With the default layout every file is byte-identical to before.
+
+Consumers on another layout take it with `workflows update`. When their CI workflows already declare `API_WORKING_DIRECTORY` and `WEB_DIRECTORY`, the update needs no options.
+
 ## 1.33.0
 
 ### Fixed

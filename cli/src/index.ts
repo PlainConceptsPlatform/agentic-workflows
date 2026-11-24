@@ -2,7 +2,8 @@
 
 import { inspectRepository, parseVisibility, resolveVisibility } from "./repository-inspection.js";
 import { catalogSourcePath, exists, installCatalog, installedRoutes, installTemplate, isTemplateName, removeRouteFiles, type CatalogInstallResult } from "./catalog-installation.js";
-import { installBundle, installedBundles, isBundleTemplate, type BundleInstallResult } from "./template-bundles.js";
+import { installBundle, installedBundles, isBundleTemplate, layoutNeeded, type BundleInstallResult } from "./template-bundles.js";
+import { normalizeRoot, persistLayout, resolveLayout, type LayoutRoot, type ProjectLayout, type ResolvedLayout } from "./project-layout.js";
 import { formatCatalog, listCatalog, searchCatalog } from "./catalog-listing.js";
 import { packageVersion } from "./package-baseline.js";
 import { routeNames, templateNames, type RouteName, type TemplateName } from "./workflow-catalog.js";
@@ -42,6 +43,9 @@ Route names (positional arguments to add and remove):
   add --template agentics-checks              Install the named template only.
   add refine --template agentics-checks       Routes plus mandatory files plus the named template.
   remove audit                                Uninstall the audit worker and drop it from the router.
+  add --template quality-gates --api-dir api --web-dir app
+                                              Install the gates for a repository whose projects are not
+                                              in apps/api and apps/web.
 
 What an update does to a package-managed file:
   The file is replaced with this version's, and its ownership header records the version.
@@ -55,6 +59,14 @@ What an update does to a package-managed file:
   Bundle templates (quality-gates, platform-template) stay package-managed like the catalog:
   add --template installs one, and update refreshes it only where its files carry the header.
 
+Project layout:
+  Files that name the api and web projects and cannot read an environment variable (.jscpd.json,
+  knip.json, .size-limit.json, the Semgrep hygiene rules, the CI templates' env:, the refine
+  worker's MOCKUP_PATHS) are written for the repository's layout. Each root comes from
+  --api-dir / --web-dir, else from API_WORKING_DIRECTORY / WEB_DIRECTORY in the installed
+  workflows' env:, else from the folders found, else apps/api and apps/web. A root given as an
+  option is written back to those env: values, so the next update renders the same files.
+
 Options:
   --dry-run                                   Print what add or update would change, write nothing.
   --force                                     Also overwrite consumer-owned files and changed templates.
@@ -65,6 +77,8 @@ Options:
                                               the package defaults the consumer never chose.
   --template <name>                           Install a standalone template alongside or instead of routes.
                                               Templates: ${templateNames.join(", ")}.
+  --api-dir <path>                            Where the api project lives, relative to the repository (. for the root).
+  --web-dir <path>                            Where the web project lives, relative to the repository.
   --visibility public|private                 Override repository visibility (init only).
   --version                                   Print the package version.
   -h, --help                                  Show this help text.
@@ -125,6 +139,8 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
     const inspection = await inspectRepository(repositoryPath);
     const { routes, template, force, dryRun } = parsed;
     const baseline = localBaseline(parsed.baseline);
+    const resolved = await resolveLayout(repositoryPath, parsed.layout);
+    const { layout } = resolved;
 
     const allConflicts: string[] = [];
     const allInstalled: string[] = [];
@@ -141,17 +157,28 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
     const routerInstalled = await exists(join(repositoryPath, ".github", "workflows", "work-router.yml"));
     const bundlesOnly = command === "update" && routes.length === 0 && template === undefined &&
       installedRouteSet.length === 0 && !routerInstalled && (await installedBundles(repositoryPath, sourcePath)).length > 0;
-    if (bundlesOnly) {
-      for (const name of await installedBundles(repositoryPath, sourcePath)) {
-        bundles.push(await installBundle(repositoryPath, name, sourcePath, { force, dryRun }));
-      }
-    } else if (routes.length > 0 || template === undefined) {
+    const refreshCatalog = !bundlesOnly && (routes.length > 0 || template === undefined);
+    const bundleNames = bundlesOnly || refreshCatalog
+      ? (await installedBundles(repositoryPath, sourcePath)).filter((name) => name !== template)
+      : [];
+    const layoutTemplates = [...bundleNames, ...(template === undefined ? [] : [template])];
+
+    // A root that cannot be decided stops the install only when a file rendered from it is about
+    // to be written: writing apps/... into a repository that keeps its projects elsewhere is the
+    // silent failure the layout exists to prevent.
+    const needsLayout = await layoutNeeded(layoutTemplates, sourcePath);
+    if (resolved.errors.length > 0 && needsLayout) return fail(resolved.errors.join("\n"));
+
+    for (const name of bundlesOnly ? bundleNames : []) {
+      bundles.push(await installBundle(repositoryPath, name, sourcePath, { force, dryRun, layout }));
+    }
+    if (refreshCatalog) {
       const selectedRoutes = unionRoutes(routes, installedRouteSet);
-      catalog = await installCatalog(repositoryPath, { force, dryRun, selectedRoutes, inspection, baseline });
+      catalog = await installCatalog(repositoryPath, { force, dryRun, selectedRoutes, inspection, baseline, layout });
       allConflicts.push(...catalog.conflicts);
       allInstalled.push(...catalog.installed);
-      for (const name of await installedBundles(repositoryPath, sourcePath)) {
-        if (name !== template) bundles.push(await installBundle(repositoryPath, name, sourcePath, { force, dryRun }));
+      for (const name of bundleNames) {
+        bundles.push(await installBundle(repositoryPath, name, sourcePath, { force, dryRun, layout }));
       }
     }
 
@@ -159,22 +186,27 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
       if (template === "dependabot-merge" && routerInstalled) {
         console.error("warning: the work router already merges Dependabot pull requests in its maintenance run; this workflow does the same work twice.");
       }
-      bundles.push(await installBundle(repositoryPath, template, sourcePath, { force, dryRun }));
+      bundles.push(await installBundle(repositoryPath, template, sourcePath, { force, dryRun, layout }));
     } else if (template !== undefined) {
       if (dryRun) {
         templatesPlanned.push(template);
       } else {
-        const result = await installTemplate(repositoryPath, template, { force, inspection });
+        const result = await installTemplate(repositoryPath, template, { force, inspection, layout });
         allConflicts.push(...result.conflicts);
         allInstalled.push(...result.installed);
       }
     }
+
+    // A root given as an option becomes the installed workflows' env: value, the one `update` reads.
+    const persisted = await persistLayout(repositoryPath, layout, Object.keys(parsed.layout) as LayoutRoot[], dryRun);
 
     if (allConflicts.length > 0 && !force) {
       console.error(`Template conflicts found. Re-run with --force to overwrite consumer-owned copies:\n${allConflicts.join("\n")}`);
       return 1;
     }
     for (const warning of catalog?.warnings ?? []) console.error(`warning: ${warning}`);
+    const layoutWarnings = needsLayout ? resolved.warnings : [];
+    for (const warning of layoutWarnings) console.error(`warning: ${warning}`);
     for (const bundle of bundles) allInstalled.push(...bundle.installed);
     console.log(JSON.stringify({
       command,
@@ -182,6 +214,7 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
       ...(catalog === undefined ? {} : summarize(catalog)),
       ...(templatesPlanned.length > 0 ? { templatesPlanned } : {}),
       ...(bundles.length > 0 ? { templates: bundles.map(summarizeBundle) } : {}),
+      layout: summarizeLayout(resolved, persisted, layoutWarnings),
       installed: allInstalled.sort(),
       conflicts: allConflicts,
     }, null, 2));
@@ -198,7 +231,8 @@ export async function run(arguments_: readonly string[], repositoryPath = proces
     const installed = await installedRoutes(repositoryPath);
     const desiredRoutes = installed.filter((route) => !parsed.routes.includes(route));
 
-    const result = await installCatalog(repositoryPath, { force: parsed.force, dryRun: parsed.dryRun, selectedRoutes: desiredRoutes, inspection, baseline: localBaseline(parsed.baseline) });
+    const { layout } = await resolveLayout(repositoryPath, parsed.layout);
+    const result = await installCatalog(repositoryPath, { force: parsed.force, dryRun: parsed.dryRun, selectedRoutes: desiredRoutes, inspection, baseline: localBaseline(parsed.baseline), layout });
     const removed = parsed.dryRun
       ? parsed.routes.filter((route) => installed.includes(route)).map((route) => `.github/workflows/agent-${route}.md`)
       : await removeRouteFiles(repositoryPath, parsed.routes);
@@ -218,6 +252,15 @@ function summarize(result: CatalogInstallResult) {
     changes: result.changes.filter((change) => change.status !== "unchanged"),
     unchanged: result.changes.filter((change) => change.status === "unchanged").length,
     ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
+  };
+}
+
+function summarizeLayout(resolved: ResolvedLayout, persisted: readonly string[], warnings: readonly string[]) {
+  return {
+    ...resolved.layout,
+    sources: resolved.sources,
+    ...(persisted.length > 0 ? { persisted } : {}),
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 
@@ -253,7 +296,7 @@ function readVisibilityOption(options: readonly string[]): "invalid" | "public" 
 }
 
 type ParsedAddOptions =
-  | { kind: "ok"; routes: readonly RouteName[]; template: TemplateName | undefined; force: boolean; dryRun: boolean; baseline: string | undefined }
+  | { kind: "ok"; routes: readonly RouteName[]; template: TemplateName | undefined; force: boolean; dryRun: boolean; baseline: string | undefined; layout: Partial<ProjectLayout> }
   | { kind: "invalid"; message: string };
 
 const TEMPLATE_NAMES = templateNames.join("|");
@@ -265,6 +308,7 @@ function parseAddOptions(options: readonly string[]): ParsedAddOptions {
   let force = false;
   let dryRun = false;
   let baseline: string | undefined;
+  const layout: { api?: string; web?: string } = {};
   let i = 0;
 
   while (i < options.length) {
@@ -285,6 +329,17 @@ function parseAddOptions(options: readonly string[]): ParsedAddOptions {
     if (token === "--baseline") {
       if (i + 1 >= options.length) return invalid("--baseline requires a path.");
       baseline = options[i + 1]!;
+      i += 2;
+      continue;
+    }
+
+    if (token === "--api-dir" || token === "--web-dir") {
+      const root: LayoutRoot = token === "--api-dir" ? "api" : "web";
+      if (layout[root] !== undefined) return invalid(`${token} can only be specified once.`);
+      if (i + 1 >= options.length) return invalid(`${token} requires a path.`);
+      const value = normalizeRoot(options[i + 1]!);
+      if (value === undefined) return invalid(`${token} must be a relative path inside the repository, such as api or apps/web (. for the root).`);
+      layout[root] = value;
       i += 2;
       continue;
     }
@@ -315,7 +370,7 @@ function parseAddOptions(options: readonly string[]): ParsedAddOptions {
     return invalid(`Unknown route: ${token}. Valid routes: ${routeNames.join(", ")}.`);
   }
 
-  return { kind: "ok", routes, template, force, dryRun, baseline };
+  return { kind: "ok", routes, template, force, dryRun, baseline, layout };
 }
 
 function invalid(message: string): ParsedAddOptions {
