@@ -250,6 +250,13 @@ template (`app-ci-dotnet-next`, and the web job of `app-ci-node-monorepo`) runs 
 are the app's, in `quality.config.json` at the repository root; the full key reference is in
 `docs/family-templates.md`.
 
+A repository whose projects are not in `apps/api` and `apps/web` passes its layout once:
+`add --template quality-gates --api-dir api --web-dir app` (the TUI asks the same). The installer
+writes `.jscpd.json`, `knip.json`, `.size-limit.json`, the Semgrep hygiene rules and the CI
+templates' `env:` for it, and stores the roots as `API_WORKING_DIRECTORY` and `WEB_DIRECTORY` in the
+installed workflows' `env:`, which `update` reads back. Do not take those files over just to change
+the paths.
+
 | Gate | Script | Fails CI when | `quality.config.json` |
 |---|---|---|---|
 | Coverage floors | `check-coverage.mjs` | a gated assembly or the web suite is under its floor | `coverage.api`, `coverage.web`, `coverage.reportOnly` |

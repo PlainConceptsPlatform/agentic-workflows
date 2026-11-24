@@ -134,3 +134,6 @@ export const catalogTemplates: readonly CatalogTemplate[] = [
 export const bundleTemplateNames: readonly TemplateName[] = catalogTemplates
   .filter((template) => template.bundle === true)
   .map((template) => template.name);
+
+/** Single-file CI templates whose `env:` names the api and web roots; installed with the project layout. */
+export const layoutBoundTemplates: readonly TemplateName[] = ["app-ci-dotnet-next", "app-ci-node-monorepo", "quality-mutation"];

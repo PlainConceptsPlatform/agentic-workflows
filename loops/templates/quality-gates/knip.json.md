@@ -2,7 +2,7 @@
 
 Managed by @plainconceptsplatform/workflows. Source: loops/templates/quality-gates/knip.json. Update with `workflows update --force`; consumer edits may be overwritten.
 
-JSON (RFC 8259) does not permit comments, so the ownership header of `knip.json` is documented here. The file scopes [Knip](https://github.com/webpro-nl/knip), the web dead-code check (`scripts/check-dead-code.mjs`), to the family's web workspace, `apps/web`. The CI runs `knip --workspace <web package> --reporter json` with it.
+JSON (RFC 8259) does not permit comments, so the ownership header of `knip.json` is documented here. The file scopes [Knip](https://github.com/webpro-nl/knip), the web dead-code check (`scripts/check-dead-code.mjs`), to the family's web workspace, `apps/web`, or the repository's web root when the installer is given another layout (`--web-dir`, or the workflows' `WEB_DIRECTORY`). The CI runs `knip --workspace <web package> --reporter json` with it.
 
 Knip's own plugins supply the entry points, so the file lists only what no plugin knows:
 

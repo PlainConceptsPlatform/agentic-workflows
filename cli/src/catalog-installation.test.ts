@@ -267,6 +267,31 @@ describe("catalog installation", () => {
     );
   });
 
+  // A shipped `apps/web/**` follows the layout; a glob the consumer chose stays theirs.
+  it("renders a worker's MOCKUP_PATHS from the project layout", async () => {
+    const packaged = worker("  MOCKUP_PATHS: \"apps/web/**\"\n");
+    const baselinePath = await createDirectory({ "workflows/agent-check.md": packaged });
+    const sourcePath = await createDirectory({
+      "workflows/agent-check.md": packaged,
+      "scripts/compile-agent-workflows.mjs": "compile\n",
+      "templates/opencode/opencode.ci.json": "{}\n",
+    });
+    const layout = { api: "api", web: "app" };
+    const target = ".github/workflows/agent-check.md";
+
+    const fresh = await createDirectory({});
+    await installCatalog(fresh, { sourcePath, packageVersion: "0.7.0", baseline: offline, layout });
+    await expect(readFile(join(fresh, target), "utf8")).resolves.toContain("  MOCKUP_PATHS: \"app/**\"\n");
+
+    const shipped = await createDirectory({ [target]: worker("  MOCKUP_PATHS: \"apps/web/**\"\n", "0.6.1") });
+    await installCatalog(shipped, { sourcePath, packageVersion: "0.7.0", baseline: async () => baselinePath, layout });
+    await expect(readFile(join(shipped, target), "utf8")).resolves.toContain("  MOCKUP_PATHS: \"app/**\"\n");
+
+    const chosen = await createDirectory({ [target]: worker("  MOCKUP_PATHS: \"app/src/views/**\"\n", "0.6.1") });
+    await installCatalog(chosen, { sourcePath, packageVersion: "0.7.0", baseline: async () => baselinePath, layout });
+    await expect(readFile(join(chosen, target), "utf8")).resolves.toContain("  MOCKUP_PATHS: \"app/src/views/**\"\n");
+  });
+
   it("uses the installed release as the merge baseline so untouched defaults follow the package", async () => {
     const baselinePath = await createDirectory({
       "workflows/agent-check.md": worker("  REPO_RULES: \"package rules\"\n  INCOMPLETE_COMMENT: \"old wording\"\n"),

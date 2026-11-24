@@ -6,11 +6,12 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { parse as parseYaml } from "yaml";
 
-import { catalogTemplates, defaultRouteNames, mandatoryFiles, plumbingWorkflowFiles, retiredWorkflowFiles, routeNames, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
+import { catalogTemplates, defaultRouteNames, layoutBoundTemplates, mandatoryFiles, plumbingWorkflowFiles, retiredWorkflowFiles, routeNames, templateNames, workflowRoutes, type RouteName, type TemplateName } from "./workflow-catalog.js";
 import { processRoutes, excludedWorkerFiles } from "./route-processing.js";
 import { generateOpencodeCi, generateOpencodeConfig, generateStackDefaults, injectStackEnv, shippedVerifyDefaults } from "./stack-defaults.js";
 import { dropMovedRouterEnv, mergePlumbing, mergeRouter, mergeWorker, mirrorRouterLiterals, parseYamlEnv, type WorkerMergeReport } from "./worker-env.js";
 import { fetchBaseline, hasOwnershipHeader, installedVersion, packageVersion, stampVersion, type BaselineFetcher } from "./package-baseline.js";
+import { renderLayout, renderWorkerLayout, type ProjectLayout } from "./project-layout.js";
 import type { RepositoryInspection } from "./repository-inspection.js";
 import { installBundle, isBundleTemplate } from "./template-bundles.js";
 
@@ -65,6 +66,8 @@ export interface CatalogInstallOptions {
   readonly baseline?: BaselineFetcher;
   /** The version stamped into headers. Defaults to this package's. */
   readonly packageVersion?: string;
+  /** Where the api and web projects live; renders the worker globs that name them. */
+  readonly layout?: ProjectLayout;
 }
 
 interface CatalogFile {
@@ -141,6 +144,14 @@ export async function installCatalog(
 
   if (options.inspection !== undefined) {
     processed = applyStackDefaults(processed, options.inspection, existing);
+  }
+
+  // A worker glob that names the web root (MOCKUP_PATHS) follows the layout. The env merge below
+  // still keeps a value the consumer chose, and moves a shipped default to the rendered one.
+  const layout = options.layout;
+  if (layout !== undefined) {
+    processed = new Map([...processed].map(([target, content]) =>
+      [target, isWorker(target) ? renderWorkerLayout(content, layout) : content]));
   }
 
   const fetcher = options.baseline ?? fetchBaseline;
@@ -423,11 +434,14 @@ export interface TemplateInstallResult {
 export async function installTemplate(
   repositoryPath: string,
   template: TemplateName,
-  options: Pick<CatalogInstallOptions, "force" | "sourcePath" | "inspection"> = {},
+  options: Pick<CatalogInstallOptions, "force" | "sourcePath" | "inspection" | "layout"> = {},
 ): Promise<TemplateInstallResult> {
   const sourcePath = options.sourcePath ?? catalogSourcePath();
   if (isBundleTemplate(template)) {
-    const bundle = await installBundle(repositoryPath, template, sourcePath, { force: options.force });
+    const bundle = await installBundle(repositoryPath, template, sourcePath, {
+      ...(options.force === undefined ? {} : { force: options.force }),
+      ...(options.layout === undefined ? {} : { layout: options.layout }),
+    });
     return { installed: bundle.installed, conflicts: [] };
   }
   const meta = catalogTemplateMeta(template);
@@ -442,12 +456,9 @@ export async function installTemplate(
       companion: true as const,
     })),
   ];
+  const rendered = (entry: TemplateDestination): Promise<string | undefined> => renderedTemplate(template, entry, options.layout);
   const conflicts = (
-    await Promise.all(destinations.map(async (entry) =>
-      await exists(join(repositoryPath, entry.target)) && await exists(entry.source) && !(await filesMatch(entry.source, join(repositoryPath, entry.target)))
-        ? entry.target
-        : undefined,
-    ))
+    await Promise.all(destinations.map(async (entry) => await templateConflicts(repositoryPath, entry, rendered) ? entry.target : undefined))
   ).filter((file): file is string => file !== undefined);
 
   if (conflicts.length > 0 && !options.force) return { installed: [], conflicts };
@@ -456,7 +467,9 @@ export async function installTemplate(
     if (!(await exists(entry.source))) continue; // companion files may not exist for every template version
     const destination = join(repositoryPath, entry.target);
     await mkdir(dirname(destination), { recursive: true });
-    await copyFile(entry.source, destination);
+    const content = await rendered(entry);
+    if (content === undefined) await copyFile(entry.source, destination);
+    else await writeFile(destination, content, "utf8");
   }
 
   if (options.inspection !== undefined && template === "opencode.ci.json") {
@@ -472,6 +485,32 @@ export async function installTemplate(
   }
 
   return { installed: (await Promise.all(destinations.map(async (entry) => await exists(entry.source) ? entry.target : undefined))).filter((file): file is string => file !== undefined), conflicts };
+}
+
+interface TemplateDestination {
+  readonly source: string;
+  readonly target: string;
+  readonly companion: boolean;
+}
+
+// A CI template names the project roots in its `env:`; it is written with the repository's layout,
+// which is then where `update` reads that layout back from. Undefined means "copy the file as is".
+async function renderedTemplate(template: TemplateName, entry: TemplateDestination, layout: ProjectLayout | undefined): Promise<string | undefined> {
+  if (layout === undefined || entry.companion || !layoutBoundTemplates.includes(template)) return undefined;
+  return renderLayout(await readFile(entry.source, "utf8"), layout);
+}
+
+// Whether the consumer's copy differs from what this install would write.
+async function templateConflicts(
+  repositoryPath: string,
+  entry: TemplateDestination,
+  rendered: (entry: TemplateDestination) => Promise<string | undefined>,
+): Promise<boolean> {
+  const destination = join(repositoryPath, entry.target);
+  if (!(await exists(destination)) || !(await exists(entry.source))) return false;
+  const content = await rendered(entry);
+  if (content === undefined) return !(await filesMatch(entry.source, destination));
+  return normalizeEol(content) !== normalizeEol(await readFile(destination, "utf8"));
 }
 
 export async function installedRoutes(repositoryPath: string): Promise<RouteName[]> {

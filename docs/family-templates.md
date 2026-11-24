@@ -47,7 +47,11 @@ JSON cannot carry a comment, so a JSON file's header lives in a companion `<file
 
 The baselines (`scripts/complexity-baseline.json`, `scripts/duplication-baseline.json`) and `quality.config.json` are app files. The template never installs or touches them; the gate scripts write a baseline only when asked to (`--write-baseline`, `--prune`, `--update-baseline`).
 
-The gate scripts find the api and web projects through the workflow `env:`, the same `API_WORKING_DIRECTORY` and `WEB_DIRECTORY` the CI templates declare (defaults `apps/api` and `apps/web`). A repository with another layout sets those two values; `update` keeps them. `.jscpd.json`, `knip.json`, `.size-limit.json` and the Semgrep rules are static files that name `apps/...` themselves: such a repository takes them over (see each `.md` header).
+The gate scripts find the api and web projects through the workflow `env:`, the same `API_WORKING_DIRECTORY` and `WEB_DIRECTORY` the CI templates declare (defaults `apps/api` and `apps/web`). The files that cannot read a variable (`.jscpd.json`, `knip.json`, `.size-limit.json`, the Semgrep hygiene rules, the CI templates' own `env:` and refine's `MOCKUP_PATHS`) are written for the repository's layout by the installer. Each root comes from `--api-dir` / `--web-dir` (the interactive TUI asks), else from those two `env:` values in the installed workflows, else from the folders found (`api`, `backend`, `server` for the api; `web`, `app`, `frontend`, `client` with a `package.json` for the web), else the defaults. A root given as an option is written back to the workflows' `env:`, so `update` renders the same files without being told. Workflows that disagree, or two candidate folders, stop the install with a message instead of writing `apps/...`; a root that does not exist is a warning. A file whose header was removed stays the app's, as everywhere else. With the default layout the files are byte-identical to the package's.
+
+```sh
+npx @plainconceptsplatform/workflows add --template quality-gates --api-dir api --web-dir app
+```
 
 Adopting the template in an app that has its own copies:
 
