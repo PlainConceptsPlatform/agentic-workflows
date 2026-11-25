@@ -362,6 +362,7 @@ The remaining keys, verified on v0.87.5:
 | `title-prefix: "[bot] "` | Prepended to the title, and the marker the gate's ownership checks read |
 | `if-no-changes: error` | Fail the item when the agent's commits touch nothing |
 | `max-patch-files` | Cap the files in one patch |
+| `max-patch-size` | Cap the patch in KB (gh-aw default 4096); implement, the merge gate and apply-review set 10240 |
 | `protected-files: allowed` + `allowed-files` | Let the gate, not PR creation, judge protected paths |
 | `preserve-branch-name: true` | Keep the agent's branch name instead of salting it |
 

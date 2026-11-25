@@ -847,6 +847,10 @@ safe-outputs:
   create-pull-request:
     draft: false
     max-patch-files: 1000
+    # gh-aw's 4096 KB default is too small for a story that regenerates binary test fixtures:
+    # a consumer's run finished its work and lost it to "Patch size (4864 KB) exceeds maximum
+    # allowed size". The same limit the merge gate and apply-review push with.
+    max-patch-size: 10240
     title-prefix: "[bot] "
     if-no-changes: error
     # Merge Gate, not PR creation, decides whether a protected change needs a human.

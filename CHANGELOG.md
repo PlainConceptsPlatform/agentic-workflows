@@ -2,6 +2,14 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.34.1
+
+### Fixed
+
+- **Implement can open a pull request whose patch is over 4 MB.** gh-aw rejects a `create_pull_request` patch over its 4096 KB default, and implement did not set a limit. A story that regenerates binary test fixtures crosses it: on a consumer the agent finished after 43 minutes and `safe_outputs` failed with "Patch size (4864 KB) exceeds maximum allowed size (4096 KB)", so the work was lost and the issue was parked for review. Implement's `create-pull-request` now sets `max-patch-size: 10240`, the limit the merge gate and apply-review already push with.
+
+Consumers take it with `workflows update` and a recompile (the limit lives in the compiled lock).
+
 ## 1.34.0
 
 ### Added
