@@ -16,14 +16,23 @@ env:
   # The fast tier alone, when a repository's account is not granted what harness.json names for it.
   AGENT_FAST_MODEL: "awf-proxy/glm-5-2"
   REPO_RULES: "Refine only the selected issue into a grounded, implementation-ready user story. Read repository documentation for domain context. Write acceptance criteria that match existing patterns. Where a story or its open questions decide how business data (named people, roles, addresses) is stored, resolve it toward the repository's convention for that data -- a database entity or a settings entry -- and record that choice in the acceptance criteria; do not carry a person's name or email address into the story as something the code reads from a constant. Do not implement code. Do not use web search or web fetch tools. The issue body already contains the research that motivated it; derive your domain context from the repository's own code and documentation only."
-  # The estimate decides whether a story gets split, and the prompt tells the agent these bands
-  # come from this repository's own merged pull requests. They have to actually come from it, or
-  # the claim is false and every repository sizes work on another one's diffs.
+  # The estimate decides whether a story gets split. Points are relative size, never days: the
+  # bands are the diff a story produces. The defaults were checked in November 2026 against
+  # about 230 estimated issues in Odyssey and Bots and the pull requests that closed them
+  # (median changed lines: 1 point 40-60, 2 points 180-240, 3 points 200-320, 5 points 520-1100,
+  # 8 points 1700-2400). A repository whose merged pull requests sit elsewhere should restate
+  # these bands from its own.
+  #
+  # The bands once printed "(~1 day)" beside 1 point and the body said "~N human days". A
+  # 300-line slice with tests is about a day for someone who knows the code, so every estimate
+  # read two to three times too long (Odyssey #639: 8 "days" for about 3). A schema migration
+  # also once set 5 by itself, which put a two-file column change on a par with a new contract
+  # (Odyssey #641); it now raises the estimate only when it rewrites stored data.
   #
   # One line, and every value in this block must stay one line: gh-aw joins a multi-line env
   # value onto a single line when it compiles the lock, so a table written across five lines
   # here arrives at the agent as one unreadable row. verify-route-matrix.sh asserts it.
-  ESTIMATE_BANDS: "1 point (~1 day) = one or two files, under about 50 changed lines, no new concepts: a wording, style or single-value fix. 2 points = up to about four files and 150 lines, all inside one layer, no schema or contract change. 3 points = a vertical slice through one boundary (API and database, or UI and API), up to about eight files and 400 lines, with new tests. 5 points = several layers together, or a schema migration, or a new contract: up to about sixteen files and 1000 lines. 8 or more = beyond those bounds, or it needs a pattern or subsystem that does not exist yet, or it still holds real unknowns."
+  ESTIMATE_BANDS: "1 point = one or two files, under about 50 changed lines, no new concepts: a wording, style or single-value fix. 2 points = up to about four files and 150 lines, all inside one layer, no contract change. 3 points = a vertical slice through one boundary (API and database, or UI and API), up to about eight files and 400 lines, with new tests. 5 points = several layers together, or a new contract: up to about sixteen files and 1000 lines. 8 or more = beyond those bounds, or it needs a pattern or subsystem that does not exist yet, or it still holds real unknowns. A schema migration counts by its size like any other file; only one that rewrites data already stored (a backfill, a re-encryption, a type change that converts existing rows) raises the estimate by one step, for the deploy-order risk."
   # What counts as a change small enough to skip the story format. The default names this stack's
   # tools, so a repository built on anything else can never match it and always takes the long,
   # expensive path. Every condition must hold for a change to be trivial.
@@ -751,8 +760,10 @@ jobs:
             for old in $(gh issue view "$issue" --repo "$REPO" --json labels --jq '.labels[].name | select(startswith("sp-"))'); do
               [ "$old" = "sp-$points" ] || gh issue edit "$issue" --repo "$REPO" --remove-label "$old" >/dev/null
             done
-            gh label create "sp-$points" --repo "$REPO" --color BFD4F2 \
-              --description "Story points: $points (about $points human days)" >/dev/null 2>&1 || true
+            # --force rewrites the description of a label made by an earlier version, which
+            # read "about N human days" and is not a time estimate.
+            gh label create "sp-$points" --repo "$REPO" --color BFD4F2 --force \
+              --description "Story points: $points (relative size, not days)" >/dev/null 2>&1 || true
             gh issue edit "$issue" --repo "$REPO" --add-label "sp-$points" >/dev/null
             echo "#$issue estimated at $points point(s)"
           }
@@ -1206,12 +1217,12 @@ timeout-minutes: 90
    The story body the skill returns has its machine-readable lines at the very top, above the
    form's first heading, so the workflow can read them whatever the form's shape.
 
-4. **Estimate the story in points.** Use the Fibonacci scale, where one point is roughly one
-   human day of work for a developer who knows this codebase. Estimate the whole story: code,
-   tests, and the edge cases the acceptance criteria imply.
+4. **Estimate the story in points.** Use the Fibonacci scale. Points are relative size, not
+   days: never convert them to time, and never write a duration beside them. Estimate the whole
+   story: code, tests, and the edge cases the acceptance criteria imply.
 
    Judge by the shape of the diff the story will produce, not by how long it feels. These bands
-   come from this repository's own merged pull requests, so compare the story against them
+   describe the merged pull requests behind each point value, so compare the story against them
    rather than against an abstract scale:
 
    ${{ env.ESTIMATE_BANDS }}
@@ -1264,7 +1275,7 @@ timeout-minutes: 90
    the title line, as exactly these two lines:
 
    ```
-   **Estimate:** N points (~N human days)
+   **Estimate:** N points
    ${{ env.ESTIMATE_MARKER_PREFIX }}N -->
    ```
 
@@ -1337,7 +1348,7 @@ timeout-minutes: 90
    Every question ends in one of two ways, on its own line under the question:
 
    - `${{ env.PROPOSED_TAG }} <the answer you would take> -- <why, in one short clause: the convention, the existing behaviour or the issue text it follows>`. This is the usual case: you can name a sensible answer, and getting it wrong costs a change, not a loss.
-   - `${{ env.DECISION_TAG }} <why no answer can be assumed>`. Only for a question where a wrong assumption is hard to undo: data deleted or rewritten, money or prices, permissions or security, personal data, or a contract another team or system consumes. These are never assumed; refinement waits for a person.
+   - `${{ env.DECISION_TAG }} <why no answer can be assumed>`. Only for a question where a wrong assumption is hard to undo: data deleted or rewritten, money or prices, permissions or security, personal data, a contract another team or system consumes, or the system contacting a host outside its own services on its own initiative (fetching, crawling or calling a third party) or sending stored data to one. These are never assumed; refinement waits for a person. When the issue, or the body you write, calls something an open or pending decision, the question about it ends in `${{ env.DECISION_TAG }}`, never in a proposal.
 
    Write the questions in **plain business language, not technical jargon**. The person reading
    them is a domain expert, not an engineer.

@@ -2,6 +2,19 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.34.1
+
+### Fixed
+
+- **Refine's estimates no longer read as two to three times too long.** Points were printed as days ("**Estimate:** 8 points (~8 human days)", and `sp-N` labels described as "about N human days"), but the bands behind them are diff sizes, and a 300-line slice with tests is about one day for someone who knows the code. Checked against about 230 estimated issues in Odyssey and Bots, the points track the merged diffs well (median changed lines: 1 point 40-60, 3 points 200-320, 5 points 520-1100, 8 points 1700-2400); only the day conversion was wrong. Odyssey #639 read as 8 days for about 3.
+  - The estimate line is `**Estimate:** N points`, the prompt says points are relative size and never a duration, and the bands drop "(~1 day)".
+  - The `sp-N` label description is "Story points: N (relative size, not days)". The labelling step creates labels with `--force`, so existing labels lose the old description the next time refine applies them.
+  - The bands no longer claim to come from each repository's own pull requests; the `env:` comment records what they were checked against and says to restate them when a repository's diffs differ.
+- **A schema migration no longer sets 5 points by itself.** It counts by size like any file; only a migration that rewrites stored data (a backfill, a re-encryption, a type change that converts rows) raises the estimate one step. Odyssey #641, a two-file column change plus a re-encryption backfill, scored 5 on the migration alone.
+- **A question about the system contacting an outside host is a decision, not a proposal.** Bots #1855 asked whether to fetch customer logos from customers' websites (a CRM domain leaving the tenant), marked it **Proposed:**, and the belt would have assumed it after 24 hours while the story body itself called it an open product decision. Fetching, crawling or calling a third party, or sending stored data to one, now ends in **Your decision needed:**, as does any question the issue or the refined body calls an open or pending decision.
+
+Consumers take it with `workflows update` and a recompile. A repository that kept the shipped `ESTIMATE_BANDS` gets the new bands; one that wrote its own keeps them.
+
 ## 1.34.0
 
 ### Added
