@@ -59,6 +59,10 @@ set -euo pipefail
 #                      A root is gated once, when its stack is complete: gating it after every child
 #                      landing spent a runner on a "blocked: the other children are missing" verdict
 #                      each time (a consumer's six roots took dozens of gate runs in a day)
+#   CI_INFRA           true when a job of the failed CI run died with its runner rather than on a
+#                      step: GitHub lost the machine or shut it down, and no check judged the code
+#   CI_RERUNS          how many times that CI run has already been re-run (its attempt number - 1);
+#                      MAX_CI_RERUNS is the budget, after which the failure goes to the gate as before
 train_move() {
   local move="" reason="" stranded=false
 
@@ -73,6 +77,16 @@ train_move() {
     # roots queued four full runs ahead of the child work that was the point (1.22.0 did this).
     # GitHub reports a conflict without an update, and the digest names a conflicting root.
     move=skip; reason="its stack still has ${OPEN_CHILDREN} open child issue(s)"
+  elif [ "${CI_STATUS:-none}" = completed ] && [ "${CI_CONCLUSION:-}" = failure ] &&
+    [ "${CI_INFRA:-false}" = true ] && [ "${CI_RERUNS:-0}" -lt "${MAX_CI_RERUNS:-2}" ] &&
+    [ "${MERGEABLE:-UNKNOWN}" != CONFLICTING ] &&
+    { [ "${PARK:-none}" != held ] || [ "${VERDICT:-}" = blocked ]; }; then
+    # The runner died, so the run says nothing about the code. Handing it to the gate spent an agent
+    # run that found no logs, reproduced every check green and still had to say `blocked`, because
+    # CI was red: Hermes #148 and #149 sat parked three days that way, four gate runs between them.
+    # A `blocked` verdict given on such a run is the machine's own, so it does not stop the re-run;
+    # a verdict that waits for a person does.
+    move=rerun; reason="CI failed because its runner died, not on a check (re-run $((${CI_RERUNS:-0} + 1)) of ${MAX_CI_RERUNS:-2})"
   elif [ "${PARK:-none}" = held ] && [ "${APPROVED_ON_HEAD:-false}" = true ] &&
     [ "${CI_STATUS:-none}" = completed ] && [ "${CI_CONCLUSION:-}" = success ] &&
     [ "${MERGEABLE:-UNKNOWN}" != CONFLICTING ]; then
@@ -190,6 +204,9 @@ budget_since() {
 #   STACK_ROOT_READY   true for a root whose stack was announced complete after the last verdict, with
 #                      STACK_ROOT_AUTOMERGE on: the train gives it one more gate run, which merges it
 #                      unless the blast radius or a finding says a person must
+#   CI_RERUN_AFTER     true when the head's CI run was re-run and finished after the verdict: a
+#                      `blocked` verdict judged a result that no longer stands. Only `blocked`, the
+#                      machine's own word; a re-run never reopens a verdict that waits for a person
 train_park() {
   local park=none
   if [ "${VERDICT_NEWER:-false}" = true ]; then
@@ -200,6 +217,8 @@ train_park() {
           park=none
         elif [ "${STACK_ROOT:-false}" = true ]; then
           park=held
+        elif [ "${VERDICT:-}" = blocked ] && [ "${CI_RERUN_AFTER:-false}" = true ]; then
+          park=none
         elif [ "${BASE_MOVED:-false}" = true ] && [ "${RETRIES:-0}" -lt "${MAX_RETRIES:-3}" ]; then
           park=none
         else
@@ -225,6 +244,8 @@ MAX_ATTEMPTS="${MAX_ATTEMPTS:-6}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
 MAX_REPAIRS="${MAX_REPAIRS:-1}"
 case "$MAX_REPAIRS" in ''|*[!0-9]*|0) MAX_REPAIRS=1 ;; esac
+MAX_CI_RERUNS="${MAX_CI_RERUNS:-2}"
+case "$MAX_CI_RERUNS" in ''|*[!0-9]*) MAX_CI_RERUNS=2 ;; esac
 MAIN_RED_WAIT_HOURS="${MAIN_RED_WAIT_HOURS:-2}"
 STUCK_HOURS="${STUCK_HOURS:-3}"
 DRY_RUN="${DRY_RUN:-false}"
@@ -279,6 +300,42 @@ ci_failed_jobs() {
   local run="$1"
   gh api "repos/$REPO/actions/runs/$run/jobs?per_page=100" \
     --jq '.jobs[] | select(.conclusion == "failure") | [(.name | sub("^.* / "; "")), .completed_at] | @tsv' 2>/dev/null
+}
+
+# What GitHub writes on a job whose machine went away, the same phrases decide-agent-retry's
+# classify-failure.sh reads for an agent job. Only GitHub writes annotations, so no test output can
+# fake one. A timeout is left out: a job that ran out of time runs out of it again.
+RUNNER_LOST='exit code 143|runner has received a shutdown signal|lost communication with the server|runner.*(was|has been) (deleted|terminated)'
+
+# True when a failed job of the run died with its runner rather than on a step. Read from the job's
+# annotations; when the token may not read them (check runs are refused to some Apps, see below),
+# from the job itself: a job that failed with no step marked failed never reached a verdict. Any
+# such job is enough. The aggregate job that fails because another failed ("Full CI") has a failed
+# step of its own, and `rerun --failed` runs it again with the rest.
+ci_died_with_runner() {
+  local run="$1" jobs id failed_steps annotations
+  jobs=$(gh api "repos/$REPO/actions/runs/$run/jobs?per_page=100" \
+    --jq '.jobs[] | select(.conclusion == "failure") | [.id, ([.steps[]? | select(.conclusion == "failure")] | length)] | @tsv' 2>/dev/null) || return 1
+  while IFS=$'\t' read -r id failed_steps; do
+    [ -n "$id" ] || continue
+    if annotations=$(gh api "repos/$REPO/check-runs/$id/annotations?per_page=50" --jq '.[].message' 2>/dev/null) && [ -n "$annotations" ]; then
+      grep -qiE "$RUNNER_LOST" <<<"$annotations" && return 0
+      grep -qiE 'maximum execution time' <<<"$annotations" && continue
+    fi
+    [ "${failed_steps:-1}" = 0 ] && return 0
+  done <<<"$jobs"
+  return 1
+}
+
+# shellcheck disable=SC2317 # called through act
+rerun_failed_jobs() {
+  local run="$1"
+  # A CI handover reaches the train from inside the run, and a run still going cannot be re-run.
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    [ "$(gh api "repos/$REPO/actions/runs/$run" --jq .status 2>/dev/null)" = completed ] && break
+    sleep 10
+  done
+  gh run rerun "$run" --repo "$REPO" --failed >/dev/null 2>&1
 }
 
 summary() { printf '%s
@@ -612,8 +669,30 @@ for line in "${candidates[@]}"; do
     fi
   fi
 
+  ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
+    --jq '[.workflow_runs[] | select(.name == env.CI_WORKFLOW_NAME)] | sort_by(.created_at) | last // empty
+      | [.id, .status, (.conclusion // ""), .created_at, (.run_attempt // 1), (.updated_at // "")] | @tsv' 2>/dev/null || true)
+  IFS=$'\t' read -r ci_run_id ci_status ci_conclusion ci_created ci_attempt ci_updated <<<"${ci:-}"
+  ci_status="${ci_status:-none}"
+  case "${ci_attempt:-1}" in ''|*[!0-9]*) ci_attempt=1 ;; esac
+  ci_reruns=$((ci_attempt - 1))
+  # A CI run hands its verdict over from its last job, so the run itself is still in progress
+  # when this tick reads it. Its own word stands in for the conclusion GitHub has not written yet.
+  if [ -n "${HINT_RUN_ID:-}" ] && [ "${ci_run_id:-}" = "$HINT_RUN_ID" ] && [ "$ci_status" != completed ]; then
+    case "${HINT_CONCLUSION:-}" in
+      success | failure) ci_status=completed; ci_conclusion="$HINT_CONCLUSION" ;;
+    esac
+  fi
+  # A re-run that finished after a `blocked` verdict: the verdict judged the run before it.
+  ci_rerun_after=false
+  if [ "$ci_status" = completed ] && [ "$ci_reruns" -gt 0 ] && [ "$verdict" = blocked ] &&
+    [ -n "$verdict_at" ] && [ -n "${ci_updated:-}" ] && [ "$ci_updated" \> "$verdict_at" ]; then
+    ci_rerun_after=true
+  fi
+
   park=$(VERDICT="$verdict" VERDICT_NEWER="$verdict_newer" BASE_MOVED="$base_moved" \
-    RETRIES="$retries" MAX_RETRIES="$MAX_RETRIES" STACK_ROOT="$stack_root" STACK_ROOT_READY="$stack_root_ready" train_park)
+    RETRIES="$retries" MAX_RETRIES="$MAX_RETRIES" STACK_ROOT="$stack_root" STACK_ROOT_READY="$stack_root_ready" \
+    CI_RERUN_AFTER="$ci_rerun_after" train_park)
 
   attempts=0
   horizon=""
@@ -636,18 +715,6 @@ for line in "${candidates[@]}"; do
     [ "$gate_runs" -le "$attempts" ] || attempts="$gate_runs"
   fi
 
-  ci=$(gh api "repos/$REPO/actions/runs?head_sha=$head_sha&per_page=100" \
-    --jq '[.workflow_runs[] | select(.name == env.CI_WORKFLOW_NAME)] | sort_by(.created_at) | last // empty
-      | [.id, .status, (.conclusion // ""), .created_at] | @tsv' 2>/dev/null || true)
-  IFS=$'\t' read -r ci_run_id ci_status ci_conclusion ci_created <<<"${ci:-}"
-  ci_status="${ci_status:-none}"
-  # A CI run hands its verdict over from its last job, so the run itself is still in progress
-  # when this tick reads it. Its own word stands in for the conclusion GitHub has not written yet.
-  if [ -n "${HINT_RUN_ID:-}" ] && [ "${ci_run_id:-}" = "$HINT_RUN_ID" ] && [ "$ci_status" != completed ]; then
-    case "${HINT_CONCLUSION:-}" in
-      success | failure) ci_status=completed; ci_conclusion="$HINT_CONCLUSION" ;;
-    esac
-  fi
   # Tiered CI (CI_DEPTH_TIERED): a bot's push runs the light checks and the full CI runs once, when the
   # pull request is next in line. Pliny-Bot spent two thirds of its pull request CI on heads that were
   # replaced before they merged. A green run without a successful "Full CI" job was light and says
@@ -673,6 +740,8 @@ for line in "${candidates[@]}"; do
       ci_run_id="$ejected_run"
       ci_status=completed
       ci_conclusion=failure
+      # Re-running a merge group's run does not put the pull request back in the queue.
+      ci_reruns="$MAX_CI_RERUNS"
     fi
   fi
   ci_stuck=false
@@ -804,7 +873,16 @@ for line in "${candidates[@]}"; do
     fi
   fi
 
+  # Asked only where the answer can change the move: red CI, re-runs left, and no person waiting.
+  ci_infra=false
+  if [ "$ci_status" = completed ] && [ "$ci_conclusion" = failure ] && [ -n "${ci_run_id:-}" ] &&
+    [ "$ci_reruns" -lt "$MAX_CI_RERUNS" ] && { [ "$park" = none ] || [ "$verdict" = blocked ]; } &&
+    ci_died_with_runner "$ci_run_id"; then
+    ci_infra=true
+  fi
+
   decision=$(HOLD="$hold" REVIEW_DECISION="$review_decision" PARK="$park" \
+    CI_INFRA="$ci_infra" CI_RERUNS="$ci_reruns" MAX_CI_RERUNS="$MAX_CI_RERUNS" \
     ATTEMPTS="$attempts" MAX_ATTEMPTS="$MAX_ATTEMPTS" SILENT_GATE="$silent_gate" REMEDIATED_ON_HEAD="${remediated_on_head:-0}" MERGEABLE="$mergeable" \
     CI_STATUS="$ci_status" CI_CONCLUSION="$ci_conclusion" CI_STUCK="$ci_stuck" SAME_AS_MAIN="$same_as_main" \
     BEHIND_BY="${behind_by:-0}" TRUSTED_AUTHOR="$trusted_author" CI_SHALLOW="$ci_shallow" \
@@ -856,6 +934,14 @@ for line in "${candidates[@]}"; do
 
   case "$move" in
     skip) continue ;;
+    rerun)
+      # Like a repair it moves nothing on the base branch, so nothing behind it waits for it here.
+      # The next tick sees the run in progress and waits on it as on any CI.
+      act "Re-running the failed jobs of CI run ${ci_run_id} on #$pr: its runner died." \
+        rerun_failed_jobs "$ci_run_id" ||
+        echo "::warning::Could not re-run CI run ${ci_run_id} on #$pr; the next tick tries again."
+      continue
+      ;;
     apply-review)
       # A dispatched apply-review can queue for an hour or two behind the fleet; asking again on
       # every tick would stack copies of the same run. Its title names the pull request.

@@ -409,7 +409,9 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: ${{ github.repository }}
           permission-issues: write
-          permission-pull-requests: read
+          # The record is the pull request itself when it closes no issue, and GitHub refuses a
+          # comment or label on a pull request to a token without pull-requests: write.
+          permission-pull-requests: write
           permission-actions: write
       # Only the reservation comes off. pr-pending says a pull request for this issue is open
       # and waiting, which is still true when the gate hands it to a human, so taking it off
@@ -486,7 +488,9 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: ${{ github.repository }}
           permission-issues: write
-          permission-pull-requests: read
+          # Bots #1879 closed no issue, so the record was the pull request and this read-only scope
+          # failed the job with 403 "Resource not accessible by integration" on its first comment.
+          permission-pull-requests: write
       - name: Check for merge conflicts
         id: conflicts
         env:
@@ -505,6 +509,8 @@ jobs:
       # every App comment is a router event: one issue collected sixteen of these in a day.
       - name: Comment on issue - problems found, solving them
         if: needs.subject.outputs.conclusion == 'failure' && (inputs.attempts_so_far || '0') == '0'
+        # A notice, not a reservation: when it cannot be posted the repair still has to run.
+        continue-on-error: true
         uses: ./.github/actions/create-issue-comment
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -909,7 +915,10 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: ${{ github.repository }}
           permission-issues: write
-          permission-pull-requests: read
+          # The attempt record goes on the pull request when it closes no issue, and the park always
+          # comments and labels it. Refused, the record never existed and the train read the run as a
+          # gate that left nothing, and stranded the pull request.
+          permission-pull-requests: write
           permission-actions: write
       # The attempt record comes first. The belt bounds its retries by counting attempt comments
       # newer than the CI verdict, not by labels; releasing the labels before the record existed

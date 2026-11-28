@@ -1501,7 +1501,7 @@ else
   done
   # The train's own settings moved with it; a copy left in the router would be dead.
   for knob in MAX_GATE_ATTEMPTS MERGE_TRAIN_MAX_RETRIES MERGE_TRAIN_STACK_ROOT_AUTOMERGE MERGE_TRAIN_DRY_RUN \
-    MERGE_TRAIN_REPAIRS HUMAN_REVIEW_TIMEOUT_HOURS REFINE_ANSWER_TIMEOUT_HOURS; do
+    MERGE_TRAIN_REPAIRS MERGE_TRAIN_CI_RERUNS HUMAN_REVIEW_TIMEOUT_HOURS REFINE_ANSWER_TIMEOUT_HOURS; do
     [ -z "$(router_env "$knob")" ] || mb_fail "work-router.yml still declares ${knob}; it belongs to agentics-merge-belt.yml"
     [ -n "$(belt_env "$knob")" ] || mb_fail "agentics-merge-belt.yml does not declare ${knob}"
   done
@@ -2468,6 +2468,11 @@ if worker_installed merge-gate; then
     assert "a stack root is never retried into a merge" held "$(park VERDICT=auto-merge VERDICT_NEWER=true BASE_MOVED=true RETRIES=0 STACK_ROOT=true)"
     assert "a root whose stack was announced complete gets one more gate run" none "$(park VERDICT=auto-merge VERDICT_NEWER=true BASE_MOVED=false RETRIES=0 STACK_ROOT=true STACK_ROOT_READY=true)"
     assert "a ready root whose merge failed is held again, not looped" held "$(park VERDICT=owner-review VERDICT_NEWER=true STACK_ROOT=true STACK_ROOT_READY=true)"
+    # A blocked verdict given on a run whose runner died judged nothing; the re-run is the verdict now.
+    assert "blocked expires once its CI was re-run after it" none "$(park VERDICT=blocked VERDICT_NEWER=true BASE_MOVED=false RETRIES=3 MAX_RETRIES=3 CI_RERUN_AFTER=true)"
+    assert "a re-run never reopens human-review" held "$(park VERDICT=human-review VERDICT_NEWER=true CI_RERUN_AFTER=true)"
+    assert "a re-run never reopens owner-review" held "$(park VERDICT=owner-review VERDICT_NEWER=true CI_RERUN_AFTER=true)"
+    assert "a re-run does not release a stack root" held "$(park VERDICT=blocked VERDICT_NEWER=true STACK_ROOT=true CI_RERUN_AFTER=true)"
 
     assert "hold keeps a pull request off the train" skip "$(move HOLD=true CI_STATUS=completed CI_CONCLUSION=success)"
     assert "requested changes keep it off the train" skip "$(move REVIEW_DECISION=CHANGES_REQUESTED CI_STATUS=completed CI_CONCLUSION=success)"
@@ -2540,6 +2545,24 @@ if worker_installed merge-gate; then
     assert "a trusted bot's CI awaiting approval is approved" approve "$(move CI_STATUS=completed CI_CONCLUSION=action_required TRUSTED_AUTHOR=true)"
     assert "a person's CI awaiting approval is not approved by the train" skip "$(move CI_STATUS=completed CI_CONCLUSION=action_required TRUSTED_AUTHOR=false)"
     assert "a cancelled run is no verdict" skip "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=cancelled)"
+    # Hermes #148 and #149: the runner died, the gate found no logs, reproduced every check green and
+    # still parked them blocked for three days. A dead runner is re-run, not repaired.
+    assert "CI whose runner died is re-run, not repaired" rerun "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure CI_INFRA=true CI_RERUNS=0 MAX_CI_RERUNS=2)"
+    assert "a parked blocked verdict on a dead runner is re-run" rerun "$(move PARK=held VERDICT=blocked CI_STATUS=completed CI_CONCLUSION=failure CI_INFRA=true CI_RERUNS=0 MAX_CI_RERUNS=2)"
+    assert "a dead runner beats a red main" rerun "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure CI_INFRA=true SAME_AS_MAIN=true)"
+    assert "a dead runner beats a spent gate budget" rerun "$(move ATTEMPTS=6 MAX_ATTEMPTS=6 MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure CI_INFRA=true)"
+    assert "re-runs spent, the failure goes to the gate" gate "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure CI_INFRA=true CI_RERUNS=2 MAX_CI_RERUNS=2)"
+    assert "0 re-runs turns it off" gate "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure CI_INFRA=true CI_RERUNS=0 MAX_CI_RERUNS=0)"
+    assert "a verdict waiting for a person is not re-run" skip "$(move PARK=held VERDICT=human-review CI_STATUS=completed CI_CONCLUSION=failure CI_INFRA=true)"
+    assert "a hold beats a dead runner" skip "$(move HOLD=true CI_STATUS=completed CI_CONCLUSION=failure CI_INFRA=true)"
+    assert "a conflict is still the gate's, whatever the runner did" gate "$(move MERGEABLE=CONFLICTING CI_STATUS=completed CI_CONCLUSION=failure CI_INFRA=true)"
+    assert "a real failure is not re-run" gate "$(move MERGEABLE=MERGEABLE CI_STATUS=completed CI_CONCLUSION=failure CI_INFRA=false)"
+    # The classifier reads GitHub's own annotation and the job's steps; this keeps it reading both.
+    # shellcheck disable=SC2015
+    grep -qF 'lost communication with the server' "$TRAIN_SH" && grep -qF 'rerun "$run" --repo "$REPO" --failed' "$TRAIN_SH" &&
+      grep -qF 'max-ci-reruns: ${{ env.MERGE_TRAIN_CI_RERUNS }}' "$BELT_WF_YML" &&
+      PASS=$((PASS + 1)) ||
+      { FAIL=$((FAIL + 1)); echo "FAIL: the merge train no longer re-runs CI whose runner died, or the belt does not pass its budget" >&2; }
   fi
 
   # One cap, not four literals, and it has to match what the worker tells the reader.

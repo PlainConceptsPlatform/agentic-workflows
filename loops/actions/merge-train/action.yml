@@ -36,6 +36,12 @@ inputs:
     description: How many pull requests may be in repair at once. Merges stay one at a time.
     required: false
     default: '1'
+  max-ci-reruns:
+    description: >-
+      How many times the train re-runs the failed jobs of a CI run whose runner died (lost, shut
+      down) before it hands the failure to the gate like any other. "0" never re-runs.
+    required: false
+    default: '2'
   human-review-timeout-hours:
     description: >-
       Working hours (Monday to Friday, UTC) a human-review verdict waits for a person. When they pass
@@ -93,6 +99,7 @@ runs:
         STUCK_HOURS: ${{ inputs.stuck-hours }}
         MAIN_RED_WAIT_HOURS: ${{ inputs.main-red-wait-hours }}
         MAX_REPAIRS: ${{ inputs.max-repairs }}
+        MAX_CI_RERUNS: ${{ inputs.max-ci-reruns }}
         HUMAN_REVIEW_TIMEOUT_HOURS: ${{ inputs.human-review-timeout-hours }}
         DRY_RUN: ${{ inputs.dry-run }}
         MERGE_QUEUE: ${{ inputs.merge-queue }}

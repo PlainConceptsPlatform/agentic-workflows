@@ -2,6 +2,23 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.35.0
+
+### Fixed
+
+- **A CI run whose runner died is re-run instead of handed to the merge gate.** When GitHub loses a self-hosted runner, or shuts it down mid-job, the job fails with no failed step and no logs. The train sent that to the gate as red CI; the gate found no logs, reproduced every check green, and still had to say `blocked`, because CI was red. Hermes #148 and #149 sat parked three days that way, after four gate runs between them, with no defect in either.
+  - The train now reads the failed jobs of a red run first. A job whose annotation says the runner was lost or shut down (the same phrases `classify-failure.sh` reads for agent jobs), or, when the token may not read annotations, a job that failed with no step marked failed, makes the move `rerun`: `gh run rerun --failed`, with no agent run. A timeout is not a dead runner and still goes to the gate.
+  - The budget is the run's attempt number, so nothing has to be recorded: `MERGE_TRAIN_CI_RERUNS` in `agentics-merge-belt.yml` (new, default `2`, `0` turns it off). Once it is spent, the failure goes to the gate as before.
+  - A `blocked` verdict given on such a run expires once the re-run finishes after it, whatever `MERGE_TRAIN_MAX_RETRIES` says, so a pull request parked this way before the update is re-run and gated again on the next tick. Only `blocked`, the machine's own verdict: a re-run never reopens `human-review` or `owner-review`, and never releases a stack root.
+- **The merge gate can comment on a pull request that closes no issue.** Its record is then the pull request itself, and three of its App tokens had `pull-requests: read`, which GitHub refuses for a comment or a label on a pull request (403 "Resource not accessible by integration").
+  - `reserve` failed on its first notice (Bots #1879), so the repair never ran. The notice is now `continue-on-error` as well: a notice that cannot be posted no longer stops a repair.
+  - `incomplete` could not write its attempt record, so the train counted the run as a gate that left nothing and stranded the pull request, and could not park it either.
+  - `review_required` could not explain a protected-path hold.
+
+  All three now ask for `pull-requests: write`; the App already holds it, since the train lands and updates pull requests.
+
+Consumers take it with `workflows update` and a recompile. `update` adds `MERGE_TRAIN_CI_RERUNS` to the belt's `env:` and keeps every value already there.
+
 ## 1.34.1
 
 ### Fixed
