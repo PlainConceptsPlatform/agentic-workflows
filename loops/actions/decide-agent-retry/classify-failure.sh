@@ -22,9 +22,10 @@
 #
 # One cause is the opposite, and repeating it is the wrong answer:
 #
-#   configuration    the job stopped in a preflight step before the model was ever started: the
+#   configuration    the run stopped in a preflight step before the model was ever started: the
 #                    harness sync and doctor (`sync-agents.mjs --strict`, `harness-doctor.mjs
-#                    --strict`) or the CI provider merge. Those read this repository's own files,
+#                    --strict`), the CI provider merge, or gh-aw's own secret check in the
+#                    activation job (activation_fix). Those read this repository's own files,
 #                    so the next attempt fails the same way in the same minute. A consumer with no
 #                    specialist `*-engineer.md` saw five of them, each commented as a provider
 #                    outage (#527). It is read from the name of the step GitHub marked failed,
@@ -50,6 +51,21 @@ preflight_fix() {
       ;;
     "Merge the CI-only OpenCode provider into opencode.jsonc")
       echo 'The step error names the file: `opencode.ci.json` must exist and be valid JSON (`workflows update` installs it), and a tracked `opencode.jsonc` must be comment-free JSON.'
+      ;;
+    *) activation_fix "$1" ;;
+  esac
+}
+
+# The steps gh-aw itself generates in the activation job, before the agent job is even created.
+# They read the repository's secrets and settings, not the model, so they are configuration too.
+# Hermes #15-#20 died on the secret check twenty times in twenty hours (2026-11-06): the agent job
+# was skipped, so this script never saw a failed step, the skipped job read as a zero-minute run,
+# and every attempt was commented as a provider outage until the janitor's budget was spent too.
+# Matched by shape, since gh-aw names the secrets per engine.
+activation_fix() {
+  case "$1" in
+    "Validate "*" secret")
+      echo 'The engine key is not set for this repository: add the `FORGE_API_KEY` repository secret (or `OPENAI_API_KEY`). The workflow reads repository secrets by name when it is dispatched, so an organisation secret it cannot see counts as missing.'
       ;;
     *) return 1 ;;
   esac

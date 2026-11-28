@@ -2,6 +2,23 @@
 
 Releases of `@plainconceptsplatform/workflows`. Earlier versions are described in their GitHub Releases and commit messages.
 
+## 1.36.0
+
+### Fixed
+
+- **A missing engine secret is a configuration failure, not twenty provider outages.** gh-aw checks the engine secret in its `activation` job, before the agent job exists. When it failed, the agent job was skipped with no failed step, so `decide-agent-retry` saw a zero-minute run, called it a provider outage and retried it. Hermes #15–#20 were triaged that way twenty times over twenty hours (2026-11-06), every comment said "That is what a provider outage looks like", and housekeeping then spent its three retries on the same failure.
+  - `decide-agent-retry` reads the failed steps of every job in the run, not only the agent job's.
+  - `classify-failure.sh` names gh-aw's "Validate … secret" step `configuration`, with a fix that names `FORGE_API_KEY`.
+  - The configuration comment says "The run stopped in its preflight step", where it said "The agent job stopped", since the step may now be in another job.
+- **A park with nothing wrong in the work is no longer permanent.** Two kinds of park used to wait for a person forever:
+  - **Configuration.** When a setup step refused the repository before the model started, the issue waited for a person to notice the fix had landed and start it again. The retry rule now marks these parks (`<!-- agent-configuration -->`), and housekeeping tries them again every `HOUSEKEEPING_CONFIG_RETRY_HOURS` (new, default `24`). A try costs a minute and no model run, so the work restarts by itself once the setup is fixed. The issue's work is read from the worker that parked it, and its label is restored, since implement drops `implement` when it parks.
+  - **Spent retries.** An issue that stalled `HOUSEKEEPING_MAX_RETRIES` times, typically through an outage longer than the retry window, gets one more try every `HOUSEKEEPING_SLOW_RETRY_DAYS` (new, default `7`). These tries are outside the budget: they are marked `<!-- housekeeping-slow-retry -->`, not as a retry.
+  - Both are capped by `HOUSEKEEPING_SLOW_RETRIES_PER_SWEEP` (new, default `3`), and `0` turns either off.
+  - A configuration park followed by a later worker comment, such as refine's questions, is that worker's decision, not a park, and is never retried.
+  - The digest has a "Repository setup to fix" section, and both kinds say when they will be tried again.
+
+Consumers take it with `workflows update` and a recompile. Issues already parked on a spent budget are tried again on the first sweep after the update, at most three per sweep. Hermes #15–#20 are among them.
+
 ## 1.35.0
 
 ### Fixed

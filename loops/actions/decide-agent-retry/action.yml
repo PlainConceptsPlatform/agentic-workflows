@@ -91,21 +91,31 @@ runs:
         # fetched leaves the decision to the duration, exactly as before these checks existed.
         if [ -n "${job_id:-}" ]; then
           gh api "repos/$REPO/actions/jobs/$job_id" --jq '.steps[]? | select(.conclusion == "failure") | .name' >"$work/failed-steps" 2>/dev/null || true
-          failed_step="$(head -1 "$work/failed-steps" 2>/dev/null || true)"
         fi
+        # And every other job of the run: gh-aw's activation job checks the engine secret before
+        # the agent job exists, and a failure there leaves the agent job skipped with no failed
+        # step of its own (Hermes #15-#20, twenty "provider outages" that were a missing secret).
+        gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+          --jq '.jobs[] | select(.conclusion == "failure") | .steps[]? | select(.conclusion == "failure") | .name' \
+          >>"$work/failed-steps" 2>/dev/null || true
+        failed_step="$(head -1 "$work/failed-steps" 2>/dev/null || true)"
         kind=none
-        if [ -n "${job_id:-}" ] && [ "${conclusion:-}" != cancelled ]; then
-          gh api "repos/$REPO/check-runs/$job_id/annotations" --paginate --jq '.[].message' >"$work/annotations" 2>/dev/null || true
-          gh api "repos/$REPO/actions/jobs/$job_id/logs" >"$work/log" 2>/dev/null || true
+        if [ "${conclusion:-}" != cancelled ]; then
+          if [ -n "${job_id:-}" ]; then
+            gh api "repos/$REPO/check-runs/$job_id/annotations" --paginate --jq '.[].message' >"$work/annotations" 2>/dev/null || true
+            gh api "repos/$REPO/actions/jobs/$job_id/logs" >"$work/log" 2>/dev/null || true
+          fi
           kind="$(bash "$ACTION_PATH/classify-failure.sh" "$work/log" "$work/annotations" "$work/failed-steps" || echo none)"
         fi
         rm -rf "$work"
         if [ "$kind" = configuration ]; then
           # Not a provider outage and not the agent's verdict: the model never started. The next
           # attempt would fail the same way in the same minute, so no attempt is spent on it.
+          # The marker lets housekeeping try it again once a day, which costs no model run, so the
+          # work starts again by itself once somebody fixes the setup.
           cause=configuration
           fix="$(bash "$ACTION_PATH/classify-failure.sh" --fix "$failed_step")"
-          reason="The agent job stopped in its preflight step **${failed_step}** before the model started. That is this repository's configuration, not a provider outage, so it was not retried. ${fix} Once that is fixed, start the work again."
+          reason="<!-- agent-configuration --> The run stopped in its preflight step **${failed_step}** before the model started. That is this repository's configuration, not a provider outage, so it was not retried here. ${fix} Housekeeping tries it again once a day, so the work starts by itself once that is fixed."
         else
           # An unknown duration is treated as a long run: never retry on a guess.
           if [ "$minutes" -ge 0 ] && [ "$minutes" -lt "$UNDER_MINUTES" ] && [ "$attempts" -lt "$PARK_AT" ]; then
