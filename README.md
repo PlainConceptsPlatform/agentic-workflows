@@ -436,6 +436,7 @@ no setting of its own: it carries only `UNATTENDED`, for `stack-landed`.
 | `MERGE_TRAIN_STACK_ROOT_AUTOMERGE` | `true` | a stack root merges itself through the gate once every child has landed |
 | `MERGE_TRAIN_DRY_RUN` | `false` | `true` logs the move the train would make and makes none |
 | `MERGE_TRAIN_REPAIRS` | `1` | how many pull requests may be in repair at once; a repair never merges so repairs do not race, while merges stay one at a time, oldest first |
+| `MERGE_TRAIN_CI_RERUNS` | `2` | how many times the failed jobs of a CI run whose runner died (lost, shut down) are re-run before the failure goes to the gate; such a run judged no code, and a `blocked` verdict given on it expires once the re-run finishes. `0` never re-runs |
 | `REFINE_ANSWER_TIMEOUT_HOURS` | `24` | working hours refine's questions wait before the hourly reconcile sends the issue back to refine with the proposed answers; `0` waits for a person |
 
 The rest of the router's `env:` block belongs to the workers it starts, and each value is a

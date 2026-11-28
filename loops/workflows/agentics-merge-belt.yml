@@ -66,6 +66,10 @@ env:
   # the default branch, so repairs of different pull requests do not race; only merges are serial.
   # 1 repairs one pull request at a time.
   MERGE_TRAIN_REPAIRS: "1"
+  # How many times a CI run whose runner died (lost, shut down) is re-run before its failure goes to
+  # the gate like any other. Such a run judged no code, and the gate could only park it as blocked.
+  # "0" never re-runs.
+  MERGE_TRAIN_CI_RERUNS: "2"
   # Working hours, Monday to Friday, a pull request the merge gate handed to a person
   # (human-review) waits for one. When they pass with no review and no comment after the verdict,
   # the gate's review stands and the train lands it (CI green, no conflict) with the label
@@ -266,6 +270,7 @@ jobs:
           max-retries: ${{ env.MERGE_TRAIN_MAX_RETRIES }}
           stack-root-automerge: ${{ env.MERGE_TRAIN_STACK_ROOT_AUTOMERGE }}
           max-repairs: ${{ env.MERGE_TRAIN_REPAIRS }}
+          max-ci-reruns: ${{ env.MERGE_TRAIN_CI_RERUNS }}
           human-review-timeout-hours: ${{ env.HUMAN_REVIEW_TIMEOUT_HOURS }}
           dry-run: ${{ env.MERGE_TRAIN_DRY_RUN }}
           ci-run-id: ${{ needs.classify.outputs.ci-run-id }}
