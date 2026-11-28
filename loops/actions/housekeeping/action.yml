@@ -20,6 +20,23 @@ inputs:
     description: A bot pull request older than this with no CI verdict is reported, never closed.
     required: false
     default: '3'
+  config-retry-hours:
+    description: >-
+      How long an issue parked on a configuration failure (a preflight step refused the repository's
+      setup before the model started) waits before it is tried again. Such a run costs no model
+      time, so the work restarts by itself once the setup is fixed. "0" waits for a person.
+    required: false
+    default: '24'
+  slow-retry-days:
+    description: >-
+      How long an issue that spent its whole retry budget waits before one more try. The try does not
+      count against the budget, so a long outage never parks work for good. "0" waits for a person.
+    required: false
+    default: '7'
+  slow-retries-per-sweep:
+    description: The most configuration and slow-lane retries one sweep starts, so a backlog does not flood the fleet.
+    required: false
+    default: '3'
   digest-title:
     description: Title of the single issue that reports what needs a human. Empty disables it.
     required: false
@@ -38,6 +55,9 @@ runs:
         RETRY_AFTER_HOURS: ${{ inputs.retry-after-hours }}
         MAX_RETRIES: ${{ inputs.max-retries }}
         STALE_PR_DAYS: ${{ inputs.stale-pr-days }}
+        CONFIG_RETRY_HOURS: ${{ inputs.config-retry-hours }}
+        SLOW_RETRY_DAYS: ${{ inputs.slow-retry-days }}
+        SLOW_RETRIES_PER_SWEEP: ${{ inputs.slow-retries-per-sweep }}
         DIGEST_TITLE: ${{ inputs.digest-title }}
         DRY_RUN: ${{ inputs.dry-run }}
       with:
@@ -184,6 +204,47 @@ runs:
           const retrying = [];
           let retried = 0;
 
+          // The slow lane. Two parks used to be permanent although nothing about the work was wrong:
+          //   configuration   a preflight step refused the repository's setup before the model
+          //                   started. Retrying costs a minute and no model run, so it is tried once
+          //                   every CONFIG_RETRY_HOURS and starts by itself once somebody fixes it.
+          //   exhausted       the issue stalled MAX_RETRIES times. An outage longer than the retry
+          //                   window spends the whole budget; one more try every SLOW_RETRY_DAYS,
+          //                   outside the budget, lets the work come back when the outage ends.
+          // Hermes #15-#20 had both: a missing secret read as twenty provider outages, the janitor
+          // spent its three retries on it, and they sat parked three weeks after the secret was set.
+          const CONFIG_MARKER = '<!-- agent-configuration -->';
+          const SLOW_MARKER = '<!-- housekeeping-slow-retry -->';
+          // Which worker parked it, read from that worker's marker, for implement drops its label.
+          const WORKER_MARKERS = [['<!-- agent-implement', 'implement'], ['<!-- agent-refine', 'refine'], ['<!-- agent-triage', 'triage']];
+          const configRetryMs = Number(process.env.CONFIG_RETRY_HOURS || 0) * 3600000;
+          const slowRetryMs = Number(process.env.SLOW_RETRY_DAYS || 0) * 86400000;
+          const slowPerSweep = Number(process.env.SLOW_RETRIES_PER_SWEEP || 0);
+          let slowRetried = 0;
+          const latest = (comments, pred) => comments.filter(pred).reduce((at, c) => (c.created_at > at ? c.created_at : at), '');
+          const bodyHas = (marker) => (c) => (c.body ?? '').includes(marker);
+          const slowRetry = async (issue, labels, work, why) => {
+            slowRetried += 1;
+            await act(`#${issue.number}: ${why}; trying ${work} again outside the retry budget`, async () => {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: issue.number,
+                body: `${SLOW_MARKER}\n${why}, so housekeeping is trying it again. This try does not count against the retry budget.`,
+              });
+              for (const label of ['review', 'stalled']) {
+                await github.rest.issues.removeLabel({ ...context.repo, issue_number: issue.number, name: label })
+                  .catch((error) => { if (error.status !== 404) throw error; });
+              }
+              if (!labels.includes(work)) {
+                await github.rest.issues.addLabels({ ...context.repo, issue_number: issue.number, labels: [work] });
+              }
+              await github.rest.actions.createWorkflowDispatch({
+                ...context.repo, workflow_id: 'work-router.yml',
+                ref: context.payload.repository.default_branch,
+                inputs: { operation: work, 'issue-number': String(issue.number) },
+              });
+            });
+          };
+
           // 1. Retry what the machine stalled on. `stalled` marks a park caused by a crash, a
           // timeout or an empty output; `review` alone is a decision the agent made, and
           // re-running a decision only reproduces it, so those are reported and never retried.
@@ -206,6 +267,22 @@ runs:
             const waited = age(issue.updated_at);
 
             if (!labels.includes('stalled')) {
+              // A configuration park, when it is the last thing a worker said: a later worker
+              // comment means the run got past the setup and this review is its decision.
+              const workerAt = latest(comments, bodyHas('<!-- agent-'));
+              const configAt = latest(comments, bodyHas(CONFIG_MARKER));
+              if (configAt && configAt === workerAt) {
+                const parked = comments.find((c) => c.created_at === configAt);
+                const configWork = WORKER_MARKERS.find(([marker]) => (parked?.body ?? '').includes(marker))?.[1] ?? work;
+                const triedAt = [configAt, latest(comments, bodyHas(SLOW_MARKER))].sort().pop();
+                const due = configRetryMs - age(triedAt);
+                if (configRetryMs > 0 && configWork && due <= 0 && slowRetried < slowPerSweep) {
+                  await slowRetry(issue, labels, configWork, 'It was parked on a configuration failure that may have been fixed since');
+                  continue;
+                }
+                needsHuman.push({ kind: 'configuration', issue, labels, waited, due: configRetryMs > 0 && configWork ? due : null });
+                continue;
+              }
               needsHuman.push({ kind: 'decided', issue, labels, waited });
               continue;
             }
@@ -260,6 +337,16 @@ runs:
                 });
                 continue;
               }
+            }
+            if (attempts >= maxRetries && work) {
+              const triedAt = latest(comments, (c) => bodyHas(RETRY_MARKER)(c) || bodyHas(SLOW_MARKER)(c));
+              const due = slowRetryMs - age(triedAt || issue.updated_at);
+              if (slowRetryMs > 0 && due <= 0 && slowRetried < slowPerSweep) {
+                await slowRetry(issue, labels, work, `It spent its ${maxRetries} retries and has waited ${days(slowRetryMs)} days since the last one`);
+                continue;
+              }
+              needsHuman.push({ kind: 'retries-exhausted', issue, labels, waited, attempts, due: slowRetryMs > 0 ? due : null });
+              continue;
             }
             if (attempts >= maxRetries || !work) {
               needsHuman.push({ kind: attempts >= maxRetries ? 'retries-exhausted' : 'no-work-label', issue, labels, waited, attempts });
@@ -627,6 +714,11 @@ runs:
             needsHuman.push({ kind: 'stale-audit', issue, waited: age(issue.created_at) });
           }
 
+          const nextTry = (entry) => {
+            if (entry.due == null) return '';
+            const hours = Math.max(0, Math.round(entry.due / 3600000));
+            return hours <= 0 ? ' · tried again on the next sweep' : ` · tried again by itself in ~${hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`}`;
+          };
           const line = (entry) => {
             if (entry.kind === 'pr-parked') return `- PR #${entry.pull.number} · parked ${days(entry.waited)}d · gate verdict \`${entry.verdict}\` · ${entry.pull.title}`;
             if (entry.kind === 'pr-stranded') return `- PR #${entry.pull.number} · stranded ${days(entry.waited)}d · the merge train stopped offering it to the gate on this commit · ${entry.pull.title}`;
@@ -637,7 +729,8 @@ runs:
             if (entry.kind === 'stack-root-conflict') return `- PR #${entry.pull.number} · conflicts with its base, ${entry.openChildren} child(ren) still open · merge the base into its feature branch by hand · ${entry.pull.title}`;
             if (entry.kind === 'stack-root-closed') return `- PR #${entry.pull.number} · stack root closed unmerged, ${entry.openChildren} child(ren) still open · ${entry.issue.title} · restore the branch from refs/pull/${entry.pull.number}/head if accidental`;
             if (entry.kind === 'stack-orphaned') return `- #${entry.issue.number} · root merged but ${entry.openChildren} child(ren) still open · ${entry.issue.title}`;
-            if (entry.kind === 'retries-exhausted') return `- #${entry.issue.number} · stalled ${days(entry.waited)}d · retried ${entry.attempts}× and still stalling · ${entry.issue.title}`;
+            if (entry.kind === 'retries-exhausted') return `- #${entry.issue.number} · stalled ${days(entry.waited)}d · retried ${entry.attempts}× and still stalling${nextTry(entry)} · ${entry.issue.title}`;
+            if (entry.kind === 'configuration') return `- #${entry.issue.number} · parked ${days(entry.waited)}d · a preflight step refused this repository's setup; the issue names the step and the fix${nextTry(entry)} · ${entry.issue.title}`;
             if (entry.kind === 'no-work-label') return `- #${entry.issue.number} · stalled ${days(entry.waited)}d · no work label to retry with · ${entry.issue.title}`;
             if (entry.kind === 'stale-audit') return `- #${entry.issue.number} · open ${days(entry.waited)}d · audit report nobody actioned · ${entry.issue.title}`;
             return `- #${entry.issue.number} · waiting ${days(entry.waited)}d · ${entry.labels.filter((l) => l !== 'review').join(', ') || 'no other labels'} · ${entry.issue.title}`;
@@ -676,6 +769,7 @@ runs:
             section('Waiting on a decision', ['decided']),
             section('Stacked features waiting on a human', ['stack-ready', 'stack-held', 'stack-root-conflict', 'stack-root-missing', 'stack-root-closed', 'stack-orphaned']),
             section('Pull requests parked by the gate', ['pr-stranded', 'pr-parked', 'pr-stale']),
+            section('Repository setup to fix', ['configuration']),
             section('Stalled beyond the retry budget', ['retries-exhausted', 'no-work-label']),
             section('Audit reports nobody actioned', ['stale-audit']),
             retryingSection(),
@@ -684,7 +778,7 @@ runs:
               'Nobody answered the gate\'s human-review verdict in time, so its review stood. Revert any that should not have gone in.\n\n' +
               autoDecided.map((p) => `- PR #${p.number} · merged ${p.merged_at.slice(0, 10)} · ${p.title}`).join('\n') + '\n',
             needsHuman.length === 0 ? '\nNothing is waiting on a person right now.\n' : '',
-            `\n---\n\nThis run retried ${retried} stalled issue(s) and made ${planned.length} change(s) in total.`,
+            `\n---\n\nThis run retried ${retried} stalled issue(s), tried ${slowRetried} parked issue(s) again outside the budget, and made ${planned.length} change(s) in total.`,
           ].filter(Boolean).join('\n');
 
           if (digestTitle) {

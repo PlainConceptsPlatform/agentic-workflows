@@ -32,6 +32,16 @@ env:
   # decision reproduces it.
   HOUSEKEEPING_RETRY_AFTER_HOURS: "1"
   HOUSEKEEPING_MAX_RETRIES: "3"
+  # The slow lane, for parks that used to be permanent with nothing wrong in the work. An issue
+  # parked on a configuration failure (the run stopped in a setup step before the model started,
+  # so a try costs no model time) is tried again every HOUSEKEEPING_CONFIG_RETRY_HOURS, and starts
+  # by itself once the setup is fixed. An issue that spent all its retries, typically during an
+  # outage longer than the retry window, gets one more try every HOUSEKEEPING_SLOW_RETRY_DAYS,
+  # outside the budget. At most HOUSEKEEPING_SLOW_RETRIES_PER_SWEEP of these per sweep. "0" turns
+  # either off, and the issue waits for a person.
+  HOUSEKEEPING_CONFIG_RETRY_HOURS: "24"
+  HOUSEKEEPING_SLOW_RETRY_DAYS: "7"
+  HOUSEKEEPING_SLOW_RETRIES_PER_SWEEP: "3"
   # A bot pull request older than this with no merge-gate verdict at all is reported, never
   # closed: the janitor deletes branches and labels, never someone's work.
   HOUSEKEEPING_STALE_PR_DAYS: "3"
@@ -175,6 +185,9 @@ jobs:
           retry-after-hours: ${{ env.HOUSEKEEPING_RETRY_AFTER_HOURS }}
           max-retries: ${{ env.HOUSEKEEPING_MAX_RETRIES }}
           stale-pr-days: ${{ env.HOUSEKEEPING_STALE_PR_DAYS }}
+          config-retry-hours: ${{ env.HOUSEKEEPING_CONFIG_RETRY_HOURS }}
+          slow-retry-days: ${{ env.HOUSEKEEPING_SLOW_RETRY_DAYS }}
+          slow-retries-per-sweep: ${{ env.HOUSEKEEPING_SLOW_RETRIES_PER_SWEEP }}
           digest-title: ${{ env.HOUSEKEEPING_DIGEST_TITLE }}
           dry-run: ${{ github.event.inputs.dry-run || 'false' }}
       # Dependabot updates merge here rather than on a cron of their own. API calls only: no pull

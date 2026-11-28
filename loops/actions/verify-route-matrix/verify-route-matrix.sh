@@ -1333,7 +1333,8 @@ if [ -f "$HOUSEKEEPING_YML" ]; then
 
   # Every knob the action takes is a repository's to change, so each has to come from the
   # housekeeping file's env: block, which is the one part of the file `workflows update` preserves.
-  for knob in HOUSEKEEPING_RETRY_AFTER_HOURS HOUSEKEEPING_MAX_RETRIES HOUSEKEEPING_STALE_PR_DAYS HOUSEKEEPING_DIGEST_TITLE; do
+  for knob in HOUSEKEEPING_RETRY_AFTER_HOURS HOUSEKEEPING_MAX_RETRIES HOUSEKEEPING_STALE_PR_DAYS HOUSEKEEPING_DIGEST_TITLE \
+    HOUSEKEEPING_CONFIG_RETRY_HOURS HOUSEKEEPING_SLOW_RETRY_DAYS HOUSEKEEPING_SLOW_RETRIES_PER_SWEEP; do
     if [ -n "$(housekeeping_env "$knob")" ] && printf '%s' "$hk_job" | grep -q "env.${knob}"; then
       PASS=$((PASS + 1))
     else
@@ -3343,19 +3344,29 @@ while IFS= read -r step; do
     PREFLIGHT_OK=0
     echo "FAIL: classify-failure.sh names preflight step '${step}', which shared/opencode-ci.md no longer has" >&2
   fi
-done < <(sed -n 's/^    "\(.*\)")$/\1/p' "${RETRY_DIR}/classify-failure.sh")
+done < <(sed -n '/^preflight_fix() {/,/^}/s/^    "\(.*\)")$/\1/p' "${RETRY_DIR}/classify-failure.sh")
+# gh-aw's own secret check runs in the activation job, so the agent job is skipped with no failed
+# step: Hermes #15-#20 read as twenty provider outages and spent the janitor's budget too.
+assert "a failed engine secret check is a configuration failure" configuration \
+  "$(classify_steps 'Validate CODEX_API_KEY or OPENAI_API_KEY secret')"
+if ! bash "${RETRY_DIR}/classify-failure.sh" --fix 'Validate CODEX_API_KEY or OPENAI_API_KEY secret' | grep -qF 'FORGE_API_KEY'; then
+  PREFLIGHT_OK=0
+  echo "FAIL: the missing-secret fix no longer names FORGE_API_KEY" >&2
+fi
 
 # The decision itself, executed with a fake `gh`: a one-minute run that died in the harness sync
 # is not retried even with every attempt left, and the same minute dying in the agent step is.
 decide_script=$(awk '/^      run: \|$/{body=1; next} body{print substr($0, 9)}' "${RETRY_DIR}/action.yml")
 decide_with_failed_step() {
-  local step="$1" bin out
+  # $1 fails in the agent job; $2, when given, fails in another job of the run (activation).
+  local step="$1" other="${2:-}" bin out
   bin="$(mktemp -d)"; out="$(mktemp)"
   {
     echo '#!/usr/bin/env bash'
     echo 'case "$*" in'
+    echo "  *\"/runs/\"*\"/jobs\"*\".steps[]?\"*) [ -z \"${other}\" ] || echo \"${other}\" ;;"
     echo '  *"/runs/"*"/jobs"*) echo "7 2026-01-01T00:00:00Z 2026-01-01T00:01:00Z failure" ;;'
-    echo "  *\"/actions/jobs/7 \"*) echo \"${step}\" ;;"
+    echo "  *\"/actions/jobs/7 \"*) [ -z \"${step}\" ] || echo \"${step}\" ;;"
     echo '  *) exit 0 ;;'
     echo 'esac'
   } > "${bin}/gh"
@@ -3367,8 +3378,14 @@ decide_with_failed_step() {
 }
 config_decision=$(decide_with_failed_step 'Sync harness agents and print model routing')
 case "$config_decision" in
-  *"retry=false "*"cause=configuration "*"failed-step=Sync harness agents and print model routing "*"reason=The agent job stopped in its preflight step"*) PASS=$((PASS + 1)) ;;
+  *"retry=false "*"cause=configuration "*"failed-step=Sync harness agents and print model routing "*"reason=<!-- agent-configuration --> The run stopped in its preflight step"*) PASS=$((PASS + 1)) ;;
   *) FAIL=$((FAIL + 1)); echo "FAIL: a failed harness sync is not reported as configuration without a retry: ${config_decision}" >&2 ;;
+esac
+# The agent job skipped, the activation job failed on the secret: configuration, not a short run.
+secret_decision=$(decide_with_failed_step '' 'Validate CODEX_API_KEY or OPENAI_API_KEY secret')
+case "$secret_decision" in
+  *"retry=false "*"cause=configuration "*"failed-step=Validate CODEX_API_KEY or OPENAI_API_KEY secret "*) PASS=$((PASS + 1)) ;;
+  *) FAIL=$((FAIL + 1)); echo "FAIL: a missing engine secret in activation is retried as an outage: ${secret_decision}" >&2 ;;
 esac
 outage_decision=$(decide_with_failed_step 'Execute OpenCode CLI')
 case "$outage_decision" in
@@ -3974,6 +3991,24 @@ fi
 # train again once it was cancelled. The hourly sweep is now a heartbeat, and a repair gate whose CI has
 # turned green is cancelled by the train itself.
 HK_YML="${HERE}/../housekeeping/action.yml"
+# The slow lane: a configuration park and a spent retry budget used to be permanent (Hermes #15-#20
+# sat three weeks after their missing secret was set). The marker the retry rule writes is the one
+# housekeeping reads, the try stays outside the budget, and the belt's knobs reach the action.
+HK_WF_YML="${WORKFLOWS_DIR}/agentics-housekeeping.yml"
+if [ -f "$HK_YML" ] && [ -f "$HK_WF_YML" ]; then
+  if grep -qF "CONFIG_MARKER = '<!-- agent-configuration -->'" "$HK_YML" &&
+    grep -qF '<!-- agent-configuration -->' "${HERE}/../decide-agent-retry/action.yml" &&
+    grep -qF "SLOW_MARKER = '<!-- housekeeping-slow-retry -->'" "$HK_YML" &&
+    ! grep -qF 'SLOW_MARKER = '"'"'<!-- housekeeping-retry' "$HK_YML" &&
+    grep -qF 'config-retry-hours: ${{ env.HOUSEKEEPING_CONFIG_RETRY_HOURS }}' "$HK_WF_YML" &&
+    grep -qF 'slow-retry-days: ${{ env.HOUSEKEEPING_SLOW_RETRY_DAYS }}' "$HK_WF_YML" &&
+    grep -qF 'slow-retries-per-sweep: ${{ env.HOUSEKEEPING_SLOW_RETRIES_PER_SWEEP }}' "$HK_WF_YML"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: housekeeping no longer retries configuration parks and spent budgets in the slow lane" >&2
+  fi
+fi
 TRAIN_SH_HB="${HERE}/../merge-train/merge-train.sh"
 if [ -f "$HK_YML" ] && [ -f "$TRAIN_SH_HB" ]; then
   if grep -qF "operation: 'merge-train'" "$HK_YML"     && grep -qF "createWorkflowDispatch" "$HK_YML"     && grep -qF "its CI is green" "$TRAIN_SH_HB"     && grep -qF 'live_titles=$(printf' "$TRAIN_SH_HB"; then

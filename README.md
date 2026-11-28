@@ -421,6 +421,9 @@ no setting of its own: it carries only `UNATTENDED`, for `stack-landed`.
 |---|---|---|
 | `HOUSEKEEPING_RETRY_AFTER_HOURS` | `1` | how long a `stalled` issue waits before a retry |
 | `HOUSEKEEPING_MAX_RETRIES` | `3` | retries before the issue is left to a person |
+| `HOUSEKEEPING_CONFIG_RETRY_HOURS` | `24` | how often an issue parked on a configuration failure (a setup step such as the engine secret check refused the repository before the model started) is tried again; such a try costs no model time, so the work restarts once the setup is fixed. `0` waits for a person |
+| `HOUSEKEEPING_SLOW_RETRY_DAYS` | `7` | how long an issue that spent all its retries waits for one more try, outside the budget, so a long outage never parks work for good. `0` waits for a person |
+| `HOUSEKEEPING_SLOW_RETRIES_PER_SWEEP` | `3` | the most of those two kinds of retry one sweep starts |
 | `HOUSEKEEPING_STALE_PR_DAYS` | `3` | a bot pull request older than this with no gate verdict is reported, never closed |
 | `HOUSEKEEPING_DIGEST_TITLE` | `Needs a human` | the one issue listing what needs a person; empty turns the digest off |
 | `DEPENDABOT_MERGE` | `all` | which Dependabot updates the maintenance run merges once green: `all`, `minor`, `patch` or `off`; a repository variable of the same name overrides it |
